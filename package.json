@@ -1,0 +1,21 @@
+{
+  "name": "photrix-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc -w"
+  },
+  "dependencies": {
+    "exifreader": "^4.23.3",
+    "heic-convert": "^2.1.0",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "@types/heic-convert": "^2.1.0",
+    "@types/node": "^22.4.0",
+    "typescript": "^5.5.4"
+  },
+  "packageManager": "yarn@1.22.21+sha1.1959a18351b811cdeedbd484a8f86c3cc3bbaf72"
+}
