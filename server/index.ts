@@ -1,8 +1,11 @@
-import path from "path";
+import path, { relative } from "path";
 import http from "http";
 
 import { getFileList } from "./getFileList";
 import { getImage } from "./media/getImage";
+import { server } from "./database";
+
+server();
 
 if (process.argv.length < 4){
     console.error("Usage: node server.js <rootDir> <thumbnailDir>");
@@ -24,18 +27,32 @@ http.createServer(async (request, response)=> {
         response.end();
         return;
     }
-    
+
     try {
         var {pathname, searchParams} = new URL(`http://${process.env.HOST ?? 'localhost'}${request.url}`);
-        // need to use path.normalize so people can't access directories underneath baseDirectory
-        const relativePath = path.normalize(decodeURI(pathname))
+        
+        // We don't want to allow access to parent directories
+        if (pathname.includes('..')){
+            response.writeHead(403)
+            response.end()
+            return;
+        }
+
+        if (pathname.endsWith('/')){
+            const files = await getFileList(path.join(rootDir,pathname), {recursive: true});
+            const relativePaths = files.map(file=>path.relative(rootDir, file));
+            response.writeHead(200, {'Content-Type': 'text/json'})
+            response.write(JSON.stringify(relativePaths));
+            response.end()
+            return;
+        };
 
         const widthStr = searchParams.get('width');
         const width = widthStr && parseInt(widthStr);
         const heightStr = searchParams.get('height');
         const height = heightStr && parseInt(heightStr);
 
-        const image = await getImage(relativePath, {
+        const image = await getImage(pathname, {
             rootDir,
             ...((width && height)?
             {

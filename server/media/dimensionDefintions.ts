@@ -18,7 +18,7 @@ export const sizes = [
     if (!('width' in desired && 'height' in desired)){
         return 'original';
     }
-    return sizes.find(([label, {width,height}])=>
+    return sizes.find(([, {width,height}])=>
         width>=desired.width && height>=desired.height)?.[0] ??
         'original';
  }
