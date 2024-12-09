@@ -1,22 +1,13 @@
-import path, { relative } from "path";
 import http from "http";
-
-import { getFileList } from "./getFileList";
-import { getImage } from "./media/getImage";
-import { server } from "./database";
-
-server();
+import path from "path";
+import fs from "fs/promises";
 
 if (process.argv.length < 4){
-    console.error("Usage: node server.js <rootDir> <thumbnailDir>");
+    console.error("Usage: node server.js <rootDir>");
     process.exit(1);
 }
 const [,,rootDir, thumbnailDir] =  process.argv;
 
-getFileList(rootDir, {recursive: true}).then(files=>{
-    const dirs = files.map(file=>path.relative(rootDir, file));
-    console.log(dirs.join('\n'));
-});
 
 var port = 9615
 
@@ -38,33 +29,24 @@ http.createServer(async (request, response)=> {
             return;
         }
 
-        if (pathname.endsWith('/')){
-            const files = await getFileList(path.join(rootDir,pathname), {recursive: true});
-            const relativePaths = files.map(file=>path.relative(rootDir, file));
+        const isDirectory = pathname.endsWith('/');
+        if (isDirectory){
+            const paths = (await fs.readdir(path.join(rootDir, pathname), {recursive: true}))
+                .map(file=>path.relative(rootDir, file));
+
             response.writeHead(200, {'Content-Type': 'text/json'})
-            response.write(JSON.stringify(relativePaths));
+            response.write(JSON.stringify(paths));
             response.end()
             return;
         };
 
-        const widthStr = searchParams.get('width');
-        const width = widthStr && parseInt(widthStr);
-        const heightStr = searchParams.get('height');
-        const height = heightStr && parseInt(heightStr);
-
-        const image = await getImage(pathname, {
-            rootDir,
-            ...((width && height)?
-            {
-                width,
-                height,
-                thumbnailDir,
-            }:{} as Record<string,never>),
-        });
-
-        response.writeHead(200, {'Content-Type': 'image/jpeg'})
-        response.write(image);
-        response.end()
+        const file = await fs.readFile(path.join(rootDir, pathname));
+        if (file){
+            response.writeHead(200, {'Content-Type': 'image/jpeg'})
+            response.write(file);
+            response.end()
+            return;
+        }
    } catch(e) {
         response.writeHead(500)
         response.end()     // end the response so browsers don't hang
