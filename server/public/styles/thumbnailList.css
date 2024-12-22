@@ -1,0 +1,8 @@
+.thumbnails{
+    display:flex;
+    flex-wrap: wrap;
+    &>*{
+        height: 200px;
+        min-width: 100px;
+    }
+}
