@@ -86,7 +86,9 @@ const fileHandlers = [
 }[]
 
 http.createServer(async (request, response)=> {
-    
+    response.setHeader('Access-Control-Allow-Origin', "http://127.0.0.1:3000");
+    response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (!request.url){
         response.writeHead(404);
         response.end();
@@ -107,34 +109,19 @@ http.createServer(async (request, response)=> {
             }
             const fullPath = path.join(rootDir, relativePath);
             const stats = await fs.stat(fullPath);
-    
-            
-            if (stats.isDirectory()){
-                const items = await fs.readdir(fullPath, {recursive: false});
-                response.writeHead(200, {'Content-Type': 'text/html'});
-                const itemsHtml = await Promise.all( items.map(async item => {
-                    const stat = await fs.stat(path.join(rootDir, relativePath, item));
-                    const itemPath = path.join(mediaPath, relativePath, item);
-                    if (stat.isDirectory()){
-                        return `<a href="${itemPath}">${item}</a>`;
-                    }
 
-                    return `<a href="${itemPath}">
-                        <img loading="lazy" src="${itemPath}?thumbnail=true" />
-                    </a>`;
-                })).then(items => `<ol class="thumbnails">${items.map(el=>`<li>${el}</li>`).join('')}</ol>`);
+            if (stats.isDirectory()){
+                type Result = {path:string, type:'directory'|'file'};
+                const items = await fs.readdir(fullPath, {recursive: false});
+                response.writeHead(200, {'Content-Type': 'text/json'});
+                const results = await Promise.all( items.map(async item => {
+                    const stat = await fs.stat(path.join(rootDir, relativePath, item));
+                    const itemPath = path.posix.join(mediaPath, relativePath, item);
+                    return {path: itemPath, type: stat.isDirectory() ? 'directory' : 'file'} as Result;
+                }));
                 
-                const html = `
-                <!DOCTYPE html>
-                <html lang="en">
-                    <head>
-                        <link rel="stylesheet" type="text/css" href="/styles/thumbnailList.css">
-                    </head>
-                    <body>
-                        ${itemsHtml}
-                    </body>
-                </html>`;
-                response.write(html);
+                const jsonString = JSON.stringify(results);
+                response.write(jsonString);
                 response.end()
                 return;
             };
