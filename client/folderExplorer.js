@@ -6,50 +6,71 @@ class FolderExplorer extends HTMLElement {
     }
 
     connectedCallback() {
-        const renderDirectoryContents = async (directoryPath) =>{
-            const ul = document.createElement('ul');
-            ul.classList.add('directory-contents');
-            const elements = await getContentsOfDirectory(directoryPath);
-            elements.forEach(({path, type}) => {
-                const li = document.createElement('li');
-                li.classList.add(type);
+        const renderDirectoryContents = async (directoryPath) => {
+            const domString = `<ul class="directory-contents">
+                ${await getContentsOfDirectory(directoryPath)
+                    .then(elements => elements.map(({ path, type }) => 
+                        `<li class="${type}" data-path="${path}">
+                            <div>
+                                ${type === 'directory' ? '<button class="expand" data-expanded="false" />' : ''}
+                                <span class='name'>${path.split('/').at(-1)}</span>
+                            </div>
+                        </li>`)
+                    .join(''))}
+            </ul>`;
 
-                const elementTitle = document.createElement('div');
-                if (type === 'directory') {
-                    const expand = document.createElement('button');
-                    expand.textContent = '▶';
-                    expand.dataset.expanded = 'false';
-                    expand.addEventListener('click', async (e) => {
-                        e.stopPropagation();
-                        if (expand.dataset.expanded === 'false') {
-                            expand.dataset.expanded = 'true';
-                            const subDir = await renderDirectoryContents(path);
-                            li.appendChild(subDir);
-                            expand.textContent = '▼';
-                        } else {
-                            expand.dataset.expanded = 'false';
-                            li.removeChild(li.querySelector('ul'));
-                            expand.textContent = '▶';
-                        }
-                    });
-                    elementTitle.appendChild(expand);
-                }
-                const name = path.split('/').at(-1);
-                const nameElement = document.createElement('span');
-                nameElement.textContent = name;
-                nameElement.addEventListener('click', (e) => {
+            const domElement = new DOMParser().parseFromString(domString, 'text/html').body.firstChild;
+            domElement.querySelectorAll('button[data-expanded]').forEach(button => {
+                button.addEventListener('click', async (e) => {
                     e.stopPropagation();
-                    this.onChange?.(path);
+                    const li = button.closest('.directory');
+                    if (button.dataset.expanded === 'false') {
+                        button.dataset.expanded = 'true';
+                        const subDir = await renderDirectoryContents(li.dataset.path);
+                        li.appendChild(subDir);
+                    } else {
+                        button.dataset.expanded = 'false';
+                        li.removeChild(li.querySelector('ul.directory-contents'));
+                    }
                 });
-                elementTitle.appendChild(nameElement);
-                li.appendChild(elementTitle);
-                ul.appendChild(li);
             });
-            return ul;
+            domElement.querySelectorAll('span.name').forEach(span => {
+                span.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.onChange?.(span.textContent);
+                });
+            });
+            return domElement;
         };
-        renderDirectoryContents(this.dataset.path).then((ul) => {
-            this.shadowRoot.appendChild(ul);
+
+        renderDirectoryContents(this.dataset.path).then((ulContent) => {
+            this.shadowRoot.appendChild(ulContent);
         });
+
+        const styleSheet = new CSSStyleSheet();
+        styleSheet.replaceSync(`
+            ul.directory-contents {
+                list-style-type: none;
+                padding-left: 20px;
+            }
+            button.expand {
+                margin-right: 5px;
+                cursor: pointer;
+                background: none;
+                border: none;
+                padding: 0;
+                font: inherit;
+                &::before {
+                    content: '▶';
+                    display: inline-block;
+                    transition: transform 0.2s ease;
+                }
+                &[data-expanded="true"]::before {
+                    transform: rotate(90deg);
+                }
+            }
+        `);
+        this.shadowRoot.adoptedStyleSheets = [styleSheet];
     }
 }
 
