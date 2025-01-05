@@ -2,10 +2,12 @@
   <head>
     <meta charset="UTF-8">
     <title>Photrix</title>
-    <script src="./index.js"></script>
+    <!-- <script src="./index.js"></script> -->
+    <script src="./folderExplorer.js" type="module"></script>
     <link rel="stylesheet" href="./index.css">
   </head>
   <body>
-    <div id="root"></div>
+    <folder-explorer data-path="/media/" />
+    <script>document.getElementsByTagName('folder-explorer')[0].onChange = console.log;</script>
   </body> 
 </html>
