@@ -1,4 +1,12 @@
 import { getContentsOfDirectory } from "./dataOperations.mjs";
+import { QQQ } from "./notAFramework.mjs";
+
+export const folderExplorer2 = QQQ`<div>
+    <img src=${𐤈`src`}>
+    <button onclick=${(e)=>console.log(e)}>Click me</button>
+</div>`;
+
+
 class FolderExplorer extends HTMLElement {
     constructor() {
         super();

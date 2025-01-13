@@ -17,8 +17,27 @@ const webpCachePath = (relativePath:string, width?:number) => path.join(cacheDir
 
 const fileHandlers = [
     {
+        extensions: ['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.flv'],
+        handler: async (relativePath:string) => {
+            const mimeTypeExtensions = {
+                'video/mp4':['.mp4'],
+                'video/quicktime':['.mov'],
+                'video/x-matroska':['.mkv'],
+                'video/x-msvideo':['.avi'],
+                'video/x-ms-wmv':['.wmv'],
+                'video/x-flv':['.flv'],
+                'video/webm':['.webm'],
+            };
+            const fullPath = path.join(rootDir, relativePath);
+            const ext = path.extname(relativePath).toLowerCase();
+            return {
+                file: await fs.readFile(fullPath),
+                contentType: Object.entries(mimeTypeExtensions).find(([_,v])=>v.includes(ext))?.[0] ?? 'application/octet-stream'
+            }
+        }
+    },
+    {
         extensions: ['.heic', '.heif'],
-        cachePath: webpCachePath,
         handler: async (relativePath:string, width?:number) => {
             const originalPath = path.join(rootDir, relativePath);
             const cachePath = webpCachePath(relativePath, width);
@@ -47,10 +66,9 @@ const fileHandlers = [
                 throw e;
             }
         }
-    },
+    },    
     {
         extensions: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff'],
-        cachePath: webpCachePath,
         handler: async (relativePath:string, width?:number) => {
             const ext = path.extname(relativePath).toLowerCase();
             const fullPath = path.join(rootDir, relativePath);
@@ -81,7 +99,6 @@ const fileHandlers = [
     }
 ] as const satisfies {
     extensions: string[];
-    cachePath: (relativePath: string, width: number) => string;
     handler: (relativePath: string, width?: number) => Promise<{file:Buffer, contentType:string}>;
 }[]
 
@@ -97,6 +114,25 @@ http.createServer(async (request, response)=> {
 
     const requestURL = new URL(`http://${process.env.HOST ?? 'localhost'}${request.url}`);
     const pathname = decodeURIComponent(requestURL.pathname);
+
+    if (pathname === '/allFileNames'){
+        response.writeHead(200, { 'Content-Type': 'text/plain' });
+        const walk = async (dir: string): Promise<void> => {
+            const list = await fs.readdir(dir, { withFileTypes: true });
+            for (const file of list) {
+                const fullPath = path.join(dir, file.name);
+                if (file.isDirectory()) {
+                    await walk(fullPath);
+                } else {
+                    response.write(path.relative(rootDir, fullPath) + '\n');
+                }
+            }
+        };
+        
+        await walk(rootDir);
+        response.end();
+        return;
+    }
 
     if (pathname.startsWith(mediaPath)){
         try {
