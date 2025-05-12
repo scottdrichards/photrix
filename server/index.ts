@@ -4,7 +4,7 @@ import path from "path";
 import process from "process";
 import { fileHandlers } from "./mediaConverters.ts";
 import { rootDir } from "./config.ts";
-import { database, type Folder } from "./database.ts";
+// import { database, type Folder } from "./database.ts";
 
 const port = 9615 
 
@@ -28,22 +28,22 @@ http.createServer(async (request, response)=> {
 
     console.log(pathname)
 
-    if (pathname === '/allFileNames'){
-        response.writeHead(200, { 'Content-Type': 'text/plain' });
-        const walkFolder = async (folder:Folder, currentPath:string) => {
-            for (const item of folder.children){
-                if ('children' in item){
-                    await walkFolder(item, currentPath+"/"+folder.name);
-                } else {
-                    response.write(currentPath+"/"+item.name);
-                }
-            }
-        };
+    // if (pathname === '/allFileNames'){
+    //     response.writeHead(200, { 'Content-Type': 'text/plain' });
+    //     const walkFolder = async (folder:Folder, currentPath:string) => {
+    //         for (const item of folder.children){
+    //             if ('children' in item){
+    //                 await walkFolder(item, currentPath+"/"+folder.name);
+    //             } else {
+    //                 response.write(currentPath+"/"+item.name);
+    //             }
+    //         }
+    //     };
         
-        // await walkFolder(database.root, "");
-        response.end();
-        return;
-    }
+    //     await walkFolder(database.root, "");
+    //     response.end();
+    //     return;
+    // }
 
     if (pathname.startsWith(mediaPath)){
         try {
@@ -57,29 +57,40 @@ http.createServer(async (request, response)=> {
             const fullPath = path.join(rootDir, relativePath);
             const stats = await fs.stat(fullPath);
 
-            const fileHandler = fileHandlers.find(handler => (handler.extensions as string[]).includes(path.extname(relativePath)));
-
             if (stats.isDirectory()){
                 type Result = {path:string, type:'directory'|'file'};
                 const recursive = requestURL.searchParams.get('includeSubfolders') === 'true';
+                const searchString = requestURL.searchParams.get('search') || "";
                 const detailsWanted = JSON.parse(requestURL.searchParams.get('details')||"[]") as unknown[];
                 const items = await fs.readdir(fullPath, {recursive});
                 response.writeHead(200, {'Content-Type': 'text/json'});
-                const results:MediaDirectoryResult = await Promise.all( items.map(async item => {
-                    const stat = await fs.stat(path.join(rootDir, relativePath, item));
+                for (const item of items){
                     const itemPath = path.posix.join(relativePath, item);
+                    if (searchString && !itemPath.toLowerCase().includes(searchString.toLowerCase())){
+                        continue;
+                    }
+                    const stat = await fs.stat(path.join(rootDir, relativePath, item));
+                    
+                    if (stat.isDirectory()){
+                        console.log("sending: ", item)
+                    } 
+                    if (requestURL.searchParams.get('excludeFolders') === 'true' && stat.isDirectory()){
+                        continue
+                    }
                     const localFileHandler = fileHandlers.find(handler => (handler.extensions as string[]).includes(path.extname(itemPath)));
                     const details = localFileHandler && "details" in localFileHandler && await localFileHandler.details(itemPath, detailsWanted as any);
-                    return {path: itemPath, type: stat.isDirectory() ? 'directory' : 'file', ...(details?{details}:{})};
-                }));
-                
-                const jsonString = JSON.stringify(results);
-                response.write(jsonString);
+                    const lineText = JSON.stringify({path: itemPath, type: stat.isDirectory() ? 'directory' : 'file', ...(details?{details}:{})});
+                    await new Promise(resolve => {
+                    response.write(lineText + "\n", resolve)});
+                }
                 response.end()
                 return;
             };
     
             if (stats.isFile()){
+                const fileExtLowercase = path.extname(relativePath).toLocaleLowerCase();
+                const fileHandler = fileHandlers.find(({extensions}) => (extensions as string[]).includes(fileExtLowercase));
+
                 if (!fileHandler){
                     response.writeHead(415);
                     response.end();
@@ -109,14 +120,19 @@ http.createServer(async (request, response)=> {
             response.end()     // end the response so browsers don't hang
             console.log(e)
        }     
-    }
-
-    const publicPath = path.join(import.meta.dirname??"", 'public', pathname);
-    const file = await fs.readFile(publicPath).catch(() => null);
-    if (file){
-        response.writeHead(200);
-        response.write(file);
-        response.end();
+    }else{
+        const forwardOptions = {
+            hostname: "localhost",
+            port: 5173,
+            path: request.url,
+            method: request.method,
+            headers: request.headers,
+        };
+        const forwardReq = http.request(forwardOptions, (forwardRes) => {
+            response.writeHead(forwardRes.statusCode ?? 500, forwardRes.headers);
+            forwardRes.pipe(response, { end: true });
+        });
+        request.pipe(forwardReq, { end: true });
     }
 
 }).listen(port)

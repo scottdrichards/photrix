@@ -1,12 +1,22 @@
-const port = 9615;
 export type MediaDirectoryResult = Array<{
   path: string;
   type: "directory" | "file";
 }>;
+
+
+export const mediaURLBase = new URL("/media/", window.location.origin);
+
 export const getFolderContents = async (
   folder: string,
 ): Promise<MediaDirectoryResult> => {
-  return fetch(`http://localhost:${port}/media/${folder}`).then((response) =>
-    response.json(),
+  const url = new URL(folder, mediaURLBase);
+  return fetch(url).then((response) =>
+    response.text().then((text) =>
+      text
+        .split("\n")
+        .slice(0, -1)
+        .map((v) => JSON.parse(v)),
+    ),
   );
 };
+

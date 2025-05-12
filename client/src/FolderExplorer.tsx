@@ -20,29 +20,18 @@ export type Selected = {
   type: Node["type"];
 };
 type Params = {
+  selected: Selected | null;
   onSelect: (element: Selected) => void;
-  style?: React.CSSProperties;
 };
 
 export const FolderExplorer: React.FC<Params> = (params) => {
-  const { onSelect, style } = params;
-  const [root, setRoot] = useState<Node>({
-    name: "root",
-    type: "directory",
-    children: [],
-    expanded: true,
-  });
+  const { onSelect, selected } = params;
+  const [root, setRoot] = useState<Node[]>([]);
 
   useEffect(() => {
     (async () => {
       const results = await getFolderContents("");
-      const newRoot: Node = {
-        name: "root",
-        type: "directory",
-        expanded: true,
-        children: results.map(mediaResultToNode),
-      };
-      setRoot(newRoot);
+      setRoot(results.map(mediaResultToNode));
     })();
   }, []);
 
@@ -50,14 +39,17 @@ export const FolderExplorer: React.FC<Params> = (params) => {
     const toggle = async (
       node: Node,
       pathRemaining: string[],
-      currentPath: string[],
+      parentPath: string[],
     ): Promise<Node> => {
       if (
         !pathRemaining.length ||
         node.name !== pathRemaining[0] ||
         node.type !== "directory"
-      )
+      ) {
         return node;
+      }
+
+      const currentPath = [...parentPath, node.name];
 
       const isExpanded = () => {
         if (pathRemaining.length === 1) {
@@ -82,10 +74,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
             ))
           )?.map(
             async (child) =>
-              await toggle(child, pathRemaining.slice(1), [
-                ...currentPath,
-                child.name,
-              ]),
+              await toggle(child, pathRemaining.slice(1), currentPath),
           )
         : node.children; // If this is not expanded, leave children as is
 
@@ -102,7 +91,9 @@ export const FolderExplorer: React.FC<Params> = (params) => {
             });
       return { ...node, children: childrenSorted, expanded: localExpanded };
     };
-    const rootCopy = await toggle(root, path, []);
+    const rootCopy = await Promise.all(
+      root.map((folder) => toggle(folder, path, [])),
+    );
     setRoot((prevRoot) => {
       if (prevRoot !== root) {
         console.error(
@@ -116,51 +107,60 @@ export const FolderExplorer: React.FC<Params> = (params) => {
   const Render = (params: { element: Node; parentPath: string[] }) => {
     const { element: el, parentPath } = params;
     const currentPath = [...parentPath, el.name];
+    const currentPathString = currentPath.join("/");
     return (
-      <>
+      <div
+        key={currentPathString}
+        style={{
+          paddingLeft: "20px",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-start",
+        }}
+      >
         <div
-          style={{
-            paddingLeft: "20px",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "flex-start",
-          }}
+          style={
+            selected?.fullPath.startsWith(currentPathString)
+              ? {
+                  backgroundColor: "lightblue",
+                  borderRadius: "5px",
+                  ...(selected?.fullPath === currentPathString
+                    ? { fontWeight: "bold" }
+                    : {}),
+                }
+              : {}
+          }
         >
-          <div>
-            {el.type === "directory" && (
-              <span onClick={() => setFolderExpand(currentPath, !el.expanded)}>
-                {el.expanded ? "📂" : "📁"}
-              </span>
-            )}
-            <span
-              onClick={() =>
-                onSelect({
-                  fullPath: currentPath.slice(1).join("/"),
-                  type: el.type,
-                })
-              }
-            >
-              {el.name}
+          {el.type === "directory" && (
+            <span onClick={() => setFolderExpand(currentPath, !el.expanded)}>
+              {el.expanded ? "📂" : "📁"}
             </span>
-          </div>
-          {el.expanded &&
-            el.children
-              ?.filter((c) => c.type === "directory")
-              .map((child) => (
-                <Render
-                  key={child.name}
-                  element={child}
-                  parentPath={currentPath}
-                />
-              ))}
+          )}
+          <span
+            onClick={() =>
+              onSelect({
+                fullPath: currentPathString,
+                type: el.type,
+              })
+            }
+          >
+            {el.name}
+          </span>
         </div>
-      </>
+        {el.expanded &&
+          el.children
+            ?.filter((c) => c.type === "directory")
+            .map((child) => (
+              <Render
+                key={child.name}
+                element={child}
+                parentPath={currentPath}
+              />
+            ))}
+      </div>
     );
   };
   return (
-    <div style={style}>
-      {" "}
-      <Render element={root} parentPath={[]} />
-    </div>
+    <>{root.map((folder) => Render({ element: folder, parentPath: [] }))}</>
   );
 };

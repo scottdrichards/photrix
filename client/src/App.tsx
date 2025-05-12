@@ -1,31 +1,59 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 import { FolderExplorer, Selected } from "./FolderExplorer";
 import { ThumbnailViewer } from "./ThumbnailViewer";
+import { Media } from "./Media";
+import { useStyles } from "./App.styles";
 
 function App() {
-  const [selected, setSelected] = useState<Selected | null>(null);
+  const [selectedFolder, setSelectedFolder] = useState<Selected | null>(null);
+  const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [includeSubfolders, setIncludeSubfolders] = useState(false);
+
+  const styles = useStyles();
+
+  useEffect(() => {
+    setSelectedImages([]);
+  }, [selectedFolder]);
 
   return (
     <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "max-content 1fr",
-        gridTemplateRows: "100%",
-        height: "100%",
-        width: "100%",
-      }}
+    className={styles.root}
     >
-      <FolderExplorer
-        onSelect={setSelected}
-        style={{ height: "100%", overflowY: "auto" }}
-      />
+      <div
+      className={styles.folderSelectionPanel}
+      >
+        <label>
+          <input
+            type="checkbox"
+            id="includeSubfolders"
+            checked={includeSubfolders}
+            onChange={(e) => setIncludeSubfolders(e.target.checked)}
+          />
+          Include Subfolders
+        </label>
+        <FolderExplorer
+          onSelect={setSelectedFolder}
+          selected={selectedFolder}
+        />
+      </div>
       <ThumbnailViewer
-        directoryPath={selected?.fullPath}
-        includeSubfolders={true}
-        style={{ height: "100%", overflowY: "auto" }}
+        selected={selectedImages}
+        setSelected={setSelectedImages}
+        directoryPath={selectedFolder?.fullPath}
+        includeSubfolders={includeSubfolders}
       />
+      <div
+        className={styles.preview}
+      >
+        {selectedImages.map((image) => (
+          <Media
+            key={image}
+            path={image}
+            style={{ width: "100%", height: "100%", objectFit: "contain" }}
+          />
+        ))}
+      </div>
     </div>
   );
 }
