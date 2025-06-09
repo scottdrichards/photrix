@@ -1,107 +1,184 @@
 import fs from "fs/promises";
 import path from "path";
-import { rootDir } from "./config.ts";
 
-export type File = {
+export type Item = {
+    name:string,
+    type: string,
+}
+
+export type File = Item & {
     type: 'file';
-    name: string;
 }
 
-export type Folder = {
+type Children = {
+    value: (Folder|File)[]|undefined;
+    subscribers?: ((value?: unknown) => void)[];
+}
+
+export type Folder = Item & {
     type: 'folder';
-    name: string;
-    children: (Folder|File)[] | undefined;
+    children: Children | undefined;
 }
 
-export const getContentsOfDirectory = async (dir: string): Promise<Folder['children']> => {const contentsResults = await fs.readdir(dir, { withFileTypes: true });
-return contentsResults.map((file) => {
-        const fullPath = path.join(dir, file.name);
-        if (file.isDirectory()) {
-            console.log('Directory:', fullPath);
-            return {
-                type: 'folder',
-                name: file.name,
-                children: undefined
-            } as Folder;
-        } else {
-            const filePath = path.relative(rootDir, fullPath) + '\n';
-            return {type:'file',name:filePath};
-        }
-    })};
 
-export const createDatabase = async (dir:string) => {
-    const contents = await getContentsOfDirectory(dir);
-    if (!contents) {
-        throw new Error(`Failed to read directory: ${dir}`);
-    }
-    return Promise.all(contents.map(async (item):Promise<File|Folder> => {
-        if (item.type === 'file') {
-            return item;
-        }
-        return {
-            ...item,
-            children: item.children || await createDatabase(path.join(dir, item.name))
-        }
-    }
-    ));
-}
+type GetMultipleOptions = {
+    search?: string;
+    type?: 'file' | 'folder' | {extensions: string[]};
+    recurse?: boolean;
+    within?: string | {
+        /* Folder - for caching/lookup purposes */
+        folder: Folder;
+        /* Relative path to the folder, relative to the root of the database 
+            It incudes the folder name itself */
+        relativePath: string;
+    };
+};
 
-export const database = {
-    setRootAndScan: async (dir: string) => {
-        const walk = async (folder:Folder, dir: string): Promise<void> => {
-            const list = await fs.readdir(dir, { withFileTypes: true });
-            for (const file of list) {
-                const fullPath = path.join(dir, file.name);
-                if (file.isDirectory()) {
-                    console.log('Directory:', fullPath);
-                    const newFolder = {
-                        name: file.name,
-                        children: []
-                    } as Folder;
-                    folder.children.push(newFolder);
-                    await walk(newFolder, fullPath);
-                } else {
-                    const filePath = path.relative(rootDir, fullPath) + '\n';
-                    folder.children.push({name:filePath});
-                }
-            }
+export class Database {
+    private root: Folder;
+    private path: string;
+    constructor(path: string) {
+        this.path = path;
+        this.root = {
+            type: 'folder',
+            name: "",
+            children: undefined,
         };
-        database.root = {
-            name: dir,
-            children: []
-        } as Folder;
-        this.root = await walk(database.root, dir);
-    },
-    root: {
-        name: rootDir,
-        children: []
-    } as Folder,
-    getPath: (path: string) => path.split('/').reduce((acc, part) => {
-        const folder = acc.children.find(child => child.name === part) as Folder;
-        if (!folder) {
-            throw new Error(`Folder ${part} not found`);
-        }
-        return folder;
-    }, database.root),
-    getFiles: (path:string, includeSubfolders: boolean) => {
-        const folder = database.getPath(path);
-        const files: File[] = [];
-        const walk = (folder: Folder) => {
-            for (const child of folder.children) {
-                if ('children' in child) {
-                    if (includeSubfolders) {
-                        walk(child);
+    }
+
+    
+    private  getChildren = async (relativePath: string): Promise<(Folder|File)[]> =>
+        fs.readdir(path.join(this.path,relativePath), { withFileTypes: true })
+            .then<(File|Folder)[]>((results) => 
+                results.map((entry) => {
+                    if (entry.isDirectory()) {
+                        return {
+                            type: 'folder',
+                            name: entry.name,
+                            children: undefined,
+                        };
                     }
-                } else {
-                    files.push(child);
+                    return {type:'file',name:entry.name};
+    }))
+
+    /**
+     * @param pathToElement relative to root
+     * @returns a reference to a file or folder in the database.
+     */
+    public async getSingle(pathToElement: string): Promise<Folder|File> {
+        const pathParts = pathToElement.split(path.sep).filter(part => part !== '');;
+        let current: Folder|File = this.root;
+        let currentPath = "";
+        for (const pathPart of pathParts) {
+            currentPath = path.join(currentPath, current.name);
+            if (current.type === 'file') {
+                throw new Error(`Cannot navigate into file (should be a folder) ${current.name}`);
+            }
+
+            if (current.children === undefined) {
+                current.children = {
+                    value:undefined, subscribers: []
+                };
+                const children = await this.getChildren(currentPath);
+                const subscribers = current.children.subscribers;
+                current.children = {value: children};
+                subscribers?.forEach(fn => fn());
+            }
+
+            const subscribers = current.children.subscribers;
+            if (current.children.value === undefined && subscribers) {
+                await new Promise(resolve => {
+                    subscribers.push(resolve);
+                });
+            }
+
+            if (!current.children.value) {
+                throw new Error(`Fodler children should have value at this point`);
+            }
+
+            const next:File|Folder|undefined = current.children.value.find(child => child.name === pathPart);
+            if (!next) {
+                throw new Error(`Item ${pathPart} not found in path ${pathToElement}`);
+            }
+            current = next;
+        }
+        return current;
+    }
+
+    /**
+     * 
+     * @param options 
+     * @returns an async generator that yields items and relative paths to the "within" location.
+     */
+    public async *getMultiple(options:GetMultipleOptions): AsyncGenerator<{item:Folder|File, relativePath:string}> {
+        const base = options.within
+            ? typeof options.within === 'string' ?
+                await this.getSingle(options.within) :
+                options.within.folder
+            : this.root;
+
+        if (base.type === 'file') {
+            throw new Error(`Cannot search within a file: ${base.name}`);
+        }
+        
+        // Folder path includes the Folder itself
+        const toSearch:{item:Folder,relativePath:string}[] = [{
+            item: base,
+            relativePath: options.within?
+                typeof options.within === 'string' ?
+                    options.within
+                    : options.within.relativePath
+                : '',
+        }];
+
+        while (toSearch.length) {
+            const {item: current, relativePath} = toSearch.shift()!;
+            // Nobody has started looking for children yet, so we can start
+            if (current.children === undefined) {
+                const value = await this.getChildren(relativePath);
+                current.children = {
+                    value
+                };
+                if (current.children.subscribers) {
+                    current.children.subscribers.forEach(fn => fn());
+                    delete current.children.subscribers;
                 }
             }
-        };
-        walk(folder);
-        return files;
-    },
-}
+            // Someone has started looking for children, but it isn't us, so we wait for them to finish
+            if (current.children.value === undefined) {
+                // Typescript has trouble with the typing of current within the promise, this copy helps
+                // it understand a bit
+                const currentCopy = current;
+                await new Promise(resolve => {
+                    if (currentCopy.children!.subscribers === undefined) {
+                        currentCopy.children!.subscribers = [];
+                    }
+                    currentCopy.children!.subscribers.push(resolve);
+                });
+            }
 
-console.log('Building database...');
-await walk(database.root, rootDir);
-console.log('Database built');
+            for (const child of current.children.value!) {
+                if (options.type) {
+                    if (typeof options.type === 'object' && 'extensions' in options.type) {
+                        if (child.type === 'file' && !options.type.extensions.includes(path.extname(child.name))) {
+                            continue;
+                        }
+                    } else if (child.type !== options.type) {
+                        continue;
+                    }
+                }
+                if (options.search && !child.name.toLowerCase().includes(options.search.toLowerCase())) {
+                    continue;
+                }
+                const next = {
+                    item: child,
+                    relativePath: path.join(relativePath, child.name),
+                };
+                yield next;
+                if (next.item.type === 'folder' && options.recurse) {
+                    toSearch.push(next as {item:Folder, relativePath:string});
+                }
+            }
+        }
+    }
+}

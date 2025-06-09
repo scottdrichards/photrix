@@ -4,13 +4,15 @@ import path from "path";
 import process from "process";
 import { fileHandlers } from "./mediaConverters.ts";
 import { rootDir } from "./config.ts";
-// import { database, type Folder } from "./database.ts";
+import { Database, type Folder } from "./database.ts";
 
 const port = 9615 
 
 const mediaPath = '/media';
 
 export type MediaDirectoryResult = Array<{path:string, type:'directory'|'file', details?:any}>;
+
+const database = new Database(rootDir);
 
 http.createServer(async (request, response)=> {
     response.setHeader('Access-Control-Allow-Origin', "http://127.0.0.1:5173");
@@ -26,68 +28,23 @@ http.createServer(async (request, response)=> {
     const requestURL = new URL(`http://${process.env.HOST ?? 'localhost'}${request.url}`);
     const pathname = decodeURIComponent(requestURL.pathname);
 
-    console.log(pathname)
-
-    // if (pathname === '/allFileNames'){
-    //     response.writeHead(200, { 'Content-Type': 'text/plain' });
-    //     const walkFolder = async (folder:Folder, currentPath:string) => {
-    //         for (const item of folder.children){
-    //             if ('children' in item){
-    //                 await walkFolder(item, currentPath+"/"+folder.name);
-    //             } else {
-    //                 response.write(currentPath+"/"+item.name);
-    //             }
-    //         }
-    //     };
-        
-    //     await walkFolder(database.root, "");
-    //     response.end();
-    //     return;
-    // }
-
     if (pathname.startsWith(mediaPath)){
         try {
-            const relativePath = pathname.substring(mediaPath.length);
+            const relativePath = pathname.substring(mediaPath.length).replaceAll("/", path.sep);
             // We don't want to allow access to parent directories
             if (pathname.includes('..')){
                 response.writeHead(403)
                 response.end()
                 return;
             }
-            const fullPath = path.join(rootDir, relativePath);
-            const stats = await fs.stat(fullPath);
-
-            if (stats.isDirectory()){
-                type Result = {path:string, type:'directory'|'file'};
-                const recursive = requestURL.searchParams.get('includeSubfolders') === 'true';
-                const searchString = requestURL.searchParams.get('search') || "";
-                const detailsWanted = JSON.parse(requestURL.searchParams.get('details')||"[]") as unknown[];
-                const items = await fs.readdir(fullPath, {recursive});
-                response.writeHead(200, {'Content-Type': 'text/json'});
-                for (const item of items){
-                    const itemPath = path.posix.join(relativePath, item);
-                    if (searchString && !itemPath.toLowerCase().includes(searchString.toLowerCase())){
-                        continue;
-                    }
-                    const stat = await fs.stat(path.join(rootDir, relativePath, item));
-                    
-                    if (stat.isDirectory()){
-                        console.log("sending: ", item)
-                    } 
-                    if (requestURL.searchParams.get('excludeFolders') === 'true' && stat.isDirectory()){
-                        continue
-                    }
-                    const localFileHandler = fileHandlers.find(handler => (handler.extensions as string[]).includes(path.extname(itemPath)));
-                    const details = localFileHandler && "details" in localFileHandler && await localFileHandler.details(itemPath, detailsWanted as any);
-                    const lineText = JSON.stringify({path: itemPath, type: stat.isDirectory() ? 'directory' : 'file', ...(details?{details}:{})});
-                    await new Promise(resolve => {
-                    response.write(lineText + "\n", resolve)});
-                }
-                response.end()
+            
+            const itemAtPath = await database.getSingle(relativePath);
+            if (!itemAtPath){
+                response.writeHead(404);
+                response.end();
                 return;
-            };
-    
-            if (stats.isFile()){
+            }
+            if (itemAtPath.type === 'file'){
                 const fileExtLowercase = path.extname(relativePath).toLocaleLowerCase();
                 const fileHandler = fileHandlers.find(({extensions}) => (extensions as string[]).includes(fileExtLowercase));
 
@@ -97,10 +54,8 @@ http.createServer(async (request, response)=> {
                     return;
                 }
                 
-                const width = (()=>{
-                    const widthRequested = requestURL.searchParams.get('width');
-                    if (!widthRequested) return undefined;
-                    const parsed = parseInt(widthRequested);
+                const requestedWidth = (()=>{
+                    const parsed = parseInt(requestURL.searchParams.get('width') ?? '');
                     if (isNaN(parsed) || parsed < 0){
                         return undefined;
                     };
@@ -108,16 +63,39 @@ http.createServer(async (request, response)=> {
                     return sizeBreaks.find(size => parsed <= size) ?? undefined;
                 })();
 
-                const {file, contentType} = await fileHandler.handler(relativePath, {width});
+                const {file, contentType} = await fileHandler.handler(relativePath, {width: requestedWidth});
     
                 response.writeHead(200, {'Content-Type': contentType});
                 response.write(file);
                 response.end()
                 return;
             }
+
+            if (itemAtPath.type === 'folder'){
+                const itemGenerator = database.getMultiple({
+                    within: {folder: itemAtPath, relativePath: relativePath},
+                    type: requestURL.searchParams.get('type') as any,
+                    search: requestURL.searchParams.get('search') ?? undefined,
+                    recurse: requestURL.searchParams.get('includeSubfolders') === 'true',
+                });
+
+                response.writeHead(200, {'Content-Type': 'text/plain'});
+                response.setHeader('Cache-Control', 'no-cache');
+                let bufferReady = true;
+                for await (const {item, relativePath} of itemGenerator){
+                    if (!bufferReady) {
+                        await new Promise(resolve => response.once('drain', resolve));
+                    }
+                    const pathWithHTMLSeparator = relativePath.replaceAll(path.sep, '/');
+                    const lineText = JSON.stringify({path: pathWithHTMLSeparator, type: item.type});
+                    bufferReady = response.write(lineText + "\n")
+                }
+                response.end()
+                return;
+            };
        } catch(e) {
             response.writeHead(500)
-            response.end()     // end the response so browsers don't hang
+            response.end()
             console.log(e)
        }     
     }else{

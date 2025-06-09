@@ -1,6 +1,6 @@
 export type MediaDirectoryResult = Array<{
   path: string;
-  type: "directory" | "file";
+  type: "folder" | "file";
 }>;
 
 

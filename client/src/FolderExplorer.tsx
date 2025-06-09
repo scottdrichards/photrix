@@ -3,7 +3,7 @@ import { getFolderContents, MediaDirectoryResult } from "./data/api";
 
 export type Node = {
   name: string;
-  type: "directory" | "file";
+  type: "folder" | "file";
   expanded: boolean;
   children?: Node[];
 };
@@ -44,7 +44,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
       if (
         !pathRemaining.length ||
         node.name !== pathRemaining[0] ||
-        node.type !== "directory"
+        node.type !== "folder"
       ) {
         return node;
       }
@@ -85,8 +85,8 @@ export const FolderExplorer: React.FC<Params> = (params) => {
         node.children === childrenResoved
           ? node.children
           : childrenResoved?.sort((a, b) => {
-              if (a.type === "directory" && b.type === "file") return -1;
-              if (a.type === "file" && b.type === "directory") return 1;
+              if (a.type === "folder" && b.type === "file") return -1;
+              if (a.type === "file" && b.type === "folder") return 1;
               return a.name.localeCompare(b.name);
             });
       return { ...node, children: childrenSorted, expanded: localExpanded };
@@ -131,7 +131,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
               : {}
           }
         >
-          {el.type === "directory" && (
+          {el.type === "folder" && (
             <span onClick={() => setFolderExpand(currentPath, !el.expanded)}>
               {el.expanded ? "📂" : "📁"}
             </span>
@@ -149,7 +149,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
         </div>
         {el.expanded &&
           el.children
-            ?.filter((c) => c.type === "directory")
+            ?.filter((c) => c.type === "folder")
             .map((child) => (
               <Render
                 key={child.name}

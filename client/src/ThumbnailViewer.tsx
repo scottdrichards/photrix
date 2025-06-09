@@ -47,6 +47,7 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
   }
 
   const url = new URL(`${directoryPath??''}`, mediaURLBase);
+  console.log({url: url.toString()});
   url.searchParams.set("details", JSON.stringify(["dimensions"]));
   if (includeSubfolders) {
     url.searchParams.set("includeSubfolders", "true");
