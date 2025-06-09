@@ -62,6 +62,7 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
   url.searchParams.set("includedAttributes", JSON.stringify(["dimensions"]));
   if (includeSubfolders) {
     url.searchParams.set("includeSubfolders", "true");
+    url.searchParams.set("type", "file");
   }
   if (search) {
     url.searchParams.set("search", search);
@@ -86,7 +87,13 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
         });
         let thumbnailData:typeof thumbnails = [];
         for await (const linesChunk of processLines(response)) {
-          thumbnailData = thumbnailData.concat(...linesChunk.map((line) => JSON.parse(line)));
+          thumbnailData = thumbnailData
+            .concat(...linesChunk.map((line) => JSON.parse(line)))
+            // .sort((a, b) => {
+            //   if (a.type === "folder" && b.type === "file") return -1;
+            //   if (a.type === "file" && b.type === "folder") return 1;
+            //   return a.path.localeCompare(b.path)}
+            // );
           setThumbnails(thumbnailData);
         }
         setLoading(false);

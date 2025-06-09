@@ -170,19 +170,6 @@ export class Database {
             }
 
             for (const child of current.children.value!) {
-                if (options.type) {
-                    if (typeof options.type === 'object' && 'extensions' in options.type) {
-                        if (child.type === 'file' && !options.type.extensions.includes(path.extname(child.name))) {
-                            continue;
-                        }
-                    } else if (child.type !== options.type) {
-                        continue;
-                    }
-                }
-                if (options.search && !child.name.toLowerCase().includes(options.search.toLowerCase())) {
-                    continue;
-                }
-
                 // Add attributes to the item if requested
                 if (desiredAttributes.has('dimensions') && child.type === 'file' && !('dimensions' in child)) {
                     const metadata = await sharp(path.join(this.path, relativePath, child.name))
@@ -203,7 +190,25 @@ export class Database {
                     item: child,
                     relativePath: path.join(relativePath, child.name),
                 };
-                yield next;
+
+                const includeInResults = (()=>{
+                    if (options.type) {
+                        if (typeof options.type === 'object' && 'extensions' in options.type) {
+                            if (child.type === 'file' && !options.type.extensions.includes(path.extname(child.name))) {
+                                return false;
+                            }
+                        } else if (child.type !== options.type) {
+                            return false;
+                        }
+                    }
+                    if (options.search && !child.name.toLowerCase().includes(options.search.toLowerCase())) {
+                        return false;
+                    }
+                    return true;
+                })()
+                if (includeInResults){
+                    yield next;
+                }
                 if (next.item.type === 'folder' && options.recurse) {
                     toSearch.push(next as {item:Folder, relativePath:string});
                 }
