@@ -20,8 +20,8 @@ export type Selected = {
   type: Node["type"];
 };
 type Params = {
-  selected: Selected | null;
-  onSelect: (element: Selected) => void;
+  selected: string | null;
+  onSelect: (path: string) => void;
 };
 
 export const FolderExplorer: React.FC<Params> = (params) => {
@@ -120,11 +120,11 @@ export const FolderExplorer: React.FC<Params> = (params) => {
       >
         <div
           style={
-            selected?.fullPath.startsWith(currentPathString)
+            selected?.startsWith(currentPathString)
               ? {
                   backgroundColor: "lightblue",
                   borderRadius: "5px",
-                  ...(selected?.fullPath === currentPathString
+                  ...(selected === currentPathString
                     ? { fontWeight: "bold" }
                     : {}),
                 }
@@ -138,10 +138,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
           )}
           <span
             onClick={() =>
-              onSelect({
-                fullPath: currentPathString,
-                type: el.type,
-              })
+              onSelect(currentPathString)
             }
           >
             {el.name}

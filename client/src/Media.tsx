@@ -37,5 +37,5 @@ export const Media: React.FC<Params> = memo((params) => {
     (exts as any as string[]).includes(ext.toLocaleLowerCase()),
   )?.[1];
 
-  return Renderer ? <Renderer /> : <div>Unsupported file type</div>;
+  return Renderer ? <Renderer /> : <div>Unsupported file type <code>{path}</code></div>;
 });

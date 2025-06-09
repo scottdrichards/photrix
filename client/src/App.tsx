@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-import { FolderExplorer, Selected } from "./FolderExplorer";
-import { ThumbnailViewer } from "./ThumbnailViewer";
-import { Media } from "./Media";
 import { useStyles } from "./App.styles";
+import { FolderExplorer } from "./FolderExplorer";
+import { Media } from "./Media";
+import { ThumbnailViewer } from "./ThumbnailViewer";
 
 function App() {
-  const [selectedFolder, setSelectedFolder] = useState<Selected | null>(null);
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [includeSubfolders, setIncludeSubfolders] = useState(false);
 
@@ -40,8 +40,9 @@ function App() {
       <ThumbnailViewer
         selected={selectedImages}
         setSelected={setSelectedImages}
-        directoryPath={selectedFolder?.fullPath}
+        directoryPath={selectedFolder}
         includeSubfolders={includeSubfolders}
+        selectFolder={setSelectedFolder}
       />
       <div
         className={styles.preview}

@@ -30,7 +30,9 @@ http.createServer(async (request, response)=> {
 
     if (pathname.startsWith(mediaPath)){
         try {
-            const relativePath = pathname.substring(mediaPath.length).replaceAll("/", path.sep);
+            const relativePath = pathname.substring(mediaPath.length)
+                .replace(/^\/+/, '') // Remove leading slashes                
+                .replaceAll("/", path.sep);
             // We don't want to allow access to parent directories
             if (pathname.includes('..')){
                 response.writeHead(403)

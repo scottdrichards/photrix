@@ -9,20 +9,21 @@ const minSize = 100;
 const maxSize = 300;
 
 type Params = {
-  directoryPath: string | undefined;
+  directoryPath: string | null;
   includeSubfolders?: boolean;
   selected: string[];
   setSelected: (paths: string[]) => void;
+  selectFolder: (path: string) => void;
 };
 
 export const ThumbnailViewer: React.FC<Params> = (params) => {
-  const { directoryPath, includeSubfolders, selected, setSelected } =
+  const { directoryPath, includeSubfolders, selected, setSelected,selectFolder } =
     params;
   const [search, setSearch] = useState("");
 
   type Thumbnail = {
     path: string;
-    type: "file" | "directory";
+    type: "file" | "folder";
     details?: { dimensions: { width: number; height: number } };
   }
   const [thumbnails, setThumbnails] = useState<Array<Thumbnail>>([]);
@@ -32,6 +33,14 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
 
   const onClick = (e: React.MouseEvent) => {
     const path = (e.currentTarget as HTMLDivElement).dataset.path;
+    const type = (e.currentTarget as HTMLDivElement).dataset.type;
+    if (type === "folder") {
+      if (path) {
+        selectFolder(path);
+      }
+      return;
+    }
+    
     if (!path) return;
     const selectMultipleMode = e.ctrlKey ||( e.target instanceof HTMLImageElement && e.target.classList.contains("select-indicator"));
     if (!selectMultipleMode
@@ -105,6 +114,7 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
               <div
                 key={thumbnail.path}
                 data-path={thumbnail.path}
+                data-type={thumbnail.type}
                 className={styles.thumbnail}
                 style={{
                   "--size": `${size}px`,
@@ -121,11 +131,12 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
                     display: selected.length ? "initial" : "none",
                   }}
                 ></div>
+                {thumbnail.type === "folder" ? <div><div>📁</div>{thumbnail.path}</div> : 
                 <Media
                   path={thumbnail.path}
                   width={100}
                   style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
+                />}
               </div>
             );
           })}
