@@ -8,6 +8,8 @@ import { mediaURLBase } from "./data/api";
 const minSize = 100;
 const maxSize = 300;
 
+const mediaStyle = { width: "100%", height: "100%", objectFit: "cover" } as const
+
 type Params = {
   directoryPath: string | null;
   includeSubfolders?: boolean;
@@ -24,7 +26,7 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
   type Thumbnail = {
     path: string;
     type: "file" | "folder";
-    details?: { dimensions: { width: number; height: number } };
+    dimensions?: { width: number; height: number };
   }
   const [thumbnails, setThumbnails] = useState<Array<Thumbnail>>([]);
   const [loading, setLoading] = useState(false);
@@ -40,7 +42,7 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
       }
       return;
     }
-    
+
     if (!path) return;
     const selectMultipleMode = e.ctrlKey ||( e.target instanceof HTMLImageElement && e.target.classList.contains("select-indicator"));
     if (!selectMultipleMode
@@ -57,7 +59,7 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
 
   const url = new URL(`${directoryPath??''}`, mediaURLBase);
   console.log({url: url.toString()});
-  url.searchParams.set("details", JSON.stringify(["dimensions"]));
+  url.searchParams.set("includedAttributes", JSON.stringify(["dimensions"]));
   if (includeSubfolders) {
     url.searchParams.set("includeSubfolders", "true");
   }
@@ -108,8 +110,7 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
       <Filters search={search} setSearch={setSearch} />
       <div className={styles.gallery}>
           {thumbnails.map((thumbnail) => {
-            const dimensions = thumbnail.details?.dimensions;
-            const ratio = (dimensions?.width || 1) / (dimensions?.height || 1);
+            const ratio = (thumbnail.dimensions?.width || 1) / (thumbnail.dimensions?.height || 1);
             return (
               <div
                 key={thumbnail.path}
@@ -135,7 +136,7 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
                 <Media
                   path={thumbnail.path}
                   width={100}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  style={mediaStyle}
                 />}
               </div>
             );

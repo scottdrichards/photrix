@@ -4,7 +4,7 @@ import path from "path";
 import process from "process";
 import { fileHandlers } from "./mediaConverters.ts";
 import { rootDir } from "./config.ts";
-import { Database, type Folder } from "./database.ts";
+import { Database, type File, type Folder, type MediaAttributes } from "./database.ts";
 
 const port = 9615 
 
@@ -74,11 +74,17 @@ http.createServer(async (request, response)=> {
             }
 
             if (itemAtPath.type === 'folder'){
+                const request = Object.fromEntries(requestURL.searchParams.entries());
+                const includedAttributes = request['includedAttributes'] ?
+                    JSON.parse(request['includedAttributes']) as Array<keyof MediaAttributes>
+                    :undefined;
+
                 const itemGenerator = database.getMultiple({
                     within: {folder: itemAtPath, relativePath: relativePath},
-                    type: requestURL.searchParams.get('type') as any,
-                    search: requestURL.searchParams.get('search') ?? undefined,
-                    recurse: requestURL.searchParams.get('includeSubfolders') === 'true',
+                    type: request['type'] as any,
+                    search: request['search'] ?? undefined,
+                    recurse: request['includeSubfolders'] === 'true',
+                    includedAttributes,
                 });
 
                 response.writeHead(200, {'Content-Type': 'text/plain'});
@@ -89,7 +95,13 @@ http.createServer(async (request, response)=> {
                         await new Promise(resolve => response.once('drain', resolve));
                     }
                     const pathWithHTMLSeparator = relativePath.replaceAll(path.sep, '/');
-                    const lineText = JSON.stringify({path: pathWithHTMLSeparator, type: item.type});
+                    const out:any = {path: pathWithHTMLSeparator, type: item.type}
+                    for (const attribute of includedAttributes??[]){
+                        if (attribute in (item as File & Folder)){
+                            out[attribute] = (item as File & Folder)[attribute];
+                        }
+                    }
+                    const lineText = JSON.stringify(out);
                     bufferReady = response.write(lineText + "\n")
                 }
                 response.end()

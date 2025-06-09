@@ -1,13 +1,23 @@
 import fs from "fs/promises";
 import path from "path";
+import sharp from "sharp";
 
 export type Item = {
     name:string,
     type: string,
+    size?: number,
+    created?: Date,
 }
 
-export type File = Item & {
-    type: 'file';
+export type MediaAttributes = {
+    dimensions?: {
+        width: number;
+        height: number;
+    };
+}
+
+export type File = Item & MediaAttributes & {
+    type: 'file';   
 }
 
 type Children = {
@@ -32,6 +42,7 @@ type GetMultipleOptions = {
             It incudes the folder name itself */
         relativePath: string;
     };
+    includedAttributes?: (keyof MediaAttributes)[];
 };
 
 export class Database {
@@ -111,6 +122,7 @@ export class Database {
      * @returns an async generator that yields items and relative paths to the "within" location.
      */
     public async *getMultiple(options:GetMultipleOptions): AsyncGenerator<{item:Folder|File, relativePath:string}> {
+        const desiredAttributes = new Set(options.includedAttributes ?? []);
         const base = options.within
             ? typeof options.within === 'string' ?
                 await this.getSingle(options.within) :
@@ -170,6 +182,23 @@ export class Database {
                 if (options.search && !child.name.toLowerCase().includes(options.search.toLowerCase())) {
                     continue;
                 }
+
+                // Add attributes to the item if requested
+                if (desiredAttributes.has('dimensions') && child.type === 'file' && !('dimensions' in child)) {
+                    const metadata = await sharp(path.join(this.path, relativePath, child.name))
+                        .metadata()
+                        .catch(() => undefined);
+                    if (metadata){
+                        const {width, height} = metadata;
+                        if (width && height) {
+                            child.dimensions = {
+                                width,
+                                height,
+                            };
+                        }
+                    }
+                }
+
                 const next = {
                     item: child,
                     relativePath: path.join(relativePath, child.name),
