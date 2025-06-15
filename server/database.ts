@@ -1,6 +1,7 @@
-import fs from "fs/promises";
-import path from "path";
-import sharp from "sharp";
+/// <reference types="npm:@types/node" />
+import fs from "node:fs/promises";
+import path from "node:path";
+import sharp from "npm:sharp";
 
 export type Item = {
     name:string,
@@ -55,22 +56,34 @@ export class Database {
             name: "",
             children: undefined,
         };
+
+        const watchFiles = async ()=>{
+            const watcher = fs.watch(this.path, { recursive: true });
+            for await (const e of watcher) {
+                console.log(`File change detected: ${e}`);
+            }
+        };
+        // Split up the IIFE to avoid the "this" context issues due to Typescript limitations
+        // https://github.com/microsoft/TypeScript/issues/9998
+        watchFiles();
     }
 
+
     
-    private  getChildren = async (relativePath: string): Promise<(Folder|File)[]> =>
-        fs.readdir(path.join(this.path,relativePath), { withFileTypes: true })
-            .then<(File|Folder)[]>((results) => 
-                results.map((entry) => {
-                    if (entry.isDirectory()) {
-                        return {
-                            type: 'folder',
-                            name: entry.name,
-                            children: undefined,
-                        };
-                    }
-                    return {type:'file',name:entry.name};
-    }))
+    private  getChildren = async (relativePath: string): Promise<(Folder|File)[]> => {
+        const results = await fs.readdir(path.join(this.path,relativePath), { withFileTypes: true });
+            
+        return results.map((entry) => {
+            if (entry.isDirectory()) {
+                return {
+                    type: 'folder',
+                    name: entry.name,
+                    children: undefined,
+                };
+            }
+            return {type:'file',name:entry.name};
+        })
+    }
 
     /**
      * @param pathToElement relative to root
@@ -122,7 +135,7 @@ export class Database {
      * @returns an async generator that yields items and relative paths to the "within" location.
      */
     public async *getMultiple(options:GetMultipleOptions): AsyncGenerator<{item:Folder|File, relativePath:string}> {
-        const desiredAttributes = new Set(options.includedAttributes ?? []);
+        const requestedAttributes = new Set(options.includedAttributes ?? []);
         const base = options.within
             ? typeof options.within === 'string' ?
                 await this.getSingle(options.within) :
@@ -171,12 +184,15 @@ export class Database {
 
             for (const child of current.children.value!) {
                 // Add attributes to the item if requested
-                if (desiredAttributes.has('dimensions') && child.type === 'file' && !('dimensions' in child)) {
+                if (requestedAttributes.has('dimensions') && child.type === 'file' && !('dimensions' in child)) {
                     const metadata = await sharp(path.join(this.path, relativePath, child.name))
                         .metadata()
                         .catch(() => undefined);
                     if (metadata){
-                        const {width, height} = metadata;
+                        let {orientation, width, height} = metadata;
+                        if (orientation === 6 || orientation === 8) {
+                            [width, height] = [height, width];
+                        }
                         if (width && height) {
                             child.dimensions = {
                                 width,

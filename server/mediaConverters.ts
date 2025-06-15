@@ -85,14 +85,22 @@ const imageDetails:FileHandler['details'] = async (relativePath, desiredDetails)
             continue;
         }
         switch (detail) {
-            case 'dimensions':
-                const {width, height} = await sharp(fullPath).metadata();
+            case 'dimensions':{
+                const metadata = await sharp(fullPath).metadata();
+                let { orientation, width, height } = metadata;
+
+                // Swap w/h if orientation is 90 or 270 degrees
+                if (orientation === 6 || orientation === 8) {
+                    [width, height] = [height, width];
+                }
                 out.dimensions = {width:width || 0, height:height || 0};
                 break;
-            case 'fileSize':
+            }
+            case 'fileSize':{
                 const stats = await fs.stat(fullPath);
                 out.fileSize = stats.size;
                 break;
+            }
         }
     }
     return out;
@@ -140,23 +148,31 @@ export const fileHandlers = [
                 }
             } catch (e){
                 if (e && typeof e === 'object' && "code" in e && e.code === 'ENOENT') {
-                    // File not found, create thumbnail using sharp
-                    const fileBuffer = await fs.readFile(originalPath);
-                    const jpegBuffer = await heicConvert({
-                        buffer: fileBuffer as unknown as ArrayBufferLike, // the HEIC file buffer
-                        format: 'JPEG', // output format
-                        quality: 1 // the quality of the output file
-                    });
-                    const webpSharp = sharp(jpegBuffer)
-                        .toFormat('webp');
+                    
+                    console.log(`Creating ${dimensions?.width} thumbnail for HEIC file: ${relativePath}`);
+                    fs.mkdir(path.dirname(cachePath), { recursive: true });
+                    const magickArgs = [
+                        'magick',
+                        `"${originalPath}"`,
+                        ...((dimensions?.width && dimensions?.width) ? ["-resize"] : []),
+                        ...(dimensions?.width ? [`${dimensions.width}x`] : []),
+                        ...(dimensions?.height ? [`${dimensions.height}y`] : []),
+                        `"${cachePath}"`,
+                    ];
 
-                    const width = dimensions?.width;
-                    const height = dimensions?.height;
-                    const resizeBy = width ? { width } : height ? { height } : undefined;
-                    const webpBuffer =await( resizeBy ? webpSharp.resize(resizeBy):webpSharp).toBuffer();
-                    await fs.mkdir(path.dirname(cachePath), { recursive: true });
-                    await fs.writeFile(cachePath, webpBuffer);
-                    return {file:webpBuffer, contentType};
+                    const command = magickArgs.join(' ')
+                    console.log(`Running command: ${command}`);
+                    await new Promise((resolve, reject) => {
+                        exec(command, (error, stdout, stderr) => {
+                            if (error) {
+                                reject({ code: error.code ?? 1, stdout, stderr });
+                            } else {
+                                resolve({ code: 0, stdout, stderr });
+                            }
+                        });
+                    });
+                    
+                    return {file:await fs.readFile(cachePath), contentType};
                 } 
                 throw e;
             }
@@ -179,14 +195,16 @@ export const fileHandlers = [
                 return {file, contentType: 'image/webp'};
             } catch (e) {
                 if (e && typeof e === 'object' && "code" in e && e.code === 'ENOENT') {
-                    // File not found, create thumbnail using sharp
+                    console.log(`Creating ${dimensions.width} thumbnail for ${ext} file: ${relativePath}`);
                     const file = await fs.readFile(fullPath);
                     const thumbnail = await sharp(file)
-                        .resize({ width:dimensions.width })
+                        .rotate()
+                        .resize({ width: dimensions.width })
                         .toFormat('webp')
                         .toBuffer();
-                    await fs.mkdir(path.dirname(thumbnailPath), { recursive: true });
-                    await fs.writeFile(thumbnailPath, thumbnail);
+                    fs.mkdir(path.dirname(thumbnailPath), { recursive: true }).then(async () => {
+                        await fs.writeFile(thumbnailPath, thumbnail);
+                    });
                     return {file:thumbnail, contentType: 'image/webp'};
                 } 
                 throw e;
