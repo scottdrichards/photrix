@@ -25,6 +25,7 @@ http.createServer(async (request, response)=> {
     const pathname = decodeURIComponent(requestURL.pathname);
 
     if (pathname.startsWith(mediaPath)){
+        console.log(`Requesting media path: ${pathname}`);
         try {
             const relativePath = pathname.substring(mediaPath.length)
                 .replace(/^\/+/, '') // Remove leading slashes                

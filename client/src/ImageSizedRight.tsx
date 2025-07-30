@@ -1,10 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { mediaURLBase } from "./data/api";
-
-type Dimensions = null |{
-    width: number | undefined;
-    height: number | undefined;
-}
+import { useDimensions } from "./hooks/useDimensions";
 
 const standardizedWidth = (width: number) => {
     let bestWidth = 50;
@@ -18,23 +14,15 @@ export type MediaBehavior = Partial<Pick<JSX.IntrinsicElements["img"], "fetchPri
 
 type Params = {
     path: string;
-    style?: React.CSSProperties;
     aspectRatio?: number;
     thumbnailBehavior?: MediaBehavior;
     fullSizeBehavior?: MediaBehavior;
-}
+} & React.HTMLProps<HTMLImageElement>
 
-export const ImageSizedRight: React.FC<Params> = ({ path, style, aspectRatio, thumbnailBehavior, fullSizeBehavior }) => {
+export const ImageSizedRight: React.FC<Params> = ({ path, aspectRatio, thumbnailBehavior, fullSizeBehavior, ...restProps }) => {
     const [fullSizeInCache, setFullSizeInCache] = useState(false);
-    const [dimensions, setDimensions] = useState<Dimensions>(null);
-    const onResize = useCallback<React.ReactEventHandler<HTMLImageElement>>(e => {
-        if (e?.currentTarget) {
-            setDimensions({
-                width: e.currentTarget.clientWidth,
-                height: e.currentTarget.clientHeight,
-            });
-        }
-    }, []);
+    const ref = useRef<HTMLImageElement>(null);
+    const dimensions = useDimensions(ref);
 
     const baseUrl = new URL(encodeURIComponent(path), mediaURLBase);
     const desiredURL = useMemo(() => {
@@ -79,10 +67,10 @@ export const ImageSizedRight: React.FC<Params> = ({ path, style, aspectRatio, th
     return <img
             src={renderFullSize?desiredURL.toString():thumbnailURL.toString()}
             alt={alt}
-            style={style}
             onLoad={!renderFullSize ? loadFullSizeImageAfterThumbnail : undefined}
             fetchPriority={behavior?.fetchPriority}
             loading={behavior?.loading}
-            onResize={onResize}
+            ref={ref}
+            {...restProps}
         />;
 };

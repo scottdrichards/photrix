@@ -125,16 +125,16 @@ const processNextInQueue = async (): Promise<void> => {
     processed++;
 };
 
-let lastProcessed = 0;
+let lastProcessed:number|undefined = undefined;
 setInterval(() => {
-    const thisProcessed = processed - lastProcessed;
+    const thisProcessed = processed - (lastProcessed || 0);
 
     const heapMB = (heapStats().heapSize / (1024 * 1024)).toFixed(2);
     console.log(
         `${processed} processed. Rate: ${thisProcessed} files per second. Last processed: ${currentItem?.parentPath}. Heap size: ${heapMB} MB.`,
     );
     lastProcessed = processed;
-}, 2_000);
+}, lastProcessed === 0 ? 60_000:2_000);
 
 const addToQueue = (processItem: ExifProcessItem): void => {
     toProcess++;

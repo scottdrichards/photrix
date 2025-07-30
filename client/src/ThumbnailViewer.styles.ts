@@ -40,6 +40,7 @@ export const useStyles = makeStyles({
   },
   thumbnail: {
     opacity: 1,
+    objectFit: "cover",
     minHeight: "var(--size)",
     minWidth: `calc(min(100%, var(--size) * var(--ratio)))`,
     flexBasis: "calc(var(--size) * var(--ratio))",
