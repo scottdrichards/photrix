@@ -1,15 +1,17 @@
 import React, { memo } from "react";
 import { mediaURLBase } from "./data/api";
+import { ImageSizedRight, MediaBehavior } from "./ImageSizedRight";
 
 type Params = {
   path: string;
   style?: React.CSSProperties;
-  width?: number;
+  aspectRatio?: number;
+  thumbnailBehavior?: MediaBehavior;
+  fullSizeBehavior?: MediaBehavior;
 } & React.HTMLProps<HTMLImageElement>;
 
 export const Media: React.FC<Params> = memo((params) => {
-  const { path, style, width } = params;
-
+  const { path, style, width, aspectRatio, thumbnailBehavior, fullSizeBehavior } = params;
 
   const url = new URL(encodeURIComponent(path), mediaURLBase);
   if (width) {
@@ -19,14 +21,24 @@ export const Media: React.FC<Params> = memo((params) => {
   const renderers = [
     [
       ["jpg", "png", "jpeg", "gif", "heif", "heic", "webp"],
-      () => (
-        <img
-          alt={path}
-          style={{ objectFit: "contain", ...style }}
-          src={url.toString()}
-          loading="lazy"
-        />
-      ),
+      () => {
+        
+        const thumbnailUrl = new URL(url);
+        thumbnailUrl.searchParams.set("width", "100");
+
+        return (
+          <ImageSizedRight
+            path={path}
+            style={{
+              objectFit: "contain",
+              ...style
+            }}
+            aspectRatio={aspectRatio}
+            thumbnailBehavior={thumbnailBehavior}
+            fullSizeBehavior={fullSizeBehavior}
+          />
+        );
+      },
     ],
     [["mp4", "mov", "avi"], () => <></>],
   ] as const;

@@ -10,6 +10,7 @@ export const getFolderContents = async (
   folder: string,
 ): Promise<MediaDirectoryResult> => {
   const url = new URL(folder, mediaURLBase);
+  url.searchParams.set("recursive", "false");
   return fetch(url).then((response) =>
     response.text().then((text) =>
       text

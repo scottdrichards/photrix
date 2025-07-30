@@ -52,6 +52,8 @@ function App() {
             key={image}
             path={image}
             style={{ width: "100%", height: "100%", objectFit: "contain" }}
+            thumbnailBehavior={{ fetchPriority: "high", loading: "eager" }}
+            fullSizeBehavior= {{ fetchPriority: "high", loading: "eager" }}
           />
         ))}
       </div>

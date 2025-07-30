@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getFolderContents, MediaDirectoryResult } from "./data/api";
 
+
 export type Node = {
   name: string;
   type: "folder" | "file";
@@ -104,9 +105,10 @@ export const FolderExplorer: React.FC<Params> = (params) => {
     });
   };
 
-  const Render = (params: { element: Node; parentPath: string[] }) => {
+  const Render = (params: { element: Node; parentPath?: string[] }) => {
     const { element: el, parentPath } = params;
-    const currentPath = [...parentPath, el.name];
+    const isRoot = !parentPath;
+    const currentPath = isRoot ? [] : [...parentPath, el.name];
     const currentPathString = currentPath.join("/");
     return (
       <div
@@ -131,7 +133,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
               : {}
           }
         >
-          {el.type === "folder" && (
+          {(el.type === 'folder') && (
             <span onClick={() => setFolderExpand(currentPath, !el.expanded)}>
               {el.expanded ? "📂" : "📁"}
             </span>
@@ -157,7 +159,10 @@ export const FolderExplorer: React.FC<Params> = (params) => {
       </div>
     );
   };
+
   return (
-    <>{root.map((folder) => Render({ element: folder, parentPath: [] }))}</>
+    <Render
+      element={{ name: "Photos Library", type: "folder", expanded: true, children: root }}
+    />
   );
 };

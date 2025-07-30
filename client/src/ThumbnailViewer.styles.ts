@@ -46,12 +46,9 @@ export const useStyles = makeStyles({
     flex: "var(--ratio)",
     borderRadius: "10px",
     overflow:"hidden",
-    filter: "drop-shadow(0 5px 2px rgba(0, 0, 0, .3))",
-    transition: "transform 0.1s ease-in-out, filter 0.1s ease-in-out",
     "&:hover": {
-      filter: "drop-shadow(0 5px 3px rgba(0, 0, 0, .4))",
-      transform: "scale(1.05)",
+      boxShadow: "0 0 0 3px #225b86ff",
       zIndex: 1,
-    },
-  }
+    }
+  },
 });

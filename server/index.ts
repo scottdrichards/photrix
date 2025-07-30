@@ -1,18 +1,14 @@
-import fs from "fs/promises";
-import http from "http";
-import path from "path";
-import process from "process";
+import http from "node:http";
+import path from "node:path";
+import process from "node:process";
 import { fileHandlers } from "./mediaConverters.ts";
-import { rootDir } from "./config.ts";
-import { Database, type File, type Folder, type MediaAttributes } from "./database.ts";
+import { type MediaFile, scanFolder, search, root, getItem } from "./database.ts";
 
 const port = 9615 
 
 const mediaPath = '/media';
 
 export type MediaDirectoryResult = Array<{path:string, type:'directory'|'file', details?:any}>;
-
-const database = new Database(rootDir);
 
 http.createServer(async (request, response)=> {
     response.setHeader('Access-Control-Allow-Origin', "http://127.0.0.1:5173");
@@ -39,14 +35,9 @@ http.createServer(async (request, response)=> {
                 response.end()
                 return;
             }
-            
-            const itemAtPath = await database.getSingle(relativePath);
-            if (!itemAtPath){
-                response.writeHead(404);
-                response.end();
-                return;
-            }
-            if (itemAtPath.type === 'file'){
+
+            const item = getItem(root, relativePath);
+            if (item.type === 'file'){
                 const fileExtLowercase = path.extname(relativePath).toLocaleLowerCase();
                 const fileHandler = fileHandlers.find(({extensions}) => (extensions as string[]).includes(fileExtLowercase));
 
@@ -73,34 +64,58 @@ http.createServer(async (request, response)=> {
                 return;
             }
 
-            if (itemAtPath.type === 'folder'){
-                const request = Object.fromEntries(requestURL.searchParams.entries());
-                const includedAttributes = request['includedAttributes'] ?
-                    JSON.parse(request['includedAttributes']) as Array<keyof MediaAttributes>
-                    :undefined;
+            if (item.type === 'folder'){
+                const {includedAttributes, includeSubfolders, ...indexSearchParams} = Object.fromEntries([...requestURL.searchParams.entries()]
+                        .map(([key, value]) => {
+                            try{
+                                return [key, JSON.parse(value)];
+                            } catch {
+                                return [key, value.split(',').map(v => v.trim())];
+                            }
+                        }));
 
-                const itemGenerator = database.getMultiple({
-                    within: {folder: itemAtPath, relativePath: relativePath},
-                    type: request['type'] as any,
-                    search: request['search'] ?? undefined,
-                    recurse: request['includeSubfolders'] === 'true',
-                    includedAttributes,
-                });
+                const items = search({within: item, recursive:includeSubfolders??false, ...indexSearchParams});
+
+                const specialDetailsHandlers = {
+                    resolution: (item: MediaFile) => ({
+                        width: item.tags?.ImageWidth,
+                        height: item.tags?.ImageHeight,
+                    })
+                } as const satisfies Record<string, (item: MediaFile) => any>;
 
                 response.writeHead(200, {'Content-Type': 'text/plain'});
                 response.setHeader('Cache-Control', 'no-cache');
                 let bufferReady = true;
-                for await (const {item, relativePath} of itemGenerator){
+                
+                for (const item of items) {
                     if (!bufferReady) {
                         await new Promise(resolve => response.once('drain', resolve));
                     }
-                    const pathWithHTMLSeparator = relativePath.replaceAll(path.sep, '/');
-                    const out:any = {path: pathWithHTMLSeparator, type: item.type}
-                    for (const attribute of includedAttributes??[]){
-                        if (attribute in (item as File & Folder)){
-                            out[attribute] = (item as File & Folder)[attribute];
+                    const pathWithHTMLSeparator = path.relative(root.parentPath, path.join(item.parentPath,item.name)).replaceAll(path.sep, '/');
+                    const out = (()=>{
+                        const outBase = {
+                            path: pathWithHTMLSeparator,
+                            type: item.type,            
                         }
-                    }
+                        if (includedAttributes && item.type === 'file'){
+                            if (!Array.isArray(includedAttributes)){
+                                throw new Error("includedAttributes must be an array");
+                            }
+                            const details = Object.fromEntries(
+                                includedAttributes?.map(detail => {
+                                        if (detail in specialDetailsHandlers){
+                                            return [detail,specialDetailsHandlers[detail as keyof typeof specialDetailsHandlers](item)];
+                                        }
+                                        return [detail, item.tags?.[detail as keyof typeof item.tags]];
+                                    })
+                                    .filter(([_, detail]) => detail !== undefined)
+                            );
+                            if (Object.keys(details).length > 0){
+                                return {...outBase, details};
+                            }
+                        }
+                        return outBase;
+                    })();
                     const lineText = JSON.stringify(out);
                     bufferReady = response.write(lineText + "\n")
                 }
@@ -130,3 +145,4 @@ http.createServer(async (request, response)=> {
 }).listen(port)
 
 console.log("listening on port "+port)
+await scanFolder(root);

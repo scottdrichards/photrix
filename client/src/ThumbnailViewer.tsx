@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { Media } from "./Media";
 import { Filters } from "./filters/Filters";
 import { processLines } from "./streamData";
@@ -26,7 +26,9 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
   type Thumbnail = {
     path: string;
     type: "file" | "folder";
-    dimensions?: { width: number; height: number };
+    details:{
+      resolution?: { width: number; height: number };
+    };
   }
   const [thumbnails, setThumbnails] = useState<Array<Thumbnail>>([]);
   const [loading, setLoading] = useState(false);
@@ -59,10 +61,9 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
 
   const url = new URL(`${directoryPath??''}`, mediaURLBase);
   console.log({url: url.toString()});
-  url.searchParams.set("includedAttributes", JSON.stringify(["dimensions"]));
+  url.searchParams.set("includedAttributes", JSON.stringify(["resolution"]));
   if (includeSubfolders) {
     url.searchParams.set("includeSubfolders", "true");
-    url.searchParams.set("type", "file");
   }
   if (search) {
     url.searchParams.set("search", search);
@@ -89,11 +90,6 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
         for await (const linesChunk of processLines(response)) {
           thumbnailData = thumbnailData
             .concat(...linesChunk.map((line) => JSON.parse(line)))
-            // .sort((a, b) => {
-            //   if (a.type === "folder" && b.type === "file") return -1;
-            //   if (a.type === "file" && b.type === "folder") return 1;
-            //   return a.path.localeCompare(b.path)}
-            // );
           setThumbnails(thumbnailData);
         }
         setLoading(false);
@@ -117,7 +113,7 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
       <Filters search={search} setSearch={setSearch} />
       <div className={styles.gallery}>
           {thumbnails.map((thumbnail) => {
-            const ratio = (thumbnail.dimensions?.width || 1) / (thumbnail.dimensions?.height || 1);
+            const ratio = (thumbnail.details?.resolution?.width || 1) / (thumbnail.details?.resolution?.height || 1);
             return (
               <div
                 key={thumbnail.path}
@@ -144,6 +140,8 @@ export const ThumbnailViewer: React.FC<Params> = (params) => {
                   path={thumbnail.path}
                   width={100}
                   style={mediaStyle}
+                  thumbnailBehavior={{ fetchPriority: "low", loading: "lazy" }}
+                  fullSizeBehavior="never"
                 />}
               </div>
             );

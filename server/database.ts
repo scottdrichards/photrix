@@ -1,234 +1,253 @@
-/// <reference types="npm:@types/node" />
+import { ExifTool } from "exiftool-vendored";
 import fs from "node:fs/promises";
 import path from "node:path";
-import sharp from "npm:sharp";
+import { heapStats } from "bun:jsc";
 
-export type Item = {
-    name:string,
-    type: string,
-    size?: number,
-    created?: Date,
-}
+import { rootDir } from "./config.ts";
+import { Dirent } from "node:fs";
+import { SortedListIndex } from "./utils/SortedListIndex.ts";
+import { type FileType, withinFilter } from "./filters/withinFilter.ts";
+import { dateRangeToNumberRange } from "./utils/dateRangeToNumberRange.ts";
+import { makeIndexes } from "./indexUtils.ts";
+import { indexFilters } from "./filters/indexFilter.ts";
+import { resolveFilters } from "./filters/resolveFilters.ts";
 
-export type MediaAttributes = {
-    dimensions?: {
-        width: number;
-        height: number;
+const tagsOfInterest = [
+    "DateTimeOriginal",
+    "Rating",
+    "Make",
+    "Model",
+    "LensModel",
+    "FocalLength",
+    "Aperture",
+    "ShutterSpeed",
+    "ISO",
+    "HierarchicalSubject",
+    "ImageWidth",
+    "ImageHeight",
+] as const satisfies Array<keyof Partial<Tags>>;
+
+const maxProcs = 3;
+const exiftool = new ExifTool({
+    taskTimeoutMillis: 5000,
+    maxProcs,
+    minDelayBetweenSpawnMillis: 500,
+});
+
+type Tags = Awaited<ReturnType<ExifTool["read"]>>;
+
+type FilysystemItem = Pick<Dirent, "name" | "parentPath">;
+
+export type Folder = FilysystemItem & {
+    type: "folder";
+    children: Array<Folder | MediaFile | MediaFile>;
+};
+export type MediaFile = FilysystemItem & { type: "file"; tags?: Pick<Tags, typeof tagsOfInterest[number]> };
+
+const indexes = makeIndexes<MediaFile>();
+
+let currentItem:MediaFile|undefined = undefined;
+const processFileWithExifTool = async (file: MediaFile): Promise<void> => {
+    currentItem = file;
+    const tags = await exiftool.read(path.join(file.parentPath, file.name));
+    // We can't keep all of the tag data (e.g., thumbnails) in memory, so we only keep the tags of interest.
+    file.tags = tagsOfInterest.reduce((acc,tagName)=>({
+        ...acc,
+        [tagName]: tags[tagName],
+    }), {})
+
+    const dateFromExifDate = (
+        date: string | number | { toDate: () => Date },
+    ): Date => {
+        if (typeof date === "object" && "toDate" in date) {
+            return date.toDate();
+        }
+        return new Date(date);
     };
-}
+    if (tags.DateTimeOriginal) {
+        const epochMillis = dateFromExifDate(tags.DateTimeOriginal).getTime();
+        indexes.dateTaken.add(epochMillis, file);
+    }
 
-export type File = Item & MediaAttributes & {
-    type: 'file';   
-}
-
-type Children = {
-    value: (Folder|File)[]|undefined;
-    subscribers?: ((value?: unknown) => void)[];
-}
-
-export type Folder = Item & {
-    type: 'folder';
-    children: Children | undefined;
-}
-
-
-type GetMultipleOptions = {
-    search?: string;
-    type?: 'file' | 'folder' | {extensions: string[]};
-    recurse?: boolean;
-    within?: string | {
-        /* Folder - for caching/lookup purposes */
-        folder: Folder;
-        /* Relative path to the folder, relative to the root of the database 
-            It incudes the folder name itself */
-        relativePath: string;
-    };
-    includedAttributes?: (keyof MediaAttributes)[];
+    ([
+        [tags.Rating, indexes.Rating],
+        [tags.Make, indexes.Make],
+        [tags.Model, indexes.Model],
+        [tags.LensModel, indexes.LensModel],
+        [tags.FocalLength, indexes.FocalLength],
+        [tags.Aperture, indexes.Aperture],
+        [tags.ShutterSpeed, indexes.ShutterSpeed],
+        [tags.ISO, indexes.ISO],
+        [tags.HierarchicalSubject?.at(-1), indexes.subject],
+    ] as const).forEach(([value, index]) => {
+        if (!value) {
+            return;
+        }
+        const key = `${value}`.trim().toLocaleLowerCase();
+        let fileListAtKey = index.get(key);
+        if (!fileListAtKey) {
+            fileListAtKey = new Set();
+            index.set(key, fileListAtKey);
+        }
+        fileListAtKey.add(file);
+    });
 };
 
-export class Database {
-    private root: Folder;
-    private path: string;
-    constructor(path: string) {
-        this.path = path;
-        this.root = {
-            type: 'folder',
-            name: "",
-            children: undefined,
-        };
+type ExifProcessItem = {
+    file: MediaFile;
+    onfinish: (file: MediaFile) => void;
+};
 
-        const watchFiles = async ()=>{
-            const watcher = fs.watch(this.path, { recursive: true });
-            for await (const e of watcher) {
-                console.log(`File change detected: ${e}`);
-            }
-        };
-        // Split up the IIFE to avoid the "this" context issues due to Typescript limitations
-        // https://github.com/microsoft/TypeScript/issues/9998
-        watchFiles();
+const exifQueue: Array<ExifProcessItem> = [];
+const exifCurrentlyProcessing: Array<ExifProcessItem> = [];
+
+let processed = 0;
+let toProcess = 0;
+const processNextInQueue = async (): Promise<void> => {
+    const item = exifQueue.shift();
+    if (!item) {
+        return;
     }
-
-
-    
-    private  getChildren = async (relativePath: string): Promise<(Folder|File)[]> => {
-        const results = await fs.readdir(path.join(this.path,relativePath), { withFileTypes: true });
-            
-        return results.map((entry) => {
-            if (entry.isDirectory()) {
-                return {
-                    type: 'folder',
-                    name: entry.name,
-                    children: undefined,
-                };
-            }
-            return {type:'file',name:entry.name};
-        })
+    exifCurrentlyProcessing.push(item);
+    const { onfinish, file } = item;
+    try {
+        await processFileWithExifTool(file);
+        onfinish(file as Required<MediaFile>);
+    } catch (error) {
+        console.error(`Error processing file ${file.name}:`, error);
+    } finally {
+        exifCurrentlyProcessing.splice(
+            exifCurrentlyProcessing.indexOf(item),
+            1,
+        );
+        processNextInQueue();
     }
+    processed++;
+};
 
-    /**
-     * @param pathToElement relative to root
-     * @returns a reference to a file or folder in the database.
-     */
-    public async getSingle(pathToElement: string): Promise<Folder|File> {
-        const pathParts = pathToElement.split(path.sep).filter(part => part !== '');;
-        let current: Folder|File = this.root;
-        let currentPath = "";
-        for (const pathPart of pathParts) {
-            currentPath = path.join(currentPath, current.name);
-            if (current.type === 'file') {
-                throw new Error(`Cannot navigate into file (should be a folder) ${current.name}`);
-            }
+let lastProcessed = 0;
+setInterval(() => {
+    const thisProcessed = processed - lastProcessed;
 
-            if (current.children === undefined) {
-                current.children = {
-                    value:undefined, subscribers: []
-                };
-                const children = await this.getChildren(currentPath);
-                const subscribers = current.children.subscribers;
-                current.children = {value: children};
-                subscribers?.forEach(fn => fn());
-            }
+    const heapMB = (heapStats().heapSize / (1024 * 1024)).toFixed(2);
+    console.log(
+        `${processed} processed. Rate: ${thisProcessed} files per second. Last processed: ${currentItem?.parentPath}. Heap size: ${heapMB} MB.`,
+    );
+    lastProcessed = processed;
+}, 2_000);
 
-            const subscribers = current.children.subscribers;
-            if (current.children.value === undefined && subscribers) {
-                await new Promise(resolve => {
-                    subscribers.push(resolve);
-                });
-            }
-
-            if (!current.children.value) {
-                throw new Error(`Fodler children should have value at this point`);
-            }
-
-            const next:File|Folder|undefined = current.children.value.find(child => child.name === pathPart);
-            if (!next) {
-                throw new Error(`Item ${pathPart} not found in path ${pathToElement}`);
-            }
-            current = next;
-        }
-        return current;
+const addToQueue = (processItem: ExifProcessItem): void => {
+    toProcess++;
+    exifQueue.push(processItem);
+    if (exifCurrentlyProcessing.length < maxProcs * 2) {
+        processNextInQueue();
     }
+};
 
-    /**
-     * 
-     * @param options 
-     * @returns an async generator that yields items and relative paths to the "within" location.
-     */
-    public async *getMultiple(options:GetMultipleOptions): AsyncGenerator<{item:Folder|File, relativePath:string}> {
-        const requestedAttributes = new Set(options.includedAttributes ?? []);
-        const base = options.within
-            ? typeof options.within === 'string' ?
-                await this.getSingle(options.within) :
-                options.within.folder
-            : this.root;
+export const root: Folder = {
+    type: "folder",
+    name: "",
+    parentPath: rootDir,
+    children: [],
+};
 
-        if (base.type === 'file') {
-            throw new Error(`Cannot search within a file: ${base.name}`);
-        }
-        
-        // Folder path includes the Folder itself
-        const toSearch:{item:Folder,relativePath:string}[] = [{
-            item: base,
-            relativePath: options.within?
-                typeof options.within === 'string' ?
-                    options.within
-                    : options.within.relativePath
-                : '',
-        }];
-
-        while (toSearch.length) {
-            const {item: current, relativePath} = toSearch.shift()!;
-            // Nobody has started looking for children yet, so we can start
-            if (current.children === undefined) {
-                const value = await this.getChildren(relativePath);
-                current.children = {
-                    value
-                };
-                if (current.children.subscribers) {
-                    current.children.subscribers.forEach(fn => fn());
-                    delete current.children.subscribers;
-                }
-            }
-            // Someone has started looking for children, but it isn't us, so we wait for them to finish
-            if (current.children.value === undefined) {
-                // Typescript has trouble with the typing of current within the promise, this copy helps
-                // it understand a bit
-                const currentCopy = current;
-                await new Promise(resolve => {
-                    if (currentCopy.children!.subscribers === undefined) {
-                        currentCopy.children!.subscribers = [];
-                    }
-                    currentCopy.children!.subscribers.push(resolve);
-                });
-            }
-
-            for (const child of current.children.value!) {
-                // Add attributes to the item if requested
-                if (requestedAttributes.has('dimensions') && child.type === 'file' && !('dimensions' in child)) {
-                    const metadata = await sharp(path.join(this.path, relativePath, child.name))
-                        .metadata()
-                        .catch(() => undefined);
-                    if (metadata){
-                        let {orientation, width, height} = metadata;
-                        if (orientation === 6 || orientation === 8) {
-                            [width, height] = [height, width];
-                        }
-                        if (width && height) {
-                            child.dimensions = {
-                                width,
-                                height,
-                            };
-                        }
-                    }
-                }
-
-                const next = {
-                    item: child,
-                    relativePath: path.join(relativePath, child.name),
-                };
-
-                const includeInResults = (()=>{
-                    if (options.type) {
-                        if (typeof options.type === 'object' && 'extensions' in options.type) {
-                            if (child.type === 'file' && !options.type.extensions.includes(path.extname(child.name))) {
-                                return false;
-                            }
-                        } else if (child.type !== options.type) {
-                            return false;
-                        }
-                    }
-                    if (options.search && !child.name.toLowerCase().includes(options.search.toLowerCase())) {
-                        return false;
-                    }
-                    return true;
-                })()
-                if (includeInResults){
-                    yield next;
-                }
-                if (next.item.type === 'folder' && options.recurse) {
-                    toSearch.push(next as {item:Folder, relativePath:string});
-                }
-            }
+export const scanFolder = async (parentFolder: Folder): Promise<void> => {
+    const parentPath = path.join(parentFolder.parentPath, parentFolder.name);
+    const entries = await fs.readdir(parentPath, { withFileTypes: true });
+    parentFolder.children = [];
+    for (const entry of entries) {
+        if (entry.isDirectory()) {
+            const folder = {
+                type: "folder" as const,
+                ...entry,
+                children: [],
+            };
+            parentFolder.children.push(folder);
+            await scanFolder(folder);
+        } else {
+            const file: MediaFile = {
+                type: "file" as const,
+                name: entry.name,
+                parentPath,
+            };
+            parentFolder.children.push(file);
+            addToQueue({
+                file,
+                onfinish: (MediaFile) => {
+                    parentFolder.children.splice(
+                        parentFolder.children.indexOf(file),
+                        1,
+                        MediaFile,
+                    );
+                },
+            });
         }
     }
+};
+
+
+
+/**
+ * Traverses the folder structure starting from the base folder to find item
+ * @param base 
+ * @param relativePath from base
+ */
+export const getItem = (
+    base: Folder = root,
+    relativePath: string,
+): MediaFile | Folder => {
+    const parts = relativePath.replaceAll("/", path.sep).split(path.sep).filter(
+        Boolean,
+    );
+    let current: Folder | MediaFile = base;
+    for (const part of parts) {
+        if (current.type !== "folder") {
+            throw new Error(`Cannot navigate into a file: ${current.name}`);
+        }
+        const next: Folder | MediaFile | undefined = current.children.find(
+            (child) => child.name === part
+        );
+        if (!next) {
+            throw new Error(`Item not found: ${part}`);
+        }
+        current = next;
+    }
+    return current;
+};
+
+type FilterSpecial = {
+    dateTaken: { from?: Date; to?: Date };
+};
+
+type FileFilters = Partial<Omit<Record<keyof typeof indexes, string[]>, keyof FilterSpecial>
+    & FilterSpecial>;
+
+type Options =(FileFilters & {
+    includeFolders?: boolean;
+}) & {
+    within: Folder;
+    recursive: boolean;
+};
+
+
+export const search = (filter: Options): IterableIterator<MediaFile| Folder>  => {
+    const {
+        within,
+        recursive,
+        ...fileIndexFilterParams
+    } = filter;
+
+    const noFileFilters = !Object.values(fileIndexFilterParams).some(v=>!!v)
+    const includeFolders = noFileFilters && !!within;
+
+    const {dateTaken, ...standardFileIndexFilterParams} = fileIndexFilterParams
+    const indexSearch = indexFilters(indexes, {...standardFileIndexFilterParams, dateTaken: dateTaken && dateRangeToNumberRange(dateTaken)});
+
+    const filters = [...indexSearch, within && withinFilter({
+        within,
+        recursive,
+        includeFolders,
+    })].filter(v=>!!v);
+
+    return resolveFilters(filters);
 }
