@@ -13,7 +13,7 @@ import { indexFilters } from "./filters/indexFilter.ts";
 import { resolveFilters } from "./filters/resolveFilters.ts";
 
 const tagsOfInterest = [
-    // "DateTimeOriginal",
+    "DateTimeOriginal",
     "Rating",
     "Make",
     "Model",
@@ -28,7 +28,7 @@ const tagsOfInterest = [
     "Orientation"
 ] as const satisfies Array<keyof Partial<Tags>>;
 
-const maxProcs = 3;
+const maxProcs = 1;
 const exiftool = new ExifTool({
     taskTimeoutMillis: 5000,
     maxProcs,
@@ -154,6 +154,7 @@ export const root: Folder = {
 };
 
 export const scanFolder = async (parentFolder: Folder): Promise<void> => {
+    console.log(`Scanning folder: ${parentFolder.parentPath}/${parentFolder.name}`);
     const parentPath = path.join(parentFolder.parentPath, parentFolder.name);
     const entries = await fs.readdir(parentPath, { withFileTypes: true });
     parentFolder.children = [];
@@ -173,16 +174,16 @@ export const scanFolder = async (parentFolder: Folder): Promise<void> => {
                 parentPath,
             };
             parentFolder.children.push(file);
-            addToQueue({
-                file,
-                onfinish: (MediaFile) => {
-                    parentFolder.children.splice(
-                        parentFolder.children.indexOf(file),
-                        1,
-                        MediaFile,
-                    );
-                },
-            });
+            // addToQueue({
+            //     file,
+            //     onfinish: (MediaFile) => {
+            //         parentFolder.children.splice(
+            //             parentFolder.children.indexOf(file),
+            //             1,
+            //             MediaFile,
+            //         );
+            //     },
+            // });
         }
     }
 };

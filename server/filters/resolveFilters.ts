@@ -47,7 +47,11 @@ export const resolveFilters = <T>(filters: Array<Filter<T>>): IterableIterator<T
     // So here we have a connundrum: we don't know how big/long the generator/validator will be. It might be 3 items, it might be 3000.
     // So we have to guess how to handle this variability.
 
-    const startingItems = firstOnlyGenerator || allSets[0]?.values() || generatorAndValidator?.at(0);
+    const startingItems = firstOnlyGenerator || allSets[0]?.values() || generatorAndValidator?.at(0)?.generator;
+
+    if (!startingItems) {
+        throw new Error("No starting items to filter out");
+    }
 
     // ⏩ If we took the generator from generatorAndValidator or allSets, we still validate it against the same set/validator.
     // This likely isn't worth the complexity of separating them out.

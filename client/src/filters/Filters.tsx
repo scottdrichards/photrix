@@ -29,7 +29,7 @@ export const Filters: React.FC = () => {
             onClick={() =>
               setFilter({
                 ...filter,
-                Rating: filter.Rating?.at(-1) === star ? undefined : RatingOptions.filter(rating => +rating >= +star),
+                Rating: filter.Rating?.at(0) === star ? undefined : RatingOptions.filter(rating => +rating >= +star),
               })
             }
             aria-label={`Set rating to ${star}`}

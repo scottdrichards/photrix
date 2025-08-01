@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { CSSProperties, memo, useCallback, useEffect, useState } from "react";
 import { Media } from "./Media";
 import { useStyles } from "./ThumbnailViewer.styles";
 import { mediaURLBase } from "./data/api";
@@ -14,6 +14,11 @@ const thumbnailImageFileExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", 
 const thumbnailVideoFileExtensions = [".mp4", ".webm", ".avi", ".mov", ".mkv", ".flv", ".m4v", ".webm", ".ogv", ".hevc", ".h264"];
 const thumbnailFileRegex = new RegExp(`(${thumbnailImageFileExtensions.join("|")}|${thumbnailVideoFileExtensions.join("|")})$`, "i");
 
+type ThumbnailData = {
+  path: string;
+  type: "file" | "folder";
+};
+
 
 type Params = {
   directoryPath: string | null;
@@ -25,66 +30,15 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
   const { directoryPath, includeSubfolders, selectFolder } = params;
   const {filter} = useFilter();
 
-  type Thumbnail = {
-    path: string;
-    type: "file" | "folder";
-    details:{
-      resolution?: { width: number; height: number };
-    };
-  }
-  const [thumbnails, setThumbnails] = useState<Array<Thumbnail>>([]);
+  const [thumbnails, setThumbnails] = useState<Array<ThumbnailData>>([]);
   const [loading, setLoading] = useState(false);
   const [size, setSize] = useState(0.2 * (maxSize - minSize) + minSize);
   const styles = useStyles();
-
-  // Thumbnail item to avoid rerendering the list when selection changes
-  const ThumbnailItem = ({ thumbnail }: { thumbnail: Thumbnail }) => {
-    const selectedDispatch = useSelectedDispatch();
-    const onClick = (e: React.MouseEvent) => {
-      const path = thumbnail.path;
-      const type = thumbnail.type;
-      if (type === "folder") {
-        if (path) {
-          selectFolder(path);
-        }
-        return;
-      }
-      if (!path) return;
-
-      const selectMultipleMode = e.ctrlKey || (e.target instanceof HTMLImageElement && e.target.classList.contains("select-indicator"));
-      if (selectMultipleMode){
-        selectedDispatch({ type: 'toggle', payload: path });
-      } else{
-        selectedDispatch({type:"set", payload: new Set([path])});
-      }
-    }
-    const ratio = (thumbnail.details?.resolution?.width || 1) / (thumbnail.details?.resolution?.height || 1);
-    const style = {
-      "--size": `${size}px`,
-      "--ratio": ratio,
-    } as React.CSSProperties;
-    
-    return (
-        thumbnail.type === "folder" ? <></> :
-          <Media
-            path={thumbnail.path}
-            width={100}
-            style={style}
-            thumbnailBehavior= "never"
-            fullSizeBehavior={{ fetchPriority: "low", loading: "lazy" }}
-            
-            key={thumbnail.path}
-            data-path={thumbnail.path}
-            data-type={thumbnail.type}
-            className={styles.thumbnail}
-            onClick={onClick}
-          />
-    );
-  }
+  const selectedDispatch = useSelectedDispatch();
 
   const url = new URL(directoryPath?.toString()??'', mediaURLBase);
   console.log({url: url.toString()});
-  url.searchParams.set("includedAttributes", JSON.stringify(["resolution"]));
+  // url.searchParams.set("includedAttributes", JSON.stringify(["resolution"]));
   if (includeSubfolders) {
     url.searchParams.set("includeSubfolders", "true");
   }
@@ -113,7 +67,7 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
         });
         let thumbnailData:typeof thumbnails = [];
         for await (const linesChunk of processLines(response)) {
-          const newThumbnailData = linesChunk.map((line) => JSON.parse(line) as Thumbnail).filter(t=>t.path.match(thumbnailFileRegex));
+          const newThumbnailData = linesChunk.map((line) => JSON.parse(line) as ThumbnailData).filter(t=>t.path.match(thumbnailFileRegex));
           thumbnailData = thumbnailData
             .concat(...newThumbnailData)
           setThumbnails([...thumbnailData, ...newThumbnailData]);
@@ -134,14 +88,49 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
     };
   }, [urlString]);
 
+  const onThumbnailClick = useCallback((e: React.MouseEvent<HTMLImageElement>) => {
+    // Grab the attributes from the clicked image so that we can reuse the handler for all images
+    const path = e.currentTarget.attributes.getNamedItem("data-path")?.value;
+    const type = e.currentTarget.attributes.getNamedItem("data-type")?.value;
+    if (type === "folder") {
+      if (path) {
+        selectFolder(path);
+      }
+      return;
+    }
+    if (!path) return;
+
+    const selectMultipleMode = e.ctrlKey || (e.target instanceof HTMLImageElement && e.target.classList.contains("select-indicator"));
+    if (selectMultipleMode){
+      selectedDispatch({ type: 'toggle', payload: path });
+    } else{
+      selectedDispatch({type:"set", payload: new Set([path])});
+    }
+  }, []);
+
+  const onThumbnailLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
+    const ratio = e.currentTarget.naturalWidth / e.currentTarget.naturalHeight;
+    e.currentTarget.style.setProperty("--ratio", ratio.toString());
+  }, []);
+
   return (
     <div className={styles.root}>
       <Filters />
-      <div className={styles.gallery}>
+      <div style={{ "--size": `${size}px` } as CSSProperties} className={styles.gallery}>
         {(includeSubfolders ? thumbnails.filter((t) => t.type !== "folder") : thumbnails)
-          .map((thumbnail) => (
-            <ThumbnailItem key={thumbnail.path} thumbnail={thumbnail} />
-          ))}
+          .map(({path, type}) => (    type === "folder" ? <></> :
+          <Media        
+            path={path}
+            width={100}
+            thumbnailBehavior= "never"
+            fullSizeBehavior={{ fetchPriority: "low", loading: "lazy" }}
+            key={path}
+            data-path={path}
+            data-type={type}
+            className={styles.thumbnail}
+            onLoad={onThumbnailLoad}
+            onClick={onThumbnailClick}
+          />))}
         <div style={{ flexGrow: Infinity}}></div> {/* Filler to keep the last image(s) from growing */}
         {loading && <div>Loading...</div>}
         <input

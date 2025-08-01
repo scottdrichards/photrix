@@ -39,12 +39,18 @@ export const useStyles = makeStyles({
     zIndex: 2,
   },
   thumbnail: {
+    "--ratio": "1",
     opacity: 1,
     objectFit: "cover",
+    // This section is to make the height of a row magically adjust so that
+    // the thumbnails each retain their aspect ratio but fill the available space.
     minHeight: "var(--size)",
+    maxHeight: "calc(1.5 * var(--size))",
     minWidth: `calc(min(100%, var(--size) * var(--ratio)))`,
     flexBasis: "calc(var(--size) * var(--ratio))",
     flex: "var(--ratio)",
+    backgroundColor: "blue",
+    
     borderRadius: "10px",
     overflow:"hidden",
     "&:hover": {
