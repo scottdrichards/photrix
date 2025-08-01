@@ -78,10 +78,18 @@ http.createServer(async (request, response)=> {
                 const items = search({within: item, recursive:includeSubfolders??false, ...indexSearchParams});
 
                 const specialDetailsHandlers = {
-                    resolution: (item: MediaFile) => ({
-                        width: item.tags?.ImageWidth,
-                        height: item.tags?.ImageHeight,
-                    })
+                    resolution: ({tags}: MediaFile) => {
+                        let width = tags?.ImageWidth;
+                        let height = tags?.ImageHeight;
+                        const rotate = tags?.Orientation && tags?.Orientation > 4;
+                        if (rotate) {
+                            [width, height] = [height, width];
+                        }
+                        return {
+                            width,
+                            height,
+                        };
+                    }
                 } as const satisfies Record<string, (item: MediaFile) => any>;
 
                 response.writeHead(200, {'Content-Type': 'text/plain'});

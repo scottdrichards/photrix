@@ -13,7 +13,7 @@ import { indexFilters } from "./filters/indexFilter.ts";
 import { resolveFilters } from "./filters/resolveFilters.ts";
 
 const tagsOfInterest = [
-    "DateTimeOriginal",
+    // "DateTimeOriginal",
     "Rating",
     "Make",
     "Model",
@@ -25,6 +25,7 @@ const tagsOfInterest = [
     "HierarchicalSubject",
     "ImageWidth",
     "ImageHeight",
+    "Orientation"
 ] as const satisfies Array<keyof Partial<Tags>>;
 
 const maxProcs = 3;
@@ -51,10 +52,11 @@ const processFileWithExifTool = async (file: MediaFile): Promise<void> => {
     currentItem = file;
     const tags = await exiftool.read(path.join(file.parentPath, file.name));
     // We can't keep all of the tag data (e.g., thumbnails) in memory, so we only keep the tags of interest.
-    file.tags = tagsOfInterest.reduce((acc,tagName)=>({
-        ...acc,
-        [tagName]: tags[tagName],
-    }), {})
+    file.tags = Object.fromEntries(
+        tagsOfInterest
+            .map(tagName => [tagName, tags[tagName]])
+            .filter(([, value]) => value !== undefined)
+    );
 
     const dateFromExifDate = (
         date: string | number | { toDate: () => Date },

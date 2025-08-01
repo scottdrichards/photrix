@@ -1,6 +1,6 @@
 export  const dateRangeToNumberRange = (
-    {from,to}: { from?: Date; to?: Date },
+    {from,to}: { from?: Date | string; to?: Date|string },
 ) => ({
-        ... (from?{from: from.getTime()}:{}),
-        ...(to?{to: to.getTime()}:{}),
+        ... (from?{from: new Date(from).getTime()}:{}),
+        ...(to?{to: new Date(to).getTime()}:{}),
     })

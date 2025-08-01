@@ -3,11 +3,17 @@ import { Media } from "./Media";
 import { useStyles } from "./ThumbnailViewer.styles";
 import { mediaURLBase } from "./data/api";
 import { Filters } from "./filters/Filters";
-import { useSelected, useSelectedDispatch } from "./selectedContext";
+import { useSelectedDispatch } from "./contexts/selectedContext";
 import { processLines } from "./streamData";
+import { useFilter } from "./contexts/filterContext";
 
 const minSize = 100;
 const maxSize = 300;
+
+const thumbnailImageFileExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".heic", ".heif"];
+const thumbnailVideoFileExtensions = [".mp4", ".webm", ".avi", ".mov", ".mkv", ".flv", ".m4v", ".webm", ".ogv", ".hevc", ".h264"];
+const thumbnailFileRegex = new RegExp(`(${thumbnailImageFileExtensions.join("|")}|${thumbnailVideoFileExtensions.join("|")})$`, "i");
+
 
 type Params = {
   directoryPath: string | null;
@@ -17,7 +23,7 @@ type Params = {
 
 export const ThumbnailViewer: React.FC<Params> = memo((params) => {
   const { directoryPath, includeSubfolders, selectFolder } = params;
-  const [search, setSearch] = useState("");
+  const {filter} = useFilter();
 
   type Thumbnail = {
     path: string;
@@ -82,8 +88,10 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
   if (includeSubfolders) {
     url.searchParams.set("includeSubfolders", "true");
   }
-  if (search) {
-    url.searchParams.set("search", search);
+  if (filter) {
+    Object.entries(filter).filter(([_, value]) => value !== undefined).forEach(([key, value]) => {
+      url.searchParams.set(key, JSON.stringify(value));
+    });
   }
   const urlString = url.toString();
 
@@ -105,9 +113,10 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
         });
         let thumbnailData:typeof thumbnails = [];
         for await (const linesChunk of processLines(response)) {
+          const newThumbnailData = linesChunk.map((line) => JSON.parse(line) as Thumbnail).filter(t=>t.path.match(thumbnailFileRegex));
           thumbnailData = thumbnailData
-            .concat(...linesChunk.map((line) => JSON.parse(line)))
-          setThumbnails(thumbnailData);
+            .concat(...newThumbnailData)
+          setThumbnails([...thumbnailData, ...newThumbnailData]);
         }
         setLoading(false);
       } catch (e) {
@@ -127,7 +136,7 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
 
   return (
     <div className={styles.root}>
-      <Filters search={search} setSearch={setSearch} />
+      <Filters />
       <div className={styles.gallery}>
         {(includeSubfolders ? thumbnails.filter((t) => t.type !== "folder") : thumbnails)
           .map((thumbnail) => (

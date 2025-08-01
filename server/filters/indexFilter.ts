@@ -36,7 +36,11 @@ export const indexFilters = <T>(indexes:Readonly<Indexes<T>>,params:Params<T>):F
             }
             const vArray = Array.isArray(v) ? v : [v] as string[];
             const set = vArray
-                .map(v=>index.get(v.toString().toLocaleLowerCase())??new Set<T>())
+                .flatMap(v=>[...index.entries()]
+                        // Get all index entries if the key includes the value
+                        .filter(([key, _]) => key.includes(v.toLocaleLowerCase()))
+                        .map(([_, value]) => value)
+                )
                 .reduce((acc,cur)=>acc.union(cur)) // This might be an expensive operation if the sets are large
             return {
                 set,

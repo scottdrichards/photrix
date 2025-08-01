@@ -3,8 +3,9 @@ import "./App.css";
 import { useStyles } from "./App.styles";
 import { FolderExplorer } from "./FolderExplorer";
 import { Media } from "./Media";
-import { SelectedProvider, useSelected, useSelectedDispatch } from "./selectedContext";
+import { SelectedProvider, useSelected, useSelectedDispatch } from "./contexts/selectedContext";
 import {ThumbnailViewer} from "./ThumbnailViewer";
+import { FilterProvider } from "./contexts/filterContext";
 
 const App = () => {
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
@@ -57,6 +58,8 @@ const App = () => {
 
 export default () => (
   <SelectedProvider>
-    <App />
+    <FilterProvider>
+      <App />
+    </FilterProvider>
   </SelectedProvider>
 );
