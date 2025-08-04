@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getFolderContents, MediaDirectoryResult } from "./data/api";
+import { useStyles } from "./FodlerExplorer.styles";
 
 
 export type Node = {
@@ -107,31 +108,18 @@ export const FolderExplorer: React.FC<Params> = (params) => {
 
   const Render = (params: { element: Node; parentPath?: string[] }) => {
     const { element: el, parentPath } = params;
+    const styles = useStyles();
     const isRoot = !parentPath;
     const currentPath = isRoot ? [] : [...parentPath, el.name];
     const currentPathString = currentPath.join("/");
     return (
       <div
         key={currentPathString}
-        style={{
-          paddingLeft: "20px",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "flex-start",
-        }}
+        className={styles.folder}
       >
         <div
-          style={
-            selected?.startsWith(currentPathString)
-              ? {
-                  backgroundColor: "lightblue",
-                  borderRadius: "5px",
-                  ...(selected === currentPathString
-                    ? { fontWeight: "bold" }
-                    : {}),
-                }
-              : {}
-          }
+          className={styles.folderHeader}
+          data-selected={selected === currentPathString || undefined}
         >
           {(el.type === 'folder') && (
             <span onClick={() => setFolderExpand(currentPath, !el.expanded)}>

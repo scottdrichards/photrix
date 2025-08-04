@@ -1,4 +1,7 @@
 {
     "editor.defaultFormatter": "dbaeumer.vscode-eslint",
-    "deno.enable": true
+    "deno.enable": true,
+    "[typescriptreact]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    }
 }
