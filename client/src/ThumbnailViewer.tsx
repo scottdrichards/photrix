@@ -36,7 +36,12 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
   const styles = useStyles();
   const selectedDispatch = useSelectedDispatch();
 
-  const url = new URL(directoryPath?.toString()??'', mediaURLBase);
+  const url = new URL(mediaURLBase);
+  if (directoryPath) {
+    // Ensure directoryPath doesn't start with / to avoid replacing the entire path
+    const cleanPath = directoryPath.startsWith('/') ? directoryPath.slice(1) : directoryPath;
+    url.pathname = url.pathname + cleanPath;
+  }
   console.log({url: url.toString()});
   // url.searchParams.set("includedAttributes", JSON.stringify(["resolution"]));
   if (includeSubfolders) {
@@ -67,7 +72,7 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
         });
         let thumbnailData:typeof thumbnails = [];
         for await (const linesChunk of processLines(response)) {
-          const newThumbnailData = linesChunk.map((line) => JSON.parse(line) as ThumbnailData).filter(t=>t.path.match(thumbnailFileRegex));
+          const newThumbnailData = linesChunk.flatMap(line => JSON.parse(line) as ThumbnailData).filter(t=>t.path.match(thumbnailFileRegex));
           thumbnailData = thumbnailData
             .concat(...newThumbnailData)
           setThumbnails([...thumbnailData, ...newThumbnailData]);
@@ -131,7 +136,7 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
             onLoad={onThumbnailLoad}
             onClick={onThumbnailClick}
           />))}
-        <div style={{ flexGrow: Infinity}}></div> {/* Filler to keep the last image(s) from growing */}
+        <div style={{ flexGrow: 1}}></div> {/* Filler to keep the last image(s) from growing */}
         {loading && <div>Loading...</div>}
         <input
           type="range"

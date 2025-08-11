@@ -1,10 +1,9 @@
 import { Buffer } from "buffer";
 import fs from "fs/promises";
-import heicConvert from 'heic-convert';
+import { exec } from "node:child_process";
 import path from "path";
 import sharp from 'sharp';
-import { cacheDir, rootDir } from "./config.ts";
-import {exec} from "node:child_process";
+import { mediaCacheDir, rootDir } from "./config.ts";
 
 type Dimensions = {
     height?: number;
@@ -22,7 +21,7 @@ const dimensionsToPathString = (dimensions:Dimensions) => {
 }
 
 const webpCachePath = (relativePath:string, dimensions:Dimensions) =>{
-    return path.join(cacheDir, relativePath)+ dimensionsToPathString(dimensions) + ".webp"
+    return path.join(mediaCacheDir, relativePath)+ dimensionsToPathString(dimensions) + ".webp"
     };
 
 const getCodec = async (fullPath:string) => {
@@ -46,7 +45,7 @@ const getCodec = async (fullPath:string) => {
 
 const convertToH264 = async (relativePath:string):Promise<string> => {
     const fullPath = path.join(rootDir, relativePath);
-    const cachePath = path.join(cacheDir, relativePath);
+    const cachePath = path.join(mediaCacheDir, relativePath);
     if (await fs.stat(cachePath).catch(e=>e.code !== 'ENOENT')){
         return cachePath;
     }

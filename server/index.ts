@@ -1,8 +1,10 @@
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";
+import { rootDir } from "./config.ts";
 import { fileHandlers } from "./mediaConverters.ts";
-import { type MediaFile, scanFolder, search, root, getItem } from "./database.ts";
+import { mediaDatabase } from "./mediaDatabase.ts";
+import { processFilesInDirectory } from "./processFiles.ts";
 
 const port = 9615 
 
@@ -25,122 +27,64 @@ http.createServer(async (request, response)=> {
     const pathname = decodeURIComponent(requestURL.pathname);
 
     if (pathname.startsWith(mediaPath)){
-        console.log(`Requesting media path: ${pathname}`);
-        try {
-            const relativePath = pathname.substring(mediaPath.length)
-                .replace(/^\/+/, '') // Remove leading slashes                
-                .replaceAll("/", path.sep);
-            // We don't want to allow access to parent directories
-            if (pathname.includes('..')){
-                response.writeHead(403)
-                response.end()
-                return;
+        const relativePath = pathname.substring(mediaPath.length)
+            .replaceAll("/", path.sep);
+        // We don't want to allow access to parent directories
+        if (pathname.includes('..')){
+            response.writeHead(403)
+            response.end()
+            return;
+        }
+        const fullPath = path.join(rootDir, relativePath);
+        const folderRequested = relativePath.endsWith(path.sep)||relativePath === ''
+        if (folderRequested){
+            if (requestURL.searchParams.get("type") === "folders"){
+                const folders = mediaDatabase.listSubfolders(relativePath);
+                response.writeHead(200, { 'Content-Type': 'application/json' });
+                response.end(JSON.stringify({folders}));
+            } else {
+                const recursive = requestURL.searchParams.get("recursive") === "true";
+                const dbResults = mediaDatabase.search({ parentPath: relativePath, recursive });
+                const output = dbResults.map(row => ({
+                    path: `${row.parent_path}/${row.name}`,
+                }));
+                response.writeHead(200, { 'Content-Type': 'application/json' });
+                response.end(JSON.stringify(output));
             }
-
-            const item = getItem(root, relativePath);
-            if (item.type === 'file'){
-                const fileExtLowercase = path.extname(relativePath).toLocaleLowerCase();
-                const fileHandler = fileHandlers.find(({extensions}) => (extensions as string[]).includes(fileExtLowercase));
-
-                if (!fileHandler){
-                    response.writeHead(415);
-                    response.end();
+        }else{
+            const ext = path.extname(relativePath).toLowerCase();
+            const handler = fileHandlers.find(h => (h.extensions as string[]).includes(ext))?.handler;
+            if (handler){
+                const width = requestURL.searchParams.get('width');
+                if (width && isNaN(Number(width))){
+                    response.writeHead(400, {'Content-Type': 'text/plain'});
+                    response.end('Invalid width parameter');
                     return;
                 }
-                
-                const requestedWidth = (()=>{
-                    const parsed = parseInt(requestURL.searchParams.get('width') ?? '');
-                    if (isNaN(parsed) || parsed < 0){
-                        return undefined;
-                    };
-                    const sizeBreaks = [160, 320, 640, 1280] as const;
-                    return sizeBreaks.find(size => parsed <= size) ?? undefined;
-                })();
-
-                const {file, contentType} = await fileHandler.handler(relativePath, {width: requestedWidth});
-    
-                response.writeHead(200, {'Content-Type': contentType});
-                response.write(file);
-                response.end()
-                return;
-            }
-
-            if (item.type === 'folder'){
-                const {includedAttributes, includeSubfolders, ...indexSearchParams} = Object.fromEntries([...requestURL.searchParams.entries()]
-                        .map(([key, value]) => {
-                            try{
-                                return [key, JSON.parse(value)];
-                            } catch {
-                                return [key, value.split(',').map(v => v.trim())];
-                            }
-                        }));
-
-                const items = search({within: item, recursive:includeSubfolders??false, ...indexSearchParams});
-
-                const specialDetailsHandlers = {
-                    resolution: ({tags}: MediaFile) => {
-                        let width = tags?.ImageWidth;
-                        let height = tags?.ImageHeight;
-                        const rotate = tags?.Orientation && tags?.Orientation > 4;
-                        if (rotate) {
-                            [width, height] = [height, width];
-                        }
-                        return {
-                            width,
-                            height,
-                        };
+                try {
+                    const result = await handler(relativePath, { width: Number(width||1024) });
+                    if (result) {
+                        response.writeHead(200, {'Content-Type': result.contentType});
+                        response.end(result.file);
+                    } else {
+                        response.writeHead(404);
+                        response.end();
                     }
-                } as const satisfies Record<string, (item: MediaFile) => any>;
-
-                response.writeHead(200, {'Content-Type': 'text/plain'});
-                response.setHeader('Cache-Control', 'no-cache');
-                let bufferReady = true;
-                
-                for (const item of items) {
-                    if (!bufferReady) {
-                        await new Promise(resolve => response.once('drain', resolve));
-                    }
-                    const pathWithHTMLSeparator = path.relative(root.parentPath, path.join(item.parentPath,item.name)).replaceAll(path.sep, '/');
-                    const out = (()=>{
-                        const outBase = {
-                            path: pathWithHTMLSeparator,
-                            type: item.type,            
-                        }
-                        if (includedAttributes && item.type === 'file'){
-                            if (!Array.isArray(includedAttributes)){
-                                throw new Error("includedAttributes must be an array");
-                            }
-                            const details = Object.fromEntries(
-                                includedAttributes?.map(detail => {
-                                        if (detail in specialDetailsHandlers){
-                                            return [detail,specialDetailsHandlers[detail as keyof typeof specialDetailsHandlers](item)];
-                                        }
-                                        return [detail, item.tags?.[detail as keyof typeof item.tags]];
-                                    })
-                                    .filter(([_, detail]) => detail !== undefined)
-                            );
-                            if (Object.keys(details).length > 0){
-                                return {...outBase, details};
-                            }
-                        }
-                        return outBase;
-                    })();
-                    const lineText = JSON.stringify(out);
-                    bufferReady = response.write(lineText + "\n")
+                } catch (error) {
+                    console.error(`Error handling file ${fullPath}:`, error);
+                    response.writeHead(500);
+                    response.end();
                 }
-                response.end()
-                return;
-            };
-       } catch(e) {
-            response.writeHead(500)
-            response.end()
-            console.log(e)
-       }     
+            }else{
+                response.writeHead(415); // Unsupported Media Type
+                response.end();
+            }
+        }
     }else{
-        const forwardOptions = {
-            hostname: "localhost",
-            port: 5173,
-            path: request.url,
+            const forwardOptions = {
+                hostname: "localhost",
+                port: 5173,
+                path: request.url,
             method: request.method,
             headers: request.headers,
         };
@@ -154,4 +98,22 @@ http.createServer(async (request, response)=> {
 }).listen(port)
 
 console.log("listening on port "+port)
-await scanFolder(root);
+
+const startFileProcessing = async () => {
+    console.log("Starting file processing...");
+    try {
+        let count =0;
+        for await (const result of processFilesInDirectory(rootDir, rootDir, mediaDatabase)) {
+            console.log("Processed file:", path.join(result.parent_path, result.name));
+            if (count++ % 1000 === 0) {
+                console.log(`Processed ${count} files`);
+            }
+        }
+        console.log("File processing completed");
+    } catch (error) {
+        console.error("File processing error:", error);
+    }
+};
+
+// startFileProcessing();
+

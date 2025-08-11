@@ -12,7 +12,7 @@ type Params = {
 export const Media: React.FC<Params> = memo((params) => {
   const { path, width, aspectRatio, thumbnailBehavior, fullSizeBehavior, ...restProps } = params;
 
-  const url = new URL(encodeURIComponent(path), mediaURLBase);
+  const url = new URL("."+path, mediaURLBase);
   if (width) {
     url.searchParams.set("width", width.toString());
   }

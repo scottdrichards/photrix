@@ -1,26 +1,20 @@
 import { useEffect, useState } from "react";
-import { getFolderContents, MediaDirectoryResult } from "./data/api";
+import { getSubfolders } from "./data/api";
 import { useStyles } from "./FodlerExplorer.styles";
 
 
-export type Node = {
+type Node = {
   name: string;
-  type: "folder" | "file";
   expanded: boolean;
   children?: Node[];
 };
 
-const mediaResultToNode = (result: MediaDirectoryResult[number]): Node => ({
-  name: result.path.split("/").at(-1),
-  type: result.type,
+const nameToNode = (name:string): Node => ({
+  name,
   expanded: false,
   children: undefined,
 });
 
-export type Selected = {
-  fullPath: string;
-  type: Node["type"];
-};
 type Params = {
   selected: string | null;
   onSelect: (path: string) => void;
@@ -32,8 +26,8 @@ export const FolderExplorer: React.FC<Params> = (params) => {
 
   useEffect(() => {
     (async () => {
-      const results = await getFolderContents("");
-      setRoot(results.map(mediaResultToNode));
+      const results = await getSubfolders("");
+      setRoot(results.map(nameToNode));
     })();
   }, []);
 
@@ -45,8 +39,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
     ): Promise<Node> => {
       if (
         !pathRemaining.length ||
-        node.name !== pathRemaining[0] ||
-        node.type !== "folder"
+        node.name !== pathRemaining[0]
       ) {
         return node;
       }
@@ -71,8 +64,8 @@ export const FolderExplorer: React.FC<Params> = (params) => {
       const children = localExpanded
         ? (
             node.children ??
-            (await getFolderContents(currentPath.join("/")).then((results) =>
-              results.map(mediaResultToNode),
+            (await getSubfolders(currentPath.join("/")+"/").then((results) =>
+              results.map(nameToNode),
             ))
           )?.map(
             async (child) =>
@@ -86,11 +79,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
       const childrenSorted =
         node.children === childrenResoved
           ? node.children
-          : childrenResoved?.sort((a, b) => {
-              if (a.type === "folder" && b.type === "file") return -1;
-              if (a.type === "file" && b.type === "folder") return 1;
-              return a.name.localeCompare(b.name);
-            });
+          : childrenResoved?.sort((a, b) => a.name.localeCompare(b.name));
       return { ...node, children: childrenSorted, expanded: localExpanded };
     };
     const rootCopy = await Promise.all(
@@ -111,7 +100,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
     const styles = useStyles();
     const isRoot = !parentPath;
     const currentPath = isRoot ? [] : [...parentPath, el.name];
-    const currentPathString = currentPath.join("/");
+    const currentPathString = currentPath.join("/")+"/";
     return (
       <div
         key={currentPathString}
@@ -121,11 +110,9 @@ export const FolderExplorer: React.FC<Params> = (params) => {
           className={styles.folderHeader}
           data-selected={selected === currentPathString || undefined}
         >
-          {(el.type === 'folder') && (
-            <span onClick={() => setFolderExpand(currentPath, !el.expanded)}>
-              {el.expanded ? "📂" : "📁"}
-            </span>
-          )}
+          <span onClick={() => setFolderExpand(currentPath, !el.expanded)}>
+            {el.expanded ? "📂" : "📁"}
+          </span>
           <span
             onClick={() =>
               onSelect(currentPathString)
@@ -134,14 +121,11 @@ export const FolderExplorer: React.FC<Params> = (params) => {
             {el.name}
           </span>
         </div>
-        {el.expanded &&
-          el.children
-            ?.filter((c) => c.type === "folder")
-            .map((child) => (
-              <Render
-                key={child.name}
-                element={child}
-                parentPath={currentPath}
+        {el.expanded && el.children?.map((child) => (
+            <Render
+              key={child.name}
+              element={child}
+              parentPath={currentPath}
               />
             ))}
       </div>
@@ -150,7 +134,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
 
   return (
     <Render
-      element={{ name: "Photos Library", type: "folder", expanded: true, children: root }}
+      element={{ name: "Photos Library", expanded: true, children: root }}
     />
   );
 };

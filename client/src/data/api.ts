@@ -21,3 +21,12 @@ export const getFolderContents = async (
   );
 };
 
+export const getSubfolders = async (
+  folder: string,
+): Promise<Array<string>> => {
+  const url = new URL(folder, mediaURLBase);
+  url.searchParams.set("type", "folders");
+  const response = await fetch(url);
+  const data = await response.json();
+  return data.folders;
+};

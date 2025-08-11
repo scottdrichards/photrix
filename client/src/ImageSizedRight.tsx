@@ -24,7 +24,7 @@ export const ImageSizedRight: React.FC<Params> = ({ path, aspectRatio, thumbnail
     const ref = useRef<HTMLImageElement>(null);
     const dimensions = useDimensions(ref);
 
-    const baseUrl = new URL(encodeURIComponent(path), mediaURLBase);
+    const baseUrl = new URL("."+path, mediaURLBase);
     const desiredURL = useMemo(() => {
         if (dimensions) {
             const {width, height} = dimensions;
