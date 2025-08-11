@@ -25,20 +25,17 @@ export const ImageSizedRight: React.FC<Params> = ({ path, aspectRatio, thumbnail
     const dimensions = useDimensions(ref);
 
     const baseUrl = new URL("."+path, mediaURLBase);
-    const desiredURL = useMemo(() => {
-        if (dimensions) {
-            const {width, height} = dimensions;
-            const containerWidth = width && standardizedWidth(width);
-            const heightConstrainedWidth = aspectRatio && height  && height * aspectRatio;
-            const desiredWidth = containerWidth && heightConstrainedWidth ? Math.min(containerWidth, heightConstrainedWidth) : containerWidth || heightConstrainedWidth;
-            if (desiredWidth) {
-                const updatedUrl = new URL(baseUrl);
-                updatedUrl.searchParams.set("width", desiredWidth.toString());
-                return updatedUrl;
-            }
+    if (dimensions) {
+        const {width, height} = dimensions;
+        const containerWidth = width && standardizedWidth(width);
+        const heightConstrainedWidth = aspectRatio && height  && height * aspectRatio;
+        const desiredWidth = containerWidth && heightConstrainedWidth ? Math.min(containerWidth, heightConstrainedWidth) : containerWidth || heightConstrainedWidth;
+        if (desiredWidth) {
+            baseUrl.searchParams.set("width", desiredWidth.toString());
         }
-        return baseUrl;
-    }, [path, dimensions]);
+    }
+
+    const baseUrlString = baseUrl.toString();
 
     const thumbnailURL = new URL(baseUrl);
     thumbnailURL.searchParams.set("width", "100");
@@ -50,11 +47,11 @@ export const ImageSizedRight: React.FC<Params> = ({ path, aspectRatio, thumbnail
         }
         // Use thumbnail image and replace when full image is loaded
         const fullImage = new Image();
-        fullImage.src = desiredURL.toString();
+        fullImage.src = baseUrlString;
         fullImage.onload = () => {
             setFullSizeInCache(true);
         };
-    }, [desiredURL]);
+    }, [baseUrlString]);
 
     const renderFullSize = thumbnailBehavior === "never" || fullSizeInCache;
 
@@ -65,7 +62,7 @@ export const ImageSizedRight: React.FC<Params> = ({ path, aspectRatio, thumbnail
     }
 
     return <img
-            src={renderFullSize?desiredURL.toString():thumbnailURL.toString()}
+            src={renderFullSize?baseUrlString:thumbnailURL.toString()}
             alt={alt}
             onLoad={!renderFullSize ? loadFullSizeImageAfterThumbnail : undefined}
             fetchPriority={behavior?.fetchPriority}

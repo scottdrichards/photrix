@@ -1,4 +1,3 @@
-import React, { memo } from "react";
 import { mediaURLBase } from "./data/api";
 import { ImageSizedRight, MediaBehavior } from "./ImageSizedRight";
 
@@ -9,7 +8,7 @@ type Params = {
   fullSizeBehavior?: MediaBehavior;
 } & React.HTMLProps<HTMLImageElement>;
 
-export const Media: React.FC<Params> = memo((params) => {
+export const Media: React.FC<Params> = (params) => {
   const { path, width, aspectRatio, thumbnailBehavior, fullSizeBehavior, ...restProps } = params;
 
   const url = new URL("."+path, mediaURLBase);
@@ -46,4 +45,4 @@ export const Media: React.FC<Params> = memo((params) => {
   )?.[1];
 
   return Renderer ? <Renderer /> : <div>Unsupported file type <code>{path}</code></div>;
-});
+};
