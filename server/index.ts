@@ -43,7 +43,7 @@ http.createServer(async (request, response)=> {
                 response.writeHead(200, { 'Content-Type': 'application/json' });
                 response.end(JSON.stringify({folders}));
             } else {
-                const recursive = requestURL.searchParams.get("recursive") === "true";
+                const recursive = requestURL.searchParams.get("includeSubfolders") === "true";
                 const dbResults = mediaDatabase.search({ parentPath: relativePath, recursive });
                 const output = dbResults.map(row => ({
                     path: `${row.parent_path}/${row.name}`,

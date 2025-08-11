@@ -190,10 +190,15 @@ export class MediaDatabase {
      */
     listSubfolders(parentPath: string): string[] {
         const normalizedParentPath = normalizePath(parentPath);
-        return this.db.prepare(`SELECT DISTINCT parent_path FROM ${tableName} WHERE parent_path like '${normalizedParentPath}%'`)
+        const subFolderSet = this.db.prepare(`SELECT DISTINCT parent_path FROM ${tableName} WHERE parent_path like '${normalizedParentPath}%'`)
             .all()
-            .map((row: any) => path.relative(normalizedParentPath, row.parent_path))
-            .filter((relativePath: string) => !relativePath.includes(path.sep) && relativePath !== "");
+            .map((row: any) => path.relative(normalizedParentPath, row.parent_path).split(path.sep)[0]) // Get the first segment of the relative path
+            .reduce((acc: Set<string>, relativePath: string) => {
+                relativePath && acc.add(relativePath);
+                return acc;
+            }, new Set())
+        
+        return [...subFolderSet].sort((a,b)=> a.localeCompare(b));
     }
 
     search(filters: SearchFilters): MediaFileRow[] {
