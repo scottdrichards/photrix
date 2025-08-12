@@ -9,7 +9,11 @@ export const Filters: React.FC = () => {
         <input
           type="text"
           value={filter.hierarchical_subject || ''}
-          onChange={e => setFilter({ ...filter, hierarchical_subject: e.target.value })}
+          onChange={e => {
+            const {hierarchical_subject, ...rest} = filter;
+            const newHierarchicalSubject = e.target.value.trim() || undefined;
+            setFilter(newHierarchicalSubject ? {...rest, hierarchical_subject: newHierarchicalSubject} : rest);
+          }}
           placeholder="Enter subject keyword"
           style={{ marginLeft: 8 }}
         />

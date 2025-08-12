@@ -173,8 +173,7 @@ export class MediaDatabase {
         return [...subFolderSet].sort((a,b)=> a.localeCompare(b));
     }
 
-    search({includeSubfolders, ...filters}: SearchFilters): MediaFileRow[] {
-
+    private createQueryFilter({includeSubfolders, ...filters}: SearchFilters):{whereClause:string, params:string[]} {
         type FilterProcessor = {
             [K in keyof SearchFilters]: (val: NonNullable<SearchFilters[K]>) => [string, string | string[]];
         };
@@ -185,10 +184,14 @@ export class MediaDatabase {
                 if (Array.isArray(val)){
                     return [`(parent_path IN (${val.map(()=>'?').join(',')})`, val]
                 }
+                const normalizedPath = normalizePath(val);
                 if (!includeSubfolders){
-                    return ['parent_path = ?', normalizePath(val)];
+                    return ['parent_path = ?', normalizedPath];
                 }
-                return ['parent_path LIKE ?', `${normalizePath(val)}/%`];
+                if (normalizedPath === "/"){
+                    return ['parent_path LIKE ?', `%${normalizedPath}%`];
+                }
+                return ['parent_path LIKE ?', `${normalizedPath}/%`];
             },
         } as const satisfies Partial<FilterProcessor>;
 
@@ -213,12 +216,16 @@ export class MediaDatabase {
 
         const textFilterProcessor = (key: TextSearchableColumns, val: NonNullable<SearchFilters[TextSearchableColumns]>):[string, string | string[]] => {
             if (Array.isArray(val)) {
-                return [`${key} IN (${val.map(() => '?').join(',')})`, val];
+                // Fuzzy match: use LIKE for each value, combine with OR
+                const queries = val.map(() => `${key} LIKE ?`).join(' OR ');
+                const params = val.map(v => `%${v}%`);
+                return [`(${queries})`, params];
             }
-            return [`${key} = ?`, val];
+            // Fuzzy match: use LIKE with wildcards
+            return [`${key} LIKE ?`, `%${val}%`];
         };
 
-        const {queries, params} = Object.entries(filters).map(([key, val]) => {
+        const {queries, params} = Object.entries(filters).filter(([, val]) => val !== undefined).map(([key, val]) => {
             if (key in specialFilterProcessors){
                 if (typeof val !== 'string'){
                     throw new Error(`Invalid value for filter '${key}': ${JSON.stringify(val)}`);
@@ -243,11 +250,26 @@ export class MediaDatabase {
             params: [...acc.params, ...(Array.isArray(params) ? params : [params])]
         }), { queries: [] as string[], params: [] as string[] });
 
-        const query = `SELECT * FROM ${tableName}
-            ${queries.length > 0 ? ' WHERE ' + queries.join(' AND ') : ''}
+        const whereClause = `${queries.length > 0 ? ' WHERE ' + queries.join(' AND ') : ''}
              ORDER BY date_taken DESC, parent_path DESC, name ASC`;
 
-        return this.db.prepare(query).all(...params) as MediaFileRow[];
+        return {whereClause, params};
+    }
+
+    search({includeSubfolders, ...filters}: SearchFilters): MediaFileRow[] {
+        const {whereClause, params} = this.createQueryFilter({includeSubfolders, ...filters});
+        return this.db.prepare(`SELECT * FROM ${tableName}${whereClause}`).all(...params) as MediaFileRow[];
+    }
+
+    getTextOptions(column: TextSearchableColumns, options?:{filter?:SearchFilters, containsText?:string}): string[] {
+        if (!options) {
+            return this.db.prepare(`SELECT DISTINCT ${column} FROM ${tableName}`).all().map((row: any) => row[column]);
+        }
+
+        const filter = {...options.filter, [column]: options.containsText};
+
+        const { whereClause, params } = this.createQueryFilter(filter);
+        return this.db.prepare(`SELECT DISTINCT ${column} FROM ${tableName}${whereClause}`).all(...params).map((row: any) => row[column]);
     }
 
     deleteByPath(relativePath: string, deleteChildPaths: boolean = false): number {
