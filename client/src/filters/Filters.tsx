@@ -8,8 +8,8 @@ export const Filters: React.FC = () => {
         Subject:
         <input
           type="text"
-          value={filter.subject || ''}
-          onChange={e => setFilter({ ...filter, subject: e.target.value })}
+          value={filter.hierarchical_subject || ''}
+          onChange={e => setFilter({ ...filter, hierarchical_subject: e.target.value })}
           placeholder="Enter subject keyword"
           style={{ marginLeft: 8 }}
         />
@@ -22,14 +22,14 @@ export const Filters: React.FC = () => {
             key={star}
             style={{
               cursor: 'pointer',
-              color: (filter.Rating && +filter.Rating[0] >= +star) ? '#FFD700' : '#ccc',
+              color: (filter.rating && +filter.rating[0] >= +star) ? '#FFD700' : '#ccc',
               fontSize: 24,
               marginRight: 4,
             }}
             onClick={() =>
               setFilter({
                 ...filter,
-                Rating: filter.Rating?.at(0) === star ? undefined : RatingOptions.filter(rating => +rating >= +star),
+                rating: filter.rating?.at(0) === star ? undefined : RatingOptions.filter(rating => +rating >= +star),
               })
             }
             aria-label={`Set rating to ${star}`}

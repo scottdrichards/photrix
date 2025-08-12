@@ -4,6 +4,28 @@ import { cacheDir } from './config.ts';
 
 const tableName = "media_files";
 
+const textSearchableColumns = [
+    'camera_make',
+    'camera_model',
+    'lens_model',
+    'focal_length',
+    'aperture',
+    'shutter_speed',
+    'iso',
+    'hierarchical_subject'
+] as const;
+type TextSearchableColumns = typeof textSearchableColumns[number];
+
+export const numberSearchableColumns = [
+    'date_taken',
+    'date_modified',
+    'rating',
+    'image_width',
+    'image_height',
+    'orientation',
+] as const;
+type NumberSearchableColumns = typeof numberSearchableColumns[number];
+
 export type MediaFileProperties = {
     name: string;
     /**
@@ -12,21 +34,8 @@ export type MediaFileProperties = {
      * Starts with slash so that root is represented as "/" and not as an empty string.
      */
     parent_path: string;
-    date_taken?: number;
-    date_modified?: number;
-    rating?: number;
-    camera_make?: string;
-    camera_model?: string;
-    lens_model?: string;
-    focal_length?: string;
-    aperture?: string;
-    shutter_speed?: string;
-    iso?: string;
-    hierarchical_subject?: string;
-    image_width?: number;
-    image_height?: number;
-    orientation?: number;
-}
+} & Partial<Record<TextSearchableColumns, string>>
+  & Partial<Record<NumberSearchableColumns, number>>;
 
 export type MediaFileRow = MediaFileProperties & {
     id: number;
@@ -49,22 +58,12 @@ const normalizePath = (systemRelativePath: string) => {
     return normalized;
 };
 
-export interface SearchFilters {
-    dateTaken?: { from?: Date; to?: Date };
-    rating?: number[];
-    cameraMake?: string[];
-    cameraModel?: string[];
-    lensModel?: string[];
-    focalLength?: string[];
-    aperture?: string[];
-    shutterSpeed?: string[];
-    iso?: string[];
-    hierarchicalSubject?: string[];
-    includeFolders?: boolean;
-    recursive?: boolean;
-    parentPath?: string;
+export type SearchFilters = {
+    includeSubfolders?: boolean;
     name?: string; // for name-based searching
-};
+    parentPath?: string;
+} & Partial<Record<TextSearchableColumns, string | Array<string>>>
+  & Partial<Record<NumberSearchableColumns, number | Array<number> | {from:number, to:number}>>;
 
 export class MediaDatabase {
     private db: Database;
@@ -80,20 +79,8 @@ export class MediaDatabase {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 parent_path TEXT NOT NULL,
-                date_taken INTEGER,
-                date_modified INTEGER,
-                rating INTEGER,
-                camera_make TEXT,
-                camera_model TEXT,
-                lens_model TEXT,
-                focal_length TEXT,
-                aperture TEXT,
-                shutter_speed TEXT,
-                iso TEXT,
-                hierarchical_subject TEXT,
-                image_width INTEGER,
-                image_height INTEGER,
-                orientation INTEGER,
+                ${textSearchableColumns.map(col => `${col} TEXT`).join(',\n')}
+                ${numberSearchableColumns.map(col => `${col} INTEGER`).join(',\n')}
                 date_indexed INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
             );
 
@@ -140,30 +127,20 @@ export class MediaDatabase {
     }
 
     insertOrUpdateFile(file: MediaFileProperties): MediaFileRow {
+        const columns = [
+            'name',
+            'parent_path',
+            ...textSearchableColumns,
+            ...numberSearchableColumns,
+            'date_indexed',
+        ];
         const result = this.db.prepare(`
-            INSERT OR REPLACE INTO ${tableName} (
-            name, parent_path, date_taken, date_modified, rating,
-            camera_make, camera_model, lens_model, focal_length, aperture,
-            shutter_speed, iso, hierarchical_subject, image_width, image_height, orientation, date_indexed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO ${tableName} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})
         `).run(
             file.name,
             normalizePath(file.parent_path),
-            file.date_taken ?? null,
-            file.date_modified ?? null,
-            file.rating ?? null,
-            file.camera_make ?? null,
-            file.camera_model ?? null,
-            file.lens_model ?? null,
-            file.focal_length ?? null,
-            file.aperture ?? null,
-            file.shutter_speed ?? null,
-            file.iso ?? null,
-            file.hierarchical_subject ?? null,
-            file.image_width ?? null,
-            file.image_height ?? null,
-            file.orientation ?? null,
-            Math.floor(Date.now() / 1000) // Set current timestamp when EXIF data is processed
+            ...[...textSearchableColumns, ...numberSearchableColumns].map(col => file[col] ?? null),
+            Date.now()
         );
 
         return this.getFileById(result.lastInsertRowid as number)!;
@@ -196,70 +173,81 @@ export class MediaDatabase {
         return [...subFolderSet].sort((a,b)=> a.localeCompare(b));
     }
 
-    search(filters: SearchFilters): MediaFileRow[] {
-        const queries: string[] = [];
-        const params: any[] = [];
+    search({includeSubfolders, ...filters}: SearchFilters): MediaFileRow[] {
 
-        // Name search filter
-        if (filters.name) {
-            queries.push('name LIKE ?');
-            params.push(`%${filters.name}%`);
-        }
+        type FilterProcessor = {
+            [K in keyof SearchFilters]: (val: NonNullable<SearchFilters[K]>) => [string, string | string[]];
+        };
+        
+        const specialFilterProcessors = {
+            name: (val) => ['name LIKE ?', `%${val}%`],
+            parentPath: (val) => {
+                if (Array.isArray(val)){
+                    return [`(parent_path IN (${val.map(()=>'?').join(',')})`, val]
+                }
+                if (!includeSubfolders){
+                    return ['parent_path = ?', normalizePath(val)];
+                }
+                return ['parent_path LIKE ?', `${normalizePath(val)}/%`];
+            },
+        } as const satisfies Partial<FilterProcessor>;
 
-        // Within folder filter
-        if (filters.parentPath !== undefined) {
-            const dbParentPath = normalizePath(filters.parentPath);
-            if (filters.recursive) {
-                queries.push('(parent_path = ? OR parent_path LIKE ?)');
-                params.push(dbParentPath, dbParentPath + '/%');
-            } else {
-                queries.push('parent_path = ?');
-                params.push(dbParentPath);
+        const numberFilterProcessor = (key: NumberSearchableColumns, val: NonNullable<SearchFilters[NumberSearchableColumns]>):[string, string | string[]] => {
+            if (Array.isArray(val)) {
+                return [`${key} IN (${val.map(() => '?').join(',')})`, val.map(v => v.toString())];
             }
-        }
-
-        // Date range filter
-        if (filters.dateTaken) {
-            if (filters.dateTaken.from) {
-                queries.push('date_taken >= ?');
-                params.push(filters.dateTaken.from.getTime());
+            if (typeof val === 'number') {
+                return [`${key} = ?`, `${val}`];
             }
-            if (filters.dateTaken.to) {
-                queries.push('date_taken <= ?');
-                params.push(filters.dateTaken.to.getTime());
+            const queries = [];
+            if ('from' in val) {
+                queries.push(`${key} >= ?`);
+                params.push(val.from.toString());
             }
-        }
+            if ('to' in val) {
+                queries.push(`${key} <= ?`);
+                params.push(val.to.toString());
+            }
+            return [queries.join(' AND '), params];
+        };
 
-        // Rating filter
-        if (filters.rating && filters.rating.length > 0) {
-            queries.push(`rating IN (${filters.rating.map(() => '?').join(',')})`);
-            params.push(...filters.rating);
-        }
+        const textFilterProcessor = (key: TextSearchableColumns, val: NonNullable<SearchFilters[TextSearchableColumns]>):[string, string | string[]] => {
+            if (Array.isArray(val)) {
+                return [`${key} IN (${val.map(() => '?').join(',')})`, val];
+            }
+            return [`${key} = ?`, val];
+        };
 
-        const stringFilters = [
-            ['camera_make', 'cameraMake'],
-            ['camera_model', 'cameraModel'],
-            ['lens_model', 'lensModel'],
-            ['focal_length', 'focalLength'],
-            ['aperture', 'aperture'],
-            ['shutter_speed', 'shutterSpeed'],
-            ['iso', 'iso'],
-            ['hierarchical_subject', 'hierarchicalSubject'],
-        ] as const;
-
-        const [stringQueries, stringParams] = stringFilters.map(([columnName, filterKey]) => 
-                [columnName, filters[filterKey]] as const)
-            .filter(([_, filterValue]) => filterValue && filterValue.length > 0)
-            .map(([columnName, filterValue]) => 
-                [`${columnName} IN (${new Array(filterValue!.length).fill('?').join(',')})`, filterValue!] as const)
-            .reduce<[string[], string[]]>(([querySegments, params], [curQuery, curParam]) => 
-                [[...querySegments, `${querySegments}${curQuery}`], params.concat(curParam)] as const, [[],[]]);
+        const {queries, params} = Object.entries(filters).map(([key, val]) => {
+            if (key in specialFilterProcessors){
+                if (typeof val !== 'string'){
+                    throw new Error(`Invalid value for filter '${key}': ${JSON.stringify(val)}`);
+                }
+                return specialFilterProcessors[key as keyof typeof specialFilterProcessors](val);
+            }
+            if (textSearchableColumns.includes(key as TextSearchableColumns)) {
+                if (typeof val !== 'string' && !(Array.isArray(val) && val.every(v => typeof v === 'string'))) {
+                    throw new Error(`Invalid value for filter '${key}': ${JSON.stringify(val)}`);
+                }
+                return textFilterProcessor(key as TextSearchableColumns, val);
+            }
+            if (numberSearchableColumns.includes(key as NumberSearchableColumns)) {
+                if (typeof val !== 'number' && !(Array.isArray(val) && val.every(v => typeof v === 'number')) && !(typeof val === 'object' && val !== null && 'from' in val && 'to' in val)) {
+                    throw new Error(`Invalid value for filter '${key}': ${JSON.stringify(val)}`);
+                }
+                return numberFilterProcessor(key as NumberSearchableColumns, val);
+            }
+            throw new Error(`Unknown filter '${key}': ${JSON.stringify(val)}`);
+        }).reduce((acc, [query, params]) => ({
+            queries: [...acc.queries, query],
+            params: [...acc.params, ...(Array.isArray(params) ? params : [params])]
+        }), { queries: [] as string[], params: [] as string[] });
 
         const query = `SELECT * FROM ${tableName}
-            ${queries.length > 0 ? ' WHERE ' + queries.concat(stringQueries).join(' AND ') : ''}
-             ORDER BY parent_path, name`;
+            ${queries.length > 0 ? ' WHERE ' + queries.join(' AND ') : ''}
+             ORDER BY date_taken DESC, parent_path DESC, name ASC`;
 
-        return this.db.prepare(query).all(...params,...stringParams) as MediaFileRow[];
+        return this.db.prepare(query).all(...params) as MediaFileRow[];
     }
 
     deleteByPath(relativePath: string, deleteChildPaths: boolean = false): number {

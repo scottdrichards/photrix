@@ -9,12 +9,12 @@ export const RatingOptions = [
 ] as const;
 
 type Filter = {
-    dateTaken?: {
+    date_taken?: {
         from: Date;
         to: Date;
     },
-    Rating?: typeof RatingOptions[number][];
-    subject?: string;
+    rating?: typeof RatingOptions[number][];
+    hierarchical_subject?: string;
 }
 
 type FilterContextType = {

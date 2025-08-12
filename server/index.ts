@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { rootDir } from "./config.ts";
 import { fileHandlers } from "./mediaConverters.ts";
-import { mediaDatabase } from "./mediaDatabase.ts";
+import { mediaDatabase, numberSearchableColumns } from "./mediaDatabase.ts";
 import { processFilesInDirectory } from "./processFiles.ts";
 
 const port = 9615 
@@ -43,14 +43,31 @@ http.createServer(async (request, response)=> {
                 response.writeHead(200, { 'Content-Type': 'application/json' });
                 response.end(JSON.stringify({folders}));
             } else {
-                const recursive = requestURL.searchParams.get("includeSubfolders") === "true";
-                const dbResults = mediaDatabase.search({ parentPath: relativePath, recursive });
+                const {includeSubfolders, details, ...rest} = Object.fromEntries(requestURL.searchParams.entries());
 
-                const details = requestURL.searchParams.get("details")?.split(",") || [];
+                const restParsed = Object.fromEntries(Object.entries(rest).map(([key, value]) => {
+                    try {
+                        return [key, JSON.parse(value)];
+                    } catch {
+                        return [key, value];
+                    }
+                })
+                .map(([key, value]) => {
+                    if (numberSearchableColumns.includes(key)) {
+                        if (Array.isArray(value)) {
+                            return [key, value.map(Number)];
+                        }
+                        return [key, Number(value)];
+                    }
+                    return [key, value];
+                })
+            );
+
+                const dbResults = mediaDatabase.search({ parentPath: relativePath, includeSubfolders: includeSubfolders === 'true', ...restParsed });
 
                 const output = dbResults.map(row => ({
                     path: `${row.parent_path}/${row.name}`,
-                    details: details.reduce((acc, key) => {
+                    details: details?.split(",").map(v => v.trim()).reduce((acc, key) => {
                         switch (key) {
                             case 'aspectRatio':
                                 acc.aspectRatio = row.image_width && row.image_height ? row.image_width / row.image_height : undefined;
@@ -129,4 +146,4 @@ const startFileProcessing = async () => {
     }
 };
 
-startFileProcessing().then(()=>console.log("Finished file processing"));
+// startFileProcessing().then(()=>console.log("Finished file processing"));
