@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { mediaURLBase } from "./data/api";
 import { useDimensions } from "./hooks/useDimensions";
 
@@ -62,12 +62,13 @@ export const ImageSizedRight: React.FC<Params> = ({ path, aspectRatio, thumbnail
     }
 
     return <img
-            src={renderFullSize?baseUrlString:thumbnailURL.toString()}
-            alt={alt}
-            onLoad={!renderFullSize ? loadFullSizeImageAfterThumbnail : undefined}
-            fetchPriority={behavior?.fetchPriority}
-            loading={behavior?.loading}
-            ref={ref}
-            {...restProps}
-        />;
+        src={renderFullSize?baseUrlString:thumbnailURL.toString()}
+        alt={alt}
+        onLoad={!renderFullSize ? loadFullSizeImageAfterThumbnail : undefined}
+        fetchPriority={behavior?.fetchPriority}
+        loading={behavior?.loading}
+        ref={ref}
+        {...restProps}
+        style={{...restProps.style, contentVisibility:"auto"}}
+    />;
 };

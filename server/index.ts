@@ -45,8 +45,22 @@ http.createServer(async (request, response)=> {
             } else {
                 const recursive = requestURL.searchParams.get("includeSubfolders") === "true";
                 const dbResults = mediaDatabase.search({ parentPath: relativePath, recursive });
+
+                const details = requestURL.searchParams.get("details")?.split(",") || [];
+
                 const output = dbResults.map(row => ({
                     path: `${row.parent_path}/${row.name}`,
+                    details: details.reduce((acc, key) => {
+                        switch (key) {
+                            case 'aspectRatio':
+                                acc.aspectRatio = row.image_width && row.image_height ? row.image_width / row.image_height : undefined;
+                                break;
+                            default:
+                                acc[key] = row[key as keyof typeof row];
+                                break;
+                        }
+                        return acc;
+                    }, {} as Record<string, any>)
                 }));
                 response.writeHead(200, { 'Content-Type': 'application/json' });
                 response.end(JSON.stringify(output));
@@ -115,5 +129,4 @@ const startFileProcessing = async () => {
     }
 };
 
-// startFileProcessing();
-
+startFileProcessing().then(()=>console.log("Finished file processing"));

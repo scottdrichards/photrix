@@ -46,7 +46,7 @@ export const useStyles = makeStyles({
     // the thumbnails each retain their aspect ratio but fill the available space.
     minHeight: "var(--size)",
     maxHeight: "calc(1.5 * var(--size))",
-    minWidth: `calc(min(100%, var(--size) * var(--ratio)))`,
+    minWidth: `calc(min(100%, calc(var(--size) * var(--ratio))))`,
     flexBasis: "calc(var(--size) * var(--ratio))",
     flex: "var(--ratio)",
     backgroundColor: "blue",

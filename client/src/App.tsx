@@ -55,7 +55,7 @@ const App = () => {
           <Media
             key={image}
             path={image}
-            style={{ width: "100%", height: "100%", objectFit: "contain" }}
+            style={{ objectFit: "contain" }}
             thumbnailBehavior={{ fetchPriority: "high", loading: "eager" }}
             fullSizeBehavior={{ fetchPriority: "high", loading: "eager" }}
           />

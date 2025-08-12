@@ -16,7 +16,9 @@ const thumbnailFileRegex = new RegExp(`(${thumbnailImageFileExtensions.join("|")
 
 type ThumbnailData = {
   path: string;
-  type: "file" | "folder";
+  details:{
+    aspectRatio?: number;
+  }
 };
 
 
@@ -37,6 +39,7 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
   const selectedDispatch = useSelectedDispatch();
 
   const url = new URL(mediaURLBase);
+  url.searchParams.set("details","aspectRatio");
   if (directoryPath) {
     // Ensure directoryPath doesn't start with / to avoid replacing the entire path
     const cleanPath = directoryPath.startsWith('/') ? directoryPath.slice(1) : directoryPath;
@@ -73,8 +76,6 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
         let thumbnailData:typeof thumbnails = [];
         for await (const linesChunk of processLines(response)) {
           const newThumbnailData = linesChunk.flatMap(line => JSON.parse(line) as ThumbnailData).filter(t=>t.path.match(thumbnailFileRegex));
-          thumbnailData = thumbnailData
-            .concat(...newThumbnailData)
           setThumbnails([...thumbnailData, ...newThumbnailData]);
         }
         setLoading(false);
@@ -122,20 +123,17 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
     <div className={styles.root}>
       <Filters />
       <div style={{ "--size": `${size}px` } as CSSProperties} className={styles.gallery}>
-        {(includeSubfolders ? thumbnails.filter((t) => t.type !== "folder") : thumbnails)
-          .map(({path, type}) => (    type === "folder" ? <></> :
-          <Media        
+        {thumbnails.map(({path, details}) => <Media        
             path={path}
-            width={100}
+            key={path}
             thumbnailBehavior= "never"
             fullSizeBehavior={{ fetchPriority: "low", loading: "lazy" }}
-            key={path}
             data-path={path}
-            data-type={type}
             className={styles.thumbnail}
+            style={{"--ratio": details.aspectRatio?.toString() || "1"} as CSSProperties}
             onLoad={onThumbnailLoad}
             onClick={onThumbnailClick}
-          />))}
+          />)}
         <div style={{ flexGrow: 1}}></div> {/* Filler to keep the last image(s) from growing */}
         {loading && <div>Loading...</div>}
         <input

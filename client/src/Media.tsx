@@ -3,31 +3,24 @@ import { ImageSizedRight, MediaBehavior } from "./ImageSizedRight";
 
 type Params = {
   path: string;
-  aspectRatio?: number;
   thumbnailBehavior?: MediaBehavior;
   fullSizeBehavior?: MediaBehavior;
 } & React.HTMLProps<HTMLImageElement>;
 
 export const Media: React.FC<Params> = (params) => {
-  const { path, width, aspectRatio, thumbnailBehavior, fullSizeBehavior, ...restProps } = params;
-
-  const url = new URL("."+path, mediaURLBase);
-  if (width) {
-    url.searchParams.set("width", width.toString());
-  }
+  const { path, width, thumbnailBehavior, fullSizeBehavior, ...restProps } = params;
 
   const renderers = [
     [
       ["jpg", "png", "jpeg", "gif", "heif", "heic", "webp"],
       () => {
         
-        const thumbnailUrl = new URL(url);
+        const thumbnailUrl = new URL(mediaURLBase);
         thumbnailUrl.searchParams.set("width", "100");
 
         return (
           <ImageSizedRight
             path={path}
-            aspectRatio={aspectRatio}
             thumbnailBehavior={thumbnailBehavior}
             fullSizeBehavior={fullSizeBehavior}
             {...restProps}

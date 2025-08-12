@@ -104,12 +104,6 @@ export class MediaDatabase {
             CREATE INDEX IF NOT EXISTS idx_rating ON ${tableName}(rating);
             CREATE INDEX IF NOT EXISTS idx_camera_make ON ${tableName}(camera_make);
             CREATE INDEX IF NOT EXISTS idx_hierarchical_subject ON ${tableName}(hierarchical_subject);
-
-            CREATE TRIGGER IF NOT EXISTS update_date_indexed
-                AFTER INSERT ON ${tableName}
-                BEGIN
-                    UPDATE ${tableName} SET date_indexed = strftime('%s', 'now') WHERE id = NEW.id;
-                END;
         `);
     }
 
@@ -150,8 +144,8 @@ export class MediaDatabase {
             INSERT OR REPLACE INTO ${tableName} (
             name, parent_path, date_taken, date_modified, rating,
             camera_make, camera_model, lens_model, focal_length, aperture,
-            shutter_speed, iso, hierarchical_subject, image_width, image_height, orientation
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            shutter_speed, iso, hierarchical_subject, image_width, image_height, orientation, date_indexed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             file.name,
             normalizePath(file.parent_path),
@@ -168,7 +162,8 @@ export class MediaDatabase {
             file.hierarchical_subject ?? null,
             file.image_width ?? null,
             file.image_height ?? null,
-            file.orientation ?? null
+            file.orientation ?? null,
+            Math.floor(Date.now() / 1000) // Set current timestamp when EXIF data is processed
         );
 
         return this.getFileById(result.lastInsertRowid as number)!;

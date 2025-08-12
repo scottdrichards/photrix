@@ -17,7 +17,7 @@ const processFile = async (fullPath: string, rootDir: string): Promise<MediaFile
     const relativePath = path.relative(rootDir, fullPath)
 
     const existing = mediaDatabase.getFileByPath(relativePath);
-    if (existing && existing.date_indexed >= dateModified/1000) {
+    if (existing && existing.date_indexed >= dateModified) {
         // console.log(`File already indexed: ${relativePath}`);
         return existing;
     }
@@ -114,6 +114,6 @@ export const processFilesInDirectory = async function* (dirPath: string, rootDir
     console.log(`Scanned ${dirPath}, found ${foundFiles.length.toLocaleString()} files`);
 
     for (const filePath of foundFiles) {
-        yield processFile(filePath, rootDir);
+        yield await processFile(filePath, rootDir);
     }
 };
