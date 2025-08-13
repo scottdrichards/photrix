@@ -181,7 +181,7 @@ const startFileProcessing = async () => {
     console.log("Starting file processing...");
     try {
         let count =0;
-        for await (const result of processFilesInDirectory(rootDir, rootDir, mediaDatabase)) {
+        for await (const result of processFilesInDirectory("./", rootDir, mediaDatabase)) {
             console.log("Processed file:", path.join(result.parent_path, result.name));
             if (count++ % 1000 === 0) {
                 console.log(`Processed ${count} files`);

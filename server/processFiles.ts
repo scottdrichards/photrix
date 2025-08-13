@@ -71,7 +71,8 @@ const processFile = async (fullPath: string, rootDir: string): Promise<MediaFile
     }
 }
 
-export const processFilesInDirectory = async function* (dirPath: string, rootDir:string, db: MediaDatabase){
+export const processFilesInDirectory = async function* (relativePath: string, rootDir:string, db: MediaDatabase){
+    const dirPath = path.join(relativePath, rootDir);
     const foundFolders = await readdir(dirPath, { withFileTypes: true });
     const foundFiles:Array<string> = [];
     const fileBatch: Array<{ name: string, parent_path: string }> = [];
