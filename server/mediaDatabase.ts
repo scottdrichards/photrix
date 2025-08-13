@@ -4,7 +4,7 @@ import { cacheDir } from './config.ts';
 
 const tableName = "media_files";
 
-const textSearchableColumns = [
+export const textSearchableColumns = [
     'camera_make',
     'camera_model',
     'lens_model',
@@ -14,7 +14,7 @@ const textSearchableColumns = [
     'iso',
     'hierarchical_subject'
 ] as const;
-type TextSearchableColumns = typeof textSearchableColumns[number];
+export type TextSearchableColumns = typeof textSearchableColumns[number];
 
 export const numberSearchableColumns = [
     'date_taken',
@@ -24,7 +24,7 @@ export const numberSearchableColumns = [
     'image_height',
     'orientation',
 ] as const;
-type NumberSearchableColumns = typeof numberSearchableColumns[number];
+export type NumberSearchableColumns = typeof numberSearchableColumns[number];
 
 export type MediaFileProperties = {
     name: string;
@@ -59,11 +59,17 @@ const normalizePath = (systemRelativePath: string) => {
 };
 
 export type SearchFilters = {
-    includeSubfolders?: boolean;
+    excludeSubfolders?: boolean;
     name?: string; // for name-based searching
-    parentPath?: string;
+    parentPath?: string; // Special case and not just a text filter
 } & Partial<Record<TextSearchableColumns, string | Array<string>>>
   & Partial<Record<NumberSearchableColumns, number | Array<number> | {from:number, to:number}>>;
+
+export const searchFields = [
+    'name',
+    ...textSearchableColumns,
+    ...numberSearchableColumns
+] as const;
 
 export class MediaDatabase {
     private db: Database;
@@ -173,7 +179,7 @@ export class MediaDatabase {
         return [...subFolderSet].sort((a,b)=> a.localeCompare(b));
     }
 
-    private createQueryFilter({includeSubfolders, ...filters}: SearchFilters):{whereClause:string, params:string[]} {
+    private createQueryFilter({excludeSubfolders: excludeSubfolders, ...filters}: SearchFilters):{whereClause:string, params:string[]} {
         type FilterProcessor = {
             [K in keyof SearchFilters]: (val: NonNullable<SearchFilters[K]>) => [string, string | string[]];
         };
@@ -185,7 +191,7 @@ export class MediaDatabase {
                     return [`(parent_path IN (${val.map(()=>'?').join(',')})`, val]
                 }
                 const normalizedPath = normalizePath(val);
-                if (!includeSubfolders){
+                if (excludeSubfolders){
                     return ['parent_path = ?', normalizedPath];
                 }
                 if (normalizedPath === "/"){
@@ -256,12 +262,12 @@ export class MediaDatabase {
         return {whereClause, params};
     }
 
-    search({includeSubfolders, ...filters}: SearchFilters): MediaFileRow[] {
-        const {whereClause, params} = this.createQueryFilter({includeSubfolders, ...filters});
+    search({excludeSubfolders, ...filters}: SearchFilters): MediaFileRow[] {
+        const {whereClause, params} = this.createQueryFilter({excludeSubfolders, ...filters});
         return this.db.prepare(`SELECT * FROM ${tableName}${whereClause}`).all(...params) as MediaFileRow[];
     }
 
-    getTextOptions(column: TextSearchableColumns, options?:{filter?:SearchFilters, containsText?:string}): string[] {
+    getColumnDistinctValues<T extends keyof MediaFileProperties>(column: T, options?:{filter?:SearchFilters, containsText?:string}): MediaFileProperties[T][] {
         if (!options) {
             return this.db.prepare(`SELECT DISTINCT ${column} FROM ${tableName}`).all().map((row: any) => row[column]);
         }
@@ -269,7 +275,12 @@ export class MediaDatabase {
         const filter = {...options.filter, [column]: options.containsText};
 
         const { whereClause, params } = this.createQueryFilter(filter);
-        return this.db.prepare(`SELECT DISTINCT ${column} FROM ${tableName}${whereClause}`).all(...params).map((row: any) => row[column]);
+        return this.db.prepare(`SELECT DISTINCT ${column} FROM ${tableName}${whereClause}`).all(...params).map(row => {
+            if (typeof row !== 'object' || row === null || !(column in row)) {
+                throw new Error(`Unexpected row format: ${JSON.stringify(row)}`);
+            }
+            return (row as MediaFileProperties)[column];
+        });
     }
 
     deleteByPath(relativePath: string, deleteChildPaths: boolean = false): number {

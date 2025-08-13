@@ -21,16 +21,8 @@ type ThumbnailData = {
   }
 };
 
-
-type Params = {
-  directoryPath: string | null;
-  includeSubfolders?: boolean;
-  selectFolder: (path: string) => void;
-};
-
-export const ThumbnailViewer: React.FC<Params> = memo((params) => {
-  const { directoryPath, includeSubfolders, selectFolder } = params;
-  const {filter} = useFilter();
+export const ThumbnailViewer: React.FC = memo(() => {
+  const { filter } = useFilter();
 
   const [thumbnails, setThumbnails] = useState<Array<ThumbnailData>>([]);
   const [loading, setLoading] = useState(false);
@@ -40,18 +32,18 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
 
   const url = new URL(mediaURLBase);
   url.searchParams.set("details","aspectRatio");
-  if (directoryPath) {
+  const {parentFolder, ...restFilter} = filter;
+  if (parentFolder) {
     // Ensure directoryPath doesn't start with / to avoid replacing the entire path
-    const cleanPath = directoryPath.startsWith('/') ? directoryPath.slice(1) : directoryPath;
+    const cleanPath = parentFolder.startsWith('/') ? parentFolder.slice(1) : parentFolder;
     url.pathname = url.pathname + cleanPath;
   }
   console.log({url: url.toString()});
-  // url.searchParams.set("includedAttributes", JSON.stringify(["resolution"]));
-  if (includeSubfolders) {
-    url.searchParams.set("includeSubfolders", "true");
+  if (!restFilter.excludeSubfolders) {
+    url.searchParams.set("excludeSubfolders", "true");
   }
-  if (filter) {
-    Object.entries(filter).filter(([_, value]) => value !== undefined).forEach(([key, value]) => {
+  if (restFilter) {
+    Object.entries(restFilter).filter(([_, value]) => value !== undefined).forEach(([key, value]) => {
       url.searchParams.set(key, JSON.stringify(value));
     });
   }
@@ -97,13 +89,6 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
   const onThumbnailClick = useCallback((e: React.MouseEvent<HTMLImageElement>) => {
     // Grab the attributes from the clicked image so that we can reuse the handler for all images
     const path = e.currentTarget.attributes.getNamedItem("data-path")?.value;
-    const type = e.currentTarget.attributes.getNamedItem("data-type")?.value;
-    if (type === "folder") {
-      if (path) {
-        selectFolder(path);
-      }
-      return;
-    }
     if (!path) return;
 
     const selectMultipleMode = e.ctrlKey || (e.target instanceof HTMLImageElement && e.target.classList.contains("select-indicator"));
@@ -134,6 +119,7 @@ export const ThumbnailViewer: React.FC<Params> = memo((params) => {
             onLoad={onThumbnailLoad}
             onClick={onThumbnailClick}
           />)}
+          {thumbnails.length === 0 && !loading && <div>No thumbnails found</div>}
         <div style={{ flexGrow: 1}}></div> {/* Filler to keep the last image(s) from growing */}
         {loading && <div>Loading...</div>}
         <input

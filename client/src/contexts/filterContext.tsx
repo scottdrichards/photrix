@@ -8,13 +8,15 @@ export const RatingOptions = [
     "5"
 ] as const;
 
-type Filter = {
+export type Filter = {
     date_taken?: {
         from: Date;
         to: Date;
     },
     rating?: typeof RatingOptions[number][];
     hierarchical_subject?: string;
+    excludeSubfolders?: boolean;
+    parentFolder?: string;
 }
 
 type FilterContextType = {
@@ -25,7 +27,9 @@ type FilterContextType = {
 const FilterContext = createContext<FilterContextType | undefined>(undefined);
 
 export const FilterProvider = ({ children }: { children: ReactNode }) => {
-    const [filter, setFilter] = useState<Filter>({});
+    const [filter, setFilter] = useState<Filter>({
+        excludeSubfolders: true
+    });
 
     return (
         <FilterContext.Provider value={{ filter, setFilter }}>

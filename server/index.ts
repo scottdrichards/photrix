@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { rootDir } from "./config.ts";
 import { fileHandlers } from "./mediaConverters.ts";
-import { mediaDatabase, numberSearchableColumns } from "./mediaDatabase.ts";
+import { mediaDatabase, numberSearchableColumns, searchFields, textSearchableColumns, type MediaFileProperties, type NumberSearchableColumns, type SearchFilters, type TextSearchableColumns } from "./mediaDatabase.ts";
 import { processFilesInDirectory } from "./processFiles.ts";
 
 const port = 9615 
@@ -11,6 +11,40 @@ const port = 9615
 const mediaPath = '/media';
 
 export type MediaDirectoryResult = Array<{path:string, type:'directory'|'file', details?:any}>;
+
+const getFilter = (searchParams: URLSearchParams): SearchFilters => {
+    const allFields = ["name", "excludeSubfolders", ...textSearchableColumns, ...numberSearchableColumns] as const;
+
+    const textFilter = allFields
+        .map(column => [column, searchParams.get(column)] as const)
+        .filter((tuple): tuple is [typeof tuple[0], string] => tuple[1] !== null)
+        .map(([column, value]) => {
+            try {
+                return [column, JSON.parse(value) as Exclude<SearchFilters[typeof column], undefined>] as const;
+            } catch {
+                return [column, value] as const ;
+            }
+        })
+        .map(([column, value]) => {
+            if (numberSearchableColumns.includes(column as NumberSearchableColumns)) {
+                if (Array.isArray(value)) {
+                    return [column, value.map(v => Number(v))] as const;
+                }
+                return [column, Number(value)] as const;
+            }
+            return [column, value] as const;
+        })
+        .reduce((acc, [column, value]) => {
+            if (value) {
+                return {...acc, [column]: value };
+            }
+            return acc;
+        }, {} as SearchFilters);
+
+    return {
+        ...textFilter
+    };
+};
 
 http.createServer(async (request, response)=> {
     response.setHeader('Access-Control-Allow-Origin', "http://127.0.0.1:5173");
@@ -42,32 +76,45 @@ http.createServer(async (request, response)=> {
                 const folders = mediaDatabase.listSubfolders(relativePath);
                 response.writeHead(200, { 'Content-Type': 'application/json' });
                 response.end(JSON.stringify({folders}));
-            } else {
-                const {includeSubfolders, details, ...rest} = Object.fromEntries(requestURL.searchParams.entries());
+            } else if (requestURL.searchParams.get("type") === "column-values") {
+                const column = requestURL.searchParams.get("column");
+                const containsText = requestURL.searchParams.get("containsText");
+                
+                if (!column) {
+                    response.writeHead(400, { 'Content-Type': 'text/plain' });
+                    response.end('Missing column parameter');
+                    return;
+                }
 
-                const restParsed = Object.fromEntries(Object.entries(rest).map(([key, value]) => {
-                    try {
-                        return [key, JSON.parse(value)];
-                    } catch {
-                        return [key, value];
-                    }
-                })
-                .map(([key, value]) => {
-                    if (numberSearchableColumns.includes(key)) {
-                        if (Array.isArray(value)) {
-                            return [key, value.map(Number)];
+                try {
+                    const distinctValues = mediaDatabase.getColumnDistinctValues(
+                        column as keyof MediaFileProperties,
+                        {
+                            filter: {
+                                parentPath: relativePath,
+                                ...getFilter(requestURL.searchParams),
+                                [column]: undefined // Ensure we don't filter by the column itself
+                            },
+                            containsText: containsText || undefined
                         }
-                        return [key, Number(value)];
-                    }
-                    return [key, value];
-                })
-            );
+                    );
+                    response.writeHead(200, { 'Content-Type': 'application/json' });
+                    response.end(JSON.stringify(distinctValues.filter(v => v !== null && v !== undefined)));
+                } catch (error) {
+                    console.error('Error getting column values:', error);
+                    response.writeHead(500, { 'Content-Type': 'text/plain' });
+                    response.end('Internal server error');
+                }
+            } else {
+                const excludeSubfolders = requestURL.searchParams.get('excludeSubfolders') !== 'false';
 
-                const dbResults = mediaDatabase.search({ parentPath: relativePath, includeSubfolders: includeSubfolders === 'true', ...restParsed });
+                const filter = getFilter(requestURL.searchParams);
+
+                const dbResults = mediaDatabase.search({ parentPath: relativePath, excludeSubfolders, ...filter });
 
                 const output = dbResults.map(row => ({
                     path: `${row.parent_path}/${row.name}`,
-                    details: details?.split(",").map(v => v.trim()).reduce((acc, key) => {
+                    details: requestURL.searchParams.get('details')?.split(",").map(v => v.trim()).reduce((acc, key) => {
                         switch (key) {
                             case 'aspectRatio':
                                 acc.aspectRatio = row.image_width && row.image_height ? row.image_width / row.image_height : undefined;

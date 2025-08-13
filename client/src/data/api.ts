@@ -1,3 +1,5 @@
+import { Filter } from "../contexts/filterContext";
+
 export type MediaDirectoryResult = Array<{
   path: string;
   type: "folder" | "file";
@@ -5,21 +7,6 @@ export type MediaDirectoryResult = Array<{
 
 
 export const mediaURLBase = new URL("/media/", window.location.origin);
-
-export const getFolderContents = async (
-  folder: string,
-): Promise<MediaDirectoryResult> => {
-  const url = new URL(folder, mediaURLBase);
-  url.searchParams.set("recursive", "false");
-  return fetch(url).then((response) =>
-    response.text().then((text) =>
-      text
-        .split("\n")
-        .slice(0, -1)
-        .map((v) => JSON.parse(v)),
-    ),
-  );
-};
 
 export const getSubfolders = async (
   folder: string,
@@ -29,4 +16,23 @@ export const getSubfolders = async (
   const response = await fetch(url);
   const data = await response.json();
   return data.folders;
+};
+
+export const getColumnDistinctValues = async (
+  column: string,
+  filter: Filter,
+  folder: string = "",
+  containsText?: string
+): Promise<Array<string>> => {
+  const url = new URL(folder, mediaURLBase);
+  url.searchParams.set("type", "column-values");
+  url.searchParams.set("column", column);
+  if (containsText) {
+    url.searchParams.set("containsText", containsText);
+  }
+  Object.entries(filter).forEach(([key, value]) => {
+    url.searchParams.set(key, JSON.stringify(value));
+  });
+  const response = await fetch(url);
+  return response.json();
 };

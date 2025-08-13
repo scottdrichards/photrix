@@ -9,19 +9,19 @@ import {
   useSelectedDispatch,
 } from "./contexts/selectedContext";
 import { ThumbnailViewer } from "./ThumbnailViewer";
-import { FilterProvider } from "./contexts/filterContext";
+import { FilterProvider, useFilter } from "./contexts/filterContext";
 
 const App = () => {
-  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const {filter, setFilter} = useFilter();
   const selectedDispatch = useSelectedDispatch();
   const selected = useSelected();
-  const [includeSubfolders, setIncludeSubfolders] = useState(false);
 
   const styles = useStyles();
 
   useEffect(() => {
     selectedDispatch({ type: "clear" });
-  }, [selectedFolder]);
+  }, [filter.parentFolder]);
+  console.log(JSON.stringify(filter));
 
   return (
     <div
@@ -35,21 +35,14 @@ const App = () => {
           <input
             type="checkbox"
             id="includeSubfolders"
-            checked={includeSubfolders}
-            onChange={(e) => setIncludeSubfolders(e.target.checked)}
+            checked={!filter.excludeSubfolders}
+            onChange={(e) => setFilter({...filter, excludeSubfolders: !e.target.checked})}
           />
           Include Subfolders
         </label>
-        <FolderExplorer
-          onSelect={setSelectedFolder}
-          selected={selectedFolder}
-        />
+        <FolderExplorer/>
       </div>
-      <ThumbnailViewer
-        directoryPath={selectedFolder}
-        includeSubfolders={includeSubfolders}
-        selectFolder={setSelectedFolder}
-      />
+      <ThumbnailViewer/>
       <div className={styles.preview}>
         {[...selected].map((image) => (
           <Media

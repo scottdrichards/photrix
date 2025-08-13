@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getSubfolders } from "./data/api";
 import { useStyles } from "./FodlerExplorer.styles";
+import { useFilter } from "./contexts/filterContext";
 
 
 type Node = {
@@ -15,13 +16,10 @@ const nameToNode = (name:string): Node => ({
   children: undefined,
 });
 
-type Params = {
-  selected: string | null;
-  onSelect: (path: string) => void;
-};
+const pathArrayToString = (path: string[]) => "./" + path.map(p => p + "/").join("");
 
-export const FolderExplorer: React.FC<Params> = (params) => {
-  const { onSelect, selected } = params;
+export const FolderExplorer: React.FC = () => {
+  const {filter, setFilter} = useFilter();
   const [root, setRoot] = useState<Node[]>([]);
 
   useEffect(() => {
@@ -64,7 +62,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
       const children = localExpanded
         ? (
             node.children ??
-            (await getSubfolders(currentPath.join("/")+"/").then((results) =>
+            (await getSubfolders(pathArrayToString(currentPath)).then((results) =>
               results.map(nameToNode),
             ))
           )?.map(
@@ -100,7 +98,7 @@ export const FolderExplorer: React.FC<Params> = (params) => {
     const styles = useStyles();
     const isRoot = !parentPath;
     const currentPath = isRoot ? [] : [...parentPath, el.name];
-    const currentPathString = currentPath.join("/")+"/";
+    const currentPathString = pathArrayToString(currentPath);
     return (
       <div
         key={currentPathString}
@@ -108,14 +106,14 @@ export const FolderExplorer: React.FC<Params> = (params) => {
       >
         <div
           className={styles.folderHeader}
-          data-selected={selected === currentPathString || undefined}
+          data-selected={filter.parentFolder === currentPathString || undefined}
         >
           <span onClick={() => setFolderExpand(currentPath, !el.expanded)}>
             {el.expanded ? "📂" : "📁"}
           </span>
           <span
             onClick={() =>
-              onSelect(currentPathString)
+              setFilter({...filter, parentFolder: currentPathString})
             }
           >
             {el.name}
