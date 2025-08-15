@@ -36,3 +36,37 @@ export const getColumnDistinctValues = async (
   const response = await fetch(url);
   return response.json();
 };
+
+export type FileInfo = {
+  name: string;
+  parent_path: string;
+  keywords?: string[];
+  date_taken?: number;
+  date_modified?: number;
+  rating?: number;
+  camera_make?: string;
+  camera_model?: string;
+  lens_model?: string;
+  focal_length?: string;
+  aperture?: string;
+  shutter_speed?: string;
+  iso?: string;
+  hierarchical_subject?: string;
+  image_width?: number;
+  image_height?: number;
+  orientation?: number;
+  date_indexed: number;
+};
+
+export const getFileInfo = async (filePath: string): Promise<FileInfo> => {
+  const url = new URL(mediaURLBase);
+  // Ensure filePath doesn't start with / to avoid replacing the entire path
+  const cleanPath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+  url.pathname = url.pathname + cleanPath;
+  url.searchParams.set("info", "true");
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to get file info: ${response.statusText}`);
+  }
+  return response.json();
+};

@@ -130,6 +130,44 @@ http.createServer(async (request, response)=> {
                 response.end(JSON.stringify(output));
             }
         }else{
+            // Check if this is a request for file information
+            if (requestURL.searchParams.get("info") === "true") {
+                try {
+                    const fileInfo = mediaDatabase.getFileByPath(relativePath);
+                    if (fileInfo) {
+                        response.writeHead(200, { 'Content-Type': 'application/json' });
+                        response.end(JSON.stringify({
+                            name: fileInfo.name,
+                            parent_path: fileInfo.parent_path,
+                            date_taken: fileInfo.date_taken,
+                            date_modified: fileInfo.date_modified,
+                            rating: fileInfo.rating,
+                            camera_make: fileInfo.camera_make,
+                            camera_model: fileInfo.camera_model,
+                            lens_model: fileInfo.lens_model,
+                            focal_length: fileInfo.focal_length,
+                            aperture: fileInfo.aperture,
+                            shutter_speed: fileInfo.shutter_speed,
+                            iso: fileInfo.iso,
+                            hierarchical_subject: fileInfo.hierarchical_subject,
+                            image_width: fileInfo.image_width,
+                            image_height: fileInfo.image_height,
+                            orientation: fileInfo.orientation,
+                            date_indexed: fileInfo.date_indexed,
+                            keywords: fileInfo.keywords
+                        }));
+                    } else {
+                        response.writeHead(404, { 'Content-Type': 'text/plain' });
+                        response.end('File not found in database');
+                    }
+                } catch (error) {
+                    console.error(`Error getting file info for ${relativePath}:`, error);
+                    response.writeHead(500, { 'Content-Type': 'text/plain' });
+                    response.end('Internal server error');
+                }
+                return;
+            }
+
             const ext = path.extname(relativePath).toLowerCase();
             const handler = fileHandlers.find(h => (h.extensions as string[]).includes(ext))?.handler;
             if (handler){
@@ -181,7 +219,7 @@ const startFileProcessing = async () => {
     console.log("Starting file processing...");
     try {
         let count =0;
-        for await (const result of processFilesInDirectory("./", rootDir, mediaDatabase)) {
+        for await (const result of processFilesInDirectory("./2021/08/Utah Trip/Bear Lake/Grandma Luau", rootDir, mediaDatabase)) {
             console.log("Processed file:", path.join(result.parent_path, result.name));
             if (count++ % 1000 === 0) {
                 console.log(`Processed ${count} files`);
@@ -193,4 +231,4 @@ const startFileProcessing = async () => {
     }
 };
 
-// startFileProcessing().then(()=>console.log("Finished file processing"));
+startFileProcessing().then(()=>console.log("Finished file processing"));

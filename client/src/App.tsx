@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import "./App.css";
 import { useStyles } from "./App.styles";
 import { FolderExplorer } from "./FolderExplorer";
@@ -10,6 +10,7 @@ import {
 } from "./contexts/selectedContext";
 import { ThumbnailViewer } from "./ThumbnailViewer";
 import { FilterProvider, useFilter } from "./contexts/filterContext";
+import { FileInfoPanel } from "./FileInfo";
 
 const App = () => {
   const {filter, setFilter} = useFilter();
@@ -45,13 +46,17 @@ const App = () => {
       <ThumbnailViewer/>
       <div className={styles.preview}>
         {[...selected].map((image) => (
-          <Media
-            key={image}
-            path={image}
-            style={{ objectFit: "contain", width: "100%", height: "100%" }}
-            thumbnailBehavior={{ fetchPriority: "high", loading: "eager" }}
-            fullSizeBehavior={{ fetchPriority: "high", loading: "eager" }}
-          />
+          <div key={image} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <div style={{ flex: 1, display: 'flex' }}>
+              <Media
+                path={image}
+                style={{ objectFit: "contain", width: "100%", height: "100%" }}
+                thumbnailBehavior={{ fetchPriority: "high", loading: "eager" }}
+                fullSizeBehavior={{ fetchPriority: "high", loading: "eager" }}
+              />
+            </div>
+            <FileInfoPanel filePath={image} />
+          </div>
         ))}
       </div>
     </div>

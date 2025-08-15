@@ -17,7 +17,7 @@ const processFile = async (fullPath: string, rootDir: string): Promise<MediaFile
     const relativePath = path.relative(rootDir, fullPath)
 
     const existing = mediaDatabase.getFileByPath(relativePath);
-    if (existing && existing.date_indexed >= dateModified) {
+    if (existing && existing.date_indexed >= dateModified && !fullPath.includes('7882')) {
         // console.log(`File already indexed: ${relativePath}`);
         return existing;
     }
@@ -50,6 +50,7 @@ const processFile = async (fullPath: string, rootDir: string): Promise<MediaFile
             aperture: tags.Aperture ? String(tags.Aperture) : undefined,
             shutter_speed: tags.ShutterSpeed ? String(tags.ShutterSpeed) : undefined,
             iso: tags.ISO ? String(tags.ISO) : undefined,
+            keywords: Array.isArray(tags.Keywords) ? tags.Keywords : typeof tags.Keywords === "string" ? [tags.Keywords] : undefined,
             hierarchical_subject: tags.HierarchicalSubject?.at(-1) ? String(tags.HierarchicalSubject.at(-1)) : undefined,
             image_width: tags.ImageWidth ? Number(tags.ImageWidth) : undefined,
             image_height: tags.ImageHeight ? Number(tags.ImageHeight) : undefined,
@@ -72,7 +73,7 @@ const processFile = async (fullPath: string, rootDir: string): Promise<MediaFile
 }
 
 export const processFilesInDirectory = async function* (relativePath: string, rootDir:string, db: MediaDatabase){
-    const dirPath = path.join(relativePath, rootDir);
+    const dirPath = path.join(rootDir, relativePath);
     const foundFolders = await readdir(dirPath, { withFileTypes: true });
     const foundFiles:Array<string> = [];
     const fileBatch: Array<{ name: string, parent_path: string }> = [];

@@ -34,6 +34,7 @@ export type MediaFileProperties = {
      * Starts with slash so that root is represented as "/" and not as an empty string.
      */
     parent_path: string;
+    keywords?: string[]; // JSON array of keywords
 } & Partial<Record<TextSearchableColumns, string>>
   & Partial<Record<NumberSearchableColumns, number>>;
 
@@ -61,9 +62,10 @@ const normalizePath = (systemRelativePath: string) => {
 export type SearchFilters = {
     excludeSubfolders?: boolean;
     name?: string; // for name-based searching
-    parentPath?: string; // Special case and not just a text filter
+    parentPath?: string;
+    keywords?: string | string[]; // Search in keywords JSON array
 } & Partial<Record<TextSearchableColumns, string | Array<string>>>
-  & Partial<Record<NumberSearchableColumns, number | Array<number> | {from:number, to:number}>>;
+  & Partial<Record<NumberSearchableColumns, number | Array<number> | {from:number, to:number}>>;;
 
 export const searchFields = [
     'name',
@@ -85,8 +87,9 @@ export class MediaDatabase {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 parent_path TEXT NOT NULL,
-                ${textSearchableColumns.map(col => `${col} TEXT`).join(',\n')}
-                ${numberSearchableColumns.map(col => `${col} INTEGER`).join(',\n')}
+                keywords JSON,
+                ${textSearchableColumns.map(col => `${col} TEXT`).join(',\n')},
+                ${numberSearchableColumns.map(col => `${col} INTEGER`).join(',\n')},
                 date_indexed INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
             );
 
@@ -97,19 +100,8 @@ export class MediaDatabase {
             CREATE INDEX IF NOT EXISTS idx_rating ON ${tableName}(rating);
             CREATE INDEX IF NOT EXISTS idx_camera_make ON ${tableName}(camera_make);
             CREATE INDEX IF NOT EXISTS idx_hierarchical_subject ON ${tableName}(hierarchical_subject);
+            CREATE INDEX IF NOT EXISTS idx_keywords ON ${tableName}(keywords);
         `);
-    }
-
-    addBasicFileRow(file: { name: string, parent_path: string }) {
-        this.db.prepare(`
-            INSERT OR IGNORE INTO ${tableName} (
-                name, parent_path, date_indexed
-            ) VALUES (?, ?, ?)
-        `).run(
-            file.name,
-            normalizePath(file.parent_path),
-            0 // indicate that EXIF data has not been processed yet
-        );
     }
 
     addBasicFileRows(files: Array<{ name: string, parent_path: string }>) {
@@ -136,6 +128,7 @@ export class MediaDatabase {
         const columns = [
             'name',
             'parent_path',
+            'keywords',
             ...textSearchableColumns,
             ...numberSearchableColumns,
             'date_indexed',
@@ -145,6 +138,7 @@ export class MediaDatabase {
         `).run(
             file.name,
             normalizePath(file.parent_path),
+            file.keywords ? JSON.stringify(file.keywords.sort((a,b) => a.localeCompare(b))) : null,
             ...[...textSearchableColumns, ...numberSearchableColumns].map(col => file[col] ?? null),
             Date.now()
         );
@@ -153,14 +147,23 @@ export class MediaDatabase {
     }
 
     getFileById(id: number): MediaFileRow | undefined {
-        const result = this.db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(id) as MediaFileRow | undefined;
-        return result && {...result, parent_path: result.parent_path};
+        const result = this.db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(id) as any;
+        if (!result) return undefined;
+        
+        // Parse keywords JSON back to array
+        const keywords = result.keywords ? JSON.parse(result.keywords) : undefined;
+        return {
+            ...result,
+            parent_path: result.parent_path,
+            keywords
+        };
     }
 
     getFileByPath(relativePath: string): MediaFileRow | undefined {
         const fileName = path.basename(relativePath);
         const parentPath = path.dirname(relativePath);
-        return this.db.prepare(`SELECT * FROM ${tableName} WHERE parent_path = ? AND name = ?`).get(normalizePath(parentPath), fileName) as MediaFileRow | undefined;
+        const result = this.db.prepare(`SELECT * FROM ${tableName} WHERE parent_path = ? AND name = ?`).get(normalizePath(parentPath), fileName) as (MediaFileRow & {keywords?:string}) | undefined;
+        return { ...result, keywords: result?.keywords && JSON.parse(result.keywords)} as MediaFileRow | undefined;
     }
 
     /**
@@ -186,6 +189,16 @@ export class MediaDatabase {
         
         const specialFilterProcessors = {
             name: (val) => ['name LIKE ?', `%${val}%`],
+            keywords: (val) => {
+                if (Array.isArray(val)) {
+                    // Search for ALL of the keywords in the JSON array (must match all)
+                    const queries = val.map(() => 'EXISTS (SELECT 1 FROM JSON_EACH(keywords) WHERE value = ?)').join(' AND ');
+                    return [`(${queries})`, val];
+                } else {
+                    // Search for a single keyword in the JSON array
+                    return ['EXISTS (SELECT 1 FROM JSON_EACH(keywords) WHERE value = ?)', val];
+                }
+            },
             parentPath: (val) => {
                 if (Array.isArray(val)){
                     return [`(parent_path IN (${val.map(()=>'?').join(',')})`, val]
@@ -209,15 +222,16 @@ export class MediaDatabase {
                 return [`${key} = ?`, `${val}`];
             }
             const queries = [];
+            const rangeParams = [];
             if ('from' in val) {
                 queries.push(`${key} >= ?`);
-                params.push(val.from.toString());
+                rangeParams.push(val.from.toString());
             }
             if ('to' in val) {
                 queries.push(`${key} <= ?`);
-                params.push(val.to.toString());
+                rangeParams.push(val.to.toString());
             }
-            return [queries.join(' AND '), params];
+            return [queries.join(' AND '), rangeParams];
         };
 
         const textFilterProcessor = (key: TextSearchableColumns, val: NonNullable<SearchFilters[TextSearchableColumns]>):[string, string | string[]] => {
@@ -233,10 +247,17 @@ export class MediaDatabase {
 
         const {queries, params} = Object.entries(filters).filter(([, val]) => val !== undefined).map(([key, val]) => {
             if (key in specialFilterProcessors){
-                if (typeof val !== 'string'){
-                    throw new Error(`Invalid value for filter '${key}': ${JSON.stringify(val)}`);
+                if (key === 'keywords') {
+                    if (typeof val !== 'string' && !(Array.isArray(val) && val.every(v => typeof v === 'string'))) {
+                        throw new Error(`Invalid value for filter '${key}': ${JSON.stringify(val)}`);
+                    }
+                    return specialFilterProcessors.keywords(val as string | string[]);
+                } else {
+                    if (typeof val !== 'string'){
+                        throw new Error(`Invalid value for filter '${key}': ${JSON.stringify(val)}`);
+                    }
+                    return specialFilterProcessors[key as Exclude<keyof typeof specialFilterProcessors, 'keywords'>](val as string);
                 }
-                return specialFilterProcessors[key as keyof typeof specialFilterProcessors](val);
             }
             if (textSearchableColumns.includes(key as TextSearchableColumns)) {
                 if (typeof val !== 'string' && !(Array.isArray(val) && val.every(v => typeof v === 'string'))) {
@@ -264,7 +285,13 @@ export class MediaDatabase {
 
     search({excludeSubfolders, ...filters}: SearchFilters): MediaFileRow[] {
         const {whereClause, params} = this.createQueryFilter({excludeSubfolders, ...filters});
-        return this.db.prepare(`SELECT * FROM ${tableName}${whereClause}`).all(...params) as MediaFileRow[];
+        const results = this.db.prepare(`SELECT * FROM ${tableName}${whereClause}`).all(...params) as any[];
+        
+        // Parse keywords JSON back to array for each result
+        return results.map(result => ({
+            ...result,
+            keywords: result.keywords ? JSON.parse(result.keywords) : undefined
+        }));
     }
 
     getColumnDistinctValues<T extends keyof MediaFileProperties>(column: T, options?:{filter?:SearchFilters, containsText?:string}): MediaFileProperties[T][] {
