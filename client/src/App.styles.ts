@@ -19,14 +19,5 @@ export const useStyles = makeStyles({
     boxSizing: "border-box", 
     height: "100%",
     overflow: "auto",
-  },
-  preview:{
-    display: "flex",
-    flexDirection: "column",
-    gap: "10px",
-    padding: "10px",
-    boxSizing: "border-box",
-    overflowY: "auto",
-    maxHeight: "100%",
   }
 })

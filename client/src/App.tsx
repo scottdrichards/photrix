@@ -2,20 +2,17 @@ import { useEffect } from "react";
 import "./App.css";
 import { useStyles } from "./App.styles";
 import { FolderExplorer } from "./FolderExplorer";
-import { Media } from "./Media";
 import {
   SelectedProvider,
-  useSelected,
   useSelectedDispatch,
 } from "./contexts/selectedContext";
 import { ThumbnailViewer } from "./ThumbnailViewer";
 import { FilterProvider, useFilter } from "./contexts/filterContext";
-import { FileInfoPanel } from "./FileInfo";
+import { Preview } from "./Preview";
 
 const App = () => {
   const {filter, setFilter} = useFilter();
   const selectedDispatch = useSelectedDispatch();
-  const selected = useSelected();
 
   const styles = useStyles();
 
@@ -43,27 +40,13 @@ const App = () => {
         </label>
         <FolderExplorer/>
       </div>
+
+      
       <ThumbnailViewer/>
-      <div className={styles.preview}>
-        {[...selected].map((image) => (
-          <div key={image} style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-            <div style={{ flex: 1, display: 'flex', height: '100%' }}>
-              <Media
-                path={image}
-                style={{ objectFit: "contain", width: "100%", height: "100%" }}
-                thumbnailBehavior={{ fetchPriority: "high", loading: "eager" }}
-                fullSizeBehavior={{ fetchPriority: "high", loading: "eager" }}
-              />
-            </div>
-            <FileInfoPanel filePath={image} style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }} />
-          </div>
-        ))}
-      </div>
+      <Preview />
     </div>
   );
-};
-
-export default () => (
+};export default () => (
   <SelectedProvider>
     <FilterProvider>
       <App />
