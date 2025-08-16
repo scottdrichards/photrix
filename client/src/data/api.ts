@@ -18,13 +18,16 @@ export const getSubfolders = async (
   return data.folders;
 };
 
-export const getColumnDistinctValues = async (
+type Params = {
   column: string,
   filter: Filter,
-  folder: string = "",
   containsText?: string
+}
+export const getColumnDistinctValues = async (
+  params: Params
 ): Promise<Array<string>> => {
-  const url = new URL(folder, mediaURLBase);
+  const { column, filter, containsText } = params;
+  const url = new URL(filter.parentFolder ?? "", mediaURLBase);
   url.searchParams.set("type", "column-values");
   url.searchParams.set("column", column);
   if (containsText) {

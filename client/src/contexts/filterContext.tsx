@@ -15,7 +15,7 @@ export type Filter = {
     },
     rating?: typeof RatingOptions[number][];
     hierarchical_subject?: string;
-    keywords?: string | string[];
+    keywords?: string[];
     excludeSubfolders?: boolean;
     parentFolder?: string;
 }

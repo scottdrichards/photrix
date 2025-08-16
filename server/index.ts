@@ -13,7 +13,7 @@ const mediaPath = '/media';
 export type MediaDirectoryResult = Array<{path:string, type:'directory'|'file', details?:any}>;
 
 const getFilter = (searchParams: URLSearchParams): SearchFilters => {
-    const allFields = ["name", "excludeSubfolders", ...textSearchableColumns, ...numberSearchableColumns] as const;
+    const allFields = ["name", "excludeSubfolders", "keywords", ...textSearchableColumns, ...numberSearchableColumns] as const;
 
     const textFilter = allFields
         .map(column => [column, searchParams.get(column)] as const)
@@ -219,7 +219,7 @@ const startFileProcessing = async () => {
     console.log("Starting file processing...");
     try {
         let count =0;
-        for await (const result of processFilesInDirectory("./2021/08/Utah Trip/Bear Lake/Grandma Luau", rootDir, mediaDatabase)) {
+        for await (const result of processFilesInDirectory("./", rootDir, mediaDatabase)) {
             console.log("Processed file:", path.join(result.parent_path, result.name));
             if (count++ % 1000 === 0) {
                 console.log(`Processed ${count} files`);

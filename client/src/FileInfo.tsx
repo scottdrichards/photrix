@@ -3,9 +3,10 @@ import { getFileInfo, type FileInfo } from "./data/api";
 
 type Props = {
   filePath: string;
+  style?: React.CSSProperties;
 };
 
-export const FileInfoPanel: React.FC<Props> = ({ filePath }) => {
+export const FileInfoPanel: React.FC<Props> = ({ filePath, style }) => {
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +66,8 @@ export const FileInfoPanel: React.FC<Props> = ({ filePath }) => {
       fontSize: '14px',
       maxHeight: '300px',
       overflowY: 'auto',
-      fontFamily: 'monospace'
+      fontFamily: 'monospace',
+      ...style
     }}>
       <h3 style={{ margin: '0 0 12px 0', fontSize: '16px' }}>{fileInfo.name}</h3>
       

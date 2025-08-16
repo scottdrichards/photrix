@@ -1,53 +1,28 @@
-import { useEffect, useState } from "react";
 import { RatingOptions, useFilter } from "../contexts/filterContext";
-import { getColumnDistinctValues } from "../data/api";
+import { useOptions } from "../hooks/useOptions";
 
 export const Filters: React.FC = () => {
   const { filter, setFilter } = useFilter();
-  const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
-  const [loadingSubjects, setLoadingSubjects] = useState(false);
+  const keywordOptions = useOptions("keywords");
 
-  useEffect(() => {
-    const loadSubjectOptions = async () => {
-      setLoadingSubjects(true);
-      try {
-        const subjects = await getColumnDistinctValues("hierarchical_subject", filter);
-        setSubjectOptions(subjects);
-      } catch (error) {
-        console.error("Error loading subject options:", error);
-      } finally {
-        setLoadingSubjects(false);
-      }
-    };
-
-    loadSubjectOptions();
-  }, []);
+  const toggleKeyword = (keyword: string) => {
+    const removeKeyword = filter.keywords?.includes(keyword);
+    const keywords = removeKeyword ? filter.keywords?.filter(k => k !== keyword)||[] : [...(filter.keywords || []), keyword];
+    setFilter({
+      ...filter,
+      keywords:keywords?.length > 0 ? keywords : undefined 
+    });
+  };
 
   return (
     <div>
-      <label style={{ display: 'block', marginBottom: 8 }}>
-        Subject:
-        {loadingSubjects ? (
-          <span style={{ marginLeft: 8 }}>Loading...</span>
-        ) : (
-          <select
-            value={filter.hierarchical_subject || ''}
-            onChange={e => {
-              const {hierarchical_subject, ...rest} = filter;
-              const newHierarchicalSubject = e.target.value || undefined;
-              setFilter(newHierarchicalSubject ? {...rest, hierarchical_subject: newHierarchicalSubject} : rest);
-            }}
-            style={{ marginLeft: 8 }}
-          >
-            <option value="">All subjects</option>
-            {subjectOptions.map(subject => (
-              <option key={subject} value={subject}>
-                {subject}
-              </option>
-            ))}
-          </select>
-        )}
-      </label>
+      <div>
+        {keywordOptions?.map(keyword => (
+          <span key={keyword} style={{ marginRight: 8, fontWeight: filter.keywords?.includes(keyword) ? 'bold' : 'normal' }} onClick={() => toggleKeyword(keyword)}>
+            {keyword}
+          </span>
+        ))}
+      </div>
       <label style={{ display: 'block', marginBottom: 8 }}>
         Rating:
         <span>

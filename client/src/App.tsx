@@ -46,8 +46,8 @@ const App = () => {
       <ThumbnailViewer/>
       <div className={styles.preview}>
         {[...selected].map((image) => (
-          <div key={image} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <div style={{ flex: 1, display: 'flex' }}>
+          <div key={image} style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+            <div style={{ flex: 1, display: 'flex', height: '100%' }}>
               <Media
                 path={image}
                 style={{ objectFit: "contain", width: "100%", height: "100%" }}
@@ -55,7 +55,7 @@ const App = () => {
                 fullSizeBehavior={{ fetchPriority: "high", loading: "eager" }}
               />
             </div>
-            <FileInfoPanel filePath={image} />
+            <FileInfoPanel filePath={image} style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }} />
           </div>
         ))}
       </div>

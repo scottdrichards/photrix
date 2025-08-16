@@ -294,20 +294,22 @@ export class MediaDatabase {
         }));
     }
 
-    getColumnDistinctValues<T extends keyof MediaFileProperties>(column: T, options?:{filter?:SearchFilters, containsText?:string}): MediaFileProperties[T][] {
-        if (!options) {
-            return this.db.prepare(`SELECT DISTINCT ${column} FROM ${tableName}`).all().map((row: any) => row[column]);
-        }
-
-        const filter = {...options.filter, [column]: options.containsText};
+    getColumnDistinctValues<T extends keyof MediaFileProperties>(column: T, options?:{filter?:SearchFilters, containsText?:string}): T extends 'keywords'?string[]:MediaFileProperties[T][] {
+        const filter = {...options?.filter, [column]: options?.containsText};
 
         const { whereClause, params } = this.createQueryFilter(filter);
+
+        if (column === 'keywords'){
+            const query = `SELECT DISTINCT value FROM ${tableName}, JSON_EACH(${column})${whereClause}`;
+            return this.db.prepare(query).all(...params).map((r:any)=>r.value) as T extends 'keywords'?string[]:never;
+        }
+
         return this.db.prepare(`SELECT DISTINCT ${column} FROM ${tableName}${whereClause}`).all(...params).map(row => {
             if (typeof row !== 'object' || row === null || !(column in row)) {
                 throw new Error(`Unexpected row format: ${JSON.stringify(row)}`);
             }
             return (row as MediaFileProperties)[column];
-        });
+        }) as T extends 'keywords'?string[]:MediaFileProperties[T][];
     }
 
     deleteByPath(relativePath: string, deleteChildPaths: boolean = false): number {
