@@ -44,40 +44,34 @@ export const Filters: React.FC = () => {
 
   return (
     <div className={styles.filtersContainer}>
+      {JSON.stringify(filter, null, 2)}
       <Keywords />
       
       <label className={styles.ratingLabel}>
         Rating:
         <div className={styles.ratingContainer}>
-          {RatingOptions.map(star => (
-            <span
-              key={star}
-              className={`${styles.star} ${
-                (filter.rating && +filter.rating[0] >= +star) 
-                  ? styles.starActive 
-                  : styles.starInactive
-              }`}
+          {RatingOptions.map(rating=>
+            <div key={rating} style={{ backgroundColor: filter.rating?.includes(rating) && '#2e2e2eff' || undefined }}
               onClick={() =>
                 setFilter({
                   ...filter,
-                  rating: filter.rating?.[0] === star ? undefined : RatingOptions.filter(rating => +rating >= +star),
+                  rating: filter.rating?.includes(rating) ?
+                    filter.rating.filter(r => r !== rating) :
+                    filter?.rating?.concat(rating) || [rating],
                 })
-              }
-              aria-label={`Set rating to ${star}`}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  setFilter({
-                    ...filter,
-                    rating: filter.rating?.[0] === star ? undefined : RatingOptions.filter(rating => +rating >= +star),
-                  });
-                }
-              }}
+              }>
+              {RatingOptions.map(star => (
+              <span
+                key={star}
+                className={`${styles.star} ${
+                  (star <= rating) 
+                    ? styles.starActive 
+                  : styles.starInactive
+              }`}
             >
               ★
             </span>
-          ))}
+          ))}</div>)}
         </div>
       </label>
     </div>

@@ -27,10 +27,25 @@ type FilterContextType = {
 
 const FilterContext = createContext<FilterContextType | undefined>(undefined);
 
+const cleanFilter = (filter: Filter): Filter => Object.fromEntries(
+    Object.entries(filter)
+        .filter(([_, value]) => {
+            if (value === undefined) {
+                return false;
+            }
+            if (Array.isArray(value) && value.length === 0) {
+                return false;
+            }
+            return true;
+        })) as Filter;
+
+
 export const FilterProvider = ({ children }: { children: ReactNode }) => {
-    const [filter, setFilter] = useState<Filter>({
+    const [filter, setFilterState] = useState<Filter>({
         excludeSubfolders: true
     });
+
+    const setFilter = (value: Filter) => setFilterState(cleanFilter(value));
 
     return (
         <FilterContext.Provider value={{ filter, setFilter }}>
