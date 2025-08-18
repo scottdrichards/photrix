@@ -23,6 +23,8 @@ export const numberSearchableColumns = [
     'image_width',
     'image_height',
     'orientation',
+    'gps_latitude',
+    'gps_longitude',
 ] as const;
 export type NumberSearchableColumns = typeof numberSearchableColumns[number];
 
@@ -35,6 +37,8 @@ export type MediaFileProperties = {
      */
     parent_path: string;
     keywords?: string[]; // JSON array of keywords
+    gps_latitude?: number;
+    gps_longitude?: number;
 } & Partial<Record<TextSearchableColumns, string>>
   & Partial<Record<NumberSearchableColumns, number>>;
 
@@ -101,6 +105,9 @@ export class MediaDatabase {
             CREATE INDEX IF NOT EXISTS idx_camera_make ON ${tableName}(camera_make);
             CREATE INDEX IF NOT EXISTS idx_hierarchical_subject ON ${tableName}(hierarchical_subject);
             CREATE INDEX IF NOT EXISTS idx_keywords ON ${tableName}(keywords);
+            CREATE INDEX IF NOT EXISTS idx_gps_latitude ON ${tableName}(gps_latitude);
+            CREATE INDEX IF NOT EXISTS idx_gps_longitude ON ${tableName}(gps_longitude);
+            CREATE INDEX IF NOT EXISTS idx_gps_coords ON ${tableName}(gps_latitude, gps_longitude);
         `);
     }
 
@@ -333,6 +340,21 @@ export class MediaDatabase {
                 count: (row as any).count
             };
         });
+    }
+
+    searchWithGeoData({excludeSubfolders, ...filters}: SearchFilters): Array<MediaFileRow & {gps_latitude?: number, gps_longitude?: number}> {
+        const {whereClause, params} = this.createQueryFilter({excludeSubfolders, ...filters});
+        const geoWhereClause = whereClause ? 
+            `${whereClause} AND gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL` :
+            ' WHERE gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL ORDER BY date_taken DESC, parent_path DESC, name ASC';
+        
+        const results = this.db.prepare(`SELECT * FROM ${tableName}${geoWhereClause}`).all(...params) as any[];
+        
+        // Parse keywords JSON back to array for each result
+        return results.map(result => ({
+            ...result,
+            keywords: result.keywords ? JSON.parse(result.keywords) : undefined
+        }));
     }
 
     deleteByPath(relativePath: string, deleteChildPaths: boolean = false): number {

@@ -106,7 +106,6 @@ export const ThumbnailViewer: React.FC = memo(() => {
 
   return (
     <div className={styles.root}>
-      <Filters />
       <div style={{ "--size": `${size}px` } as CSSProperties} className={styles.gallery}>
         {thumbnails.map(({path, details}) => <Media        
             path={path}

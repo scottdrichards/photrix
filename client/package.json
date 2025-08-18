@@ -11,11 +11,13 @@
   },
   "dependencies": {
     "@fluentui/react-components": "^9.63.0",
+    "ol": "^10.6.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@types/ol": "^7.0.0",
     "@types/react": "^19.1.1",
     "@types/react-dom": "^19.1.1",
     "@vitejs/plugin-react-swc": "^3.5.0",

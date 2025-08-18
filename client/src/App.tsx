@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 import { useStyles } from "./App.styles";
 import { FolderExplorer } from "./FolderExplorer";
@@ -9,10 +9,13 @@ import {
 import { ThumbnailViewer } from "./ThumbnailViewer";
 import { FilterProvider, useFilter } from "./contexts/filterContext";
 import { Preview } from "./Preview";
+import { MapView } from "./MapView";
+import { Filters } from "./filters/Filters";
 
 const App = () => {
   const {filter, setFilter} = useFilter();
   const selectedDispatch = useSelectedDispatch();
+  const [viewMode, setViewMode] = useState<'thumbnails' | 'map'>('thumbnails');
 
   const styles = useStyles();
 
@@ -38,12 +41,40 @@ const App = () => {
           />
           Include Subfolders
         </label>
+        
+        <div style={{ marginTop: "10px" }}>
+          <label style={{ marginRight: "10px" }}>
+            <input
+              type="radio"
+              name="viewMode"
+              checked={viewMode === 'thumbnails'}
+              onChange={() => setViewMode('thumbnails')}
+            />
+            Thumbnails
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="viewMode"
+              checked={viewMode === 'map'}
+              onChange={() => setViewMode('map')}
+            />
+            Map
+          </label>
+        </div>
+        
         <FolderExplorer/>
       </div>
 
-      
-      <ThumbnailViewer/>
-      <Preview />
+      <Filters />
+      {viewMode === 'thumbnails' ? (
+        <>
+          <ThumbnailViewer/>
+          <Preview />
+        </>
+      ) : (
+        <MapView />
+      )}
     </div>
   );
 };export default () => (

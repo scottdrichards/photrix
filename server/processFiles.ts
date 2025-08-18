@@ -55,6 +55,8 @@ const processFile = async (fullPath: string, rootDir: string): Promise<MediaFile
             image_width: tags.ImageWidth ? Number(tags.ImageWidth) : undefined,
             image_height: tags.ImageHeight ? Number(tags.ImageHeight) : undefined,
             orientation: tags.Orientation ? Number(tags.Orientation) : undefined,
+            gps_latitude: tags.GPSLatitude ? Number(tags.GPSLatitude) : undefined,
+            gps_longitude: tags.GPSLongitude ? Number(tags.GPSLongitude) : undefined,
         };
 
         return mediaDatabase.insertOrUpdateFile(properties);

@@ -6,7 +6,7 @@ import { fileHandlers } from "./mediaConverters.ts";
 import { mediaDatabase, numberSearchableColumns, searchFields, textSearchableColumns, type MediaFileProperties, type NumberSearchableColumns, type SearchFilters, type TextSearchableColumns } from "./mediaDatabase.ts";
 import { processFilesInDirectory } from "./processFiles.ts";
 
-const port = 9615 
+const port = 9616
 
 const mediaPath = '/media';
 
@@ -121,6 +121,12 @@ http.createServer(async (request, response)=> {
                             case 'aspectRatio':
                                 acc.aspectRatio = row.image_width && row.image_height ? row.image_width / row.image_height : undefined;
                                 break;
+                            case 'geolocation':
+                                acc.geolocation = row.gps_latitude && row.gps_longitude ? {
+                                    latitude: row.gps_latitude,
+                                    longitude: row.gps_longitude
+                                } : undefined;
+                                break;
                             default:
                                 acc[key] = row[key as keyof typeof row];
                                 break;
@@ -221,7 +227,7 @@ const startFileProcessing = async () => {
     console.log("Starting file processing...");
     try {
         let count =0;
-        for await (const result of processFilesInDirectory("./", rootDir, mediaDatabase)) {
+        for await (const result of processFilesInDirectory("./2021/01/", rootDir, mediaDatabase)) {
             console.log("Processed file:", path.join(result.parent_path, result.name));
             if (count++ % 1000 === 0) {
                 console.log(`Processed ${count} files`);
@@ -233,4 +239,4 @@ const startFileProcessing = async () => {
     }
 };
 
-// startFileProcessing().then(()=>console.log("Finished file processing"));
+startFileProcessing().then(()=>console.log("Finished file processing"));
