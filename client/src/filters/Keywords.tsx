@@ -29,21 +29,21 @@ export const Keywords: React.FC = () => {
     });
   };
 
-  const keywordFilterNotFoundInResults = filter.keywords?.filter(
-    keyword => !keywordOptions?.includes(keyword)
-  );
-
   return (
     <div className={styles.keywordsContainer}>
-      {keywordOptions?.map(keyword => (
+      {keywordOptions?.sort((a,b)=>b.count-a.count)
+        .map(({value:keyword, count}) => (
         <Keyword 
           key={keyword} 
           name={keyword} 
-          state={filter.keywords?.includes(keyword) ? 'active' : 'inactive'}
+          count={count}
+          state={filter.keywords?.find(option=>option===keyword) ? 'active' : 'inactive'}
           onClick={toggleKeyword}
         />
       ))}
-      {keywordFilterNotFoundInResults?.map(keyword => (
+      {filter.keywords?.filter(
+        keyword => !keywordOptions?.find(option=>option.value==(keyword))
+      )?.map(keyword => (
         <Keyword 
           key={keyword} 
           name={keyword} 

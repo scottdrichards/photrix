@@ -40,9 +40,10 @@ export interface KeywordProps {
   name: string;
   state: 'inactive' | 'active' | 'notFound';
   onClick: (keyword: string) => void;
+  count?: number;
 }
 
-export const Keyword: React.FC<KeywordProps> = ({ name, state, onClick }) => {
+export const Keyword: React.FC<KeywordProps> = ({ name, state, onClick, count }) => {
   const styles = useStyles();
   
   return (
@@ -57,7 +58,7 @@ export const Keyword: React.FC<KeywordProps> = ({ name, state, onClick }) => {
         }
       }}
     >
-      {name}
+      {name}{count && ` (${count})`}
     </span>
   );
 };

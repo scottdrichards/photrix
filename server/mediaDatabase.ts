@@ -277,16 +277,16 @@ export class MediaDatabase {
             params: [...acc.params, ...(Array.isArray(params) ? params : [params])]
         }), { queries: [] as string[], params: [] as string[] });
 
-        const whereClause = `${queries.length > 0 ? ' WHERE ' + queries.join(' AND ') : ''}
-             ORDER BY date_taken DESC, parent_path DESC, name ASC`;
+        const whereClause = `${queries.length > 0 ? ' WHERE ' + queries.join(' AND ') : ''}`;
 
         return {whereClause, params};
     }
 
     search({excludeSubfolders, ...filters}: SearchFilters): MediaFileRow[] {
         const {whereClause, params} = this.createQueryFilter({excludeSubfolders, ...filters});
-        const results = this.db.prepare(`SELECT * FROM ${tableName}${whereClause}`).all(...params) as any[];
-        
+        const orderClause = `ORDER BY date_taken DESC, parent_path DESC, name ASC`;
+        const results = this.db.prepare(`SELECT * FROM ${tableName}${whereClause}${orderClause}`).all(...params) as any[];
+
         // Parse keywords JSON back to array for each result
         return results.map(result => ({
             ...result,
@@ -294,22 +294,45 @@ export class MediaDatabase {
         }));
     }
 
-    getColumnDistinctValues<T extends keyof MediaFileProperties>(column: T, options?:{filter?:SearchFilters, containsText?:string}): T extends 'keywords'?string[]:MediaFileProperties[T][] {
+    getColumnDistinctValues<T extends keyof MediaFileProperties>(column: T, options?:{filter?:SearchFilters, containsText?:string}): Array<{value: T extends 'keywords' ? string : MediaFileProperties[T], count: number}> {
         const filter = {...options?.filter, [column]: options?.containsText};
 
         const { whereClause, params } = this.createQueryFilter(filter);
+        const orderClause = `ORDER BY count DESC, value ASC`;
 
         if (column === 'keywords'){
-            const query = `SELECT DISTINCT value FROM ${tableName}, JSON_EACH(${column})${whereClause}`;
-            return this.db.prepare(query).all(...params).map((r:any)=>r.value) as T extends 'keywords'?string[]:never;
+            // Count occurrences and sort by count descending
+            const query = `
+                SELECT value, COUNT(*) as count 
+                FROM ${tableName}, JSON_EACH(${column})
+                ${whereClause}
+                GROUP BY value
+                ${orderClause}
+            `;
+            return this.db.prepare(query).all(...params).map((r:any) => ({
+                value: r.value,
+                count: r.count
+            }));
         }
 
-        return this.db.prepare(`SELECT DISTINCT ${column} FROM ${tableName}${whereClause}`).all(...params).map(row => {
-            if (typeof row !== 'object' || row === null || !(column in row)) {
+        // For other columns, count occurrences and sort by count descending
+        const query = `
+            SELECT ${column} as value, COUNT(*) as count 
+            FROM ${tableName}
+            ${whereClause}
+            GROUP BY ${column}
+            ${orderClause}
+        `;
+        
+        return this.db.prepare(query).all(...params).map(row => {
+            if (typeof row !== 'object' || row === null || !('value' in row) || !('count' in row)) {
                 throw new Error(`Unexpected row format: ${JSON.stringify(row)}`);
             }
-            return (row as MediaFileProperties)[column];
-        }) as T extends 'keywords'?string[]:MediaFileProperties[T][];
+            return {
+                value: (row as any).value,
+                count: (row as any).count
+            };
+        });
     }
 
     deleteByPath(relativePath: string, deleteChildPaths: boolean = false): number {

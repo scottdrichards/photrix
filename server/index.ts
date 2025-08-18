@@ -98,8 +98,10 @@ http.createServer(async (request, response)=> {
                             containsText: containsText || undefined
                         }
                     );
+                    // Filter out null/undefined values
+                    const filteredValues = distinctValues.filter(item => item.value !== null && item.value !== undefined);
                     response.writeHead(200, { 'Content-Type': 'application/json' });
-                    response.end(JSON.stringify(distinctValues.filter(v => v !== null && v !== undefined)));
+                    response.end(JSON.stringify(filteredValues));
                 } catch (error) {
                     console.error('Error getting column values:', error);
                     response.writeHead(500, { 'Content-Type': 'text/plain' });
@@ -231,4 +233,4 @@ const startFileProcessing = async () => {
     }
 };
 
-startFileProcessing().then(()=>console.log("Finished file processing"));
+// startFileProcessing().then(()=>console.log("Finished file processing"));

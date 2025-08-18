@@ -23,9 +23,15 @@ type Params = {
   filter: Filter,
   containsText?: string
 }
+
+export type ColumnValueWithCount = {
+  value: string;
+  count: number;
+};
+
 export const getColumnDistinctValues = async (
   params: Params
-): Promise<Array<string>> => {
+): Promise<Array<ColumnValueWithCount>> => {
   const { column, filter, containsText } = params;
   const url = new URL(filter.parentFolder ?? "", mediaURLBase);
   url.searchParams.set("type", "column-values");
