@@ -1,17 +1,17 @@
-import { useEffect, useState, useRef } from "react";
+import { Map, View } from 'ol';
+import Feature from 'ol/Feature';
+import Point from 'ol/geom/Point';
+import TileLayer from 'ol/layer/Tile';
+import VectorLayer from 'ol/layer/Vector';
+import 'ol/ol.css';
+import { fromLonLat } from 'ol/proj';
+import OSM from 'ol/source/OSM';
+import VectorSource from 'ol/source/Vector';
+import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style';
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useFilter } from "./contexts/filterContext";
 import { useSelected, useSelectedDispatch } from "./contexts/selectedContext";
 import { useStyles } from "./MapView.styles";
-import 'ol/ol.css';
-import { Map, View } from 'ol';
-import TileLayer from 'ol/layer/Tile';
-import OSM from 'ol/source/OSM';
-import VectorLayer from 'ol/layer/Vector';
-import VectorSource from 'ol/source/Vector';
-import Feature from 'ol/Feature';
-import Point from 'ol/geom/Point';
-import { fromLonLat } from 'ol/proj';
-import { Style, Fill, Stroke, Circle as CircleStyle } from 'ol/style';
 
 type MapDataPoint = {
   path: string;
@@ -23,150 +23,80 @@ type MapDataPoint = {
   };
 };
 
-export const MapView: React.FC = () => {
+export const MapViewInner: React.FC = () => {
   const styles = useStyles();
-  const { filter } = useFilter();
+  const { filter, url } = useFilter();
   const selected = useSelected();
   const selectedDispatch = useSelectedDispatch();
-  const [mapData, setMapData] = useState<MapDataPoint[]>([]);
+
+  const [mapData, setMapData] = useState<MapDataPoint[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [map, setMap] = useState<Map | null>(null);
-  const [vectorLayer, setVectorLayer] = useState<VectorLayer<VectorSource> | null>(null);
   const mapRef = useRef<HTMLDivElement>(null);
 
   // Initialize map
-  useEffect(() => {
-    console.log('Map initialization effect triggered, mapRef.current:', !!mapRef.current);
-    if (!mapRef.current) return;
-
-    // Check if map already exists
-    if (map) {
-      console.log('Map already initialized, skipping');
-      return;
+  const [map, vectorSource] = useMemo(() => {
+    if (!mapRef.current || mapRef.current.children.length > 0) {
+      return [null, null]
     }
 
-    // Small delay to ensure DOM is ready
-    const initMap = () => {
-      const vectorSource = new VectorSource();
-      const newVectorLayer = new VectorLayer({
-        source: vectorSource,
-      });
-
-      const newMap = new Map({
-        target: mapRef.current!,
-        layers: [
-          new TileLayer({
-            source: new OSM(),
-          }),
-          newVectorLayer,
-        ],
-        view: new View({
-          center: fromLonLat([0, 20]),
-          zoom: 2,
+    const source = new VectorSource();
+    console.log('new map')
+    const map = new Map({
+      target: mapRef.current,
+      layers: [
+        new TileLayer({
+          source: new OSM(),
         }),
-      });
-
-      console.log('Map created successfully');
-      setMap(newMap);
-      setVectorLayer(newVectorLayer);
-
-      // Force map to resize after a moment
-      setTimeout(() => {
-        newMap.updateSize();
-        console.log('Map size updated');
-      }, 100);
-    };
-
-    const timeoutId = setTimeout(initMap, 100);
-
-    return () => {
-      console.log('Cleaning up map');
-      clearTimeout(timeoutId);
-    };
-  }, []);
+        new VectorLayer({
+          source
+        }),
+      ],
+      view: new View({
+        center: fromLonLat([0, 20]),
+        zoom: 2,
+      }),
+    })
+    return [map, source];
+  }, [mapRef.current]);
 
   // Load map data
   useEffect(() => {
     const loadMapData = async () => {
-      try {
-        setLoading(true);
-        console.log('Loading map data for filter:', filter);
-        
-        // Use the regular API with details parameter
-        const url = new URL(filter.parentFolder ?? "", `${window.location.origin}/media/`);
-        url.searchParams.set("details", "geolocation");
-        
-        Object.entries(filter).forEach(([key, value]) => {
-          if (value !== undefined && key !== 'parentFolder') {
-            url.searchParams.set(key, JSON.stringify(value));
-          }
-        });
-        
-        console.log('Fetching from URL:', url.toString());
-        const response = await fetch(url);
-        const data = await response.json();
-        console.log('Received map data:', data);
-        setMapData(data);
-      } catch (error) {
-        console.error('Error loading map data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
+      setLoading(true);
+      const mapURL = new URL(url);
+      mapURL.searchParams.set('details', "geolocation");
+
+      const response = await fetch(mapURL.toString());
+      const data = await response.json();
+      console.log('Received map data:', data);
+      setMapData(data);
+      setLoading(false);
+    }
 
     loadMapData();
   }, [filter]);
 
   // Update markers when data or map changes
   useEffect(() => {
-    console.log('Map effect triggered:', { 
-      hasMap: !!map, 
-      hasVectorLayer: !!vectorLayer, 
-      dataLength: mapData.length,
-      mapData: mapData.slice(0, 3) // Show first 3 items for debugging
-    });
-
-    if (!map || !vectorLayer) {
-      console.log('Map or vector layer not ready');
+    if (vectorSource === null || map === null || mapData === null) {
       return;
     }
-
-    if (!mapData.length) {
-      console.log('No map data available');
-      return;
-    }
-
-    const source = vectorLayer.getSource();
-    if (!source) {
-      console.log('No vector source available');
-      return;
-    }
-
-    // Clear existing features
-    source.clear();
+    vectorSource.clear();
 
     // Filter points with valid geolocation
-    const validPoints = mapData.filter(item => 
-      item.details?.geolocation?.latitude && 
-      item.details?.geolocation?.longitude
-    );
-
-    console.log('Valid points with geolocation:', validPoints.length);
-
-    // Add simple pin markers for each photo
-    validPoints.forEach((item, index) => {
-      const { latitude, longitude } = item.details!.geolocation!;
-      console.log(`Adding pin ${index}:`, { latitude, longitude, path: item.path });
+    const features = mapData.filter((item): item is MapDataPoint & { details: { geolocation: { latitude: number; longitude: number; }; }; } => 
+      item.details?.geolocation?.latitude !== undefined && 
+      item.details?.geolocation?.longitude !== undefined
+    ).map(item=>{
+      const { latitude, longitude } = item.details.geolocation;
       
       const feature = new Feature({
         geometry: new Point(fromLonLat([longitude, latitude])),
-        path: item.path
+        path: item.path,
       });
 
-      // Check if this item is selected
       const isSelected = selected.has(item.path);
 
-      // Style based on selection state
       feature.setStyle(new Style({
         image: new CircleStyle({
           radius: isSelected ? 12 : 8,
@@ -174,13 +104,15 @@ export const MapView: React.FC = () => {
           stroke: new Stroke({ color: 'white', width: isSelected ? 3 : 2 }),
         }),
       }));
-
-      source.addFeature(feature);
+      return feature;
     });
 
-    console.log('Added features to map:', source.getFeatures().length);
+    if (features.length === 0){
+      return;
+    }
 
-    // Add click handler for pins
+    vectorSource.addFeatures(features);
+
     const clickHandler = (event: any) => {
       map.forEachFeatureAtPixel(event.pixel, (feature) => {
         const path = feature.get('path');
@@ -193,39 +125,23 @@ export const MapView: React.FC = () => {
     };
 
     map.on('click', clickHandler);
-
-    // Fit map to show all pins if we have data
-    if (validPoints.length > 0) {
-      const extent = source.getExtent();
-      console.log('Map extent:', extent);
-      if (extent && extent.every(coord => isFinite(coord))) {
-        map.getView().fit(extent, { padding: [50, 50, 50, 50] });
-        console.log('Fitted map to extent');
-      }
-    }
+    
+    map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
 
     return () => {
       map.un('click', clickHandler);
     };
-  }, [map, vectorLayer, mapData, selected, selectedDispatch]);
-
-  if (loading) {
-    return (
-      <div className={styles.mapContainer}>
-        <div className={styles.loadingSpinner}>
-          Loading map data...
-        </div>
-        <div ref={mapRef} className={styles.mapWrapper} />
-      </div>
-    );
-  }
+  }, [vectorSource, map, mapData]);
 
   return (
     <div className={styles.mapContainer}>
       <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1000, background: 'white', padding: '5px', fontSize: '12px' }}>
-        Debug: {mapData.length} items loaded, {mapData.filter(item => item.details?.geolocation).length} with GPS
+        Debug: {mapData?.length} items loaded, {mapData?.filter(item => item.details?.geolocation).length} with GPS
       </div>
-      <div ref={mapRef} className={styles.mapWrapper} />
+      {loading &&<div style={{position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 1000, background: 'white', padding: '5px', fontSize: '12px'}}>Loading map data...</div>}
+      <div ref={mapRef} className={styles.mapWrapper}></div>
     </div>
   );
 };
+
+export const MapView = memo(MapViewInner);

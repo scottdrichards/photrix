@@ -3,11 +3,11 @@ import path from "node:path";
 import process from "node:process";
 import { rootDir } from "./config.ts";
 import { fileHandlers } from "./mediaConverters.ts";
-import { mediaDatabase, numberSearchableColumns, searchFields, textSearchableColumns, type MediaFileProperties, type NumberSearchableColumns, type SearchFilters, type TextSearchableColumns } from "./mediaDatabase.ts";
+import { mediaDatabase, numberSearchableColumns, textSearchableColumns, type MediaFileProperties, type NumberSearchableColumns, type SearchFilters } from "./mediaDatabase.ts";
 import { processFilesInDirectory } from "./processFiles.ts";
 import zlib from "node:zlib";
 
-const port = 9616
+const port = 9615
 
 const mediaPath = '/media';
 

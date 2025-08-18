@@ -1,4 +1,5 @@
-import { createContext, ReactNode, useContext, useState } from 'react';
+import { createContext, ReactNode, useContext, useMemo, useState } from 'react';
+import { mediaURLBase } from '../data/api';
 
 export const RatingOptions = [
     "1",
@@ -54,10 +55,20 @@ export const FilterProvider = ({ children }: { children: ReactNode }) => {
     );
 };
 
-export const useFilter = (): FilterContextType => {
+export const useFilter = (): FilterContextType & { url: Readonly<URL> } => {
     const context = useContext(FilterContext);
     if (!context) {
         throw new Error('useFilter must be used within a FilterProvider');
     }
-    return context;
+
+    const returnValue = useMemo(()=>{
+        const url = new URL(context.filter.parentFolder ?? "", mediaURLBase);
+        Object.entries(context.filter).forEach(([key, value]) => {
+            if (value !== undefined && key !== 'parentFolder') {
+                url.searchParams.set(key, JSON.stringify(value));
+            }
+        });
+        return {...context, url}
+    }, [context])
+    return returnValue;
 };
