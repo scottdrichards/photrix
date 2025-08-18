@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { useFilter } from "./contexts/filterContext";
+import { useSelected, useSelectedDispatch } from "./contexts/selectedContext";
 import { useStyles } from "./MapView.styles";
 import 'ol/ol.css';
 import { Map, View } from 'ol';
@@ -25,6 +26,8 @@ type MapDataPoint = {
 export const MapView: React.FC = () => {
   const styles = useStyles();
   const { filter } = useFilter();
+  const selected = useSelected();
+  const selectedDispatch = useSelectedDispatch();
   const [mapData, setMapData] = useState<MapDataPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [map, setMap] = useState<Map | null>(null);
@@ -79,11 +82,8 @@ export const MapView: React.FC = () => {
     return () => {
       console.log('Cleaning up map');
       clearTimeout(timeoutId);
-      if (map) {
-        map.setTarget(undefined);
-      }
     };
-  }, [map]);
+  }, []);
 
   // Load map data
   useEffect(() => {
@@ -163,12 +163,15 @@ export const MapView: React.FC = () => {
         path: item.path
       });
 
-      // Simple blue circle pin
+      // Check if this item is selected
+      const isSelected = selected.has(item.path);
+
+      // Style based on selection state
       feature.setStyle(new Style({
         image: new CircleStyle({
-          radius: 8,
-          fill: new Fill({ color: '#0078d4' }),
-          stroke: new Stroke({ color: 'white', width: 2 }),
+          radius: isSelected ? 12 : 8,
+          fill: new Fill({ color: isSelected ? '#ff4444' : '#0078d4' }),
+          stroke: new Stroke({ color: 'white', width: isSelected ? 3 : 2 }),
         }),
       }));
 
@@ -183,7 +186,8 @@ export const MapView: React.FC = () => {
         const path = feature.get('path');
         if (path) {
           console.log('Photo clicked:', path);
-          // You can add navigation to the photo here
+          // Toggle selection
+          selectedDispatch({ type: 'toggle', payload: path });
         }
       });
     };
@@ -203,7 +207,7 @@ export const MapView: React.FC = () => {
     return () => {
       map.un('click', clickHandler);
     };
-  }, [map, vectorLayer, mapData]);
+  }, [map, vectorLayer, mapData, selected, selectedDispatch]);
 
   if (loading) {
     return (

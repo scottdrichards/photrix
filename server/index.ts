@@ -5,6 +5,7 @@ import { rootDir } from "./config.ts";
 import { fileHandlers } from "./mediaConverters.ts";
 import { mediaDatabase, numberSearchableColumns, searchFields, textSearchableColumns, type MediaFileProperties, type NumberSearchableColumns, type SearchFilters, type TextSearchableColumns } from "./mediaDatabase.ts";
 import { processFilesInDirectory } from "./processFiles.ts";
+import zlib from "node:zlib";
 
 const port = 9616
 
@@ -135,7 +136,13 @@ http.createServer(async (request, response)=> {
                     }, {} as Record<string, any>)
                 }));
                 response.writeHead(200, { 'Content-Type': 'application/json' });
-                response.end(JSON.stringify(output));
+                const json = JSON.stringify(output);
+                response.setHeader('Content-Encoding', 'gzip');
+                response.writeHead(200, { 'Content-Type': 'application/json' });
+                
+                const gzip = zlib.createGzip();
+                gzip.pipe(response);
+                gzip.end(json);
             }
         }else{
             // Check if this is a request for file information
@@ -227,7 +234,7 @@ const startFileProcessing = async () => {
     console.log("Starting file processing...");
     try {
         let count =0;
-        for await (const result of processFilesInDirectory("./2021/01/", rootDir, mediaDatabase)) {
+        for await (const result of processFilesInDirectory("./", rootDir, mediaDatabase)) {
             console.log("Processed file:", path.join(result.parent_path, result.name));
             if (count++ % 1000 === 0) {
                 console.log(`Processed ${count} files`);
