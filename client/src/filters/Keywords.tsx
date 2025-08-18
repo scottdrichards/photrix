@@ -32,6 +32,7 @@ export const Keywords: React.FC = () => {
   return (
     <div className={styles.keywordsContainer}>
       {keywordOptions?.sort((a,b)=>b.count-a.count)
+        .slice(0, 10)
         .map(({value:keyword, count}) => (
         <Keyword 
           key={keyword} 
