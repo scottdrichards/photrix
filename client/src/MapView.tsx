@@ -1,10 +1,13 @@
 import { Map, View } from 'ol';
 import Feature from 'ol/Feature';
 import Point from 'ol/geom/Point';
+import Polygon from 'ol/geom/Polygon';
+import { DragBox } from 'ol/interaction';
+import { platformModifierKeyOnly } from 'ol/events/condition';
 import TileLayer from 'ol/layer/Tile';
 import VectorLayer from 'ol/layer/Vector';
 import 'ol/ol.css';
-import { fromLonLat } from 'ol/proj';
+import { fromLonLat, toLonLat } from 'ol/proj';
 import OSM from 'ol/source/OSM';
 import VectorSource from 'ol/source/Vector';
 import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style';
@@ -25,7 +28,7 @@ type MapDataPoint = {
 
 export const MapViewInner: React.FC = () => {
   const styles = useStyles();
-  const { filter, url } = useFilter();
+  const { filter, url, setFilter } = useFilter();
   const selected = useSelected();
   const selectedDispatch = useSelectedDispatch();
 
@@ -34,13 +37,15 @@ export const MapViewInner: React.FC = () => {
   const mapRef = useRef<HTMLDivElement>(null);
 
   // Initialize map
-  const [map, vectorSource] = useMemo(() => {
+  const [map, vectorSource, boundingBoxSource] = useMemo(() => {
     if (!mapRef.current || mapRef.current.children.length > 0) {
-      return [null, null]
+      return [null, null, null]
     }
 
     const source = new VectorSource();
+    const bboxSource = new VectorSource();
     console.log('new map')
+    
     const map = new Map({
       target: mapRef.current,
       layers: [
@@ -50,13 +55,66 @@ export const MapViewInner: React.FC = () => {
         new VectorLayer({
           source
         }),
+        new VectorLayer({
+          source: bboxSource,
+          style: new Style({
+            stroke: new Stroke({
+              color: '#ff0000',
+              width: 2,
+            }),
+            fill: new Fill({
+              color: 'rgba(255, 0, 0, 0.1)',
+            }),
+          }),
+        }),
       ],
       view: new View({
         center: fromLonLat([0, 20]),
         zoom: 2,
       }),
-    })
-    return [map, source];
+    });
+
+    // Add drag box interaction for bounding box
+    const dragBox = new DragBox({
+      condition: platformModifierKeyOnly, // Ctrl key on Windows/Linux, Cmd key on Mac
+    });
+
+    map.addInteraction(dragBox);
+
+    // Handle box end to update filter
+    dragBox.on('boxend', () => {
+      const extent = dragBox.getGeometry().getExtent();
+      
+      // Convert extent to lat/lng bounds
+      const bottomLeft = toLonLat([extent[0], extent[1]]);
+      const topRight = toLonLat([extent[2], extent[3]]);
+      const [minLongitude, minLatitude] = bottomLeft;
+      const [maxLongitude, maxLatitude] = topRight;
+
+      console.log('Created bounding box:', { minLongitude, minLatitude, maxLongitude, maxLatitude });
+      setFilter({ ...filter,
+        gps_latitude: { from: minLatitude, to: maxLatitude },
+        gps_longitude: { from: minLongitude, to: maxLongitude }
+      });
+
+      // Create a visual polygon for the bounding box
+      const coordinates = [
+        fromLonLat([minLongitude, minLatitude]),
+        fromLonLat([minLongitude, maxLatitude]),
+        fromLonLat([maxLongitude, maxLatitude]),
+        fromLonLat([maxLongitude, minLatitude]),
+        fromLonLat([minLongitude, minLatitude]),
+      ];
+      
+      const polygon = new Polygon([coordinates]);
+      const feature = new Feature({ geometry: polygon });
+      
+      // Clear previous bounding boxes and add new one
+      bboxSource.clear();
+      bboxSource.addFeature(feature);
+    });
+
+    return [map, source, bboxSource];
   }, [mapRef.current]);
 
   // Load map data
@@ -66,6 +124,7 @@ export const MapViewInner: React.FC = () => {
       const mapURL = new URL(url);
       mapURL.searchParams.set('details', "geolocation");
 
+      console.log('Fetching map data from URL:', mapURL.toString());
       const response = await fetch(mapURL.toString());
       const data = await response.json();
       console.log('Received map data:', data);
@@ -74,7 +133,30 @@ export const MapViewInner: React.FC = () => {
     }
 
     loadMapData();
-  }, [filter]);
+  }, [url]);
+
+  // Update bounding box display when filter changes
+  useEffect(() => {
+    if (!map || !boundingBoxSource) return;
+
+    boundingBoxSource.clear();
+    
+    if (filter.gps_latitude && filter.gps_longitude) {
+      const { from: minLat, to: maxLat } = filter.gps_latitude;
+      const { from: minLng, to: maxLng } = filter.gps_longitude;
+      const coordinates = [
+        fromLonLat([minLng, minLat]),
+        fromLonLat([minLng, maxLat]),
+        fromLonLat([maxLng, maxLat]),
+        fromLonLat([maxLng, minLat]),
+        fromLonLat([minLng, minLat]),
+      ];
+      
+      const polygon = new Polygon([coordinates]);
+      const feature = new Feature({ geometry: polygon });
+      boundingBoxSource.addFeature(feature);
+    }
+  }, [map, boundingBoxSource, filter.gps_latitude, filter.gps_longitude]);
 
   // Update markers when data or map changes
   useEffect(() => {
@@ -135,8 +217,21 @@ export const MapViewInner: React.FC = () => {
 
   return (
     <div className={styles.mapContainer}>
-      <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1000, background: 'white', padding: '5px', fontSize: '12px' }}>
+      <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1000, background: 'white', padding: '5px', fontSize: '12px', maxWidth: '200px' }}>
         Debug: {mapData?.length} items loaded, {mapData?.filter(item => item.details?.geolocation).length} with GPS
+        <br />
+        <small>Hold Ctrl + drag to create geo filter box</small>
+        {filter.gps_latitude && filter.gps_longitude && (
+          <div>
+            <small>Geo filter active</small>
+            <button 
+              onClick={() => setFilter({ ...filter, gps_latitude: undefined, gps_longitude: undefined })}
+              style={{ marginLeft: '5px', fontSize: '10px', padding: '2px 4px' }}
+            >
+              Clear
+            </button>
+          </div>
+        )}
       </div>
       {loading &&<div style={{position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 1000, background: 'white', padding: '5px', fontSize: '12px'}}>Loading map data...</div>}
       <div ref={mapRef} className={styles.mapWrapper}></div>

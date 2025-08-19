@@ -37,8 +37,6 @@ export type MediaFileProperties = {
      */
     parent_path: string;
     keywords?: string[]; // JSON array of keywords
-    gps_latitude?: number;
-    gps_longitude?: number;
 } & Partial<Record<TextSearchableColumns, string>>
   & Partial<Record<NumberSearchableColumns, number>>;
 

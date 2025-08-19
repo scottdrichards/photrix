@@ -31,7 +31,10 @@ const getFilter = (searchParams: URLSearchParams): SearchFilters => {
                 if (Array.isArray(value)) {
                     return [column, value.map(v => Number(v))] as const;
                 }
-                return [column, Number(value)] as const;
+                if (typeof value === "string") {
+                    return [column, Number(value)] as const;
+                }
+                return [column, value] as const;
             }
             return [column, value] as const;
         })
@@ -246,4 +249,4 @@ const startFileProcessing = async () => {
     }
 };
 
-startFileProcessing().then(()=>console.log("Finished file processing"));
+// startFileProcessing().then(()=>console.log("Finished file processing"));

@@ -19,6 +19,14 @@ export type Filter = {
     keywords?: string[];
     excludeSubfolders?: boolean;
     parentFolder?: string;
+    gps_latitude?: {
+        from: number;
+        to: number;
+    };
+    gps_longitude?: {
+        from: number;
+        to: number;
+    };
 }
 
 type FilterContextType = {
@@ -69,6 +77,6 @@ export const useFilter = (): FilterContextType & { url: Readonly<URL> } => {
             }
         });
         return {...context, url}
-    }, [context])
+    }, [context.filter])
     return returnValue;
 };
