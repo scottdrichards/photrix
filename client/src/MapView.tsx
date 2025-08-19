@@ -1,9 +1,6 @@
 import { Map, View } from 'ol';
 import Feature from 'ol/Feature';
 import Point from 'ol/geom/Point';
-import Polygon from 'ol/geom/Polygon';
-import { DragBox } from 'ol/interaction';
-import { platformModifierKeyOnly } from 'ol/events/condition';
 import TileLayer from 'ol/layer/Tile';
 import VectorLayer from 'ol/layer/Vector';
 import 'ol/ol.css';
@@ -37,13 +34,12 @@ export const MapViewInner: React.FC = () => {
   const mapRef = useRef<HTMLDivElement>(null);
 
   // Initialize map
-  const [map, vectorSource, boundingBoxSource] = useMemo(() => {
+  const [map, vectorSource] = useMemo(() => {
     if (!mapRef.current || mapRef.current.children.length > 0) {
-      return [null, null, null]
+      return [null, null]
     }
 
     const source = new VectorSource();
-    const bboxSource = new VectorSource();
     console.log('new map')
     
     const map = new Map({
@@ -55,18 +51,6 @@ export const MapViewInner: React.FC = () => {
         new VectorLayer({
           source
         }),
-        new VectorLayer({
-          source: bboxSource,
-          style: new Style({
-            stroke: new Stroke({
-              color: '#ff0000',
-              width: 2,
-            }),
-            fill: new Fill({
-              color: 'rgba(255, 0, 0, 0.1)',
-            }),
-          }),
-        }),
       ],
       view: new View({
         center: fromLonLat([0, 20]),
@@ -74,47 +58,7 @@ export const MapViewInner: React.FC = () => {
       }),
     });
 
-    // Add drag box interaction for bounding box
-    const dragBox = new DragBox({
-      condition: platformModifierKeyOnly, // Ctrl key on Windows/Linux, Cmd key on Mac
-    });
-
-    map.addInteraction(dragBox);
-
-    // Handle box end to update filter
-    dragBox.on('boxend', () => {
-      const extent = dragBox.getGeometry().getExtent();
-      
-      // Convert extent to lat/lng bounds
-      const bottomLeft = toLonLat([extent[0], extent[1]]);
-      const topRight = toLonLat([extent[2], extent[3]]);
-      const [minLongitude, minLatitude] = bottomLeft;
-      const [maxLongitude, maxLatitude] = topRight;
-
-      console.log('Created bounding box:', { minLongitude, minLatitude, maxLongitude, maxLatitude });
-      setFilter({ ...filter,
-        gps_latitude: { from: minLatitude, to: maxLatitude },
-        gps_longitude: { from: minLongitude, to: maxLongitude }
-      });
-
-      // Create a visual polygon for the bounding box
-      const coordinates = [
-        fromLonLat([minLongitude, minLatitude]),
-        fromLonLat([minLongitude, maxLatitude]),
-        fromLonLat([maxLongitude, maxLatitude]),
-        fromLonLat([maxLongitude, minLatitude]),
-        fromLonLat([minLongitude, minLatitude]),
-      ];
-      
-      const polygon = new Polygon([coordinates]);
-      const feature = new Feature({ geometry: polygon });
-      
-      // Clear previous bounding boxes and add new one
-      bboxSource.clear();
-      bboxSource.addFeature(feature);
-    });
-
-    return [map, source, bboxSource];
+    return [map, source];
   }, [mapRef.current]);
 
   // Load map data
@@ -135,28 +79,43 @@ export const MapViewInner: React.FC = () => {
     loadMapData();
   }, [url]);
 
-  // Update bounding box display when filter changes
+  // Add debounced view change listener to update filter based on map extent
   useEffect(() => {
-    if (!map || !boundingBoxSource) return;
+    if (!map) return;
 
-    boundingBoxSource.clear();
-    
-    if (filter.gps_latitude && filter.gps_longitude) {
-      const { from: minLat, to: maxLat } = filter.gps_latitude;
-      const { from: minLng, to: maxLng } = filter.gps_longitude;
-      const coordinates = [
-        fromLonLat([minLng, minLat]),
-        fromLonLat([minLng, maxLat]),
-        fromLonLat([maxLng, maxLat]),
-        fromLonLat([maxLng, minLat]),
-        fromLonLat([minLng, minLat]),
-      ];
+    let timeoutId: number;
+
+    const updateFilterFromView = () => {
+      const view = map.getView();
+      const extent = view.calculateExtent(map.getSize());
       
-      const polygon = new Polygon([coordinates]);
-      const feature = new Feature({ geometry: polygon });
-      boundingBoxSource.addFeature(feature);
-    }
-  }, [map, boundingBoxSource, filter.gps_latitude, filter.gps_longitude]);
+      // Convert extent to lat/lng bounds
+      const bottomLeft = toLonLat([extent[0], extent[1]]);
+      const topRight = toLonLat([extent[2], extent[3]]);
+      const [minLongitude, minLatitude] = bottomLeft;
+      const [maxLongitude, maxLatitude] = topRight;
+
+      console.log('Map view changed, updating filter:', { minLongitude, minLatitude, maxLongitude, maxLatitude });
+      
+      setFilter({ ...filter,
+        gps_latitude: { from: minLatitude, to: maxLatitude },
+        gps_longitude: { from: minLongitude, to: maxLongitude }
+      });
+    };
+
+    const debouncedUpdate = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(updateFilterFromView, 500);
+    };
+
+    const view = map.getView();
+    view.on('change', debouncedUpdate);
+
+    return () => {
+      clearTimeout(timeoutId);
+      view.un('change', debouncedUpdate);
+    };
+  }, [map, filter, setFilter]);
 
   // Update markers when data or map changes
   useEffect(() => {
@@ -166,28 +125,30 @@ export const MapViewInner: React.FC = () => {
     vectorSource.clear();
 
     // Filter points with valid geolocation
-    const features = mapData.filter((item): item is MapDataPoint & { details: { geolocation: { latitude: number; longitude: number; }; }; } => 
-      item.details?.geolocation?.latitude !== undefined && 
-      item.details?.geolocation?.longitude !== undefined
-    ).map(item=>{
-      const { latitude, longitude } = item.details.geolocation;
-      
-      const feature = new Feature({
-        geometry: new Point(fromLonLat([longitude, latitude])),
-        path: item.path,
+    const features = mapData
+      .filter((item): item is MapDataPoint & { details: { geolocation: { latitude: number; longitude: number; }; }; } => 
+        item.details?.geolocation?.latitude !== undefined && 
+        item.details?.geolocation?.longitude !== undefined
+      )
+      .map(item=>{
+        const { latitude, longitude } = item.details.geolocation;
+        
+        const feature = new Feature({
+          geometry: new Point(fromLonLat([longitude, latitude])),
+          path: item.path,
+        });
+
+        const isSelected = selected.has(item.path);
+
+        feature.setStyle(new Style({
+          image: new CircleStyle({
+            radius: isSelected ? 12 : 8,
+            fill: new Fill({ color: isSelected ? '#ff4444' : '#0078d4' }),
+            stroke: new Stroke({ color: 'white', width: isSelected ? 3 : 2 }),
+          }),
+        }));
+        return feature;
       });
-
-      const isSelected = selected.has(item.path);
-
-      feature.setStyle(new Style({
-        image: new CircleStyle({
-          radius: isSelected ? 12 : 8,
-          fill: new Fill({ color: isSelected ? '#ff4444' : '#0078d4' }),
-          stroke: new Stroke({ color: 'white', width: isSelected ? 3 : 2 }),
-        }),
-      }));
-      return feature;
-    });
 
     if (features.length === 0){
       return;
@@ -208,7 +169,7 @@ export const MapViewInner: React.FC = () => {
 
     map.on('click', clickHandler);
     
-    map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
+    // map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
 
     return () => {
       map.un('click', clickHandler);
@@ -220,10 +181,10 @@ export const MapViewInner: React.FC = () => {
       <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1000, background: 'white', padding: '5px', fontSize: '12px', maxWidth: '200px' }}>
         Debug: {mapData?.length} items loaded, {mapData?.filter(item => item.details?.geolocation).length} with GPS
         <br />
-        <small>Hold Ctrl + drag to create geo filter box</small>
+        <small>Pan/zoom to filter by current view</small>
         {filter.gps_latitude && filter.gps_longitude && (
           <div>
-            <small>Geo filter active</small>
+            <small>View-based filter active</small>
             <button 
               onClick={() => setFilter({ ...filter, gps_latitude: undefined, gps_longitude: undefined })}
               style={{ marginLeft: '5px', fontSize: '10px', padding: '2px 4px' }}
