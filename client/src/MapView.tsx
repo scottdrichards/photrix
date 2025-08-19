@@ -124,7 +124,6 @@ export const MapViewInner: React.FC = () => {
     }
     vectorSource.clear();
 
-    // Filter points with valid geolocation
     const features = mapData
       .filter((item): item is MapDataPoint & { details: { geolocation: { latitude: number; longitude: number; }; }; } => 
         item.details?.geolocation?.latitude !== undefined && 
@@ -169,12 +168,14 @@ export const MapViewInner: React.FC = () => {
 
     map.on('click', clickHandler);
     
-    // map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
+    if (!filter.gps_latitude && !filter.gps_longitude){
+      map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
+    }
 
     return () => {
       map.un('click', clickHandler);
     };
-  }, [vectorSource, map, mapData]);
+  }, [vectorSource, map, mapData, filter.gps_latitude, filter.gps_longitude]);
 
   return (
     <div className={styles.mapContainer}>
