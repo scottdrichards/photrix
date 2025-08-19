@@ -1,6 +1,7 @@
 import { makeStyles } from "@fluentui/react-components";
 import { RatingOptions, useFilter } from "../contexts/filterContext";
 import { Keywords } from "./Keywords";
+import { MapView } from "../MapView";
 
 const useStyles = makeStyles({
   filtersContainer: {
@@ -74,6 +75,7 @@ export const Filters: React.FC = () => {
           ))}</div>)}
         </div>
       </label>
+      <MapView />
     </div>
   );
 };

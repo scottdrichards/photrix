@@ -49,7 +49,18 @@ export const Keywords: React.FC = () => {
           {filteredKeywords?.length || 0} Keywords Found
         </div>
         <div className={styles.keywordsList}>
-          {filteredKeywords?.sort((a,b)=>b.count-a.count)
+            {filteredKeywords?.sort((a, b) => {
+              const aSelected = filter.keywords?.includes(a.value) ? 1 : 0;
+              const bSelected = filter.keywords?.includes(b.value) ? 1 : 0;
+              
+              // First sort by selected status (selected first)
+              if (aSelected !== bSelected) {
+                return bSelected - aSelected;
+              }
+              
+              // Then sort by count
+              return b.count - a.count;
+            })
             .slice(0, 20)
             .map(({value:keyword, count}) => (
             <Keyword 
@@ -59,7 +70,7 @@ export const Keywords: React.FC = () => {
               state={filter.keywords?.find(option=>option===keyword) ? 'active' : 'inactive'}
               onClick={toggleKeyword}
             />
-          ))}
+            ))}
           {filter.keywords?.filter(
             keyword => !keywordOptions?.find(option=>option.value==(keyword))
           )?.map(keyword => (
