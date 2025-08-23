@@ -4,40 +4,70 @@ export const useStyles = makeStyles({
   keywordsContainer: {
     display: "flex",
     flexDirection: "column",
-    gap: "12px",
-    marginBottom: "16px"
+  gap: "4px",
+  marginBottom: "8px"
   },
   searchSection: {
     display: "flex",
-    flexDirection: "column",
-    gap: "6px",
-    padding: "12px",
-    backgroundColor: "#faf9f8",
-    borderRadius: "8px",
-    border: "1px solid #e1dfdd"
+  flexDirection: "row",
+  alignItems: "center",
+  gap: "4px",
+  padding: "4px 6px",
+  backgroundColor: "#faf9f8",
+  borderRadius: "6px",
+  border: "1px solid #e1dfdd"
+  },
+  clearButton: {
+    cursor: 'pointer',
+    border: 'none',
+    background: 'transparent',
+    padding: '0 4px',
+    fontSize: '12px',
+    lineHeight: 1,
+    color: '#605e5c',
+    borderRadius: '3px',
+    transition: 'background 0.15s ease, color 0.15s ease',
+    '&:hover': {
+      background: '#edebe9',
+      color: '#323130'
+    },
+    '&:active': {
+      background: '#e1dfdd'
+    },
+    '&[disabled]': {
+      opacity: 0.3,
+      cursor: 'default'
+    }
   },
   searchLabel: {
-    fontSize: "14px",
-    fontWeight: "600",
-    color: "#323130",
-    marginBottom: "4px"
+  display: "none"
   },
   searchInput: {
-    borderRadius: "6px",
-    transition: "all 0.2s ease"
+    borderRadius: "4px",
+    transition: "all 0.15s ease",
+    flexGrow: 1,
+    minWidth: 0,
+    fontSize: "11px",
+    height: "24px",
+    padding: 0,
+    // Smaller placeholder
+    '::placeholder': {
+      fontSize: "10px",
+      color: '#8a8886'
+    }
   },
   keywordsList: {
     display: "flex",
     flexWrap: "wrap",
-    gap: "6px",
-    padding: "8px 0"
+  gap: "4px",
+  padding: "2px 0 0"
   },
   keywordsHeader: {
-    fontSize: "13px",
-    fontWeight: "500",
-    color: "#605e5c",
-    marginBottom: "8px",
-    textTransform: "uppercase",
-    letterSpacing: "0.5px"
+  fontSize: "11px",
+  fontWeight: 500,
+  color: "#605e5c",
+  margin: "2px 0 0",
+  textTransform: "uppercase",
+  letterSpacing: "0.5px"
   }
 });

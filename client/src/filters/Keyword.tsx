@@ -2,13 +2,15 @@ import { makeStyles } from "@fluentui/react-components";
 
 const useStyles = makeStyles({
   keyword: {
-    marginRight: "8px",
-    cursor: "pointer",
-    padding: "4px 8px",
-    borderRadius: "4px",
-    display: "inline-block",
-    transition: "all 0.2s ease",
-    border: "1px solid transparent",
+  // Rely on parent flex gap; remove individual margin
+  cursor: "pointer",
+  padding: "2px 6px",
+  borderRadius: "3px",
+  display: "inline-block",
+  transition: "all 0.15s ease",
+  border: "1px solid transparent",
+  fontSize: "12px",
+  lineHeight: 1.2,
     "&:hover": {
       backgroundColor: "#f3f2f1"
     }

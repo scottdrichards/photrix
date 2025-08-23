@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Input, Label } from "@fluentui/react-components";
+import { Input } from "@fluentui/react-components";
 import { useFilter } from "../contexts/filterContext";
 import { useOptions } from "../hooks/useOptions";
 import { Keyword } from "./Keyword";
@@ -31,22 +31,29 @@ export const Keywords: React.FC = () => {
   return (
     <div className={styles.keywordsContainer}>
       <div className={styles.searchSection}>
-        <Label htmlFor="keyword-search" className={styles.searchLabel}>
-          🔍 Search Keywords
-        </Label>
-        <Input
+  <span style={{fontSize: '12px', opacity: 0.7}}>🔍</span>
+  <Input
           id="keyword-search"
           className={styles.searchInput}
-          placeholder="Type to find keywords..."
+          placeholder="search keywords"
+          aria-label="search keywords"
           value={searchTerm}
           onChange={(_, data) => setSearchTerm(data.value)}
           appearance="outline"
         />
+        <button
+          type="button"
+          className={styles.clearButton}
+          aria-label="clear search"
+          disabled={!searchTerm}
+          onClick={() => setSearchTerm("")}
+          title="Clear"
+        >✕</button>
       </div>
       
       <div>
         <div className={styles.keywordsHeader}>
-          {filteredKeywords?.length || 0} Keywords Found
+          {filteredKeywords?.length || 0} match{(filteredKeywords?.length||0)!==1 && 'es'}
         </div>
         <div className={styles.keywordsList}>
             {filteredKeywords?.sort((a, b) => {
