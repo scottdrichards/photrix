@@ -15,5 +15,14 @@ export const useStyles = makeStyles({
         "&[data-selected]": {
             backgroundColor: "lightblue",
         },
+    },
+    folderSelectionPanel: {
+        display: "flex",
+        flexDirection: "column",
+        gap: "10px",
+        padding: "10px",
+        boxSizing: "border-box", 
+        height: "100%",
+        overflow: "auto",
     }
 });

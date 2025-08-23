@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getSubfolders } from "./data/api";
-import { useStyles } from "./FodlerExplorer.styles";
+import { useStyles } from "./FolderExplorer.styles";
 import { useFilter } from "./contexts/filterContext";
 
 
@@ -21,6 +21,7 @@ const pathArrayToString = (path: string[]) => "./" + path.map(p => p + "/").join
 export const FolderExplorer: React.FC = () => {
   const {filter, setFilter} = useFilter();
   const [root, setRoot] = useState<Node[]>([]);
+  const styles = useStyles();
 
   useEffect(() => {
     (async () => {
@@ -95,7 +96,6 @@ export const FolderExplorer: React.FC = () => {
 
   const Render = (params: { element: Node; parentPath?: string[] }) => {
     const { element: el, parentPath } = params;
-    const styles = useStyles();
     const isRoot = !parentPath;
     const currentPath = isRoot ? [] : [...parentPath, el.name];
     const currentPathString = pathArrayToString(currentPath);
@@ -131,8 +131,19 @@ export const FolderExplorer: React.FC = () => {
   };
 
   return (
-    <Render
-      element={{ name: "Photos Library", expanded: true, children: root }}
-    />
+          <div className={styles.folderSelectionPanel}>
+            <label>
+              <input
+                type="checkbox"
+                id="includeSubfolders"
+                checked={!filter.excludeSubfolders}
+                onChange={(e) => setFilter({...filter, excludeSubfolders: !e.target.checked})}
+              />
+              Include Subfolders
+            </label>
+            <Render
+              element={{ name: "Photos Library", expanded: true, children: root }}
+            />
+          </div>
   );
 };

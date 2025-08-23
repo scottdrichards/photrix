@@ -10,14 +10,5 @@ export const useStyles = makeStyles({
     width: "100%",
 
     fontFamily: "'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif",
-  },
-  folderSelectionPanel:{
-    display: "flex",
-    flexDirection: "column",
-    gap: "10px",
-    padding: "10px",
-    boxSizing: "border-box", 
-    height: "100%",
-    overflow: "auto",
   }
 })

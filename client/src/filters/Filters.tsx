@@ -2,6 +2,7 @@ import { makeStyles } from "@fluentui/react-components";
 import { RatingOptions, useFilter } from "../contexts/filterContext";
 import { Keywords } from "./Keywords";
 import { MapView } from "../MapView";
+import { FolderExplorer } from "../FolderExplorer";
 
 const useStyles = makeStyles({
   filtersContainer: {
@@ -46,6 +47,7 @@ export const Filters: React.FC = () => {
   return (
     <div className={styles.filtersContainer}>
       {JSON.stringify(filter, null, 2)}
+      <FolderExplorer />
       <Keywords />
       
       <label className={styles.ratingLabel}>
