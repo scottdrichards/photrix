@@ -5,15 +5,17 @@ const circleSize = "15px";
 
 export const useStyles = makeStyles({
   root: {
-    display: "flex",
-    flexDirection: "column",
-    gap: spacing,
-    position: "relative",
+  display: "flex",
+  flexDirection: "column",
+  gap: spacing,
+  position: "relative",
+  flex: 1,
+  minHeight: 0,
   },
   gallery: {
     width: "100%",
-    height: "100%",
-    overflowY: "auto",
+  height: "100%",
+  overflowY: "auto",
     display: "flex",
     flexWrap: "wrap",
     alignContent: "flex-start",

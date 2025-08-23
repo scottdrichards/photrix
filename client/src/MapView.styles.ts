@@ -3,7 +3,7 @@ import { makeStyles } from "@fluentui/react-components";
 export const useStyles = makeStyles({
   mapContainer: {
     width: "100%",
-    height: "600px", // Fixed height to ensure map shows
+  height: "100%", // Fill parent panel height
     position: "relative"
   },
   mapWrapper: {
