@@ -20,23 +20,54 @@ const useStyles = makeStyles({
   },
   ratingContainer: {
     display: "flex",
-    alignItems: "center",
+    flexDirection: "column",
     gap: "4px"
+  },
+  ratingOption: {
+    display: "flex",
+    alignItems: "center",
+    gap: "4px",
+    padding: "2px 6px",
+    borderRadius: "4px",
+    cursor: "pointer",
+    backgroundColor: "#ffffff",
+    border: "1px solid #ddd",
+    transition: "background-color 100ms, box-shadow 100ms, border-color 100ms",
+    userSelect: "none",
+    "&[data-selected='true']": {
+      backgroundColor: "#f6e7b8",
+      border: "1px solid #d4b032"
+    },
+    "&:hover": {
+      backgroundColor: "#f0f0f0"
+    },
+    "&:active": {
+      backgroundColor: "#ececec"
+    }
+  },
+  ratingNumber: {
+    width: "14px",
+    fontSize: "11px",
+    fontWeight: 600,
+    color: "#605e5c"
+  },
+  starRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "1px"
   },
   star: {
     cursor: "pointer",
-    fontSize: "24px",
-    marginRight: "4px",
-    transition: "all 0.2s ease",
+    fontSize: "14px",
+    lineHeight: 1,
+    transition: "transform 80ms",
+    color: "#d2d0ce",
+    "&[data-active='true']": {
+      color: "#ffc83d"
+    },
     "&:hover": {
       transform: "scale(1.1)"
     }
-  },
-  starActive: {
-    color: "#FFD700"
-  },
-  starInactive: {
-    color: "#d2d0ce"
   }
 });
 
@@ -50,33 +81,42 @@ export const Filters: React.FC = () => {
       <FolderExplorer />
       <Keywords />
       
-      <label className={styles.ratingLabel}>
-        Rating:
+      <div>
+        <div className={styles.ratingLabel}>Rating</div>
         <div className={styles.ratingContainer}>
-          {RatingOptions.map(rating=>
-            <div key={rating} style={{ backgroundColor: filter.rating?.includes(rating) && '#2e2e2eff' || undefined }}
-              onClick={() =>
-                setFilter({
-                  ...filter,
-                  rating: filter.rating?.includes(rating) ?
-                    filter.rating.filter(r => r !== rating) :
-                    filter?.rating?.concat(rating) || [rating],
-                })
-              }>
-              {RatingOptions.map(star => (
-              <span
-                key={star}
-                className={`${styles.star} ${
-                  (star <= rating) 
-                    ? styles.starActive 
-                  : styles.starInactive
-              }`}
-            >
-              ★
-            </span>
-          ))}</div>)}
+          {RatingOptions.map(rating => {
+            const selected = filter.rating?.includes(rating) ?? false;
+            return (
+              <div
+                key={rating}
+                className={styles.ratingOption}
+                data-selected={selected || undefined}
+                onClick={() => {
+                  setFilter({
+                    ...filter,
+                    rating: selected
+                      ? filter.rating!.filter(r => r !== rating)
+                      : (filter.rating ? [...filter.rating, rating] : [rating])
+                  });
+                }}
+              >
+                <span className={styles.ratingNumber}>{rating}</span>
+                <div className={styles.starRow}>
+                  {[1,2,3,4,5].map(starIndex => (
+                    <span
+                      key={starIndex}
+                      className={styles.star}
+                      data-active={starIndex <= Number(rating) || undefined}
+                    >
+                      ★
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
-      </label>
+      </div>
       <MapView />
     </div>
   );
