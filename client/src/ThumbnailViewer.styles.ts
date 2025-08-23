@@ -47,7 +47,6 @@ export const useStyles = makeStyles({
     // This section is to make the height of a row magically adjust so that
     // the thumbnails each retain their aspect ratio but fill the available space.
     minHeight: "var(--size)",
-    maxHeight: "calc(1.5 * var(--size))",
     minWidth: `calc(min(100%, calc(var(--size) * var(--ratio))))`,
     flexBasis: "calc(var(--size) * var(--ratio))",
     flex: "var(--ratio)",

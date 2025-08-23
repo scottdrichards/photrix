@@ -131,19 +131,21 @@ export const FolderExplorer: React.FC = () => {
   };
 
   return (
-          <div className={styles.folderSelectionPanel}>
-            <label>
-              <input
-                type="checkbox"
-                id="includeSubfolders"
-                checked={!filter.excludeSubfolders}
-                onChange={(e) => setFilter({...filter, excludeSubfolders: !e.target.checked})}
-              />
-              Include Subfolders
-            </label>
-            <Render
-              element={{ name: "Photos Library", expanded: true, children: root }}
-            />
-          </div>
+    <div className={styles.folderSelectionPanel}>
+      <div className={styles.subfolderToggleBar}>
+        <span style={{fontSize: '11px'}}>Include subfolders</span>
+        <label className={styles.toggleSwitch} aria-label="Include subfolders">
+          <input
+            type="checkbox"
+            checked={!filter.excludeSubfolders}
+            onChange={(e) => setFilter({...filter, excludeSubfolders: !e.target.checked})}
+          />
+          <span />
+        </label>
+      </div>
+      <div className={styles.folderTreeScroll}>
+        <Render element={{ name: "Photos Library", expanded: true, children: root }} />
+      </div>
+    </div>
   );
 };

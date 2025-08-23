@@ -36,6 +36,12 @@ const useStyles = makeStyles({
     flexDirection: "column",
     minHeight: 0
   },
+  folderPanel: {
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0
+  },
   resizer: {
     height: "6px",
     cursor: "row-resize",
@@ -208,7 +214,7 @@ export const Filters: React.FC = () => {
       style={{ gridTemplateRows }}
     >
       {/* Folder */}
-      <div className={styles.panel}>
+  <div className={`${styles.panel} ${styles.folderPanel}`}>
         <FolderExplorer />
       </div>
       {/* Resizer 0 */}
