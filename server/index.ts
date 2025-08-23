@@ -196,7 +196,7 @@ http.createServer(async (request, response)=> {
                     return;
                 }
                 try {
-                    const result = await handler(relativePath, { width: Number(width||1024) });
+                    const result = await handler(relativePath, width ? { width: Number(width) } : undefined);
                     if (result) {
                         response.writeHead(200, {'Content-Type': result.contentType});
                         response.end(result.file);

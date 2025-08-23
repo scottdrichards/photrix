@@ -17,7 +17,8 @@ const dimensionsToPathString = (dimensions:Dimensions) => {
     if (dimensions.height){
         return `-${dimensions.height}h`;
     }
-    return "";
+    // Return "full" for full resolution when no dimensions specified
+    return "-full";
 }
 
 const webpCachePath = (relativePath:string, dimensions:Dimensions) =>{
@@ -138,7 +139,8 @@ export const fileHandlers = [
         extensions: ['.heic', '.heif'],
         handler: async (relativePath:string, dimensions?:Dimensions) => {
             const originalPath = path.join(rootDir, relativePath);
-            const cachePath = webpCachePath(relativePath, dimensions || {height: 1024});
+            // When no width specified, convert to full resolution WebP
+            const cachePath = webpCachePath(relativePath, dimensions || {});
             const contentType = 'image/webp';
             try{
                 return {
@@ -148,7 +150,7 @@ export const fileHandlers = [
             } catch (e){
                 if (e && typeof e === 'object' && "code" in e && e.code === 'ENOENT') {
                     
-                    console.log(`Creating ${dimensions?.width} thumbnail for HEIC file: ${relativePath}`);
+                    console.log(`Creating ${dimensions?.width ? dimensions.width + 'px' : 'full resolution'} WebP for HEIC file: ${relativePath}`);
                     fs.mkdir(path.dirname(cachePath), { recursive: true });
                     const magickArgs = [
                         'magick',
@@ -185,7 +187,11 @@ export const fileHandlers = [
             const fullPath = path.join(rootDir, relativePath);
             if (!dimensions?.width){
                 const file = await fs.readFile(fullPath);
-                return {file, contentType: `image/${ext.substring(1)}`};
+                // Return JPG files as JPG, others as their original format
+                const contentType = ext === '.jpeg' ? 'image/jpeg' : 
+                                   ext === '.jpg' ? 'image/jpeg' : 
+                                   `image/${ext.substring(1)}`;
+                return {file, contentType};
             }
             
             const thumbnailPath = webpCachePath(relativePath, dimensions);
