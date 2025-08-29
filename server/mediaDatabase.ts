@@ -25,6 +25,9 @@ export const numberSearchableColumns = [
     'orientation',
     'gps_latitude',
     'gps_longitude',
+    // video specific
+    'duration_seconds',
+    'video_frame_rate',
 ] as const;
 export type NumberSearchableColumns = typeof numberSearchableColumns[number];
 
@@ -66,6 +69,7 @@ export type SearchFilters = {
     name?: string; // for name-based searching
     parentPath?: string;
     keywords?: string | string[]; // Search in keywords JSON array
+    mediaType?: 'image' | 'video';
 } & Partial<Record<TextSearchableColumns, string | Array<string>>>
   & Partial<Record<NumberSearchableColumns, number | Array<number> | {from:number, to:number}>>;;
 
@@ -107,6 +111,19 @@ export class MediaDatabase {
             CREATE INDEX IF NOT EXISTS idx_gps_longitude ON ${tableName}(gps_longitude);
             CREATE INDEX IF NOT EXISTS idx_gps_coords ON ${tableName}(gps_latitude, gps_longitude);
         `);
+        // Migration: ensure new numeric columns exist (e.g., duration_seconds, video_frame_rate)
+        const existingCols = this.db.query(`PRAGMA table_info(${tableName})`).all() as Array<{name:string}>;
+        const existingSet = new Set(existingCols.map(c=>c.name));
+        for (const col of numberSearchableColumns) {
+            if (!existingSet.has(col)) {
+                this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${col} INTEGER`);
+            }
+        }
+        for (const col of textSearchableColumns) {
+            if (!existingSet.has(col)) {
+                this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${col} TEXT`);
+            }
+        }
     }
 
     addBasicFileRows(files: Array<{ name: string, parent_path: string }>) {
@@ -187,12 +204,22 @@ export class MediaDatabase {
         return [...subFolderSet].sort((a,b)=> a.localeCompare(b));
     }
 
-    private createQueryFilter({excludeSubfolders: excludeSubfolders, ...filters}: SearchFilters):{whereClause:string, params:string[]} {
+    private createQueryFilter({excludeSubfolders, ...filters}: SearchFilters):{whereClause:string, params:string[]} {
         type FilterProcessor = {
             [K in keyof SearchFilters]: (val: NonNullable<SearchFilters[K]>) => [string, string | string[]];
         };
         
         const specialFilterProcessors = {
+            mediaType: (val) => {
+                if (val === 'image') {
+                    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.raw', '.heic'];
+                    return [`(${imageExts.map(ext => `name LIKE '%${ext}'`).join(' OR ')})`, []];
+                } else if (val === 'video') {
+                    const videoExts = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv', '.webm', '.m4v'];
+                    return [`(${videoExts.map(ext => `name LIKE '%${ext}'`).join(' OR ')})`, []];
+                }
+                return ['1=1', []]; // fallback that matches everything
+            },
             name: (val) => ['name LIKE ?', `%${val}%`],
             keywords: (val) => {
                 if (Array.isArray(val)) {
@@ -261,7 +288,7 @@ export class MediaDatabase {
                     if (typeof val !== 'string'){
                         throw new Error(`Invalid value for filter '${key}': ${JSON.stringify(val)}`);
                     }
-                    return specialFilterProcessors[key as Exclude<keyof typeof specialFilterProcessors, 'keywords'>](val as string);
+                    return specialFilterProcessors[key as Exclude<keyof typeof specialFilterProcessors, 'keywords'>](val as any);
                 }
             }
             if (textSearchableColumns.includes(key as TextSearchableColumns)) {
@@ -287,8 +314,8 @@ export class MediaDatabase {
         return {whereClause, params};
     }
 
-    search({excludeSubfolders, ...filters}: SearchFilters): MediaFileRow[] {
-        const {whereClause, params} = this.createQueryFilter({excludeSubfolders, ...filters});
+    search(filters: SearchFilters): MediaFileRow[] {
+        const {whereClause, params} = this.createQueryFilter(filters);
         const orderClause = `ORDER BY date_taken DESC, parent_path DESC, name ASC`;
         const results = this.db.prepare(`SELECT * FROM ${tableName}${whereClause}${orderClause}`).all(...params) as any[];
 

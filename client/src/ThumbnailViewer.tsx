@@ -2,7 +2,6 @@ import { CSSProperties, memo, useCallback, useEffect, useState } from "react";
 import { Media } from "./Media";
 import { useStyles } from "./ThumbnailViewer.styles";
 import { mediaURLBase } from "./data/api";
-import { Filters } from "./filters/Filters";
 import { useSelectedDispatch } from "./contexts/selectedContext";
 import { processLines } from "./streamData";
 import { useFilter } from "./contexts/filterContext";
@@ -107,17 +106,39 @@ export const ThumbnailViewer: React.FC = memo(() => {
   return (
     <div className={styles.root}>
       <div style={{ "--size": `${size}px` } as CSSProperties} className={styles.gallery}>
-        {thumbnails.map(({path, details}) => <Media        
-            path={path}
-            key={path}
-            thumbnailBehavior= "never"
-            fullSizeBehavior={{ fetchPriority: "low", loading: "lazy" }}
-            data-path={path}
-            className={styles.thumbnail}
-            style={{"--ratio": details.aspectRatio?.toString() || "1"} as CSSProperties}
-            onLoad={onThumbnailLoad}
-            onClick={onThumbnailClick}
-          />)}
+        {thumbnails.map(({path, details}) => {
+          const isVideo = path.match(/\.(mp4|mov|avi|mkv|webm|flv|m4v)$/i);
+          if (isVideo) {
+            return (
+              <div
+                key={path}
+                data-path={path}
+                className={styles.thumbnail}
+                style={{ display:'flex', alignItems:'center', justifyContent:'center', fontSize:'12px', cursor:'pointer', border:'1px solid #555', overflow:'hidden', "--ratio": '1'} as CSSProperties}
+                onClick={(e:any) => {
+                  const selectMultipleMode = e.ctrlKey;
+                  if (selectMultipleMode){
+                    selectedDispatch({ type: 'toggle', payload: path });
+                  } else {
+                    selectedDispatch({ type: 'set', payload: new Set([path]) });
+                  }
+                }}
+                title={path}
+              >{path.split('/').pop()}</div>
+            );
+          }
+          return <Media        
+              path={path}
+              key={path}
+              thumbnailBehavior= "never"
+              fullSizeBehavior={{ fetchPriority: "low", loading: "lazy" }}
+              data-path={path}
+              className={styles.thumbnail}
+              style={{"--ratio": details.aspectRatio?.toString() || "1"} as CSSProperties}
+              onLoad={onThumbnailLoad}
+              onClick={onThumbnailClick}
+            />
+        })}
           {thumbnails.length === 0 && !loading && <div>No thumbnails found</div>}
         <div style={{ flexGrow: 1}}></div> {/* Filler to keep the last image(s) from growing */}
         {loading && <div>Loading...</div>}

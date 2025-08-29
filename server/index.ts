@@ -1,13 +1,15 @@
+import { createReadStream } from "node:fs";
+import fs from 'node:fs/promises';
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";
+import zlib from "node:zlib";
 import { rootDir } from "./config.ts";
-import { fileHandlers } from "./mediaConverters.ts";
+import { fileHandlers, videoExtensions } from "./mediaConverters.ts";
 import { mediaDatabase, numberSearchableColumns, textSearchableColumns, type MediaFileProperties, type NumberSearchableColumns, type SearchFilters } from "./mediaDatabase.ts";
 import { processFilesInDirectory } from "./processFiles.ts";
-import zlib from "node:zlib";
 
-const port = 9615
+const port = 9616
 
 const mediaPath = '/media';
 
@@ -146,6 +148,7 @@ http.createServer(async (request, response)=> {
                 const gzip = zlib.createGzip();
                 gzip.pipe(response);
                 gzip.end(json);
+                return;
             }
         }else{
             // Check if this is a request for file information
@@ -186,8 +189,7 @@ http.createServer(async (request, response)=> {
                 return;
             }
 
-            const ext = path.extname(relativePath).toLowerCase();
-            const handler = fileHandlers.find(h => (h.extensions as string[]).includes(ext))?.handler;
+            const handler = fileHandlers.find(h => h.canHandleFile(relativePath))?.handler;
             if (handler){
                 const width = requestURL.searchParams.get('width');
                 if (width && isNaN(Number(width))){
@@ -210,8 +212,26 @@ http.createServer(async (request, response)=> {
                     response.end();
                 }
             }else{
-                response.writeHead(415); // Unsupported Media Type
-                response.end();
+                try {
+                    const stats = await fs.stat(fullPath);
+                    const fileStream = createReadStream(fullPath);
+                    fileStream.on("error", (error) => {
+                        console.error(`Error reading file ${fullPath}:`, error);
+                        response.writeHead(404);
+                        response.end();
+                    });
+                    fileStream.on("open", () => {
+                        response.writeHead(200, {
+                            'Content-Type': 'application/octet-stream',
+                            'Content-Length': stats.size
+                        });
+                        fileStream.pipe(response);
+                    });
+                } catch (error) {
+                    console.error(`Error accessing file ${fullPath}:`, error);
+                    response.writeHead(404);
+                    response.end();
+                }
             }
         }
     }else{
@@ -237,7 +257,7 @@ const startFileProcessing = async () => {
     console.log("Starting file processing...");
     try {
         let count =0;
-        for await (const result of processFilesInDirectory("./", rootDir, mediaDatabase)) {
+        for await (const result of processFilesInDirectory("./2025/01", rootDir, mediaDatabase)) {
             console.log("Processed file:", path.join(result.parent_path, result.name));
             if (count++ % 1000 === 0) {
                 console.log(`Processed ${count} files`);

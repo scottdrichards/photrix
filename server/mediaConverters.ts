@@ -1,9 +1,10 @@
 import { Buffer } from "buffer";
 import fs from "fs/promises";
-import { exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import path from "path";
 import sharp from 'sharp';
 import { mediaCacheDir, rootDir } from "./config.ts";
+import { createDashFiles, isDashFile } from "./dash/createDashFiles.ts";
 
 type Dimensions = {
     height?: number;
@@ -23,48 +24,8 @@ const dimensionsToPathString = (dimensions:Dimensions) => {
 
 const webpCachePath = (relativePath:string, dimensions:Dimensions) =>{
     return path.join(mediaCacheDir, relativePath)+ dimensionsToPathString(dimensions) + ".webp"
-    };
-
-const getCodec = async (fullPath:string) => {
-    // use ffmpeg to determine if files is h.265
-    const ffprobe = await new Promise((resolve, reject) => {
-        exec(`ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "${fullPath}"`, (error, stdout, stderr) => {   
-            if (error) {
-                console.error(`Error converting file: ${error.message}`);
-                reject(error);
-            } else if (stderr) {
-                console.error(`Error converting file: ${stderr}`);
-                reject(new Error(stderr));
-            } else {
-                resolve(stdout.trim());
-            }
-        });
-    });
-    return ffprobe
-}
-
-
-const convertToH264 = async (relativePath:string):Promise<string> => {
-    const fullPath = path.join(rootDir, relativePath);
-    const cachePath = path.join(mediaCacheDir, relativePath);
-    if (await fs.stat(cachePath).catch(e=>e.code !== 'ENOENT')){
-        return cachePath;
-    }
-    return new Promise((resolve, reject) => {
-        exec(`ffmpeg -i "${fullPath}" -c:v libx264 -crf 23 -preset medium -c:a aac -b:a 192k "${cachePath}"`, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`Error converting file: ${error.message}`);
-                reject(error);
-            } else if (stderr) {
-                console.error(`Error converting file: ${stderr}`);
-                reject(new Error(stderr));
-            } else {
-                console.log(`File converted successfully: ${cachePath}`);
-                resolve(cachePath);
-            }
-        });
-    });
 };
+
 
 type Details = {
     dimensions: {height:number, width:number};
@@ -72,8 +33,13 @@ type Details = {
 }
 
 type FileHandler = {
-    extensions: string[];
-    handler: (relativePath: string, dimensions?: Dimensions) => Promise<{file:Buffer, contentType:string}>;
+    name:string,
+    extensions?: string[];
+    canHandleFile: (path:string) => boolean;
+    handler: (relativePath: string, dimensions?: Dimensions) => Promise<
+        | { file: Buffer; contentType: string }
+        | { stream: NodeJS.ReadableStream; contentType: string }
+    >;
     details?: <T extends (keyof Details)[]>(relativePath:string, desiredDetails:T) => Promise<Pick<Details,T[number]>>;
 }
 
@@ -106,40 +72,54 @@ const imageDetails:FileHandler['details'] = async (relativePath, desiredDetails)
     return out;
 }
 
+export const videoExtensions = ['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.flv', '.webm'];
+
+const extValidator = (exts:string[])=> (p:string) => exts.includes(path.extname(p).toLowerCase());
+
 export const fileHandlers = [
     {
-        extensions: ['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.flv'],
+        name: "Dash",
+        canHandleFile: isDashFile,
         handler: async (relativePath:string) => {
-            const mimeTypeExtensions = {
-                'video/mp4':['.mp4'],
-                'video/quicktime':['.mov'],
-                'video/x-matroska':['.mkv'],
-                'video/x-msvideo':['.avi'],
-                'video/x-ms-wmv':['.wmv'],
-                'video/x-flv':['.flv'],
-                'video/webm':['.webm'],
-            };
-            const fullPath = path.join(rootDir, relativePath);
-            const ext = path.extname(relativePath).toLowerCase();
-            
-            if (ext === '.mp4' && await getCodec(fullPath) === 'hevc'){
-                return {
-                    file: await fs.readFile(await convertToH264(relativePath)),
-                    contentType: 'video/mp4'
-                }
-            }
+            const fullPath = path.join(mediaCacheDir, relativePath);
+            const content = await fs.readFile(fullPath);
+            return { file: content, contentType: 'application/dash+xml' };
+        }
+    },
+    {
+        name: "Video",
+        canHandleFile: extValidator(videoExtensions),
+        handler: async (relativePath:string) => {
+            const sourceFullPath = path.join(rootDir, relativePath);
+            const cacheDir = path.join(mediaCacheDir, path.dirname(relativePath));
+            const baseName = path.basename(relativePath, path.extname(relativePath));
+            const manifestPath = path.join(cacheDir, `${baseName}.mpd`);
 
-            return {
-                file: await fs.readFile(fullPath),
-                contentType: Object.entries(mimeTypeExtensions).find(([_,v])=>v.includes(ext))?.[0] ?? 'application/octet-stream'
+            // Check if DASH manifest already exists
+            try {
+                await fs.access(manifestPath);
+                console.log('[VIDEO] Serving existing DASH manifest:', manifestPath);
+                const manifestContent = await fs.readFile(manifestPath, 'utf-8');
+                return { file: Buffer.from(manifestContent), contentType: 'application/dash+xml' };
+            } catch {
+                // Manifest doesn't exist, create DASH files
+                console.log('[VIDEO] Creating DASH files for:', relativePath);
+                const dashManifestPath = await createDashFiles({
+                    sourceFilePath: sourceFullPath,
+                    destDir: cacheDir
+                });
+                
+                console.log('[VIDEO] DASH creation complete:', dashManifestPath);
+                const manifestContent = await fs.readFile(dashManifestPath, 'utf-8');
+                return { file: Buffer.from(manifestContent), contentType: 'application/dash+xml' };
             }
         }
     },
     {
-        extensions: ['.heic', '.heif'],
+        name: "High Efficiency Image",
+        canHandleFile: extValidator(['.heic', '.heif']),
         handler: async (relativePath:string, dimensions?:Dimensions) => {
             const originalPath = path.join(rootDir, relativePath);
-            // When no width specified, convert to full resolution WebP
             const cachePath = webpCachePath(relativePath, dimensions || {});
             const contentType = 'image/webp';
             try{
@@ -181,7 +161,8 @@ export const fileHandlers = [
         details: imageDetails
     },    
     {
-        extensions: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff'],
+        name: "Image",
+        canHandleFile: extValidator(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff']),
         handler: async (relativePath, dimensions) => {
             const ext = path.extname(relativePath).toLowerCase();
             const fullPath = path.join(rootDir, relativePath);

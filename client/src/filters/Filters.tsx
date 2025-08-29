@@ -233,6 +233,23 @@ export const Filters: React.FC = () => {
       />
       {/* Rating */}
       <div className={`${styles.panel} ${styles.compactPanel}`}>
+        <div className={styles.ratingLabel}>File Type</div>
+        <div style={{display:'flex', gap:'6px', marginBottom:'6px', flexWrap:'wrap'}}>
+          {(['image','video'] as const).map(type => {
+            const active = filter.fileType === type;
+            return (
+              <div
+                key={type}
+                className={styles.ratingOption}
+                data-selected={active || undefined}
+                style={{padding:'2px 8px', fontSize:'12px'}}
+                onClick={() => {
+                  setFilter({...filter, fileType: active ? undefined : type});
+                }}
+              >{type}</div>
+            );
+          })}
+        </div>
         <div className={styles.ratingLabel}>Rating</div>
         <div className={styles.ratingContainer}>
           {RatingOptions.map(rating => {

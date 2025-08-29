@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { exec } from 'node:child_process';
 import { MediaDatabase, mediaDatabase, type MediaFileProperties, type MediaFileRow } from "./mediaDatabase";
 import { ExifTool } from "exiftool-vendored";
 import { readdir } from "node:fs/promises";
@@ -37,6 +38,33 @@ const processFile = async (fullPath: string, rootDir: string): Promise<MediaFile
         const parent_path = parentRelative === '.' ? '' : parentRelative;
 
         // Create MediaFileRow from EXIF data
+        // Video-specific enrichment via ffprobe (covers duration, dimensions, frame rate)
+        let durationSeconds: number | undefined;
+        let videoFrameRate: number | undefined;
+        // If exiftool already gave us width/height keep them; otherwise we can backfill from probe
+        const videoExts = ['.mp4','.mov','.mkv','.avi','.wmv','.flv','.webm','.m4v'];
+        const ext = path.extname(fullPath).toLowerCase();
+        if (videoExts.includes(ext)) {
+            const probeJson = await new Promise<any>(resolve => {
+                exec(`ffprobe -v error -select_streams v:0 -show_entries stream=width,height,avg_frame_rate,duration -of json "${fullPath}"`, (err, stdout) => {
+                    if (err) return resolve({});
+                    try { resolve(JSON.parse(stdout)); } catch { resolve({}); }
+                });
+            });
+            const stream = probeJson.streams?.[0];
+            if (stream) {
+                if (!('ImageWidth' in tags) && stream.width) (tags as any).ImageWidth = stream.width;
+                if (!('ImageHeight' in tags) && stream.height) (tags as any).ImageHeight = stream.height;
+                if (stream.avg_frame_rate && typeof stream.avg_frame_rate === 'string' && stream.avg_frame_rate.includes('/')) {
+                    const [n,d] = stream.avg_frame_rate.split('/').map(Number); if (d) videoFrameRate = n/d;
+                } else if (typeof stream.avg_frame_rate === 'number') videoFrameRate = stream.avg_frame_rate;
+                if (stream.duration) durationSeconds = Number(stream.duration);
+            }
+            if (!durationSeconds && probeJson.format?.duration) {
+                const d = Number(probeJson.format.duration); if (!Number.isNaN(d)) durationSeconds = d;
+            }
+        }
+
         const properties: MediaFileProperties = {
             name: path.basename(relativePath),
             parent_path,
@@ -57,6 +85,8 @@ const processFile = async (fullPath: string, rootDir: string): Promise<MediaFile
             orientation: tags.Orientation ? Number(tags.Orientation) : undefined,
             gps_latitude: tags.GPSLatitude ? Number(tags.GPSLatitude) : undefined,
             gps_longitude: tags.GPSLongitude ? Number(tags.GPSLongitude) : undefined,
+            duration_seconds: durationSeconds ? Math.round(durationSeconds) : undefined,
+            video_frame_rate: videoFrameRate ? Math.round(videoFrameRate*1000)/1000 : undefined,
         };
 
         return mediaDatabase.insertOrUpdateFile(properties);
