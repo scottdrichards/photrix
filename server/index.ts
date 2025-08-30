@@ -53,10 +53,19 @@ const getFilter = (searchParams: URLSearchParams): SearchFilters => {
 };
 
 http.createServer(async (request, response)=> {
-    response.setHeader('Access-Control-Allow-Origin', "http://127.0.0.1:5173");
-    response.setHeader('Access-Control-Allow-Origin', "http://localhost:5173");
-    response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    // Set CORS headers for all requests
+    response.setHeader('Access-Control-Allow-Origin', '*'); // Allow all origins
+    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
+    response.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length');
+    
+    // Handle preflight OPTIONS requests
+    if (request.method === 'OPTIONS') {
+        response.writeHead(200);
+        response.end();
+        return;
+    }
+
     if (!request.url){
         response.writeHead(404);
         response.end();
@@ -66,6 +75,7 @@ http.createServer(async (request, response)=> {
     const requestURL = new URL(`http://${process.env.HOST ?? 'localhost'}${request.url}`);
     const pathname = decodeURIComponent(requestURL.pathname);
 
+    console.info(`Request for ${pathname}`);
     if (pathname.startsWith(mediaPath)){
         const relativePath = pathname.substring(mediaPath.length)
             .replaceAll("/", path.sep);

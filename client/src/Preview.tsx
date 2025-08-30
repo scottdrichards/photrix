@@ -39,12 +39,12 @@ export const Preview = () => {
           </button>
           
           {/* Details panel - only show when toggled */}
-          {showDetails[image] && (
+          {/* {showDetails[image] && (
             <FileInfoPanel 
               filePath={image} 
               style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }} 
             />
-          )}
+          )} */}
         </div>
       ))}
     </div>

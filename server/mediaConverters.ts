@@ -83,7 +83,7 @@ export const fileHandlers = [
         handler: async (relativePath:string) => {
             const fullPath = path.join(mediaCacheDir, relativePath);
             const content = await fs.readFile(fullPath);
-            return { file: content, contentType: 'application/dash+xml' };
+            return { file: content, contentType: relativePath.endsWith('.mpd') ? 'application/dash+xml' : 'video/mp4' };
         }
     },
     {

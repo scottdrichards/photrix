@@ -3,7 +3,6 @@ import { spawn, exec } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { dashConfig } from "./dashConstants";
-import { videoExtensions } from "../mediaConverters";
 
 const execAsync = promisify(exec);
 
@@ -14,6 +13,9 @@ type Params = {
 
 const dashInitToken = "init";
 const dashChunkToken = "chunk";
+
+
+const videoExtensions = ['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.flv', '.webm'];
 
 export const isDashFile = (filePath: string) =>
         path.extname(filePath).toLowerCase() === '.mpd' ||
@@ -34,6 +36,17 @@ export const createDashFiles = async (params: Params): Promise<string> => {
     const probeResult = JSON.parse(probeOutput);
     const sourceWidth = probeResult.streams?.[0]?.width || 1920;
     const sourceHeight = probeResult.streams?.[0]?.height || 1080;
+
+    // Probe for (optional) audio presence
+    let hasAudio = false;
+    try {
+        const audioProbeCmd = `ffprobe -v error -select_streams a:0 -show_entries stream=index -of json "${sourceFilePath}"`;
+        const { stdout: audioProbeOut } = await execAsync(audioProbeCmd);
+        const audioProbe = JSON.parse(audioProbeOut);
+        hasAudio = Array.isArray(audioProbe.streams) && audioProbe.streams.length > 0;
+    } catch {
+        hasAudio = false; // Treat probe failures as no audio
+    }
 
     // Filter ladder to only include resolutions that fit within source
     const availableLadder = dashConfig.ladder.filter((r, i) =>
@@ -61,15 +74,25 @@ export const createDashFiles = async (params: Params): Promise<string> => {
 
     const mapArgs = [
         ... availableLadder.flatMap((_, i) => ['-map', `[${scaledLabels[i]}]`]),
-        '-map', '0:a?'
+        ...(hasAudio ? ['-map', '0:a:0'] : [])
     ];
 
-    const audioArgs = ['-c:a', 'aac', '-b:a', '128k', '-ac', '2'];
+    const audioArgs = hasAudio ? ['-c:a', 'aac', '-b:a', '128k', '-ac', '2'] : [];
+    
+    // Create adaptation sets string: all video renditions in one set; include audio set only if audio present
+    const videoStreamIndices = availableLadder.map((_, i) => i).join(',');
+    // Audio output stream index is immediately after last video if present
+    const adaptationSets = hasAudio
+        ? `id=0,streams=${videoStreamIndices} id=1,streams=${availableLadder.length}`
+        : `id=0,streams=${videoStreamIndices}`;
+    
     const dashArgs = [
         '-f', 'dash',
         '-seg_duration', String(dashConfig.segmentDurationSeconds),
         '-use_template', '1',
         '-use_timeline', '1',
+        // Quote adaptation sets so both sets (video+audio) are treated as one argument
+        '-adaptation_sets', `"${adaptationSets}"`,
         '-g', '60',
         '-keyint_min', '60',
         '-sc_threshold', '0',
