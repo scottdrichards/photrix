@@ -1,163 +1,216 @@
-import { mkdir } from "node:fs/promises";
-import { spawn, exec } from "node:child_process";
-import path from "node:path";
-import { promisify } from "node:util";
-import { dashConfig } from "./dashConstants";
+import { ChildProcess, exec } from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { mediaCacheDir, rootDir } from '../config';
+import { AUDIO_BITRATE, AUDIO_CODEC, dashConfig, DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE, SEGMENT_DURATION_SEC, VIDEO_CODEC } from './dashConstants';
+import { characteristicsToString, initFileName, processDashFileName, segmentFileName, segmentPadding } from './dashPathUtils';
+import type { StreamCharacteristics, VideoStreamCharacteristics } from './dashTypes';
 
-const execAsync = promisify(exec);
+const gpuProcess: {
+    stream: string,
+    process: ChildProcess
+} | null = null;
 
-type Params = {
-    sourceFilePath: string;
-    destDir: string;
+// Cached probe results so repeated requests are cheap.
+type ProbeInfo = {
+    duration: number;
+    fps: number;
+    hasAudio: boolean;
+    sampleRate?: number;
+    channels?: number;
 };
 
-const dashInitToken = "init";
-const dashChunkToken = "chunk";
+// Probe source (duration, fps, audio presence / parameters)
+const probe = async (source: string): Promise<ProbeInfo> => {
+    const run = (cmd: string) => new Promise<string>((resolve, reject) =>
+        exec(cmd, (e, o) => (e ? reject(e) : resolve(o)))
+    );
 
+    const videoProbeCmd = `ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate,duration -of default=noprint_wrappers=1:nokey=0 "${source}"`;
+    const audioProbeCmd = `ffprobe -v error -select_streams a:0 -show_entries stream=index,sample_rate,channels -of default=nw=1:nk=1 "${source}"`;
 
-const videoExtensions = ['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.flv', '.webm'];
-
-export const isDashFile = (filePath: string) =>
-        path.extname(filePath).toLowerCase() === '.mpd' ||
-        new RegExp(`\\.(${videoExtensions.map(ext=>ext.substring(1)).join('|')})-(${dashChunkToken}|${dashInitToken})-\\d+(-\\d+\\.m4s|\\.mp4)`, "gi").test(filePath);
-
-export const createDashFiles = async (params: Params): Promise<string> => {
-    const { sourceFilePath, destDir } = params;
-
-    // Create the destination directory if it doesn't exist
-    await mkdir(destDir, { recursive: true });
-
-    // Get base name for output files
-    const baseName = path.basename(sourceFilePath);
-
-    // Probe source video dimensions
-    const probeCmd = `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of json "${sourceFilePath}"`;
-    const { stdout: probeOutput } = await execAsync(probeCmd);
-    const probeResult = JSON.parse(probeOutput);
-    const sourceWidth = probeResult.streams?.[0]?.width || 1920;
-    const sourceHeight = probeResult.streams?.[0]?.height || 1080;
-
-    // Probe for (optional) audio presence
+    let duration = 0;
+    let fps = 30;
     let hasAudio = false;
+    let sampleRate: number | undefined;
+    let channels: number | undefined;
+
     try {
-        const audioProbeCmd = `ffprobe -v error -select_streams a:0 -show_entries stream=index -of json "${sourceFilePath}"`;
-        const { stdout: audioProbeOut } = await execAsync(audioProbeCmd);
-        const audioProbe = JSON.parse(audioProbeOut);
-        hasAudio = Array.isArray(audioProbe.streams) && audioProbe.streams.length > 0;
+        const vOut = await run(videoProbeCmd);
+        for (const line of vOut.split(/\r?\n/)) {
+            if (line.startsWith('duration=')) duration = parseFloat(line.split('=')[1]) || 0;
+            if (line.startsWith('r_frame_rate=')) {
+                const fr = line.split('=')[1];
+                if (fr?.includes('/')) {
+                    const [a, b] = fr.split('/').map(Number);
+                    if (b) fps = a / b;
+                }
+            }
+        }
+
+        const aOut = await run(audioProbeCmd).catch(() => '');
+        const lines = aOut.trim().split(/\r?\n/).filter(Boolean);
+        if (lines.length) {
+            hasAudio = true;
+            const nums = lines.map(l => parseInt(l, 10)).filter(n => !Number.isNaN(n));
+            if (nums.length === 1) sampleRate = nums[0];
+            if (nums.length >= 2) { sampleRate = nums[1]; channels = nums[2] || DEFAULT_CHANNELS; }
+        }
     } catch {
-        hasAudio = false; // Treat probe failures as no audio
+        // swallow; use defaults
     }
 
-    // Filter ladder to only include resolutions that fit within source
-    const availableLadder = dashConfig.ladder.filter((r, i) =>
-        i === 0 // Always make the smallest available even if the video is smaller
-        || (r.width <= sourceWidth && r.height <= sourceHeight));
-
-    // Build filter_complex for multi-rendition split and scale
-    const splitCount = availableLadder.length;
-    const splitLabels = availableLadder.map((_, i) => `v${i}`);
-    const scaledLabels = availableLadder.map((_, i) => `v${i}out`);
-    
-    const splitPart = `[0:v]split=${splitCount}${splitLabels.map(l => `[${l}]`).join('')};`;
-    const scaleParts = availableLadder.map((r, i) => 
-        `[${splitLabels[i]}]scale=${r.width}:${r.height}:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2[${scaledLabels[i]}]`
-    ).join(';');
-    const filterComplex = `${splitPart}${scaleParts}`;
-
-    const videoCodecArgs = availableLadder.flatMap((r, i)=>[
-            `-c:v:${i}`, 'h264_amf',
-            '-pix_fmt', 'yuv420p',
-            `-b:v:${i}`, `${Math.round(r.bitrate/1000)}k`,
-            `-maxrate:v:${i}`, `${Math.round(r.bitrate/1000)}k`,
-            `-bufsize:v:${i}`, `${Math.round(r.bitrate/500)}k`
-        ]);
-
-    const mapArgs = [
-        ... availableLadder.flatMap((_, i) => ['-map', `[${scaledLabels[i]}]`]),
-        ...(hasAudio ? ['-map', '0:a:0'] : [])
-    ];
-
-    const audioArgs = hasAudio ? ['-c:a', 'aac', '-b:a', '128k', '-ac', '2'] : [];
-    
-    // Create adaptation sets string: all video renditions in one set; include audio set only if audio present
-    const videoStreamIndices = availableLadder.map((_, i) => i).join(',');
-    // Audio output stream index is immediately after last video if present
-    const adaptationSets = hasAudio
-        ? `id=0,streams=${videoStreamIndices} id=1,streams=${availableLadder.length}`
-        : `id=0,streams=${videoStreamIndices}`;
-    
-    const dashArgs = [
-        '-f', 'dash',
-        '-seg_duration', String(dashConfig.segmentDurationSeconds),
-        '-use_template', '1',
-        '-use_timeline', '1',
-        // Quote adaptation sets so both sets (video+audio) are treated as one argument
-        '-adaptation_sets', `"${adaptationSets}"`,
-        '-g', '60',
-        '-keyint_min', '60',
-        '-sc_threshold', '0',
-        '-init_seg_name', `${baseName}-${dashInitToken}-$RepresentationID$.mp4`,        // Use relative paths
-        '-media_seg_name', `${baseName}-${dashChunkToken}-$RepresentationID$-$Number%05d$.m4s`  // Use relative paths
-    ];
-
-    const manifestPath = path.join(destDir, `${baseName}.mpd`);
-    
-    // Build command as string with proper quoting for UNC paths
-    const quotePath = (p: string) => `"${p.replace(/"/g, '\\"')}"`;
-    const escapeFilterComplex = (filter: string) => `"${filter.replace(/"/g, '\\"')}"`;
-    
-    const cmd = [
-        'ffmpeg',
-        '-nostdin', '-y', '-hide_banner', '-loglevel', 'error',
-        '-hwaccel', 'auto',
-        '-i', quotePath(sourceFilePath),
-        '-filter_complex', escapeFilterComplex(filterComplex),
-        ...mapArgs,
-        ...videoCodecArgs,
-        ...audioArgs,
-        ...dashArgs,
-        quotePath(`${baseName}.mpd`)  // Use relative path for manifest
-    ].join(' ');
-
-    console.log(`[DASH] Creating manifest and segments: ${cmd}`);
-    console.log(`[DASH] Working directory: ${destDir}`);
-
-    // Use exec instead of spawn for better shell handling of UNC paths
-    const child = exec(cmd, { cwd: destDir });
-    
-    // Monitor stdout live
-    child.stdout?.on('data', (data) => {
-        console.log(`[DASH-STDOUT] ${data.toString().trim()}`);
-    });
-    
-    // Monitor stderr live  
-    child.stderr?.on('data', (data) => {
-        console.log(`[DASH-STDERR] ${data.toString().trim()}`);
-    });
-    
-    // Wait for process to complete
-    await new Promise<void>((resolve, reject) => {
-        child.on('close', (code) => {
-            if (code === 0) {
-                console.log(`[DASH] Process completed successfully`);
-                resolve();
-            } else {
-                reject(new Error(`[DASH] ffmpeg exited with code ${code}`));
-            }
-        });
-        
-        child.on('error', (err) => {
-            reject(new Error(`[DASH] Process error: ${err.message}`));
-        });
-    });
-
-    return manifestPath
+    if (!duration) duration = 1;
+    return { duration, fps, hasAudio, sampleRate, channels };
 };
 
-// const startTime = Date.now();
-// await createDashFiles({
-//     sourceFilePath: "//TRUENAS/Date-uh/Pictures and Videos/2025/01/Snow/GX011823.MP4",
-//     destDir: "C:\\cache\\media\\2025\\01\\Snow\\"
-// });
-// const duration = Date.now() - startTime;
-// console.log(`[DASH] Process completed in ${duration}ms`);
+// Select ladder entries that fit inside the source dimensions (always keep smallest)
+const filterLadder = (sourceWidth: number, sourceHeight: number) =>
+    dashConfig.videoQualityOptions.filter((streamCharacteristic, index) => {
+        if (index === 0) return true;
+        return streamCharacteristic.width <= sourceWidth && streamCharacteristic.height <= sourceHeight;
+    });
+
+const probeDimensions = async (fullPath: string): Promise<{ width: number; height: number }> => {
+    const cmd = `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "${fullPath}"`;
+    const {stderr, stdout} = await promisify(exec)(cmd);
+    if (stderr){
+        throw new Error(`ffprobe error: ${stderr}`);
+    }
+    const [width, height] = stdout?.trim().split('x').map(Number);
+    if (isNaN(width) || isNaN(height)) {
+        throw new Error(`Invalid ffprobe output: ${stdout}`);
+    }
+    return { width, height };
+};
+
+const getManifest = async (sourceFilePath: string, destDir: string, overwriteExisting:boolean = false) => {
+    await fs.mkdir(destDir, { recursive: true });
+    const baseName = path.basename(sourceFilePath);
+    const manifestPath = path.join(destDir, `${baseName}.mpd`);
+    try {
+        if (!overwriteExisting) {
+            return await fs.readFile(manifestPath, 'utf-8');
+        }
+    } catch { /* create below */ }
+
+    const { width: sourceWidth, height: sourceHeight } = await probeDimensions(sourceFilePath);
+    const { duration, fps, hasAudio, sampleRate = DEFAULT_SAMPLE_RATE, channels = DEFAULT_CHANNELS } = await probe(sourceFilePath);
+    const videoStreams = filterLadder(sourceWidth, sourceHeight).map<VideoStreamCharacteristics>(s => ({ ...s, streamType: 'video' }));
+    const audioStreams = [{ streamType: 'audio', bitrate: AUDIO_BITRATE, channels, sampleRate }];
+    const timescale = Math.round((fps * 1000) / 1001) || fps || 30; // approx for common NTSC rates
+    const segmentDurationTicks = SEGMENT_DURATION_SEC * timescale;
+    const maxW = Math.max(...videoStreams.map(r => r.width));
+    const maxH = Math.max(...videoStreams.map(r => r.height));
+
+    const mpd = `<?xml version="1.0" encoding="utf-8"?>
+        <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:isoff-live:2011" type="static" mediaPresentationDuration="PT${duration.toFixed(1)}S" minBufferTime="PT${Math.min(12, SEGMENT_DURATION_SEC * 2)}S">
+            <Period start="PT0S">
+                <AdaptationSet id="0" contentType="video" segmentAlignment="true" bitstreamSwitching="true" maxWidth="${maxW}" maxHeight="${maxH}">
+                    ${videoStreams.map(r => `
+                    <Representation id="${r.height}" mimeType="video/mp4" codecs="${VIDEO_CODEC}" bandwidth="${r.bitrate}" width="${r.width}" height="${r.height}" sar="1:1">
+                        <SegmentTemplate timescale="${timescale}" initialization="${initFileName(baseName, r)}" media="${baseName}-${characteristicsToString(r)}-s$Number%0${segmentPadding}d$.m4s" startNumber="1" duration="${segmentDurationTicks}"/>
+                    </Representation>`).join('')}
+                </AdaptationSet>${hasAudio ? `
+                <AdaptationSet id="1" contentType="audio" segmentAlignment="true">
+                    ${audioStreams.map((r, i) => `
+                    <Representation id="audio_${i}" mimeType="audio/mp4" codecs="${AUDIO_CODEC}" bandwidth="${r.bitrate}" audioSamplingRate="${r.sampleRate}">
+                        <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="${r.channels}"/>
+                        <SegmentTemplate timescale="${r.sampleRate}" initialization="${baseName}-audio-${AUDIO_BITRATE}.init" media="${baseName}-audio-${AUDIO_BITRATE}-s$Number%0${segmentPadding}d$.m4s" startNumber="1" duration="${SEGMENT_DURATION_SEC * r.sampleRate}"/>
+                    </Representation>`).join('')}
+                </AdaptationSet>` : ''}
+            </Period>
+        </MPD>`;
+
+    await fs.writeFile(manifestPath, mpd, 'utf-8');
+    return mpd;
+};
+
+export const getDashFile = async (fileRelativePath: string): Promise<{file:Buffer, contentType: string}> => {
+    const relativeDir = path.dirname(fileRelativePath);
+    const dashFileName = path.basename(fileRelativePath);
+    const cachePath = path.join(mediaCacheDir,fileRelativePath);
+    const cachePathDir = path.dirname(cachePath);
+    
+    const {baseFile, ...dashProperties} = processDashFileName(dashFileName);
+    const sourceFilePath = path.join(rootDir, relativeDir, baseFile);
+
+    const contentType = dashProperties.fileType === 'm4s' ? 'video/mp4' : 'application/dash+xml';
+
+    try {
+        // return {
+        //     file: await fs.readFile(cachePath),
+        //     contentType
+        // };
+    } catch {
+        // Need to build it
+    }
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+
+    if (dashProperties.fileType === 'mpd') {
+        return {file: Buffer.from(await getManifest(sourceFilePath,cachePathDir,true)), contentType};
+    }
+
+    const {characteristics} = dashProperties;
+    if (dashProperties.fileType === 'init') {
+        // Initialize audio characteristics if not present
+        if (characteristics.streamType === 'audio') {
+            const { sampleRate = DEFAULT_SAMPLE_RATE, channels = DEFAULT_CHANNELS } = await probe(sourceFilePath);
+            characteristics.sampleRate = sampleRate; characteristics.channels = channels;
+        }
+
+        await generateSegment(sourceFilePath, cachePathDir, characteristics, 1, true);
+        // Warm-up further segments asynchronously
+        generateSegment(sourceFilePath, cachePathDir, characteristics, 2).catch(()=>{});
+        generateSegment(sourceFilePath, cachePathDir, characteristics, 3).catch(()=>{});
+    } else if (dashProperties.fileType === 'm4s') {
+        await generateSegment(sourceFilePath, cachePathDir, characteristics, dashProperties.segmentNumber);
+    }
+
+    return {
+        file: await fs.readFile(cachePath),
+        contentType
+    };
+};
+
+const generateSegment = async (
+    source: string,
+    destDir: string,
+    rep: StreamCharacteristics,
+    segmentNumber: number,
+    includeInit = false
+) => {
+    const baseName = path.basename(source);
+    const start = (segmentNumber - 1) * SEGMENT_DURATION_SEC;
+    const isAudio = rep.streamType === 'audio';
+    const tempOut = path.join(destDir, `.__tmp_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`);
+    const initPath = path.join(destDir, initFileName(baseName, rep));
+    const segPath = path.join(destDir, segmentFileName(baseName, rep, segmentNumber));
+    const commonStart = [ 'ffmpeg', '-hide_banner', '-loglevel', 'error', '-ss', String(start), '-i', `"${source}"`, '-t', String(SEGMENT_DURATION_SEC) ];
+
+    const cmd = isAudio
+        ? [ ...commonStart, '-vn', '-c:a', 'aac', '-b:a', String(rep.bitrate), '-movflags', 'frag_keyframe+empty_moov+default_base_moof', tempOut ]
+        : [ ...commonStart, '-vf', `scale=${(rep as VideoStreamCharacteristics).width}:${(rep as VideoStreamCharacteristics).height}:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2`, '-c:v','h264_amf','-usage','transcoding','-quality','balanced','-profile:v','main','-level','4.0','-b:v', String(rep.bitrate), '-an', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', tempOut ];
+        
+    const { stderr } = await promisify(exec)(cmd.join(' '));
+    if (stderr) throw new Error(stderr);
+
+    const full = await fs.readFile(tempOut);
+    if (includeInit) {
+        const moofPos = full.indexOf(Buffer.from('moof'));
+        if (moofPos > 8) {
+            const initSlice = full.subarray(0, Math.max(0, moofPos - 4));
+            await fs.writeFile(initPath, initSlice.length ? initSlice : full);
+        } else {
+            await fs.writeFile(initPath, full);
+        }
+    }
+    await fs.copyFile(tempOut, segPath);
+    // Delete temporary file
+    await fs.unlink(tempOut).catch(() => {});
+};
+
+export const isDashFile = (filePath: string) =>
+    filePath.toLowerCase().endsWith('.mpd') || filePath.includes('.m4s') || filePath.endsWith('.init');
+

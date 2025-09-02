@@ -4,7 +4,7 @@ import { exec, spawn } from "node:child_process";
 import path from "path";
 import sharp from 'sharp';
 import { mediaCacheDir, rootDir } from "./config.ts";
-import { createDashFiles, isDashFile } from "./dash/createDashFiles.ts";
+import { getDashFile, isDashFile } from "./dash/createDashFiles.ts";
 
 type Dimensions = {
     height?: number;
@@ -32,7 +32,7 @@ type Details = {
     fileSize: number;
 }
 
-type FileHandler = {
+export type FileHandler = {
     name:string,
     extensions?: string[];
     canHandleFile: (path:string) => boolean;
@@ -78,42 +78,9 @@ const extValidator = (exts:string[])=> (p:string) => exts.includes(path.extname(
 
 export const fileHandlers = [
     {
-        name: "Dash",
+        name: "Dash Video",
         canHandleFile: isDashFile,
-        handler: async (relativePath:string) => {
-            const fullPath = path.join(mediaCacheDir, relativePath);
-            const content = await fs.readFile(fullPath);
-            return { file: content, contentType: relativePath.endsWith('.mpd') ? 'application/dash+xml' : 'video/mp4' };
-        }
-    },
-    {
-        name: "Video",
-        canHandleFile: extValidator(videoExtensions),
-        handler: async (relativePath:string) => {
-            const sourceFullPath = path.join(rootDir, relativePath);
-            const cacheDir = path.join(mediaCacheDir, path.dirname(relativePath));
-            const baseName = path.basename(relativePath, path.extname(relativePath));
-            const manifestPath = path.join(cacheDir, `${baseName}.mpd`);
-
-            // Check if DASH manifest already exists
-            try {
-                await fs.access(manifestPath);
-                console.log('[VIDEO] Serving existing DASH manifest:', manifestPath);
-                const manifestContent = await fs.readFile(manifestPath, 'utf-8');
-                return { file: Buffer.from(manifestContent), contentType: 'application/dash+xml' };
-            } catch {
-                // Manifest doesn't exist, create DASH files
-                console.log('[VIDEO] Creating DASH files for:', relativePath);
-                const dashManifestPath = await createDashFiles({
-                    sourceFilePath: sourceFullPath,
-                    destDir: cacheDir
-                });
-                
-                console.log('[VIDEO] DASH creation complete:', dashManifestPath);
-                const manifestContent = await fs.readFile(dashManifestPath, 'utf-8');
-                return { file: Buffer.from(manifestContent), contentType: 'application/dash+xml' };
-            }
-        }
+        handler: getDashFile,
     },
     {
         name: "High Efficiency Image",
