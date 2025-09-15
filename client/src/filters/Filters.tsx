@@ -236,7 +236,7 @@ export const Filters: React.FC = () => {
         <div className={styles.ratingLabel}>File Type</div>
         <div style={{display:'flex', gap:'6px', marginBottom:'6px', flexWrap:'wrap'}}>
           {(['image','video'] as const).map(type => {
-            const active = filter.fileType === type;
+            const active = filter.mediaType === type;
             return (
               <div
                 key={type}
@@ -244,7 +244,7 @@ export const Filters: React.FC = () => {
                 data-selected={active || undefined}
                 style={{padding:'2px 8px', fontSize:'12px'}}
                 onClick={() => {
-                  setFilter({...filter, fileType: active ? undefined : type});
+                  setFilter({...filter, mediaType: active ? undefined : type});
                 }}
               >{type}</div>
             );

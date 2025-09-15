@@ -16,7 +16,7 @@ const mediaPath = '/media';
 export type MediaDirectoryResult = Array<{path:string, type:'directory'|'file', details?:any}>;
 
 const getFilter = (searchParams: URLSearchParams): SearchFilters => {
-    const allFields = ["name", "excludeSubfolders", "keywords", ...textSearchableColumns, ...numberSearchableColumns] as const;
+    const allFields = ["name", "mediaType", "excludeSubfolders", "keywords", ...textSearchableColumns, ...numberSearchableColumns] as const;
 
     const textFilter = allFields
         .map(column => [column, searchParams.get(column)] as const)
@@ -266,7 +266,7 @@ http.createServer(async (request, response)=> {
     }else{
             const forwardOptions = {
                 hostname: "localhost",
-                port: 5173,
+                port: 5174,
                 path: request.url,
             method: request.method,
             headers: request.headers,

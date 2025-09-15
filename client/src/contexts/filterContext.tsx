@@ -15,7 +15,7 @@ export type Filter = {
         to: Date;
     },
     rating?: typeof RatingOptions[number][];
-    fileType?: 'image' | 'video';
+    mediaType?: 'image' | 'video';
     hierarchical_subject?: string;
     keywords?: string[];
     excludeSubfolders?: boolean;
