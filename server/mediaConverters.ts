@@ -4,7 +4,7 @@ import { exec, spawn } from "node:child_process";
 import path from "path";
 import sharp from 'sharp';
 import { mediaCacheDir, rootDir } from "./config.ts";
-import { getDashFile, isDashFile } from "./dash/createDashFiles.ts";
+import { createDashFiles } from "./dash/createDashFiles.ts";
 
 type Dimensions = {
     height?: number;
@@ -76,11 +76,38 @@ export const videoExtensions = ['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.flv', 
 
 const extValidator = (exts:string[])=> (p:string) => exts.includes(path.extname(p).toLowerCase());
 
+const dashTypes = {
+    '.mpd':'application/dash+xml',
+    '.m4v':'video/mp4',
+    '.m4a':'audio/mp4',
+} as const satisfies Record<string,string>;
+
 export const fileHandlers = [
     {
-        name: "Dash Video",
-        canHandleFile: isDashFile,
-        handler: getDashFile,
+        name: "Dash File",
+        canHandleFile: extValidator(Object.keys(dashTypes)),
+        handler: async relativePath=>{
+            const cachePath = path.join(mediaCacheDir,relativePath);
+            const contentType = dashTypes[path.extname(relativePath).toLowerCase() as keyof typeof dashTypes];
+            try{
+                return {
+                    file: await fs.readFile(cachePath),
+                    contentType
+                };
+            } catch (e) {
+                if (e && typeof e === 'object' && "code" in e && e.code === 'ENOENT') {
+                    console.log(`Creating DASH file for: ${relativePath}`);
+                    // remove .mpd or whatever to get to original filename
+                    const sourceFile = relativePath.substring(0, relativePath.length - 4);
+                    await createDashFiles(sourceFile, rootDir, mediaCacheDir);
+                    return {
+                        file: await fs.readFile(cachePath),
+                        contentType
+                    };
+                }
+                throw e;
+            }
+        },
     },
     {
         name: "High Efficiency Image",
