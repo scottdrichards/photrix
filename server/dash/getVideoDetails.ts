@@ -58,35 +58,32 @@ type AudioDetails = {
 
 // Probe source (duration, fps, audio presence / parameters)
 export const getAudioDetails = async (fullPath: string): Promise<AudioDetails> => {
-    const audioProbeCmd = `ffprobe -v error -select_streams a:0 -show_entries stream=index,sample_rate,channels -of default=nw=1:nk=1 "${fullPath}"`;
-
-    const {stderr: audioStderr, stdout: audioStdOut} = await promisify(exec)(audioProbeCmd);
-    if (audioStderr){
-        throw new Error(audioStderr);
+    const audioProbeCmd = `ffprobe -v error -select_streams a:0 -show_entries stream=index,sample_rate,channels -of default=noprint_wrappers=1:nokey=1 "${fullPath}"`;
+    try {
+        const { stdout } = await promisify(exec)(audioProbeCmd);
+        const lines = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        // ffprobe with these options prints values in order; safer to parse key/value variant again:
+        // We'll run a second command with nokey=0 if needed
+        if (!lines.length) {
+            // No audio stream
+            return { hasAudio: false, sampleRate: 0, channels: 0 };
+        }
+    } catch {
+        return { hasAudio: false, sampleRate: 0, channels: 0 };
     }
 
-    const audioDetails = audioStdOut.split(/\r?\n/)
+    // Re-run with key names for clarity
+    const audioProbeKeyed = `ffprobe -v error -select_streams a:0 -show_entries stream=index,sample_rate,channels -of default=noprint_wrappers=1:nokey=0 "${fullPath}"`;
+    const { stdout: keyedOut } = await promisify(exec)(audioProbeKeyed);
+    const parsed = keyedOut.split(/\r?\n/)
         .map(line => line.trim().split('='))
-        .reduce((vals, [key, value])=>{
+        .reduce((vals, [key, value]) => {
             switch (key) {
-                case 'index':
-                    vals.hasAudio = true;
-                    break;
-                case 'sample_rate':
-                    vals.sampleRate = parseInt(value);
-                    break;
-                case 'channels':
-                    vals.channels = parseInt(value);
-                    break;
+                case 'index': vals.hasAudio = true; break;
+                case 'sample_rate': vals.sampleRate = parseInt(value); break;
+                case 'channels': vals.channels = parseInt(value); break;
             }
             return vals;
-        }, {} as Partial<AudioDetails>);
-
-    (['hasAudio', 'sampleRate', 'channels'] as const).some(key => {
-        if (audioDetails[key] === undefined) {
-            throw new Error(`Failed to probe audio for ${key}`);
-        }
-    });
-
-    return audioDetails as AudioDetails;
+        }, { hasAudio: false, sampleRate: 0, channels: 0 } as AudioDetails);
+    return parsed;
 };

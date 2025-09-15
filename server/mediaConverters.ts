@@ -4,7 +4,8 @@ import { exec, spawn } from "node:child_process";
 import path from "path";
 import sharp from 'sharp';
 import { mediaCacheDir, rootDir } from "./config.ts";
-import { createDashFiles } from "./dash/createDashFiles.ts";
+// Legacy pre-generation kept for reference; new on-demand system uses dashSessionManager
+import { getMpdForSource, awaitDashFileBySlug, ensureEncodingStartedForFile } from './dash/dashSessionManager';
 
 type Dimensions = {
     height?: number;
@@ -78,36 +79,50 @@ const extValidator = (exts:string[])=> (p:string) => exts.includes(path.extname(
 
 const dashTypes = {
     '.mpd':'application/dash+xml',
-    '.m4v':'video/mp4',
-    '.m4a':'audio/mp4',
+    '.m4s':'video/iso.segment', // CMAF segment (audio or video) generic mp4 segment type
 } as const satisfies Record<string,string>;
 
 export const fileHandlers = [
     {
-        name: "Dash File",
-        canHandleFile: extValidator(Object.keys(dashTypes)),
-        handler: async relativePath=>{
-            const cachePath = path.join(mediaCacheDir,relativePath);
-            const contentType = dashTypes[path.extname(relativePath).toLowerCase() as keyof typeof dashTypes];
-            try{
-                return {
-                    file: await fs.readFile(cachePath),
-                    contentType
-                };
-            } catch (e) {
-                if (e && typeof e === 'object' && "code" in e && e.code === 'ENOENT') {
-                    console.log(`Creating DASH file for: ${relativePath}`);
-                    // remove .mpd or whatever to get to original filename
-                    const sourceFile = relativePath.substring(0, relativePath.length - 4);
-                    await createDashFiles(sourceFile, rootDir, mediaCacheDir);
-                    return {
-                        file: await fs.readFile(cachePath),
-                        contentType
-                    };
-                }
-                throw e;
-            }
+        name: 'DASH (On-Demand)',
+        canHandleFile: (p:string) => {
+            const ext = path.extname(p).toLowerCase();
+            return ext === '.mpd' || ext === '.m4s';
         },
+        handler: async (relativePath: string) => {
+            const ext = path.extname(relativePath).toLowerCase();
+            const contentType = dashTypes[ext as keyof typeof dashTypes];
+
+            if (ext === '.mpd') {
+                if (!relativePath.toLowerCase().endsWith('.mpd')) {
+                    throw Object.assign(new Error('Invalid MPD path'), { code: 'ENOENT' });
+                }
+                const sourceBase = relativePath.substring(0, relativePath.length - 4); // remove .mpd
+                // Caller supplies path like /folder/video.mp4.mpd so sourceBase still has video extension.
+                const mpd = await getMpdForSource(sourceBase);
+                // Eagerly start encoding so init segments likely ready when requested
+                ensureEncodingStartedForFile(sourceBase).catch(e => console.warn('[DASH] Failed eager start', e));
+                return { file: Buffer.from(mpd), contentType };
+            }
+
+            if (ext === '.m4s') {
+                const file = path.basename(relativePath); // slug-init-v0.m4s or slug-chunk-v0-1.m4s
+                const match = /^([A-Za-z0-9_-]+)-(init|chunk)-/.exec(file);
+                if (!match) {
+                    throw Object.assign(new Error('Invalid segment naming'), { code: 'ENOENT' });
+                }
+                const slug = match[1];
+                const data = await awaitDashFileBySlug(slug, file);
+                if (!data) {
+                    const err: any = new Error('Segment not ready');
+                    err.code = 'ESEGMENT_NOT_READY';
+                    throw err;
+                }
+                return { file: data, contentType };
+            }
+
+            throw Object.assign(new Error('Unsupported DASH file type'), { code: 'ENOENT' });
+        }
     },
     {
         name: "High Efficiency Image",

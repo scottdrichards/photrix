@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import zlib from "node:zlib";
 import { rootDir } from "./config.ts";
-import { fileHandlers, videoExtensions } from "./mediaConverters.ts";
+import { fileHandlers } from "./mediaConverters.ts";
 import { mediaDatabase, numberSearchableColumns, textSearchableColumns, type MediaFileProperties, type NumberSearchableColumns, type SearchFilters } from "./mediaDatabase.ts";
 import { processFilesInDirectory } from "./processFiles.ts";
 
@@ -218,8 +218,27 @@ http.createServer(async (request, response)=> {
                     }
                 } catch (error) {
                     console.error(`Error handling file ${fullPath}:`, error);
-                    response.writeHead(500);
-                    response.end();
+                    // Map known error codes to appropriate HTTP statuses
+                    if (error && typeof error === 'object' && 'code' in error) {
+                        const code = (error as any).code;
+                        if (code === 'ESEGMENT_NOT_READY') {
+                            // Dash segment (likely init) not ready yet – suggest client retry soon
+                            response.writeHead(503, {
+                                'Content-Type': 'text/plain',
+                                'Retry-After': '1', // seconds; fast retry for live/on-demand segment availability
+                                'Cache-Control': 'no-store'
+                            });
+                            response.end('Segment not ready');
+                            return;
+                        }
+                        if (code === 'ENOENT') {
+                            response.writeHead(404, { 'Content-Type': 'text/plain' });
+                            response.end('Not found');
+                            return;
+                        }
+                    }
+                    response.writeHead(500, { 'Content-Type': 'text/plain' });
+                    response.end('Internal server error');
                 }
             }else{
                 try {
