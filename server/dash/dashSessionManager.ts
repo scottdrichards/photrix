@@ -5,6 +5,23 @@ import { getVideoDetails, getAudioDetails } from './getVideoDetails';
 import { dashConfig, AUDIO_BITRATE, AUDIO_CODEC, VIDEO_CODEC, SEGMENT_DURATION_SEC } from './dashConstants';
 import { mediaCacheDir, rootDir } from '../config';
 
+// Hardware / encoder configuration & limits
+const AMF_MAX_WIDTH = Number(process.env.PHOTRIX_AMF_MAX_WIDTH || 4096);
+const AMF_MAX_HEIGHT = Number(process.env.PHOTRIX_AMF_MAX_HEIGHT || 4096);
+const ALLOW_SOFTWARE_FALLBACK = process.env.PHOTRIX_ALLOW_SOFTWARE_FALLBACK === '1';
+const VIDEO_ENCODER = process.env.PHOTRIX_VIDEO_ENCODER || 'h264_amf'; // could be hevc_amf, h264_nvenc, libx264, etc.
+const BASE_SCALE_FLAGS = process.env.PHOTRIX_BASE_SCALE_FLAGS || 'bilinear';
+const DOWNSCALE_FLAGS = process.env.PHOTRIX_DOWNSCALE_FLAGS || 'fast_bilinear';
+// Basic hwaccel choice (minimal detection for now)
+const HWACCEL_FLAG: string[] = (() => {
+  if (process.platform === 'win32') return ['-hwaccel', 'dxva2'];
+  if (process.platform === 'linux') {
+    if (process.env.PHOTRIX_VAAPI_DEVICE) return ['-hwaccel', 'vaapi', '-vaapi_device', process.env.PHOTRIX_VAAPI_DEVICE];
+    return ['-hwaccel', 'vaapi'];
+  }
+  return [];
+})();
+
 // Representation definition
 export type Representation = {
   id: string;
@@ -89,18 +106,33 @@ const pickRepresentations = async (sourcePath:string): Promise<Representation[]>
   const reps = dashConfig.videoQualityOptions
     .filter((opt, idx) => {
       if (idx === 0) return true; // keep the lowest always
-      // Avoid upscaling: only include if source is at least that big in both dimensions
-      if (videoDetails.width < opt.width || videoDetails.height < opt.height) return false;
+      if (videoDetails.width < opt.width || videoDetails.height < opt.height) return false; // no upscaling
       return true;
     })
-    .slice(0, max)
     .map((opt, i) => ({
-  id: `${i}`,
+      id: `${i}`,
       width: opt.width,
       height: opt.height,
       bandwidth: opt.bitrate,
       codec: VIDEO_CODEC
     }));
+
+  // Hardware capability filter (currently only applying 4K constraint for AMF H.264)
+  if (VIDEO_ENCODER === 'h264_amf') {
+    const filtered: Representation[] = [];
+    for (const r of reps) {
+      if (r.width > AMF_MAX_WIDTH || r.height > AMF_MAX_HEIGHT) {
+        const msg = `[DASH] WARNING: Representation ${r.width}x${r.height} exceeds AMF limit ${AMF_MAX_WIDTH}x${AMF_MAX_HEIGHT}.`;
+        if (ALLOW_SOFTWARE_FALLBACK) {
+          console.warn(msg + ' Keeping (software fallback libx264).');
+          filtered.push(r);
+        } else {
+          console.warn(msg + ' Dropping (enable PHOTRIX_ALLOW_SOFTWARE_FALLBACK=1 to keep).');
+        }
+      } else filtered.push(r);
+    }
+    return filtered;
+  }
   return reps;
 };
 
@@ -131,27 +163,84 @@ const startEncoder = async (session: DashSession, segmentDurationSeconds: number
 
   session.encoderStarted = true;
   const startP = (async () => {
-    // Prepare ffmpeg command.
+    // Prepare ffmpeg command with hwaccel before input.
     const input = session.absoluteSourcePath;
-    const args: string[] = ['-y', '-i', input];
+    const args: string[] = ['-y', ...HWACCEL_FLAG, '-i', input];
 
-    // For each representation we map the same source video stream 0:v:0
-    session.representations.forEach((rep, idx) => {
-      args.push('-map', '0:v:0');
-      args.push('-filter:v:' + idx, `scale=${rep.width}:${rep.height}`);
-      args.push('-c:v:' + idx, 'h264_amf');
-      args.push('-b:v:' + idx, String(rep.bandwidth));
-      args.push('-maxrate:v:' + idx, String(rep.bandwidth));
-      args.push('-bufsize:v:' + idx, String(rep.bandwidth * 2));
-      args.push('-g:v:' + idx, String(segmentDurationSeconds * 30));
-      args.push('-keyint_min:v:' + idx, String(segmentDurationSeconds * 30));
-      args.push('-sc_threshold:v:' + idx, '0');
+    // ------------------------------------------------------------------
+    // Cascaded scaling filter graph (single decode -> largest rep -> split -> downscale others)
+    // ------------------------------------------------------------------
+    const reps = session.representations;
+    if (reps.length === 0) {
+      console.warn('[DASH] No video representations selected; proceeding without video encodes.');
+    }
+
+    let filterComplex = '';
+    const largestRep = reps[reps.length - 1]; // pickRepresentations outputs ascending quality
+    const largestLabel = `v_${largestRep?.id}`;
+    if (reps.length === 1 && largestRep) {
+      // Single rep: optional scale only if size differs; still enforce format=nv12 for AMF
+      filterComplex = `[0:v]format=nv12` + (largestRep.width && largestRep.height ? `,scale=${largestRep.width}:${largestRep.height}:flags=${BASE_SCALE_FLAGS}` : '') + `[${largestLabel}]`;
+    } else if (reps.length > 1) {
+      // Build split outputs (one for base + one per *other* rep)
+      const splitOutputs: string[] = [];
+      // We will create one temporary branch per non-largest rep
+      const otherBranches: { rep: Representation; tmpLabel: string; finalLabel: string }[] = [];
+      for (const r of reps.slice(0, -1)) { // all but largest
+        const tmp = `tmp_${r.id}`;
+        const final = `v_${r.id}`;
+        splitOutputs.push(`[${tmp}]`);
+        otherBranches.push({ rep: r, tmpLabel: tmp, finalLabel: final });
+      }
+      // Add largest output label last so order matches branches count
+      splitOutputs.unshift(`[${largestLabel}]`); // first output of split is base largest label
+      const splitCount = splitOutputs.length;
+      // Base chain always scales to largest (even if same size; minimal overhead) then splits
+      filterComplex = `[0:v]format=nv12,scale=${largestRep.width}:${largestRep.height}:flags=${BASE_SCALE_FLAGS},split=${splitCount}${splitOutputs.join('')}`;
+      // Now add scale filters for each smaller rep
+      otherBranches.forEach(b => {
+        filterComplex += `;[${b.tmpLabel}]scale=${b.rep.width}:${b.rep.height}:flags=${DOWNSCALE_FLAGS}[${b.finalLabel}]`;
+      });
+    }
+    if (filterComplex) {
+      args.push('-filter_complex', filterComplex);
+    }
+
+    // For each representation create mapping & encoder settings (remove old -s based approach)
+    reps.forEach((rep, idx) => {
+      const label = `v_${rep.id}`;
+      args.push('-map', `[${label}]`);
+      const overLimit = (rep.width > AMF_MAX_WIDTH || rep.height > AMF_MAX_HEIGHT) && VIDEO_ENCODER === 'h264_amf';
+      const encoder = overLimit && ALLOW_SOFTWARE_FALLBACK ? 'libx264' : VIDEO_ENCODER;
+      if (overLimit && ALLOW_SOFTWARE_FALLBACK) {
+        console.warn(`[DASH] Software fallback for rep ${rep.id} (${rep.width}x${rep.height}) using libx264.`);
+      } else if (overLimit) {
+        console.warn(`[DASH] Representation ${rep.width}x${rep.height} exceeded AMF limits but fallback disabled (may fail).`);
+      }
+      args.push(`-c:v:${idx}`, encoder);
+      args.push(`-b:v:${idx}`, String(rep.bandwidth));
+      args.push(`-maxrate:v:${idx}`, String(rep.bandwidth));
+      args.push(`-bufsize:v:${idx}`, String(rep.bandwidth * 2));
+      const g = segmentDurationSeconds * 30; // assume 30fps input
+      args.push(`-g:v:${idx}`, String(g));
+      args.push(`-keyint_min:v:${idx}`, String(g));
+      args.push(`-sc_threshold:v:${idx}`, '0');
+      if (encoder === 'h264_amf') {
+        args.push(`-pix_fmt:v:${idx}`, 'nv12');
+        // Optional AMF tuning flags (only if user sets env to enable) – can extend later
+        if (process.env.PHOTRIX_AMF_QUALITY) args.push(`-quality:v:${idx}`, process.env.PHOTRIX_AMF_QUALITY);
+        if (process.env.PHOTRIX_AMF_USAGE) args.push(`-usage:v:${idx}`, process.env.PHOTRIX_AMF_USAGE);
+        if (process.env.PHOTRIX_AMF_ASYNC_DEPTH) args.push(`-async_depth:v:${idx}`, process.env.PHOTRIX_AMF_ASYNC_DEPTH);
+      }
     });
+    if (filterComplex) {
+      console.log('[DASH] filter_complex:', filterComplex);
+    }
 
     // Audio (single track) if present
     if (session.audio) {
-  args.push('-map', '0:a:0?');
-  args.push('-c:a', 'aac');
+        args.push('-map', '0:a:0?');
+        args.push('-c:a', 'aac');
       args.push('-b:a', String(session.audio.bandwidth));
       args.push('-ac', '2');
     }
@@ -173,33 +262,23 @@ const startEncoder = async (session: DashSession, segmentDurationSeconds: number
   const tempMPD = 'temp.mpd';
   args.push(tempMPD);
 
-    const spawnWithArgs = (codecLabel:string, replace:boolean) => {
-      const finalArgs = replace ? args.map(a => a === 'h264_amf' ? 'libx264' : a) : args;
+    const spawnWithArgs = (codecLabel:string,) => {
       console.log(`[DASH] Spawn dir: ${session.cacheDir}`);
-      console.log(`[DASH] Spawning ffmpeg (${codecLabel}):`, 'ffmpeg ' + finalArgs.join(' '));
-      const proc = spawn('ffmpeg', finalArgs, { stdio: ['ignore', 'pipe', 'pipe'], cwd: session.cacheDir });
+      console.log(`[DASH] HWACCEL: ${HWACCEL_FLAG.join(' ') || '(none)'}  ENCODER(base): ${VIDEO_ENCODER}  FALLBACK_ALLOWED: ${ALLOW_SOFTWARE_FALLBACK}`);
+      console.log(`[DASH] Spawning ffmpeg (${codecLabel}):`, 'ffmpeg ' + args.join(' '));
+      const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'], cwd: session.cacheDir });
       proc.stdout.on('data', d => console.log('[ffmpeg-out]', d.toString().trim()));
       proc.stderr.on('data', d => console.log('[ffmpeg-err]', d.toString().trim()));
       return proc;
     };
 
-    let encoder = spawnWithArgs('h264_amf', false);
+    let encoder = spawnWithArgs('h264_amf');
     session.encoder = encoder;
     let exitedEarly = true;
     const earlyTimer = setTimeout(() => { exitedEarly = false; }, 1500); // if it survives 1.5s assume stable
 
     encoder.on('close', code => {
       clearTimeout(earlyTimer);
-      if (exitedEarly) {
-        console.warn('[DASH] AMF encoder died early, attempting libx264 fallback');
-        encoder = spawnWithArgs('libx264-fallback', true);
-        session.encoder = encoder;
-        encoder.on('close', c2 => {
-          console.log(`[DASH] ffmpeg (fallback) exited with code ${c2}`);
-          session.closed = true;
-        });
-        return;
-      }
       console.log(`[DASH] ffmpeg exited with code ${code}`);
       session.closed = true;
     });
