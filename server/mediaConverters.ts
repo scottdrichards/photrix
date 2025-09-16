@@ -35,7 +35,7 @@ type Details = {
 
 export type FileHandler = {
     name:string,
-    extensions?: string[];
+    extensions?: readonly string[];
     canHandleFile: (path:string) => boolean;
     handler: (relativePath: string, dimensions?: Dimensions) => Promise<
         | { file: Buffer; contentType: string }
@@ -73,9 +73,9 @@ const imageDetails:FileHandler['details'] = async (relativePath, desiredDetails)
     return out;
 }
 
-export const videoExtensions = ['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.flv', '.webm'];
+export const videoExtensions = ['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.flv', '.webm'] as const;
 
-const extValidator = (exts:string[])=> (p:string) => exts.includes(path.extname(p).toLowerCase());
+const extValidator = (exts: readonly string[])=> (p:string) => exts.includes(path.extname(p).toLowerCase());
 
 const dashTypes = {
     '.mpd':'application/dash+xml',
@@ -206,5 +206,64 @@ export const fileHandlers = [
             };
         },
         details: imageDetails
+    },
+    {
+        name: 'Video (thumbnail only)',
+        extensions: videoExtensions,
+        canHandleFile: extValidator(videoExtensions),
+        handler: async (relativePath: string, dimensions?: Dimensions) => {
+            // Only respond for thumbnail requests; full video delivery is handled elsewhere (DASH or static)
+            const fullPath = path.join(rootDir, relativePath);
+
+            const thumbWidth = (dimensions && dimensions.width) || 480; // default width
+            const cacheFileDir = path.join(mediaCacheDir, path.dirname(relativePath));
+            const baseName = path.basename(relativePath);
+            const cacheBase = baseName + `.thumb-${thumbWidth}.webp`;
+            const cachePath = path.join(cacheFileDir, cacheBase);
+
+            try {
+                const file = await fs.readFile(cachePath);
+                return { file, contentType: 'image/webp' };
+            } catch (e) {
+                if (!e || typeof e !== 'object' || !('code' in e) || (e as any).code !== 'ENOENT') {
+                    throw e; // unexpected error
+                }
+            }
+
+            await fs.mkdir(cacheFileDir, { recursive: true });
+
+            // Generate a single representative frame at 10% into the video (fallback 1s) using ffmpeg
+            // We extract a frame to a temp PNG then transcode to webp via sharp for consistency with image pipeline
+            const tempPng = path.join(cacheFileDir, baseName + `.thumb-${thumbWidth}.tmp.png`);
+            const timeSeek = '5'; // Could probe duration and pick 10%, but keep simple & fast
+            const ffmpegArgs = [
+                'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+                '-ss', timeSeek,
+                '-i', fullPath,
+                '-vframes', '1',
+                '-vf', `scale=${thumbWidth}:-1:flags=fast_bilinear`,
+                tempPng
+            ];
+            await new Promise<void>((resolve, reject) => {
+                exec(ffmpegArgs.map(a => (a.includes(' ') ? `"${a}"` : a)).join(' '), (error, _stdout, stderr) => {
+                    if (error) {
+                        console.error('[VideoThumb] ffmpeg error:', stderr);
+                        reject(error);
+                    } else resolve();
+                });
+            });
+
+            try {
+                const pngData = await fs.readFile(tempPng);
+                const webp = await sharp(pngData).toFormat('webp').toBuffer();
+                await fs.writeFile(cachePath, webp);
+                // Cleanup temp
+                fs.unlink(tempPng).catch(()=>{});
+                return { file: webp, contentType: 'image/webp' };
+            } catch (err) {
+                console.error('[VideoThumb] Failed creating thumbnail', err);
+                throw err;
+            }
+        }
     }
 ] as const satisfies FileHandler[]

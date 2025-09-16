@@ -9,7 +9,7 @@ import { fileHandlers } from "./mediaConverters.ts";
 import { mediaDatabase, numberSearchableColumns, textSearchableColumns, type MediaFileProperties, type NumberSearchableColumns, type SearchFilters } from "./mediaDatabase.ts";
 import { processFilesInDirectory } from "./processFiles.ts";
 
-const port = 9616
+const port = 9615;
 
 const mediaPath = '/media';
 
@@ -208,7 +208,12 @@ http.createServer(async (request, response)=> {
                     return;
                 }
                 try {
-                    const result = await handler(relativePath, width ? { width: Number(width) } : undefined);
+                    const thumbnailImage = requestURL.searchParams.get('thumbnailImage');
+                    const wantsThumb = thumbnailImage === 'true';
+                    const result = await handler(
+                        relativePath,
+                        (width || wantsThumb) ? { width: width ? Number(width) : 480, ...(wantsThumb ? { thumbnailImage: true } as any : {}) } : undefined
+                    );
                     if (result) {
                         response.writeHead(200, {'Content-Type': result.contentType});
                         response.end(result.file);
@@ -266,7 +271,7 @@ http.createServer(async (request, response)=> {
     }else{
             const forwardOptions = {
                 hostname: "localhost",
-                port: 5174,
+                port: 5173,
                 path: request.url,
             method: request.method,
             headers: request.headers,

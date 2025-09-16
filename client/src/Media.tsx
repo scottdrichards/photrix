@@ -7,6 +7,10 @@ type Params = {
   path: string;
   thumbnailBehavior?: MediaBehavior;
   fullSizeBehavior?: MediaBehavior;
+  videoConfig?:{
+    autoPlay?: boolean;
+    onHover?: 'play'| 'playMuted' | 'none';
+  }
 } & React.HTMLProps<HTMLImageElement>;
 
 export const Media: React.FC<Params> = (params) => {

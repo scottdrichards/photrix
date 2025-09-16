@@ -109,12 +109,21 @@ export const ThumbnailViewer: React.FC = memo(() => {
         {thumbnails.map(({path, details}) => {
           const isVideo = path.match(/\.(mp4|mov|avi|mkv|webm|flv|m4v)$/i);
           if (isVideo) {
+            // Build thumbnail URL for video
+            const clean = path.startsWith('/') ? path.slice(1) : path;
+            const thumbUrl = new URL(clean, mediaURLBase);
+            thumbUrl.searchParams.set('thumbnailImage','true');
+            thumbUrl.searchParams.set('width', Math.round(size).toString());
             return (
-              <div
+              <img
                 key={path}
+                src={thumbUrl.toString()}
                 data-path={path}
                 className={styles.thumbnail}
-                style={{ display:'flex', alignItems:'center', justifyContent:'center', fontSize:'12px', cursor:'pointer', border:'1px solid #555', overflow:'hidden', "--ratio": '1'} as CSSProperties}
+                style={{"--ratio": (details.aspectRatio ?? 1).toString(), objectFit:'cover'} as CSSProperties}
+                loading="lazy"
+                decoding="async"
+                onLoad={onThumbnailLoad}
                 onClick={(e:any) => {
                   const selectMultipleMode = e.ctrlKey;
                   if (selectMultipleMode){
@@ -123,11 +132,12 @@ export const ThumbnailViewer: React.FC = memo(() => {
                     selectedDispatch({ type: 'set', payload: new Set([path]) });
                   }
                 }}
-                title={path}
-              >{path.split('/').pop()}</div>
+                title={path.split('/').pop() || path}
+                alt={path.split('/').pop() || 'video thumbnail'}
+              />
             );
           }
-          return <Media        
+          return <Media
               path={path}
               key={path}
               thumbnailBehavior= "never"
