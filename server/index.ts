@@ -1,12 +1,16 @@
-import { createReadStream } from "node:fs";
-import fs from 'node:fs/promises';
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";
-import zlib from "node:zlib";
 import { rootDir } from "./config.ts";
-import { fileHandlers } from "./mediaConverters.ts";
-import { mediaDatabase, numberSearchableColumns, textSearchableColumns, type MediaFileProperties, type NumberSearchableColumns, type SearchFilters } from "./mediaDatabase.ts";
+import { dashHandler } from "./handlers/dashHandler.ts";
+import { directoryHandler } from "./handlers/directoryHandler.ts";
+import { fileInfoHandler } from "./handlers/fileInfoHandler.ts";
+import { heicImageHandler } from "./handlers/heicImageHandler.ts";
+import { rasterImageHandler } from "./handlers/rasterImageHandler.ts";
+import { staticFileHandler } from "./handlers/staticFileHandler.ts";
+import { NOT_HANDLED, type MediaRequestHandler } from './handlers/types.ts';
+import { videoThumbnailHandler } from "./handlers/videoThumbnailHandler.ts";
+import { mediaDatabase } from "./mediaDatabase.ts";
 import { processFilesInDirectory } from "./processFiles.ts";
 
 const port = 9615;
@@ -15,44 +19,9 @@ const mediaPath = '/media';
 
 export type MediaDirectoryResult = Array<{path:string, type:'directory'|'file', details?:any}>;
 
-const getFilter = (searchParams: URLSearchParams): SearchFilters => {
-    const allFields = ["name", "mediaType", "excludeSubfolders", "keywords", ...textSearchableColumns, ...numberSearchableColumns] as const;
+// getFilter logic moved into directoryHandler.
 
-    const textFilter = allFields
-        .map(column => [column, searchParams.get(column)] as const)
-        .filter((tuple): tuple is [typeof tuple[0], string] => tuple[1] !== null)
-        .map(([column, value]) => {
-            try {
-                return [column, JSON.parse(value) as Exclude<SearchFilters[typeof column], undefined>] as const;
-            } catch {
-                return [column, value] as const ;
-            }
-        })
-        .map(([column, value]) => {
-            if (numberSearchableColumns.includes(column as NumberSearchableColumns)) {
-                if (Array.isArray(value)) {
-                    return [column, value.map(v => Number(v))] as const;
-                }
-                if (typeof value === "string") {
-                    return [column, Number(value)] as const;
-                }
-                return [column, value] as const;
-            }
-            return [column, value] as const;
-        })
-        .reduce((acc, [column, value]) => {
-            if (value) {
-                return {...acc, [column]: value };
-            }
-            return acc;
-        }, {} as SearchFilters);
-
-    return {
-        ...textFilter
-    };
-};
-
-http.createServer(async (request, response)=> {
+http.createServer(async (request: http.IncomingMessage, response: http.ServerResponse)=> {
     // Set CORS headers for all requests
     response.setHeader('Access-Control-Allow-Origin', '*'); // Allow all origins
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -77,198 +46,66 @@ http.createServer(async (request, response)=> {
 
     console.info(`Request for ${pathname}`);
     if (pathname.startsWith(mediaPath)){
-        const relativePath = pathname.substring(mediaPath.length)
-            .replaceAll("/", path.sep);
-        // We don't want to allow access to parent directories
-        if (pathname.includes('..')){
-            response.writeHead(403)
-            response.end()
+        const relativePath = pathname.substring(mediaPath.length).replaceAll('/', path.sep);
+        if (pathname.includes('..')) {
+            response.writeHead(403);
+            response.end();
             return;
         }
         const fullPath = path.join(rootDir, relativePath);
-        const folderRequested = relativePath.endsWith(path.sep)||relativePath === ''
-        if (folderRequested){
-            if (requestURL.searchParams.get("type") === "folders"){
-                const folders = mediaDatabase.listSubfolders(relativePath);
-                response.writeHead(200, { 'Content-Type': 'application/json' });
-                response.end(JSON.stringify({folders}));
-            } else if (requestURL.searchParams.get("type") === "column-values") {
-                const column = requestURL.searchParams.get("column");
-                const containsText = requestURL.searchParams.get("containsText");
-                
-                if (!column) {
-                    response.writeHead(400, { 'Content-Type': 'text/plain' });
-                    response.end('Missing column parameter');
-                    return;
-                }
+        // folderRequested logic moved into directoryHandler; file metadata handled by fileInfoHandler
 
-                try {
-                    const distinctValues = mediaDatabase.getColumnDistinctValues(
-                        column as keyof MediaFileProperties,
-                        {
-                            filter: {
-                                parentPath: relativePath,
-                                ...getFilter(requestURL.searchParams),
-                                [column]: undefined // Ensure we don't filter by the column itself
-                            },
-                            containsText: containsText || undefined
-                        }
-                    );
-                    // Filter out null/undefined values
-                    const filteredValues = distinctValues.filter(item => item.value !== null && item.value !== undefined);
-                    response.writeHead(200, { 'Content-Type': 'application/json' });
-                    response.end(JSON.stringify(filteredValues));
-                } catch (error) {
-                    console.error('Error getting column values:', error);
-                    response.writeHead(500, { 'Content-Type': 'text/plain' });
-                    response.end('Internal server error');
-                }
-            } else {
-                const excludeSubfolders = requestURL.searchParams.get('excludeSubfolders') !== 'false';
+        // Unified handler pipeline (directoryHandler covers folder/search scenarios)
+        const ctx = {
+            req: request,
+            res: response,
+            url: requestURL,
+            pathname,
+            relativePath,
+            fullPath,
+            query: requestURL.searchParams,
+            width: (() => { const widthParam = requestURL.searchParams.get('width'); const wantsThumb = requestURL.searchParams.get('thumbnailImage') === 'true'; const w = widthParam ? Number(widthParam) : (wantsThumb ? 480 : undefined); return isNaN(w as number) ? undefined : w; })(),
+            wantsThumbnail: requestURL.searchParams.get('thumbnailImage') === 'true'
+        } as const;
+        const widthParam = requestURL.searchParams.get('width');
+        if (widthParam && isNaN(Number(widthParam))){
+            response.writeHead(400, { 'Content-Type': 'text/plain' });
+            response.end('Invalid width parameter');
+            return;
+        }
+        let handled = false;
 
-                const filter = getFilter(requestURL.searchParams);
+        // Order is important here - first match gets to handle the request
+        const handlers: MediaRequestHandler[] = [
+            directoryHandler,
+            fileInfoHandler,
+            dashHandler,
+            heicImageHandler,
+            rasterImageHandler,
+            videoThumbnailHandler,
+            staticFileHandler
+        ];
 
-                const dbResults = mediaDatabase.search({ parentPath: relativePath, excludeSubfolders, ...filter });
-
-                const output = dbResults.map(row => ({
-                    path: `${row.parent_path}/${row.name}`,
-                    details: requestURL.searchParams.get('details')?.split(",").map(v => v.trim()).reduce((acc, key) => {
-                        switch (key) {
-                            case 'aspectRatio':
-                                acc.aspectRatio = row.image_width && row.image_height ? row.image_width / row.image_height : undefined;
-                                break;
-                            case 'geolocation':
-                                acc.geolocation = row.gps_latitude && row.gps_longitude ? {
-                                    latitude: row.gps_latitude,
-                                    longitude: row.gps_longitude
-                                } : undefined;
-                                break;
-                            default:
-                                acc[key] = row[key as keyof typeof row];
-                                break;
-                        }
-                        return acc;
-                    }, {} as Record<string, any>)
-                }));
-                response.writeHead(200, { 'Content-Type': 'application/json' });
-                const json = JSON.stringify(output);
-                response.setHeader('Content-Encoding', 'gzip');
-                response.writeHead(200, { 'Content-Type': 'application/json' });
-                
-                const gzip = zlib.createGzip();
-                gzip.pipe(response);
-                gzip.end(json);
-                return;
-            }
-        }else{
-            // Check if this is a request for file information
-            if (requestURL.searchParams.get("info") === "true") {
-                try {
-                    const fileInfo = mediaDatabase.getFileByPath(relativePath);
-                    if (fileInfo) {
-                        response.writeHead(200, { 'Content-Type': 'application/json' });
-                        response.end(JSON.stringify({
-                            name: fileInfo.name,
-                            parent_path: fileInfo.parent_path,
-                            date_taken: fileInfo.date_taken,
-                            date_modified: fileInfo.date_modified,
-                            rating: fileInfo.rating,
-                            camera_make: fileInfo.camera_make,
-                            camera_model: fileInfo.camera_model,
-                            lens_model: fileInfo.lens_model,
-                            focal_length: fileInfo.focal_length,
-                            aperture: fileInfo.aperture,
-                            shutter_speed: fileInfo.shutter_speed,
-                            iso: fileInfo.iso,
-                            hierarchical_subject: fileInfo.hierarchical_subject,
-                            image_width: fileInfo.image_width,
-                            image_height: fileInfo.image_height,
-                            orientation: fileInfo.orientation,
-                            date_indexed: fileInfo.date_indexed,
-                            keywords: fileInfo.keywords
-                        }));
-                    } else {
-                        response.writeHead(404, { 'Content-Type': 'text/plain' });
-                        response.end('File not found in database');
-                    }
-                } catch (error) {
-                    console.error(`Error getting file info for ${relativePath}:`, error);
+        for (const handler of handlers) {
+            try {
+                const res = await handler(ctx);
+                if (res === NOT_HANDLED) continue;
+                handled = true;
+                break;
+            } catch (error) {
+                console.error(`[HandlerPipeline] Error for ${fullPath}`, error);
+                if (!response.headersSent) {
                     response.writeHead(500, { 'Content-Type': 'text/plain' });
                     response.end('Internal server error');
                 }
                 return;
-            }
-
-            const handler = fileHandlers.find(h => h.canHandleFile(relativePath))?.handler;
-            if (handler){
-                const width = requestURL.searchParams.get('width');
-                if (width && isNaN(Number(width))){
-                    response.writeHead(400, {'Content-Type': 'text/plain'});
-                    response.end('Invalid width parameter');
-                    return;
-                }
-                try {
-                    const thumbnailImage = requestURL.searchParams.get('thumbnailImage');
-                    const wantsThumb = thumbnailImage === 'true';
-                    const result = await handler(
-                        relativePath,
-                        (width || wantsThumb) ? { width: width ? Number(width) : 480, ...(wantsThumb ? { thumbnailImage: true } as any : {}) } : undefined
-                    );
-                    if (result) {
-                        response.writeHead(200, {'Content-Type': result.contentType});
-                        response.end(result.file);
-                    } else {
-                        response.writeHead(404);
-                        response.end();
-                    }
-                } catch (error) {
-                    console.error(`Error handling file ${fullPath}:`, error);
-                    // Map known error codes to appropriate HTTP statuses
-                    if (error && typeof error === 'object' && 'code' in error) {
-                        const code = (error as any).code;
-                        if (code === 'ESEGMENT_NOT_READY') {
-                            // Dash segment (likely init) not ready yet – suggest client retry soon
-                            response.writeHead(503, {
-                                'Content-Type': 'text/plain',
-                                'Retry-After': '1', // seconds; fast retry for live/on-demand segment availability
-                                'Cache-Control': 'no-store'
-                            });
-                            response.end('Segment not ready');
-                            return;
-                        }
-                        if (code === 'ENOENT') {
-                            response.writeHead(404, { 'Content-Type': 'text/plain' });
-                            response.end('Not found');
-                            return;
-                        }
-                    }
-                    response.writeHead(500, { 'Content-Type': 'text/plain' });
-                    response.end('Internal server error');
-                }
-            }else{
-                try {
-                    const stats = await fs.stat(fullPath);
-                    const fileStream = createReadStream(fullPath);
-                    fileStream.on("error", (error) => {
-                        console.error(`Error reading file ${fullPath}:`, error);
-                        response.writeHead(404);
-                        response.end();
-                    });
-                    fileStream.on("open", () => {
-                        response.writeHead(200, {
-                            'Content-Type': 'application/octet-stream',
-                            'Content-Length': stats.size
-                        });
-                        fileStream.pipe(response);
-                    });
-                } catch (error) {
-                    console.error(`Error accessing file ${fullPath}:`, error);
-                    response.writeHead(404);
-                    response.end();
-                }
             }
         }
-    }else{
+        if (!handled && !response.headersSent){
+            response.writeHead(404, { 'Content-Type': 'text/plain' });
+            response.end('Not found');
+        }
+    } else {
             const forwardOptions = {
                 hostname: "localhost",
                 port: 5173,
@@ -282,7 +119,6 @@ http.createServer(async (request, response)=> {
         });
         request.pipe(forwardReq, { end: true });
     }
-
 }).listen(port)
 
 console.log("listening on port "+port)
