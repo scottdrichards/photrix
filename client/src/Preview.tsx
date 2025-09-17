@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { useStyles } from "./Preview.styles";
 import { Media } from "./Media";
-import { FileInfoPanel } from "./FileInfo";
+import { useStyles } from "./Preview.styles";
 import { useSelected } from "./contexts/selectedContext";
 
 export const Preview = () => {

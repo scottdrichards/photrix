@@ -1,19 +1,22 @@
-import type { MediaRequestHandler } from './types.ts';
-import { NOT_HANDLED } from './types.ts';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { Readable } from 'node:stream';
-import { mediaDatabase, type MediaFileProperties, numberSearchableColumns, textSearchableColumns, type SearchFilters, type NumberSearchableColumns } from '../mediaDatabase.ts';
+import { mediaDatabase, numberSearchableColumns, textSearchableColumns, type MediaFileProperties, type NumberSearchableColumns, type SearchFilters } from '../mediaDatabase.ts';
+import type { MediaRequestHandler } from './types.ts';
+import { NOT_HANDLED } from './types.ts';
 
 // Reproduce getFilter logic locally to avoid coupling to server/index.ts
 const allFields = ["name", "mediaType", "excludeSubfolders", "keywords", ...textSearchableColumns, ...numberSearchableColumns] as const;
 const buildFilter = (searchParams: URLSearchParams): SearchFilters => {
   const textFilter = allFields
+    // Get the client requested values for filter fields
     .map(column => [column, searchParams.get(column)] as const)
+    // Only keep those that are set
     .filter((tuple): tuple is [typeof tuple[0], string] => tuple[1] !== null)
+    // Parse JSON values if present (arrays, numbers, booleans)
     .map(([column, value]) => {
       try { return [column, JSON.parse(value) as any] as const; } catch { return [column, value] as const; }
     })
+    // Convert number fields to numbers
     .map(([column, value]) => {
       if (numberSearchableColumns.includes(column as NumberSearchableColumns)) {
         if (Array.isArray(value)) return [column, value.map(v => Number(v))] as const;
@@ -21,6 +24,7 @@ const buildFilter = (searchParams: URLSearchParams): SearchFilters => {
       }
       return [column, value] as const;
     })
+    // Rebuild into object, skipping any that failed parsing (NaN)
     .reduce((acc, [column, value]) => value ? { ...acc, [column]: value } : acc, {} as SearchFilters);
   return { ...textFilter };
 };
