@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Media } from "./Media";
 import { useStyles } from "./Preview.styles";
 import { useSelected } from "./contexts/selectedContext";
+import { SmartImage } from "./media/SmartImage";
+import { DashVideo, isVideo } from "./media/DashVideo";
 
 export const Preview = () => {
   const selected = useSelected();
@@ -17,26 +18,29 @@ export const Preview = () => {
 
   return (
     <div className={styles.preview}>
-      {[...selected].map((image) => (
-        <div key={image} style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+      {[...selected].map((path) => (
+        <div key={path} style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
           <div style={{ flex: 1, display: 'flex', height: '100%' }}>
-            <Media
-              path={image}
-              style={{ objectFit: "contain", width: "100%", height: "100%" }}
-              thumbnailBehavior={{ fetchPriority: "high", loading: "eager" }}
-              fullSizeBehavior={{ fetchPriority: "high", loading: "eager" }}
-            />
+            {isVideo(path) ?
+              <DashVideo path={path}/>
+              : <SmartImage
+                path={path}
+                style={{ objectFit: "contain", width: "100%", height: "100%" }}
+                fetchPriority="high"
+                loading="eager"
+              />
+            }
           </div>
-          
+
           {/* Info button */}
-          <button 
+          <button
             className={styles.infoButton}
-            onClick={() => toggleDetails(image)}
-            title={showDetails[image] ? "Hide details" : "Show details"}
+            onClick={() => toggleDetails(path)}
+            title={showDetails[path] ? "Hide details" : "Show details"}
           >
             i
           </button>
-          
+
           {/* Details panel - only show when toggled */}
           {/* {showDetails[image] && (
             <FileInfoPanel 

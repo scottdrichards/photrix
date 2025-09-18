@@ -1,17 +1,15 @@
 import { CSSProperties, memo, useCallback, useEffect, useState } from "react";
-import { Media } from "./Media";
 import { useStyles } from "./ThumbnailViewer.styles";
 import { mediaURLBase } from "./data/api";
 import { useSelectedDispatch } from "./contexts/selectedContext";
 import { processLines } from "./streamData";
 import { useFilter } from "./contexts/filterContext";
+import { DashVideo, isVideo } from "./media/DashVideo";
+import { SmartImage } from "./media/SmartImage";
 
 const minSize = 100;
 const maxSize = 300;
 
-const thumbnailImageFileExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".heic", ".heif"];
-const thumbnailVideoFileExtensions = [".mp4", ".webm", ".avi", ".mov", ".mkv", ".flv", ".m4v", ".webm", ".ogv", ".hevc", ".h264"];
-const thumbnailFileRegex = new RegExp(`(${thumbnailImageFileExtensions.join("|")}|${thumbnailVideoFileExtensions.join("|")})$`, "i");
 
 type ThumbnailData = {
   path: string;
@@ -66,7 +64,7 @@ export const ThumbnailViewer: React.FC = memo(() => {
         });
         let thumbnailData:typeof thumbnails = [];
         for await (const linesChunk of processLines(response)) {
-          const newThumbnailData = linesChunk.flatMap(line => JSON.parse(line) as ThumbnailData).filter(t=>t.path.match(thumbnailFileRegex));
+          const newThumbnailData = linesChunk.flatMap(line => JSON.parse(line) as ThumbnailData);
           setThumbnails([...thumbnailData, ...newThumbnailData]);
         }
         setLoading(false);
@@ -99,25 +97,27 @@ export const ThumbnailViewer: React.FC = memo(() => {
   }, []);
 
   const onThumbnailLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
-    const ratio = e.currentTarget.naturalWidth / e.currentTarget.naturalHeight;
-    e.currentTarget.style.setProperty("--ratio", ratio.toString());
+    // const ratio = e.currentTarget.naturalWidth / e.currentTarget.naturalHeight;
+    // e.currentTarget.style.setProperty("--ratio", ratio.toString());
   }, []);
 
   return (
     <div className={styles.root}>
       <div style={{ "--size": `${size}px` } as CSSProperties} className={styles.gallery}>
         {thumbnails.map(({path, details}) => {
-          return <Media
-              path={path}
-              key={path}
-              thumbnailBehavior= "never"
-              fullSizeBehavior={{ fetchPriority: "low", loading: "lazy" }}
-              data-path={path}
-              className={styles.thumbnail}
-              style={{"--ratio": details.aspectRatio?.toString() || "1"} as CSSProperties}
-              onLoad={onThumbnailLoad}
-              onClick={onThumbnailClick}
-            />
+          const parameters = {
+            key: path,
+            path,
+            "data-path": path,
+            className: styles.thumbnail,
+            style: { "--ratio": details.aspectRatio?.toString() || "1" } as CSSProperties,
+            onLoad: onThumbnailLoad,
+            onClick: onThumbnailClick,
+          };
+
+          return isVideo(path)?
+            <DashVideo thumbnail {...parameters}/>
+            : <SmartImage  {...parameters}/>
         })}
           {thumbnails.length === 0 && !loading && <div>No thumbnails found</div>}
         <div style={{ flexGrow: 1}}></div> {/* Filler to keep the last image(s) from growing */}
