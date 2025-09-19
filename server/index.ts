@@ -2,16 +2,13 @@ import http from "node:http";
 import path from "node:path";
 import process from "node:process";
 import { rootDir } from "./config.ts";
-import { dashHandler } from "./handlers/dashHandler.ts";
 import { directoryHandler } from "./handlers/directoryHandler.ts";
 import { fileInfoHandler } from "./handlers/fileInfoHandler.ts";
-import { heicImageHandler } from "./handlers/heicImageHandler.ts";
-import { rasterImageHandler } from "./handlers/rasterImageHandler.ts";
 import { staticFileHandler } from "./handlers/staticFileHandler.ts";
 import { NOT_HANDLED, type MediaRequestHandler } from './handlers/types.ts';
-import { videoThumbnailHandler } from "./handlers/videoThumbnailHandler.ts";
 import { mediaDatabase } from "./mediaDatabase.ts";
 import { processFilesInDirectory } from "./processFiles.ts";
+import { unifiedMediaHandler } from "handlers/unifiedMediaHandler.ts";
 
 const port = 9615;
 
@@ -79,10 +76,7 @@ http.createServer(async (request: http.IncomingMessage, response: http.ServerRes
         const handlers: MediaRequestHandler[] = [
             directoryHandler,
             fileInfoHandler,
-            dashHandler,
-            heicImageHandler,
-            rasterImageHandler,
-            videoThumbnailHandler,
+            unifiedMediaHandler,
             staticFileHandler
         ];
 

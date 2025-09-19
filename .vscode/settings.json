@@ -2,6 +2,9 @@
     "editor.defaultFormatter": "dbaeumer.vscode-eslint",
     "deno.enable": true,
     "[typescriptreact]": {
+        "editor.defaultFormatter": "vscode.typescript-language-features"
+    },
+    "[typescript]": {
         "editor.defaultFormatter": "esbenp.prettier-vscode"
     }
 }
