@@ -12,7 +12,10 @@ import {SharedConstants} from "../../shared/constants.ts";
 
 const fileTypeConfig = [
   {
-    extensions: [".heic", ".heif"],
+    canHandle: (relativePath) => {
+      const ext = path.extname(relativePath).toLowerCase();
+      return [".heic", ".heif"].includes(ext);
+    },
     filePath: (relativePath, dimensions) => {
         if (!dimensions){
             throw new Error("Dimensions required for thumbnail generation of non-websafe images");
@@ -22,21 +25,34 @@ const fileTypeConfig = [
     generator: heicToThumbnails,
   },
   {
-    extensions: [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff"],
+    canHandle: (relativePath) => {
+      const ext = path.extname(relativePath).toLowerCase();
+      return [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff"].includes(ext);
+    },
     // Grab source file if web-safe format and no resizing requested
     filePath: (relativePath, dimensions) => dimensions && webpCachePath(relativePath, dimensions),
     generator: standardImageToThumbnails,
   },
   {
-    extensions: [".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm"],
+    canHandle: (relativePath, {width}) => {
+      const ext = path.extname(relativePath).toLowerCase();
+      const isVideoFile = [".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm"].includes(ext);
+      return isVideoFile && !!width; // Only handle video files when width is specified (thumbnail request)
+    },
+    filePath: (relativePath, dimensions) => dimensions && webpCachePath(relativePath, dimensions),
     generator: videoToThumbnails,
   },
   {
-    extensions: [".mpd"],
+    canHandle: (relativePath, {width}) => {
+      const ext = path.extname(relativePath).toLowerCase();
+      const isVideoFile = [".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm"].includes(ext);
+      return isVideoFile && !width; // Handle video files when no width specified (dash request)
+    },
+    filePath: relativePath => path.join(mediaCacheDir,  relativePath + '.mpd'),
     generator: videoToDash,
   },
 ] satisfies Array<{
-  extensions: Array<string>;
+  canHandle: (relativePath: string, params: { width?: number }) => boolean;
   filePath?: (relativePath: string, dimensions?: { width?: number; height?: number }) => string | undefined;
   generator: Function;
 }>;
@@ -67,10 +83,10 @@ const contentTypes = {
 export const unifiedMediaHandler: MediaRequestHandler = async (ctx) => {
   const { relativePath, width } = ctx;
 
-  const conformedWidth = width && SharedConstants.thumbnailWidths.find(w => w <= width);
+  const conformedWidth = width && SharedConstants.thumbnailWidths.find(w => w >= width);
 
   const config = fileTypeConfig.find((cfg) =>
-    (cfg.extensions as string[]).includes(path.extname(relativePath).toLowerCase())
+    cfg.canHandle(relativePath, { width: conformedWidth })
   );
 
   const filePath = config?.filePath?.(relativePath, { width: conformedWidth }) ?? path.join(mediaCacheDir, relativePath);
@@ -86,7 +102,7 @@ export const unifiedMediaHandler: MediaRequestHandler = async (ctx) => {
       throw e;
     }
     
-    if (!path.relative(rootDir, filePath).startsWith('..')) {
+    if (path.relative(rootDir, filePath).startsWith('..')) {
         // File should be in root dir but isn't, not sure how to handle
         ctx.res.writeHead(404);
         ctx.res.end("File not found");

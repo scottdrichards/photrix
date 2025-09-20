@@ -14,7 +14,7 @@ type Params = {
     thumbnail?: boolean;
 }
 
-export const DashVideo: React.FC<Params> = ({ path, thumbnail }) => {
+export const DashVideo: React.FC<Params> = ({ path, thumbnail,...rest }) => {
     const videoRef = useRef<HTMLVideoElement | null>(null);
 
     useEffect(() => {
@@ -30,6 +30,7 @@ export const DashVideo: React.FC<Params> = ({ path, thumbnail }) => {
 
     return thumbnail ? 
      <SmartImage
+     {...rest}
        path={path}
      /> : (
      <video ref={videoRef} preload="auto" />

@@ -2,8 +2,7 @@ import { rootDir } from "config";
 import { webpCachePath } from "fileGenerators/webpCachePath";
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import sharp from 'sharp';
 import type { FileGeneratorType } from './FileGeneratorType';
 
@@ -38,9 +37,35 @@ export const videoToThumbnails = (async ({ inputPathRelative, widths }) => {
     'pipe:1'
   ];
 
-  const command = ['ffmpeg', ...ffmpegArgs].map(arg => arg.includes(' ') ? `"${arg}"` : arg).join(' ');
-  const { stdout } = await promisify(exec)(command, { encoding: 'buffer', maxBuffer: 50 * 1024 * 1024 });
-  const pngBuffer = stdout as Buffer;
+  // Use spawn instead of exec to avoid shell quoting issues
+  const pngBuffer = await new Promise<Buffer>((resolve, reject) => {
+    const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+    const chunks: Buffer[] = [];
+    let stderrOutput = '';
+    
+    ffmpeg.stdout.on('data', (chunk) => chunks.push(chunk));
+    ffmpeg.stderr.on('data', (chunk) => {
+      stderrOutput += chunk.toString();
+    });
+    
+    ffmpeg.on('close', (code) => {
+      const buffer = Buffer.concat(chunks);
+      if (code === 0 && buffer.length > 0) {
+        resolve(buffer);
+      } else if (buffer.length === 0) {
+        reject(new Error(`FFmpeg produced empty output. stderr: ${stderrOutput}`));
+      } else {
+        console.log(new Error(`FFmpeg exited with code ${code}. stderr: ${stderrOutput}`));
+        resolve(buffer);
+      }
+    });
+    
+    ffmpeg.on('error', reject);
+  });
+
+  if (pngBuffer.length === 0) {
+    throw new Error('FFmpeg produced an empty buffer');
+  }
 
   const base = sharp(pngBuffer); // already scaled to maxWidth
 

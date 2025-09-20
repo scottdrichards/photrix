@@ -1,14 +1,23 @@
 import { makeStyles } from "@fluentui/react-components";
 
 export const useStyles = makeStyles({
-  preview: {
+  root: {
     display: "flex",
+    justifyContent: "space-evenly",
     flexDirection: "column",
     gap: "10px",
     padding: "10px",
     boxSizing: "border-box",
     overflowY: "auto",
-    maxHeight: "100%",
+    height: "100%",
+    width: "100%",
+  },
+  imageContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    position: 'relative',
+    flex: '1 1 auto',
+    minHeight: 0
   },
   infoButton: {
     position: "absolute",

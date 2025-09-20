@@ -17,20 +17,18 @@ export const Preview = () => {
   };
 
   return (
-    <div className={styles.preview}>
+    <div className={styles.root}>
       {[...selected].map((path) => (
-        <div key={path} style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-          <div style={{ flex: 1, display: 'flex', height: '100%' }}>
+        // Image container
+        <div key={path} className={styles.imageContainer}>
             {isVideo(path) ?
               <DashVideo path={path}/>
               : <SmartImage
                 path={path}
-                style={{ objectFit: "contain", width: "100%", height: "100%" }}
                 fetchPriority="high"
                 loading="eager"
               />
             }
-          </div>
 
           {/* Info button */}
           <button
