@@ -1,0 +1,230 @@
+const express = require('express');
+const multer = require('multer');
+const sharp = require('sharp');
+const path = require('path');
+const fs = require('fs').promises;
+const { getDb } = require('../models/database');
+const { authenticateToken } = require('../middleware/auth');
+
+const router = express.Router();
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: async (req, file, cb) => {
+    const uploadDir = path.join(__dirname, '../../uploads');
+    try {
+      await fs.mkdir(uploadDir, { recursive: true });
+      cb(null, uploadDir);
+    } catch (error) {
+      cb(error);
+    }
+  },
+  filename: (req, file, cb) => {
+    const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(file.originalname)}`;
+    cb(null, uniqueName);
+  }
+});
+
+const upload = multer({ 
+  storage,
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  },
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit
+  }
+});
+
+// Upload photos
+router.post('/upload', authenticateToken, upload.array('photos', 10), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No photos uploaded' });
+    }
+
+    const db = getDb();
+    const uploadedPhotos = [];
+
+    for (const file of req.files) {
+      try {
+        // Generate thumbnail
+        const thumbnailPath = path.join(
+          path.dirname(file.path),
+          'thumb_' + path.basename(file.path)
+        );
+
+        const metadata = await sharp(file.path)
+          .resize(300, 300, { 
+            fit: 'inside',
+            withoutEnlargement: true
+          })
+          .jpeg({ quality: 80 })
+          .toFile(thumbnailPath);
+
+        // Get image dimensions
+        const imageMetadata = await sharp(file.path).metadata();
+
+        // Insert photo record
+        const photoData = {
+          user_id: req.user.id,
+          filename: file.filename,
+          original_name: file.originalname,
+          file_path: file.path,
+          thumbnail_path: thumbnailPath,
+          file_size: file.size,
+          mime_type: file.mimetype,
+          width: imageMetadata.width,
+          height: imageMetadata.height,
+          metadata: JSON.stringify(imageMetadata)
+        };
+
+        await new Promise((resolve, reject) => {
+          db.run(
+            `INSERT INTO photos (user_id, filename, original_name, file_path, thumbnail_path, 
+             file_size, mime_type, width, height, metadata) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              photoData.user_id, photoData.filename, photoData.original_name,
+              photoData.file_path, photoData.thumbnail_path, photoData.file_size,
+              photoData.mime_type, photoData.width, photoData.height, photoData.metadata
+            ],
+            function(err) {
+              if (err) reject(err);
+              else {
+                uploadedPhotos.push({
+                  id: this.lastID,
+                  ...photoData
+                });
+                resolve();
+              }
+            }
+          );
+        });
+      } catch (error) {
+        console.error('Error processing file:', file.originalname, error);
+      }
+    }
+
+    res.json({
+      message: `Successfully uploaded ${uploadedPhotos.length} photos`,
+      photos: uploadedPhotos
+    });
+
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ error: 'Failed to upload photos' });
+  }
+});
+
+// Get user's photos
+router.get('/', authenticateToken, (req, res) => {
+  const db = getDb();
+  const { page = 1, limit = 20, search = '', tags = '' } = req.query;
+  const offset = (page - 1) * limit;
+
+  let query = 'SELECT * FROM photos WHERE user_id = ?';
+  let params = [req.user.id];
+
+  if (search) {
+    query += ' AND (original_name LIKE ? OR description LIKE ?)';
+    params.push(`%${search}%`, `%${search}%`);
+  }
+
+  query += ' ORDER BY uploaded_at DESC LIMIT ? OFFSET ?';
+  params.push(parseInt(limit), offset);
+
+  db.all(query, params, (err, photos) => {
+    if (err) {
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    // Parse JSON fields
+    const processedPhotos = photos.map(photo => ({
+      ...photo,
+      metadata: JSON.parse(photo.metadata || '{}'),
+      tags: JSON.parse(photo.tags || '[]')
+    }));
+
+    res.json({
+      photos: processedPhotos,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: processedPhotos.length
+      }
+    });
+  });
+});
+
+// Get single photo
+router.get('/:id', authenticateToken, (req, res) => {
+  const db = getDb();
+  
+  db.get(
+    'SELECT * FROM photos WHERE id = ? AND user_id = ?',
+    [req.params.id, req.user.id],
+    (err, photo) => {
+      if (err) {
+        return res.status(500).json({ error: 'Database error' });
+      }
+      
+      if (!photo) {
+        return res.status(404).json({ error: 'Photo not found' });
+      }
+
+      res.json({
+        ...photo,
+        metadata: JSON.parse(photo.metadata || '{}'),
+        tags: JSON.parse(photo.tags || '[]')
+      });
+    }
+  );
+});
+
+// Delete photo
+router.delete('/:id', authenticateToken, async (req, res) => {
+  const db = getDb();
+  
+  // First get the photo to delete files
+  db.get(
+    'SELECT * FROM photos WHERE id = ? AND user_id = ?',
+    [req.params.id, req.user.id],
+    async (err, photo) => {
+      if (err) {
+        return res.status(500).json({ error: 'Database error' });
+      }
+      
+      if (!photo) {
+        return res.status(404).json({ error: 'Photo not found' });
+      }
+
+      try {
+        // Delete files
+        await fs.unlink(photo.file_path);
+        if (photo.thumbnail_path) {
+          await fs.unlink(photo.thumbnail_path);
+        }
+      } catch (error) {
+        console.error('Error deleting files:', error);
+      }
+
+      // Delete from database
+      db.run(
+        'DELETE FROM photos WHERE id = ? AND user_id = ?',
+        [req.params.id, req.user.id],
+        (err) => {
+          if (err) {
+            return res.status(500).json({ error: 'Database error' });
+          }
+          res.json({ message: 'Photo deleted successfully' });
+        }
+      );
+    }
+  );
+});
+
+module.exports = router;

@@ -1,0 +1,11 @@
+{
+  "name": "photrix-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for Photrix photo organization app",
+  "scripts": {
+    "dev": "python3 -m http.server 3000",
+    "build": "echo 'Frontend build complete - static files ready'",
+    "start": "python3 -m http.server 8080"
+  },
+  "devDependencies": {}
+}

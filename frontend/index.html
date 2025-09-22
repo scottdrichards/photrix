@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photrix - Your Photo Collection</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header" id="header">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-camera"></i>
+                    <h1>Photrix</h1>
+                </div>
+                <nav class="nav" id="nav">
+                    <button class="nav-btn active" data-section="photos">
+                        <i class="fas fa-images"></i> Photos
+                    </button>
+                    <button class="nav-btn" data-section="albums">
+                        <i class="fas fa-folder"></i> Albums
+                    </button>
+                    <button class="nav-btn" data-section="shared">
+                        <i class="fas fa-share"></i> Shared
+                    </button>
+                </nav>
+                <div class="user-actions">
+                    <button id="uploadBtn" class="btn btn-primary">
+                        <i class="fas fa-upload"></i> Upload
+                    </button>
+                    <div class="user-menu">
+                        <button id="userMenuBtn" class="user-btn">
+                            <i class="fas fa-user"></i>
+                            <span id="username">User</span>
+                        </button>
+                        <div class="dropdown" id="userDropdown">
+                            <button id="logoutBtn">
+                                <i class="fas fa-sign-out-alt"></i> Logout
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Login Form -->
+        <div id="loginForm" class="auth-form">
+            <div class="auth-container">
+                <div class="auth-header">
+                    <i class="fas fa-camera"></i>
+                    <h2>Welcome to Photrix</h2>
+                    <p>Organize and share your favorite photos</p>
+                </div>
+                
+                <div class="auth-tabs">
+                    <button class="tab-btn active" data-tab="login">Login</button>
+                    <button class="tab-btn" data-tab="register">Register</button>
+                </div>
+
+                <form id="loginFormData" class="auth-tab active">
+                    <div class="form-group">
+                        <input type="text" id="loginUsername" placeholder="Username or Email" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="password" id="loginPassword" placeholder="Password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-full">Login</button>
+                </form>
+
+                <form id="registerFormData" class="auth-tab">
+                    <div class="form-group">
+                        <input type="text" id="registerUsername" placeholder="Username" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="email" id="registerEmail" placeholder="Email" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="password" id="registerPassword" placeholder="Password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-full">Register</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <main class="main" id="mainContent" style="display: none;">
+            <!-- Photos Section -->
+            <section id="photosSection" class="content-section active">
+                <div class="section-header">
+                    <h2><i class="fas fa-images"></i> Your Photos</h2>
+                    <div class="search-bar">
+                        <input type="text" id="searchInput" placeholder="Search photos...">
+                        <i class="fas fa-search"></i>
+                    </div>
+                </div>
+
+                <div id="photosGrid" class="photos-grid">
+                    <!-- Photos will be loaded here -->
+                </div>
+
+                <div id="photosLoading" class="loading">
+                    <i class="fas fa-spinner fa-spin"></i> Loading photos...
+                </div>
+            </section>
+
+            <!-- Albums Section -->
+            <section id="albumsSection" class="content-section">
+                <div class="section-header">
+                    <h2><i class="fas fa-folder"></i> Your Albums</h2>
+                    <button id="createAlbumBtn" class="btn btn-secondary">
+                        <i class="fas fa-plus"></i> Create Album
+                    </button>
+                </div>
+
+                <div id="albumsGrid" class="albums-grid">
+                    <!-- Albums will be loaded here -->
+                </div>
+            </section>
+
+            <!-- Shared Section -->
+            <section id="sharedSection" class="content-section">
+                <div class="section-header">
+                    <h2><i class="fas fa-share"></i> Shared Content</h2>
+                </div>
+
+                <div class="shared-tabs">
+                    <button class="tab-btn active" data-tab="received">Shared with Me</button>
+                    <button class="tab-btn" data-tab="created">Shared by Me</button>
+                </div>
+
+                <div id="sharedReceived" class="shared-content active">
+                    <!-- Received shares will be loaded here -->
+                </div>
+
+                <div id="sharedCreated" class="shared-content">
+                    <!-- Created shares will be loaded here -->
+                </div>
+            </section>
+        </main>
+
+        <!-- Upload Modal -->
+        <div id="uploadModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-upload"></i> Upload Photos</h3>
+                    <button class="close-btn" id="closeUploadModal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="upload-area" id="uploadArea">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p>Drag and drop photos here or click to select</p>
+                        <input type="file" id="photoInput" multiple accept="image/*" style="display: none;">
+                        <button class="btn btn-secondary" onclick="document.getElementById('photoInput').click()">
+                            Select Photos
+                        </button>
+                    </div>
+                    <div id="uploadProgress" class="upload-progress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                        <p id="progressText">Uploading...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Photo Viewer Modal -->
+        <div id="photoModal" class="modal photo-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="photoTitle">Photo</h3>
+                    <button class="close-btn" id="closePhotoModal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <img id="modalPhoto" src="" alt="Photo">
+                    <div class="photo-info">
+                        <div class="photo-metadata" id="photoMetadata">
+                            <!-- Metadata will be loaded here -->
+                        </div>
+                        <div class="photo-actions">
+                            <button class="btn btn-secondary" id="sharePhotoBtn">
+                                <i class="fas fa-share"></i> Share
+                            </button>
+                            <button class="btn btn-danger" id="deletePhotoBtn">
+                                <i class="fas fa-trash"></i> Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div id="toastContainer" class="toast-container"></div>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="js/photos.js"></script>
+    <script src="js/albums.js"></script>
+    <script src="js/sharing.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
