@@ -174,7 +174,10 @@
                     <div class="upload-area" id="uploadArea">
                         <i class="fas fa-cloud-upload-alt"></i>
                         <p>Drag and drop photos here or click to select</p>
-                        <input type="file" id="photoInput" multiple accept="image/*" style="display: none;">
+                        <small style="color: rgba(255,255,255,0.7); margin-top: 0.5rem; display: block;">
+                            Supports JPG, PNG, GIF, WebP, and HEIC files
+                        </small>
+                        <input type="file" id="photoInput" multiple accept="image/*,.heic,.heif" style="display: none;">
                         <button class="btn btn-secondary" onclick="document.getElementById('photoInput').click()">
                             Select Photos
                         </button>

@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
 const exifReader = require('exif-reader');
+const convert = require('heic-convert');
 const path = require('path');
 const fs = require('fs').promises;
 const { getDb } = require('../models/database');
@@ -46,7 +47,8 @@ async function extractEXIFData(filePath) {
     
     if (exif) {
       const exifData = exifReader(exif);
-      const gpsCoords = convertGPSToDecimal(exifData.gps);
+      // Look for GPS data in GPSInfo (not gps)
+      const gpsCoords = convertGPSToDecimal(exifData.GPSInfo || exifData.gps);
       return {
         exifData,
         gpsCoords
@@ -78,14 +80,19 @@ const storage = multer.diskStorage({
 const upload = multer({ 
   storage,
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
+    // Accept standard image types and HEIC files
+    if (file.mimetype.startsWith('image/') || 
+        file.mimetype === 'image/heic' || 
+        file.mimetype === 'image/heif' ||
+        file.originalname.toLowerCase().endsWith('.heic') ||
+        file.originalname.toLowerCase().endsWith('.heif')) {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'));
+      cb(new Error('Only image files are allowed (including HEIC)'));
     }
   },
   limits: {
-    fileSize: 25 * 1024 * 1024 // 10MB limit
+    fileSize: 25 * 1024 * 1024 // 25MB limit (increased for HEIC files)
   }
 });
 
@@ -96,7 +103,7 @@ router.post('/upload', authenticateToken, (req, res) => {
       // Handle multer errors
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
-          return res.status(413).json({ error: 'File too large. Maximum size is 10MB per file.' });
+          return res.status(413).json({ error: 'File too large. Maximum size is 25MB per file.' });
         } else if (err.code === 'LIMIT_FILE_COUNT') {
           return res.status(413).json({ error: 'Too many files. Maximum is 10 files at once.' });
         } else if (err.code === 'LIMIT_UNEXPECTED_FILE') {
@@ -104,8 +111,8 @@ router.post('/upload', authenticateToken, (req, res) => {
         } else {
           return res.status(400).json({ error: err.message });
         }
-      } else if (err.message === 'Only image files are allowed') {
-        return res.status(400).json({ error: 'Only image files are allowed. Please select JPG, PNG, GIF, or WebP files.' });
+      } else if (err.message === 'Only image files are allowed (including HEIC)') {
+        return res.status(400).json({ error: 'Only image files are allowed. Please select JPG, PNG, GIF, WebP, or HEIC files.' });
       } else {
         return res.status(500).json({ error: 'Upload failed: ' + err.message });
       }
@@ -114,6 +121,38 @@ router.post('/upload', authenticateToken, (req, res) => {
     handleUpload(req, res);
   });
 });
+
+// Function to check if a file is HEIC format
+function isHEICFile(file) {
+  return file.mimetype === 'image/heic' || 
+         file.mimetype === 'image/heif' ||
+         file.originalname.toLowerCase().endsWith('.heic') ||
+         file.originalname.toLowerCase().endsWith('.heif');
+}
+
+// Function to convert HEIC to JPEG
+async function convertHEICToJPEG(inputPath) {
+  try {
+    const inputBuffer = await fs.readFile(inputPath);
+    const outputBuffer = await convert({
+      buffer: inputBuffer,
+      format: 'JPEG',
+      quality: 0.9
+    });
+    
+    // Write converted file back to the same path with .jpg extension
+    const outputPath = inputPath.replace(/\.(heic|heif)$/i, '.jpg');
+    await fs.writeFile(outputPath, outputBuffer);
+    
+    // Delete original HEIC file
+    await fs.unlink(inputPath);
+    
+    return outputPath;
+  } catch (error) {
+    console.error('HEIC conversion error:', error);
+    throw new Error('Failed to convert HEIC file');
+  }
+}
 
 // Separate function to handle the actual upload processing
 async function handleUpload(req, res) {
@@ -127,13 +166,38 @@ async function handleUpload(req, res) {
 
     for (const file of req.files) {
       try {
+        let processedFilePath = file.path;
+        let processedFilename = file.filename;
+        let processedMimeType = file.mimetype;
+        let gpsCoords = null;
+        let exifData = null;
+
+        // Extract EXIF/GPS data BEFORE conversion (for HEIC files)
+        if (isHEICFile(file)) {
+          console.log(`Extracting EXIF from HEIC file: ${file.originalname}`);
+          const exifResult = await extractEXIFData(file.path);
+          exifData = exifResult.exifData;
+          gpsCoords = exifResult.gpsCoords;
+          
+          console.log(`Converting HEIC file: ${file.originalname}`);
+          processedFilePath = await convertHEICToJPEG(file.path);
+          processedFilename = path.basename(processedFilePath);
+          processedMimeType = 'image/jpeg';
+          console.log(`HEIC conversion complete: ${processedFilename}`);
+        } else {
+          // Extract EXIF/GPS from non-HEIC files normally
+          const exifResult = await extractEXIFData(processedFilePath);
+          exifData = exifResult.exifData;
+          gpsCoords = exifResult.gpsCoords;
+        }
+
         // Generate thumbnail
         const thumbnailPath = path.join(
-          path.dirname(file.path),
-          'thumb_' + path.basename(file.path)
+          path.dirname(processedFilePath),
+          'thumb_' + path.basename(processedFilePath)
         );
 
-        const metadata = await sharp(file.path)
+        const metadata = await sharp(processedFilePath)
           .resize(300, 300, { 
             fit: 'inside',
             withoutEnlargement: true
@@ -141,19 +205,18 @@ async function handleUpload(req, res) {
           .jpeg({ quality: 80 })
           .toFile(thumbnailPath);
 
-        // Get image dimensions and extract EXIF/GPS data
-        const imageMetadata = await sharp(file.path).metadata();
-        const { exifData, gpsCoords } = await extractEXIFData(file.path);
+        // Get image dimensions
+        const imageMetadata = await sharp(processedFilePath).metadata();
 
         // Insert photo record
         const photoData = {
           user_id: req.user.id,
-          filename: file.filename,
+          filename: processedFilename,
           original_name: file.originalname,
-          file_path: file.filename, // Store just the filename for serving via /uploads
-          thumbnail_path: 'thumb_' + file.filename, // Store just the thumbnail filename
+          file_path: processedFilename, // Store just the filename for serving via /uploads
+          thumbnail_path: 'thumb_' + processedFilename, // Store just the thumbnail filename
           file_size: file.size,
-          mime_type: file.mimetype,
+          mime_type: processedMimeType,
           width: imageMetadata.width,
           height: imageMetadata.height,
           metadata: JSON.stringify({...imageMetadata, exif: exifData}),
@@ -284,6 +347,68 @@ router.get('/:id', authenticateToken, (req, res) => {
       });
     }
   );
+});
+
+// Maintenance: Reprocess EXIF for photos missing GPS (per-user)
+router.post('/reprocess-exif', authenticateToken, async (req, res) => {
+  const db = getDb();
+  try {
+    // Fetch user's photos missing latitude/longitude
+    const photos = await new Promise((resolve, reject) => {
+      db.all(
+        'SELECT * FROM photos WHERE user_id = ? AND (latitude IS NULL OR longitude IS NULL)',
+        [req.user.id],
+        (err, rows) => err ? reject(err) : resolve(rows)
+      );
+    });
+
+    if (!photos.length) {
+      return res.json({ message: 'No photos need EXIF GPS reprocessing', updated: 0 });
+    }
+
+    let updated = 0;
+    for (const photo of photos) {
+      try {
+        const fullPath = path.join(__dirname, '../../uploads', photo.file_path);
+        // Ensure file exists before processing
+        try {
+          await fs.access(fullPath);
+        } catch {
+          console.warn('File missing for EXIF reprocess:', fullPath);
+          continue;
+        }
+        const { exifData, gpsCoords } = await extractEXIFData(fullPath);
+        if (gpsCoords) {
+          await new Promise((resolve, reject) => {
+            db.run(
+              'UPDATE photos SET latitude = ?, longitude = ?, metadata = ? WHERE id = ? AND user_id = ?',
+              [
+                gpsCoords.latitude,
+                gpsCoords.longitude,
+                // Merge existing metadata with new exif if possible
+                (() => {
+                  let meta = {};
+                  try { meta = JSON.parse(photo.metadata || '{}'); } catch {}
+                  return JSON.stringify({ ...meta, exif: exifData });
+                })(),
+                photo.id,
+                req.user.id
+              ],
+              (err) => err ? reject(err) : resolve()
+            );
+          });
+          updated++;
+        }
+      } catch (innerErr) {
+        console.error('Error reprocessing EXIF for photo', photo.id, innerErr);
+      }
+    }
+
+    res.json({ message: `Reprocess complete`, candidates: photos.length, updated });
+  } catch (error) {
+    console.error('Reprocess EXIF error:', error);
+    res.status(500).json({ error: 'Failed to reprocess EXIF data' });
+  }
 });
 
 // Delete photo

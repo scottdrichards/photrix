@@ -16,6 +16,15 @@ export class PhotosManager {
     this.init();
   }
 
+  // Helper function to check if file is a supported image format (including HEIC)
+  private isValidImageFile(file: File): boolean {
+    return file.type.startsWith('image/') || 
+           file.type === 'image/heic' || 
+           file.type === 'image/heif' ||
+           file.name.toLowerCase().endsWith('.heic') ||
+           file.name.toLowerCase().endsWith('.heif');
+  }
+
   private init(): void {
     this.setupEventListeners();
     this.setupUpload();
@@ -217,7 +226,7 @@ export class PhotosManager {
       e.preventDefault();
       uploadArea.classList.remove('drag-over');
       const files = Array.from(e.dataTransfer?.files || []).filter(file => 
-        file.type.startsWith('image/'));
+        this.isValidImageFile(file));
       if (files.length > 0) {
         this.uploadPhotos(files);
       }
