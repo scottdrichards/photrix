@@ -12,7 +12,8 @@
     "build:frontend": "cd frontend && npm run build",
     "start": "npm run start:backend",
     "start:backend": "cd backend && npm run start",
-    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install"
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "preview": "cd frontend && npm run preview"
   },
   "keywords": [
     "photo",
