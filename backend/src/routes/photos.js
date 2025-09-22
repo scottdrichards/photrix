@@ -40,7 +40,33 @@ const upload = multer({
 });
 
 // Upload photos
-router.post('/upload', authenticateToken, upload.array('photos', 10), async (req, res) => {
+router.post('/upload', authenticateToken, (req, res) => {
+  upload.array('photos', 10)(req, res, (err) => {
+    if (err) {
+      // Handle multer errors
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ error: 'File too large. Maximum size is 10MB per file.' });
+        } else if (err.code === 'LIMIT_FILE_COUNT') {
+          return res.status(413).json({ error: 'Too many files. Maximum is 10 files at once.' });
+        } else if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+          return res.status(400).json({ error: 'Unexpected file field.' });
+        } else {
+          return res.status(400).json({ error: err.message });
+        }
+      } else if (err.message === 'Only image files are allowed') {
+        return res.status(400).json({ error: 'Only image files are allowed. Please select JPG, PNG, GIF, or WebP files.' });
+      } else {
+        return res.status(500).json({ error: 'Upload failed: ' + err.message });
+      }
+    }
+
+    handleUpload(req, res);
+  });
+});
+
+// Separate function to handle the actual upload processing
+async function handleUpload(req, res) {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No photos uploaded' });
@@ -73,8 +99,8 @@ router.post('/upload', authenticateToken, upload.array('photos', 10), async (req
           user_id: req.user.id,
           filename: file.filename,
           original_name: file.originalname,
-          file_path: file.path,
-          thumbnail_path: thumbnailPath,
+          file_path: file.filename, // Store just the filename for serving via /uploads
+          thumbnail_path: 'thumb_' + file.filename, // Store just the thumbnail filename
           file_size: file.size,
           mime_type: file.mimetype,
           width: imageMetadata.width,
@@ -118,7 +144,7 @@ router.post('/upload', authenticateToken, upload.array('photos', 10), async (req
     console.error('Upload error:', error);
     res.status(500).json({ error: 'Failed to upload photos' });
   }
-});
+}
 
 // Get user's photos
 router.get('/', authenticateToken, (req, res) => {

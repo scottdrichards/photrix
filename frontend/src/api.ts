@@ -116,14 +116,21 @@ export class PhotoAPI {
       
       xhr.addEventListener('load', () => {
         try {
-          const data = JSON.parse(xhr.responseText);
           if (xhr.status >= 200 && xhr.status < 300) {
+            const data = JSON.parse(xhr.responseText);
             resolve(data);
           } else {
-            reject(new Error(data.error || `HTTP ${xhr.status}`));
+            // Try to parse error response
+            try {
+              const errorData = JSON.parse(xhr.responseText);
+              reject(new Error(errorData.error || `HTTP ${xhr.status}`));
+            } catch (parseError) {
+              // If response is not JSON (e.g., HTML error page), use status text
+              reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText || 'Upload failed'}`));
+            }
           }
         } catch (error) {
-          reject(error);
+          reject(new Error('Failed to parse server response'));
         }
       });
       
@@ -226,6 +233,10 @@ export class PhotoAPI {
   // Helper method to get file URL
   getFileUrl(path: string | undefined): string {
     if (!path) return '';
-    return path.startsWith('http') ? path : `${this.baseURL.replace('/api', '')}/uploads/${path.split('/').pop()}`;
+    if (path.startsWith('http')) return path;
+    
+    // For relative paths, construct the full URL
+    const baseUrl = this.baseURL.replace('/api', '');
+    return `${baseUrl}/uploads/${path}`;
   }
 }
