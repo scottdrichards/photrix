@@ -51,9 +51,24 @@ function createTables() {
       tags TEXT, -- JSON array of tags
       description TEXT,
       is_favorite BOOLEAN DEFAULT 0,
+      latitude REAL,
+      longitude REAL,
       FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     )
   `);
+
+  // Add latitude and longitude columns to existing photos table if they don't exist
+  db.run(`ALTER TABLE photos ADD COLUMN latitude REAL`, (err) => {
+    if (err && !err.message.includes('duplicate column name')) {
+      console.error('Error adding latitude column:', err);
+    }
+  });
+
+  db.run(`ALTER TABLE photos ADD COLUMN longitude REAL`, (err) => {
+    if (err && !err.message.includes('duplicate column name')) {
+      console.error('Error adding longitude column:', err);
+    }
+  });
 
   // Albums table
   db.run(`

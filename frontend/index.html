@@ -6,6 +6,9 @@
     <title>Photrix - Your Photo Collection</title>
     <link rel="stylesheet" href="/src/css/style.css">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        /* OpenLayers styles will be included by the JS import */
+    </style>
 </head>
 <body>
     <div id="app">
@@ -89,11 +92,30 @@
         <main class="main" id="mainContent" style="display: none;">
             <!-- Photos Section -->
             <section id="photosSection" class="content-section active">
-                <div class="section-header">
-                    <h2><i class="fas fa-images"></i> Your Photos</h2>
-                    <div class="search-bar">
-                        <input type="text" id="searchInput" placeholder="Search photos...">
-                        <i class="fas fa-search"></i>
+                <!-- Filter Pane -->
+                <div class="filter-pane" id="filterPane">
+                    <div class="filter-header">
+                        <h2><i class="fas fa-images"></i> Your Photos</h2>
+                        <button class="toggle-btn" id="toggleFilterPane">
+                            <i class="fas fa-chevron-down"></i>
+                        </button>
+                    </div>
+                    <div class="filter-content" id="filterContent">
+                        <div class="filter-controls">
+                            <div class="search-bar">
+                                <input type="text" id="searchInput" placeholder="Search photos...">
+                                <i class="fas fa-search"></i>
+                            </div>
+                            <button class="btn btn-outline" id="clearFiltersBtn">
+                                <i class="fas fa-times"></i> Clear Filters
+                            </button>
+                        </div>
+                        <div class="map-container">
+                            <div id="photoMap" class="photo-map"></div>
+                            <div class="map-info">
+                                <span id="mapPhotoCount">0 photos</span> in current view
+                            </div>
+                        </div>
                     </div>
                 </div>
 

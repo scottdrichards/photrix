@@ -23,6 +23,8 @@ export interface Photo {
   tags?: string[];
   description?: string;
   is_favorite: boolean;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface Album {

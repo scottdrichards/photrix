@@ -1,12 +1,16 @@
 import type { Photo } from './types.js';
 import { showToast, truncateText, formatDate, formatFileSize } from './utils.js';
+import { PhotoMap } from './map.js';
 
 // Photos management module
 export class PhotosManager {
   private photos: Photo[] = [];
+  private filteredPhotos: Photo[] = [];
   private isLoading: boolean = false;
   private currentPhoto: Photo | null = null;
   private searchTimeout: NodeJS.Timeout | undefined;
+  private photoMap: PhotoMap | null = null;
+  private isFilterPaneCollapsed: boolean = false;
 
   constructor() {
     this.init();
@@ -15,6 +19,131 @@ export class PhotosManager {
   private init(): void {
     this.setupEventListeners();
     this.setupUpload();
+    this.initializeMap();
+    this.setupFilterPane();
+  }
+
+  private initializeMap(): void {
+    // Initialize the map after a short delay to ensure DOM is ready
+    setTimeout(() => {
+      try {
+        this.photoMap = new PhotoMap('photoMap');
+        this.photoMap.setViewportChangeHandler((bounds) => {
+          this.handleMapViewportChange(bounds);
+        });
+      } catch (error) {
+        console.error('Failed to initialize map:', error);
+      }
+    }, 100);
+  }
+
+  private setupFilterPane(): void {
+    const filterHeader = document.querySelector('.filter-header');
+    const toggleBtn = document.getElementById('toggleFilterPane');
+    const filterContent = document.getElementById('filterContent');
+    const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+
+    // Toggle filter pane
+    if (filterHeader && toggleBtn && filterContent) {
+      filterHeader.addEventListener('click', () => {
+        this.toggleFilterPane();
+      });
+    }
+
+    // Clear filters
+    if (clearFiltersBtn) {
+      clearFiltersBtn.addEventListener('click', () => {
+        this.clearFilters();
+      });
+    }
+  }
+
+  private toggleFilterPane(): void {
+    const toggleBtn = document.getElementById('toggleFilterPane');
+    const filterContent = document.getElementById('filterContent');
+    
+    if (toggleBtn && filterContent) {
+      this.isFilterPaneCollapsed = !this.isFilterPaneCollapsed;
+      
+      if (this.isFilterPaneCollapsed) {
+        filterContent.classList.add('collapsed');
+        toggleBtn.classList.add('collapsed');
+      } else {
+        filterContent.classList.remove('collapsed');
+        toggleBtn.classList.remove('collapsed');
+      }
+    }
+  }
+
+  private clearFilters(): void {
+    const searchInput = document.getElementById('searchInput') as HTMLInputElement;
+    if (searchInput) {
+      searchInput.value = '';
+    }
+    // Reset filtered photos to show all photos
+    this.filteredPhotos = this.photos;
+    this.renderPhotos();
+    this.updateMapInfo(this.photos.filter(p => p.latitude && p.longitude).length);
+  }
+
+  private handleMapViewportChange(_bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number; }): void {
+    if (!this.photoMap) return;
+    
+    const photosInView = this.photoMap.getPhotosInView();
+    this.filteredPhotos = photosInView;
+    this.displayFilteredPhotos();
+    this.updateMapInfo(photosInView.length);
+  }
+
+  private displayFilteredPhotos(): void {
+    const grid = document.getElementById('photosGrid');
+    if (!grid) return;
+
+    if (this.filteredPhotos.length === 0) {
+      grid.innerHTML = `
+        <div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: rgba(255,255,255,0.7);">
+          <i class="fas fa-map-marker-alt" style="font-size: 3rem; margin-bottom: 1rem; display: block;"></i>
+          <p>No photos in this area</p>
+        </div>
+      `;
+      return;
+    }
+
+    grid.innerHTML = this.filteredPhotos.map(photo => `
+      <div class="photo-card" data-photo-id="${photo.id}">
+        <img src="${window.photoAPI.getFileUrl(photo.thumbnail_path || photo.file_path)}" 
+             alt="${photo.original_name}" 
+             loading="lazy">
+        <div class="photo-card-info">
+          <h4 title="${photo.original_name}">${truncateText(photo.original_name, 25)}</h4>
+          <p>
+            <i class="fas fa-calendar"></i>
+            ${formatDate(photo.uploaded_at)}
+          </p>
+          ${photo.width && photo.height ? 
+            `<p><i class="fas fa-expand-arrows-alt"></i> ${photo.width}x${photo.height}</p>` : ''}
+          ${photo.latitude && photo.longitude ? 
+            `<p><i class="fas fa-map-marker-alt"></i> ${photo.latitude.toFixed(4)}, ${photo.longitude.toFixed(4)}</p>` : ''}
+        </div>
+      </div>
+    `).join('');
+
+    // Add click handlers
+    grid.querySelectorAll('.photo-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const photoId = (card as HTMLElement).dataset.photoId;
+        if (photoId) {
+          this.openPhotoModal(parseInt(photoId));
+        }
+      });
+    });
+  }
+
+  private updateMapInfo(count: number): void {
+    const mapPhotoCount = document.getElementById('mapPhotoCount');
+    if (mapPhotoCount) {
+      mapPhotoCount.textContent = `${count} photo${count === 1 ? '' : 's'}`;
+    }
   }
 
   private setupEventListeners(): void {
@@ -116,7 +245,14 @@ export class PhotosManager {
 
       const response = await window.photoAPI.getPhotos(params);
       this.photos = response.photos;
+      this.filteredPhotos = this.photos; // Initially show all photos
       this.renderPhotos();
+      
+      // Update map with new photos
+      if (this.photoMap) {
+        this.photoMap.setPhotos(this.photos);
+        this.updateMapInfo(this.photos.filter(p => p.latitude && p.longitude).length);
+      }
     } catch (error) {
       showToast(`Failed to load photos: ${(error as Error).message}`, 'error');
     } finally {

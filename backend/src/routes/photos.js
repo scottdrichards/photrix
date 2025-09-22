@@ -1,12 +1,62 @@
 const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
+const exifReader = require('exif-reader');
 const path = require('path');
 const fs = require('fs').promises;
 const { getDb } = require('../models/database');
 const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
+
+// Function to convert GPS coordinates from EXIF format to decimal degrees
+function convertGPSToDecimal(gpsData) {
+  if (!gpsData) return null;
+
+  const { GPSLatitude, GPSLongitude, GPSLatitudeRef, GPSLongitudeRef } = gpsData;
+  
+  if (!GPSLatitude || !GPSLongitude) return null;
+
+  // Convert degrees, minutes, seconds to decimal degrees
+  const convertDMS = (degrees, minutes, seconds) => {
+    return degrees + minutes / 60 + seconds / 3600;
+  };
+
+  try {
+    const lat = convertDMS(GPSLatitude[0], GPSLatitude[1], GPSLatitude[2]);
+    const lon = convertDMS(GPSLongitude[0], GPSLongitude[1], GPSLongitude[2]);
+
+    // Apply direction modifiers (N/S, E/W)
+    const latitude = GPSLatitudeRef === 'S' ? -lat : lat;
+    const longitude = GPSLongitudeRef === 'W' ? -lon : lon;
+
+    return { latitude, longitude };
+  } catch (error) {
+    console.error('Error converting GPS coordinates:', error);
+    return null;
+  }
+}
+
+// Function to extract EXIF data including GPS
+async function extractEXIFData(filePath) {
+  try {
+    const imageBuffer = await fs.readFile(filePath);
+    const sharpImage = sharp(imageBuffer);
+    const { exif } = await sharpImage.metadata();
+    
+    if (exif) {
+      const exifData = exifReader(exif);
+      const gpsCoords = convertGPSToDecimal(exifData.gps);
+      return {
+        exifData,
+        gpsCoords
+      };
+    }
+  } catch (error) {
+    console.error('Error extracting EXIF data:', error);
+  }
+  return { exifData: null, gpsCoords: null };
+}
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -35,7 +85,7 @@ const upload = multer({
     }
   },
   limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
+    fileSize: 25 * 1024 * 1024 // 10MB limit
   }
 });
 
@@ -91,8 +141,9 @@ async function handleUpload(req, res) {
           .jpeg({ quality: 80 })
           .toFile(thumbnailPath);
 
-        // Get image dimensions
+        // Get image dimensions and extract EXIF/GPS data
         const imageMetadata = await sharp(file.path).metadata();
+        const { exifData, gpsCoords } = await extractEXIFData(file.path);
 
         // Insert photo record
         const photoData = {
@@ -105,18 +156,21 @@ async function handleUpload(req, res) {
           mime_type: file.mimetype,
           width: imageMetadata.width,
           height: imageMetadata.height,
-          metadata: JSON.stringify(imageMetadata)
+          metadata: JSON.stringify({...imageMetadata, exif: exifData}),
+          latitude: gpsCoords ? gpsCoords.latitude : null,
+          longitude: gpsCoords ? gpsCoords.longitude : null
         };
 
         await new Promise((resolve, reject) => {
           db.run(
             `INSERT INTO photos (user_id, filename, original_name, file_path, thumbnail_path, 
-             file_size, mime_type, width, height, metadata) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             file_size, mime_type, width, height, metadata, latitude, longitude) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               photoData.user_id, photoData.filename, photoData.original_name,
               photoData.file_path, photoData.thumbnail_path, photoData.file_size,
-              photoData.mime_type, photoData.width, photoData.height, photoData.metadata
+              photoData.mime_type, photoData.width, photoData.height, photoData.metadata,
+              photoData.latitude, photoData.longitude
             ],
             function(err) {
               if (err) reject(err);
@@ -149,7 +203,16 @@ async function handleUpload(req, res) {
 // Get user's photos
 router.get('/', authenticateToken, (req, res) => {
   const db = getDb();
-  const { page = 1, limit = 20, search = '', tags = '' } = req.query;
+  const { 
+    page = 1, 
+    limit = 20, 
+    search = '', 
+    tags = '', 
+    minLat, 
+    maxLat, 
+    minLng, 
+    maxLng 
+  } = req.query;
   const offset = (page - 1) * limit;
 
   let query = 'SELECT * FROM photos WHERE user_id = ?';
@@ -158,6 +221,18 @@ router.get('/', authenticateToken, (req, res) => {
   if (search) {
     query += ' AND (original_name LIKE ? OR description LIKE ?)';
     params.push(`%${search}%`, `%${search}%`);
+  }
+
+  // Add location-based filtering if bounds are provided
+  if (minLat && maxLat && minLng && maxLng) {
+    query += ' AND latitude IS NOT NULL AND longitude IS NOT NULL';
+    query += ' AND latitude >= ? AND latitude <= ? AND longitude >= ? AND longitude <= ?';
+    params.push(
+      parseFloat(minLat), 
+      parseFloat(maxLat), 
+      parseFloat(minLng), 
+      parseFloat(maxLng)
+    );
   }
 
   query += ' ORDER BY uploaded_at DESC LIMIT ? OFFSET ?';
