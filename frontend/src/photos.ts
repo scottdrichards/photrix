@@ -30,6 +30,9 @@ export class PhotosManager {
     this.setupUpload();
     this.initializeMap();
     this.setupFilterPane();
+    // Load photos immediately on initialization so they are ready
+    // Map may not yet be initialized; a later sync will attach markers
+    this.loadPhotos();
   }
 
   private initializeMap(): void {
@@ -40,10 +43,20 @@ export class PhotosManager {
         this.photoMap.setViewportChangeHandler((bounds) => {
           this.handleMapViewportChange(bounds);
         });
+        // If photos were already loaded before map became ready, sync markers now
+        this.trySyncMap();
       } catch (error) {
         console.error('Failed to initialize map:', error);
       }
     }, 100);
+  }
+
+  // Ensure the map reflects the currently loaded photos (idempotent)
+  private trySyncMap(): void {
+    if (this.photoMap && this.photos.length > 0) {
+      this.photoMap.setPhotos(this.photos);
+      this.updateMapInfo(this.photos.filter(p => p.latitude && p.longitude).length);
+    }
   }
 
   private setupFilterPane(): void {
@@ -256,12 +269,8 @@ export class PhotosManager {
       this.photos = response.photos;
       this.filteredPhotos = this.photos; // Initially show all photos
       this.renderPhotos();
-      
-      // Update map with new photos
-      if (this.photoMap) {
-        this.photoMap.setPhotos(this.photos);
-        this.updateMapInfo(this.photos.filter(p => p.latitude && p.longitude).length);
-      }
+      // Attempt to sync map markers regardless of map readiness
+      this.trySyncMap();
     } catch (error) {
       showToast(`Failed to load photos: ${(error as Error).message}`, 'error');
     } finally {
