@@ -69,6 +69,11 @@ export class PhotoAPI {
     }
   }
 
+  // Current user endpoint
+  async getCurrentUser(): Promise<{ user: { id: number; username: string; email: string } }> {
+    return this.request<{ user: { id: number; username: string; email: string } }>("/auth/me");
+  }
+
   // Auth endpoints
   async login(username: string, password: string): Promise<AuthResponse> {
     return this.request<AuthResponse>('/auth/login', {

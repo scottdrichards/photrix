@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { getDb } = require('../models/database');
-const { generateToken } = require('../middleware/auth');
+const { generateToken, authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -119,3 +119,9 @@ router.post('/login', async (req, res) => {
 });
 
 module.exports = router;
+// Get current user from token
+router.get('/me', authenticateToken, (req, res) => {
+  // req.user was set in authenticateToken
+  const { id, username, email } = req.user;
+  res.json({ user: { id, username, email } });
+});
