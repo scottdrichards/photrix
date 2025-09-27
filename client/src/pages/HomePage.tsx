@@ -1,131 +1,192 @@
 import { useState } from 'react'
-import { Filter, Grid, List, Upload, Camera } from 'lucide-react'
+import { 
+  Button,
+  ToggleButton,
+  Card,
+  Text,
+  Title2,
+  Subtitle1,
+  Body1,
+  Field,
+  Input,
+  Checkbox,
+  makeStyles,
+  shorthands
+} from '@fluentui/react-components'
+import { 
+  GridDots24Regular,
+  List24Regular,
+  CloudArrowUp24Regular,
+  Camera24Regular,
+  Filter24Regular
+} from '@fluentui/react-icons'
+
+const useStyles = makeStyles({
+  root: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    ...shorthands.overflow('hidden'),
+  },
+  filtersSection: {
+    ...shorthands.padding('16px', '24px'),
+    backgroundColor: '#fafafa',
+    ...shorthands.borderBottom('1px', 'solid', '#e1e1e1'),
+  },
+  filtersContainer: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+    ...shorthands.gap('16px'),
+    alignItems: 'end',
+  },
+  toolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    ...shorthands.padding('16px', '24px'),
+    ...shorthands.borderBottom('1px', 'solid', '#e1e1e1'),
+    backgroundColor: '#ffffff',
+  },
+  toolbarLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    ...shorthands.gap('8px'),
+  },
+  toolbarRight: {
+    display: 'flex',
+    alignItems: 'center',
+    ...shorthands.gap('8px'),
+  },
+  viewToggle: {
+    display: 'flex',
+  },
+  mainContent: {
+    flex: '1',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shorthands.padding('48px', '24px'),
+  },
+  emptyState: {
+    textAlign: 'center',
+    maxWidth: '400px',
+  },
+  emptyIcon: {
+    fontSize: '64px',
+    color: '#d1d1d1',
+    marginBottom: '16px',
+  },
+  detailsSection: {
+    ...shorthands.padding('16px', '24px'),
+    backgroundColor: '#fafafa',
+    ...shorthands.borderTop('1px', 'solid', '#e1e1e1'),
+    minHeight: '120px',
+  },
+})
 
 export default function HomePage() {
-  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(true)
+  const [isFiltersVisible, setIsFiltersVisible] = useState(true)
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
+  const styles = useStyles()
 
   return (
-    <div className="flex w-full">
-      {/* Collapsible Filter Panel */}
-      <div className={`bg-gray-50 border-r border-gray-200 transition-all duration-300 ${
-        isFilterPanelOpen ? 'w-80' : 'w-0'
-      } overflow-hidden`}>
-        <div className="p-4 w-80">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-900">Filters</h2>
-            <button
-              onClick={() => setIsFilterPanelOpen(false)}
-              className="p-1 text-gray-600 hover:text-gray-900 rounded"
+    <div className={styles.root}>
+      {/* Filters Section - Horizontal at top */}
+      {isFiltersVisible && (
+        <section className={styles.filtersSection}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <Subtitle1>Filters</Subtitle1>
+            <Button
+              appearance="subtle"
+              size="small"
+              onClick={() => setIsFiltersVisible(false)}
             >
               ✕
-            </button>
+            </Button>
           </div>
           
-          {/* Filter Content */}
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Date Range
-              </label>
-              <input
-                type="date"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-              />
-            </div>
+          <div className={styles.filtersContainer}>
+            <Field label="Date Range">
+              <Input type="date" size="small" />
+            </Field>
             
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Tags
-              </label>
-              <div className="space-y-1">
-                <label className="flex items-center">
-                  <input type="checkbox" className="mr-2" />
-                  <span className="text-sm">Favorites</span>
-                </label>
-                <label className="flex items-center">
-                  <input type="checkbox" className="mr-2" />
-                  <span className="text-sm">People</span>
-                </label>
+            <Field label="Tags">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <Checkbox label="Favorites" />
+                <Checkbox label="People" />
               </div>
-            </div>
+            </Field>
             
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Location
-              </label>
-              <div className="h-32 bg-gray-200 rounded-md flex items-center justify-center text-gray-500 text-sm">
-                Map View (To be implemented)
-              </div>
-            </div>
+            <Field label="Location">
+              <Card style={{ height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Body1 style={{ color: '#757575' }}>Map View (To be implemented)</Body1>
+              </Card>
+            </Field>
+          </div>
+        </section>
+      )}
+
+      {/* Toolbar */}
+      <div className={styles.toolbar}>
+        <div className={styles.toolbarLeft}>
+          {!isFiltersVisible && (
+            <Button
+              appearance="subtle"
+              icon={<Filter24Regular />}
+              onClick={() => setIsFiltersVisible(true)}
+            >
+              Show Filters
+            </Button>
+          )}
+          <Text size={300}>0 photos</Text>
+        </div>
+        
+        <div className={styles.toolbarRight}>
+          <Button
+            appearance="primary"
+            icon={<CloudArrowUp24Regular />}
+          >
+            Upload Photos
+          </Button>
+          
+          <div className={styles.viewToggle}>
+            <ToggleButton
+              checked={viewMode === 'grid'}
+              onClick={() => setViewMode('grid')}
+              icon={<GridDots24Regular />}
+            />
+            <ToggleButton
+              checked={viewMode === 'list'}
+              onClick={() => setViewMode('list')}
+              icon={<List24Regular />}
+            />
           </div>
         </div>
       </div>
 
       {/* Main Photo Area */}
-      <div className="flex-1 flex flex-col">
-        {/* Toolbar */}
-        <div className="bg-white border-b border-gray-200 px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              {!isFilterPanelOpen && (
-                <button
-                  onClick={() => setIsFilterPanelOpen(true)}
-                  className="p-2 text-gray-600 hover:text-gray-900 rounded-lg hover:bg-gray-100"
-                >
-                  <Filter className="h-5 w-5" />
-                </button>
-              )}
-              <span className="text-sm text-gray-600">0 photos</span>
-            </div>
-            
-            <div className="flex items-center space-x-2">
-              <button className="btn-primary">
-                <Upload className="h-4 w-4 mr-2" />
-                Upload Photos
-              </button>
-              
-              <div className="flex border border-gray-300 rounded-lg">
-                <button
-                  onClick={() => setViewMode('grid')}
-                  className={`p-2 ${viewMode === 'grid' ? 'bg-primary-100 text-primary-700' : 'text-gray-600 hover:text-gray-900'}`}
-                >
-                  <Grid className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => setViewMode('list')}
-                  className={`p-2 ${viewMode === 'list' ? 'bg-primary-100 text-primary-700' : 'text-gray-600 hover:text-gray-900'}`}
-                >
-                  <List className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Photo Grid/List */}
-        <div className="flex-1 p-4">
-          <div className="h-full flex items-center justify-center text-gray-500">
-            <div className="text-center">
-              <Camera className="h-16 w-16 mx-auto mb-4 text-gray-300" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No photos yet</h3>
-              <p className="text-gray-600 mb-4">Upload your first photos to get started</p>
-              <button className="btn-primary">
-                <Upload className="h-4 w-4 mr-2" />
-                Upload Photos
-              </button>
-            </div>
-          </div>
+      <div className={styles.mainContent}>
+        <div className={styles.emptyState}>
+          <Camera24Regular className={styles.emptyIcon} />
+          <Title2 style={{ marginBottom: '8px' }}>No photos yet</Title2>
+          <Body1 style={{ marginBottom: '24px', color: '#757575' }}>
+            Upload your first photos to get started
+          </Body1>
+          <Button
+            appearance="primary"
+            size="large"
+            icon={<CloudArrowUp24Regular />}
+          >
+            Upload Photos
+          </Button>
         </div>
       </div>
 
-      {/* Details Panel (Bottom) */}
-      <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-200 h-32 transform translate-y-full transition-transform duration-300">
-        <div className="p-4">
-          <h3 className="text-sm font-medium text-gray-900 mb-2">Photo Details</h3>
-          <p className="text-sm text-gray-600">Select a photo to view details</p>
-        </div>
-      </div>
+      {/* Details Section - Bottom */}
+      <section className={styles.detailsSection}>
+        <Subtitle1 style={{ marginBottom: '8px' }}>Photo Details</Subtitle1>
+        <Body1 style={{ color: '#757575' }}>Select a photo to view details</Body1>
+      </section>
     </div>
   )
 }

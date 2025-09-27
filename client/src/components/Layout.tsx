@@ -1,33 +1,76 @@
 import { Outlet } from 'react-router-dom'
-import { Camera, Search, User, Settings } from 'lucide-react'
+import { 
+  Toolbar, 
+  ToolbarButton,
+  Title3,
+  makeStyles,
+  shorthands
+} from '@fluentui/react-components'
+import { 
+  Camera24Regular,
+  Search24Regular, 
+  Settings24Regular, 
+  Person24Regular 
+} from '@fluentui/react-icons'
+
+const useStyles = makeStyles({
+  root: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100vh',
+  },
+  header: {
+    ...shorthands.padding('16px', '24px'),
+    ...shorthands.borderBottom('1px', 'solid', '#e1e1e1'),
+    backgroundColor: '#ffffff',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: '64px',
+  },
+  brandContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    ...shorthands.gap('12px'),
+  },
+  main: {
+    flex: '1',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  },
+})
 
 export default function Layout() {
+  const styles = useStyles()
+
   return (
-    <div className="h-full flex flex-col">
-      {/* Top Menu Bar */}
-      <header className="bg-white border-b border-gray-200 px-6 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <Camera className="h-8 w-8 text-primary-600" />
-            <h1 className="text-2xl font-bold text-gray-900">Photrix</h1>
-          </div>
-          
-          <div className="flex items-center space-x-4">
-            <button className="p-2 text-gray-600 hover:text-gray-900 rounded-lg hover:bg-gray-100">
-              <Search className="h-5 w-5" />
-            </button>
-            <button className="p-2 text-gray-600 hover:text-gray-900 rounded-lg hover:bg-gray-100">
-              <Settings className="h-5 w-5" />
-            </button>
-            <button className="p-2 text-gray-600 hover:text-gray-900 rounded-lg hover:bg-gray-100">
-              <User className="h-5 w-5" />
-            </button>
-          </div>
+    <div className={styles.root}>
+      {/* Top Header */}
+      <header className={styles.header}>
+        <div className={styles.brandContainer}>
+          <Camera24Regular />
+          <Title3 as="h1">Photrix</Title3>
         </div>
+        
+        <Toolbar>
+          <ToolbarButton 
+            aria-label="Search"
+            icon={<Search24Regular />}
+          />
+          <ToolbarButton 
+            aria-label="Settings"
+            icon={<Settings24Regular />}
+          />
+          <ToolbarButton 
+            aria-label="Profile"
+            icon={<Person24Regular />}
+          />
+        </Toolbar>
       </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 flex overflow-hidden">
+      {/* Main Content Area - Vertical Layout */}
+      <main className={styles.main}>
         <Outlet />
       </main>
     </div>
