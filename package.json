@@ -1,0 +1,41 @@
+{
+  "name": "photrix",
+  "version": "0.1.0",
+  "description": "A modern way to enjoy your photos. Think the functionality of LightRoom, the reliability of your local storage, the ease of use of your phone gallery, and the AI of Google.",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
+    "build": "npm run client:build && npm run server:build",
+    "start": "npm run server:start",
+    "client:dev": "cd client && npm run dev",
+    "client:build": "cd client && npm run build",
+    "server:dev": "cd server && npm run dev",
+    "server:build": "cd server && npm run build",
+    "server:start": "cd server && npm run start",
+    "install:all": "npm install && cd client && npm install && cd ../server && npm install",
+    "lint": "npm run client:lint && npm run server:lint",
+    "client:lint": "cd client && npm run lint",
+    "server:lint": "cd server && npm run lint",
+    "test": "npm run client:test && npm run server:test",
+    "client:test": "cd client && npm run test",
+    "server:test": "cd server && npm run test"
+  },
+  "keywords": [
+    "photo",
+    "gallery",
+    "image",
+    "management",
+    "ai",
+    "lightroom",
+    "photos"
+  ],
+  "author": "Photrix Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
