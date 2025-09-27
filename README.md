@@ -22,3 +22,8 @@ The system will index a photo by date taken, geolocation, ratings, favorites, ke
 ## sharing
 A user can select a collection of photos or a filter set, and share those with a particular email address. 
 for example, a user could share all pictures during a certain time period and place with someone. Or the person can share all pictures with a particular face in them.
+
+# Tech Stack
+Frontend should be Typescript Vite React and fluent ui v9
+Backend should generally be node/npm but can be whatever is easiest to maintain.
+Playwright and Jest should be used to thoroughly test the system. Tests should not be concerned with implementation details but general features expected of the application. 
