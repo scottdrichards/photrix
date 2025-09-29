@@ -1,5 +1,5 @@
 # Photrix
-A modern way to enjoy your photos. Think the functionality of LightRoom, the reliability of your local storage, the ease of use of your phone gallery, and the AI of Google.
+A modern way to enjoy your photos. Think the functionality of Light Room, the reliability of your local storage, the ease of use of your phone gallery, and the AI of Google.
 
 Mission:
 - To allow people to enjoy photos of their past.
@@ -10,6 +10,7 @@ A user can easily ...
   - find pictures he or she knows exists
   - discover forgotten pictures
   - share pictures with friends, family, and others
+The system can be used for local pictures as well
 
 ## General Interaction
 User can upload a photo through convenient web techniques such as drag and drop, file system access api, etc. The client device resizes the image to a moderate resolution before sending. The server than indexes the files, saves it, and saves a thumbnail.
