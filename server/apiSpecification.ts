@@ -1,6 +1,21 @@
-type Filter = {
+export type Filter = {
   /** Path matchers (glob or exact). */
   path?: string[];
+
+  /** File name matchers (glob or exact). */
+  filename?: string[];
+
+  /** Directory matchers relative to the indexed root (glob or exact). */
+  directory?: string[];
+
+  /** MIME type filters (exact match, case-insensitive). */
+  mimeType?: string[];
+
+  /** Filter by camera make (case-insensitive). */
+  cameraMake?: string[];
+
+  /** Filter by camera model (case-insensitive). */
+  cameraModel?: string[];
 
   /** Geographic bounding box filter (inclusive). Use decimal degrees. */
   location?: {
@@ -20,12 +35,14 @@ type Filter = {
 
   /** Tags to match. By default match any; server may support `matchAll` option. */
   tags?: string[];
+  /** When true require all tags to be present instead of any. */
+  tagsMatchAll?: boolean;
 
   /** Free-text search over filename, description, etc. */
   q?: string;
 };
 
-type FileMetadata = {
+export type FileMetadata = {
   name: string;
   size: number; // bytes
   mimeType: string;
@@ -33,17 +50,17 @@ type FileMetadata = {
   dateCreated?: string;
 };
 
-type Location = {
+export type Location = {
   latitude: number;
   longitude: number;
 };
 
-type Dimensions = {
+export type Dimensions = {
   width: number;
   height: number;
 };
 
-type MediaMetadata = {
+export type MediaMetadata = {
   dimensions?: Dimensions;
   // ISO 8601 on the wire
   dateTaken?: string | null;
@@ -52,7 +69,7 @@ type MediaMetadata = {
   tags?: string[];
 };
 
-type PhotoMetadata = MediaMetadata & {
+export type PhotoMetadata = MediaMetadata & {
   cameraMake?: string;
   cameraModel?: string;
   exposureTime?: string;
@@ -62,7 +79,7 @@ type PhotoMetadata = MediaMetadata & {
   lens?: string;
 };
 
-type VideoMetadata = MediaMetadata & {
+export type VideoMetadata = MediaMetadata & {
   duration?: number; // seconds
   framerate?: number;
   videoCodec?: string;
@@ -72,7 +89,7 @@ type VideoMetadata = MediaMetadata & {
 // AllMetadata describes fields that may be available for a media item. Some
 // fields are specific to photos vs videos; clients should request the
 // metadata keys they need rather than relying on a large combined object.
-type AllMetadata = FileMetadata & Partial<PhotoMetadata & VideoMetadata>;
+export type AllMetadata = FileMetadata & Partial<PhotoMetadata & VideoMetadata>;
 
 // Representation describes the desired format for the returned file data.
 // It's generic over the media type so certain options can be photo- or
@@ -90,7 +107,7 @@ export type ApiSpecification = {
    * Find files matching the filter. The response is paginated and includes
    * a total count so clients can render simple pagination UIs.
    */
-  findFiles: <T extends Array<keyof AllMetadata> | undefined = undefined>(
+  queryFiles: <T extends Array<keyof AllMetadata> | undefined = undefined>(
     filter?: Filter,
     options?: {
       sort?: {
@@ -99,6 +116,7 @@ export type ApiSpecification = {
       };
       metadata?: T; // list of metadata keys to include per item
       page?: number;
+      pageSize?: number;
     }
   ) => Promise<{
     items: Array<{
