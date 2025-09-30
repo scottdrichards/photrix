@@ -51,6 +51,10 @@ export class FolderIndexer {
     return this.db;
   }
 
+  getRootDirectory(): string {
+    return this.root;
+  }
+
   async indexFile(filePath: string): Promise<void> {
     try {
       const record = await buildIndexedRecord(this.root, filePath);

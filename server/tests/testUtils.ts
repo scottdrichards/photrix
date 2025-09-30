@@ -29,3 +29,7 @@ export async function createExampleWorkspace(prefix = "photrix-indexer-"): Promi
   await cp(source, destination, { recursive: true });
   return destination;
 }
+
+export function resolveWorkspacePath(workspace: string, relative: string): string {
+  return path.resolve(workspace, relative.split("/").join(path.sep));
+}

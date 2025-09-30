@@ -94,7 +94,7 @@ export type AllMetadata = FileMetadata & Partial<PhotoMetadata & VideoMetadata>;
 // Representation describes the desired format for the returned file data.
 // It's generic over the media type so certain options can be photo- or
 // video-specific.
-type Representation<T extends "photo" | "video"> =
+export type Representation<T extends "photo" | "video"> =
   | { type: "resize"; maxWidth?: number; maxHeight?: number }
   | { type: "webSafe" }
   | { type: "original" }
