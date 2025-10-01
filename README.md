@@ -28,3 +28,24 @@ for example, a user could share all pictures during a certain time period and pl
 Frontend should be Typescript Vite React and fluent ui v9
 Backend should generally be node/npm but can be whatever is easiest to maintain.
 Playwright and Jest should be used to thoroughly test the system. Tests should not be concerned with implementation details but general features expected of the application. 
+
+## Development
+
+To experiment with the current prototype:
+
+1. Install dependencies for the backend and start the HTTP server (uses the sample `exampleFolder` by default):
+  ```powershell
+  cd server
+  npm install
+  npm start
+  ```
+  Set the `PHOTRIX_MEDIA_ROOT` environment variable if you want to index a different folder of photos.
+
+2. In a separate shell, start the client development server:
+  ```powershell
+  cd client
+  npm install
+  npm run dev
+  ```
+
+The client proxies `/api` and `/uploads` requests to `http://localhost:3000`, so keep the backend running while developing the UI.

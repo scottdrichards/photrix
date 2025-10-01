@@ -1,9 +1,11 @@
 {
   "name": "server",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "dist/src/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prestart": "npm run build",
+    "start": "node dist/src/cli.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
