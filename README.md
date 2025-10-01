@@ -33,15 +33,17 @@ Playwright and Jest should be used to thoroughly test the system. Tests should n
 
 To experiment with the current prototype:
 
-1. Install dependencies for the backend and start the HTTP server (uses the sample `exampleFolder` by default):
+1. Copy `server/.env.example` to `server/.env` and update the values to point at your media library (for quick tests you can keep the defaults).
+
+2. Install dependencies for the backend and start the HTTP server (uses the paths from `.env` by default):
   ```powershell
   cd server
   npm install
   npm start
   ```
-  Set the `PHOTRIX_MEDIA_ROOT` environment variable if you want to index a different folder of photos.
+  The CLI reads configuration from the `.env` file; you can still override values with real environment variables when needed.
 
-2. In a separate shell, start the client development server:
+3. In a separate shell, start the client development server:
   ```powershell
   cd client
   npm install

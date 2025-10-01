@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { lookup as lookupMimeType } from "mime-types";
-import imageSize from "image-size";
+import { imageSize } from "image-size";
 import exifr from "exifr";
 import type { IndexedFileRecord } from "./models.js";
 
