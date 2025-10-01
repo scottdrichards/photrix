@@ -41,9 +41,7 @@ function buildFallbackUrl(path: string): string {
 
 export async function fetchPhotos(signal?: AbortSignal): Promise<PhotoItem[]> {
   const params = new URLSearchParams();
-  for (const key of DEFAULT_METADATA_KEYS) {
-    params.append("metadata", key);
-  }
+  params.set("metadata", DEFAULT_METADATA_KEYS.join(","));
   params.set("pageSize", "200");
 
   const response = await fetch(`/api/files?${params.toString()}`, { signal });

@@ -114,7 +114,7 @@ export type ApiSpecification = {
         sortBy: "name" | "dateTaken" | "dateCreated" | "rating";
         order: "asc" | "desc";
       };
-      metadata?: T; // list of metadata keys to include per item
+    metadata?: T; // list of metadata keys to include per item (HTTP clients should pass as a comma-separated string; if repeated only the first value is used)
       page?: number;
       pageSize?: number;
     }

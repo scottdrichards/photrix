@@ -145,6 +145,7 @@ export class PhotrixHttpServer {
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    let parsedUrl: URL | null = null;
     try {
       if (!req.url) {
         throw new BadRequestError("Invalid request URL");
@@ -158,27 +159,27 @@ export class PhotrixHttpServer {
         return;
       }
 
-      const url = buildRequestUrl(req.url, this.currentHost ?? req.headers.host ?? "localhost");
-      const pathname = url.pathname;
+      parsedUrl = buildRequestUrl(req.url, this.currentHost ?? req.headers.host ?? "localhost");
+      const pathname = parsedUrl.pathname;
 
       if (method === "GET" && pathname === "/api/files") {
-        await this.handleQueryFiles(url, res);
+        await this.handleQueryFiles(parsedUrl, res);
         return;
       }
 
       if (method === "GET" && pathname === "/api/file") {
-        await this.handleGetFile(url, res);
+        await this.handleGetFile(parsedUrl, res);
         return;
       }
 
       if (method === "GET" && pathname.startsWith(`${this.uploadPrefix}/`)) {
-        await this.handleStaticFile(url, res);
+        await this.handleStaticFile(parsedUrl, res);
         return;
       }
 
       this.sendError(res, 404, "Not found");
     } catch (error) {
-      this.handleError(res, error);
+      this.handleError(req, res, error, parsedUrl);
     }
   }
 
@@ -246,22 +247,20 @@ export class PhotrixHttpServer {
   private async handleStaticFile(url: URL, res: http.ServerResponse): Promise<void> {
     const relative = url.pathname.slice(this.uploadPrefix.length + 1);
     if (!relative) {
-      this.sendError(res, 404, "File not found");
-      return;
+      throw new NotFoundError("File not found");
     }
 
+    const normalized = sanitizeRelativePath(relative);
+    const absolute = this.resolveAbsolutePath(normalized);
     try {
-      const normalized = sanitizeRelativePath(relative);
-      const absolute = this.resolveAbsolutePath(normalized);
       const data = await fs.readFile(absolute);
-  const contentType = lookupMimeType(path.basename(normalized)) || "application/octet-stream";
-  this.sendFile(res, data, contentType);
+      const contentType = lookupMimeType(path.basename(normalized)) || "application/octet-stream";
+      this.sendFile(res, data, contentType);
     } catch (error) {
       if (error && typeof (error as NodeJS.ErrnoException).code === "string" && (error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.sendError(res, 404, "File not found");
-        return;
+        throw new NotFoundError("File not found");
       }
-      this.handleError(res, error);
+      throw error;
     }
   }
 
@@ -295,16 +294,26 @@ export class PhotrixHttpServer {
     this.sendJson(res, status, { error: message });
   }
 
-  private handleError(res: http.ServerResponse, error: unknown): void {
+  private handleError(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    error: unknown,
+    url: URL | null
+  ): void {
+    const method = (req.method ?? "GET").toUpperCase();
+    const requestUrl = url?.toString() ?? req.url ?? "";
+
     if (error instanceof BadRequestError) {
+      console.warn(`[photrix] 400 ${method} ${requestUrl}: ${error.message}`);
       this.sendError(res, 400, error.message);
       return;
     }
     if (error instanceof NotFoundError) {
+      console.info(`[photrix] 404 ${method} ${requestUrl}: ${error.message}`);
       this.sendError(res, 404, error.message);
       return;
     }
-    console.error("[photrix] HTTP handler error", error);
+    console.error(`[photrix] 500 ${method} ${requestUrl}`, error);
     this.sendError(res, 500, "Internal server error");
   }
 }
@@ -534,16 +543,9 @@ function parseMetadataKeys(params: URLSearchParams): MetadataKeyList {
 }
 
 function getStringList(params: URLSearchParams, key: string): string[] {
-  const values = params.getAll(key);
-  const result: string[] = [];
-  for (const raw of values) {
-    const parts = raw
-      .split(",")
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0);
-    result.push(...parts);
-  }
-  return result;
+  const values = params.get(key)?.split(",").map(v=>v.trim());
+  // Deduplicate values
+  return Array.from(new Set(values));
 }
 
 function sanitizeRelativePath(raw: string): string {

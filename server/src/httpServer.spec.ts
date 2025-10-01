@@ -42,7 +42,7 @@ describe("PhotrixHttpServer", () => {
   });
 
   it("lists indexed files with selected metadata", async () => {
-    const response = await fetch(`${baseUrl}/api/files?metadata=name&metadata=mimeType&pageSize=10`);
+    const response = await fetch(`${baseUrl}/api/files?metadata=name,mimeType&pageSize=10`);
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.total).toBe(1);
@@ -50,6 +50,19 @@ describe("PhotrixHttpServer", () => {
     expect(payload.items[0].path).toBe("sample.png");
     expect(payload.items[0].metadata?.name).toBe("sample.png");
     expect(payload.items[0].metadata?.mimeType).toContain("image/png");
+  });
+
+  it("uses the first metadata entry when provided multiple times", async () => {
+    const response = await fetch(
+      `${baseUrl}/api/files?metadata=mimeType&metadata=name,dimensions&pageSize=5`
+    );
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+  const metadata = payload.items[0].metadata ?? {};
+  expect(metadata.mimeType).toContain("image/png");
+  expect(metadata.name).toBeUndefined();
+  expect(metadata.dimensions).toBeUndefined();
+  expect(Object.keys(metadata)).toEqual(["mimeType"]);
   });
 
   it("serves the original file bytes", async () => {

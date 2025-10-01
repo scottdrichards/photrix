@@ -46,3 +46,6 @@ Thumbs.db
 **/temp/
 /tmp/
 **/tmp/
+
+# DB
+data-index.json
