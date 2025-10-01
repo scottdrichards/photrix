@@ -2,8 +2,8 @@ import { cp, writeFile, unlink, readFile } from "node:fs/promises";
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import { describe, it, expect } from "vitest";
-import { FolderIndexer } from "../src/folderIndexer.js";
-import { createExampleWorkspace, waitForCondition } from "./testUtils.js";
+import { FolderIndexer } from "./folderIndexer.js";
+import { createExampleWorkspace, waitForCondition } from "../tests/testUtils.js";
 
 describe("FolderIndexer", () => {
   it("indexes existing files on startup", async () => {

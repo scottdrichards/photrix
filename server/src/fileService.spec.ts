@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 import { readFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import imageSize from "image-size";
-import { FolderIndexer } from "../src/folderIndexer.js";
-import { FileService } from "../src/fileService.js";
-import { createExampleWorkspace, resolveWorkspacePath } from "./testUtils.js";
+import { FolderIndexer } from "./folderIndexer.js";
+import { FileService } from "./fileService.js";
+import { createExampleWorkspace, resolveWorkspacePath } from "../tests/testUtils.js";
 
 async function createService() {
   const workspace = await createExampleWorkspace("photrix-files-");

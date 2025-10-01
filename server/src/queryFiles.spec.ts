@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { FolderIndexer } from "../src/folderIndexer.js";
-import { createExampleWorkspace } from "./testUtils.js";
+import { FolderIndexer } from "./folderIndexer.js";
+import { createExampleWorkspace } from "../tests/testUtils.js";
 
 async function createIndexer() {
   const workspace = await createExampleWorkspace("photrix-query-");
