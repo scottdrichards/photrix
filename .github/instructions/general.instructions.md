@@ -7,9 +7,7 @@ applyTo: '**/*.js, **/*.jsx, **/*.ts, **/*.tsx, **/*.mjs, **/*.cjs'
 - Avoid mutating objects or arrays directly unless necessary.
 - Use functional paradigms as much as possible. Instead of iterating over an array with a for loop and a mutable accumulator, prefer using array methods like map, filter, and reduce.
 - Avoid "let" unless necessary.
-- Functions should avoid nesting and complexity. The general form should be validate, execute, return. "Else" statements should be avoid in favor of early returns.
 - Prefer async/await over Promises and callbacks for asynchronous code.
-- Do not abstract unecessarily. If a function is only used once, and is not complex, consider inlining it.
 - Classes should only be used to avoid complexities surrounding shared state and mutability is inevitable. For example, a database could be a class.
 - Arrow functions are preferred over function declarations and expressions.
 - Use template literals instead of string concatenation.
@@ -21,6 +19,13 @@ applyTo: '**/*.js, **/*.jsx, **/*.ts, **/*.tsx, **/*.mjs, **/*.cjs'
 - Keep files short.
 - Always refactor code to be simpler when possible.
 - If adding a non-complex feature requires a lot of complex code, that is an indicator that the existing framework should be refactored first.
+
+# Function organization and structure
+- The longest path should be the happiest path. The final return should relate to the purpose of the function (and likely the name of it). All other code should be to validate inputs, handle errors, and prepare for the final return.
+- Do not abstract unecessarily. If a function is only used once, and is not complex, consider inlining it.
+- If it is challenging to find a simple name for a function, that is an indicator that the function is doing too much and should be broken up.
+- Functions should avoid nesting and complexity. The general form should be validate, execute, return. "Else" statements should be avoid in favor of early returns.
+
 
 # General Principles
 - Code should be first: easy to understand (brief and legible), next easy to maintain/change, and last performant.
