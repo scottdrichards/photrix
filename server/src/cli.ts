@@ -59,7 +59,7 @@ async function main(): Promise<void> {
   process.once("SIGTERM", shutdown);
 }
 
-function parsePort(raw: string | undefined, fallback: number): number {
+const parsePort = (raw: string | undefined, fallback: number): number => {
   if (!raw) {
     return fallback;
   }
@@ -69,9 +69,9 @@ function parsePort(raw: string | undefined, fallback: number): number {
     return fallback;
   }
   return parsed;
-}
+};
 
-async function resolveMediaRoot(): Promise<string> {
+const resolveMediaRoot = async (): Promise<string> => {
   const envRoot = process.env.PHOTRIX_MEDIA_ROOT;
   if (envRoot && envRoot.trim().length > 0) {
     const absolute = path.resolve(envRoot);
@@ -96,20 +96,20 @@ async function resolveMediaRoot(): Promise<string> {
   const fallback = path.resolve(process.cwd(), "media");
   await ensureDirectory(fallback);
   return fallback;
-}
+};
 
-async function ensureDirectory(target: string): Promise<void> {
+const ensureDirectory = async (target: string): Promise<void> => {
   await fs.mkdir(target, { recursive: true });
-}
+};
 
-function resolveOptionalPath(raw: string | undefined): string | undefined {
+const resolveOptionalPath = (raw: string | undefined): string | undefined => {
   if (!raw || raw.trim().length === 0) {
     return undefined;
   }
   return path.resolve(raw);
-}
+};
 
-function parseBooleanEnv(raw: string | undefined, fallback: boolean): boolean {
+const parseBooleanEnv = (raw: string | undefined, fallback: boolean): boolean => {
   if (!raw || raw.trim().length === 0) {
     return fallback;
   }
@@ -121,7 +121,7 @@ function parseBooleanEnv(raw: string | undefined, fallback: boolean): boolean {
     return false;
   }
   return fallback;
-}
+};
 
 main().catch((error) => {
   console.error("[photrix] Failed to start HTTP server", error);

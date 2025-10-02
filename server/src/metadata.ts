@@ -5,11 +5,11 @@ import { imageSize } from "image-size";
 import exifr from "exifr";
 import type { IndexedFileRecord } from "./models.js";
 
-function toPosixPath(relativePath: string): string {
+const toPosixPath = (relativePath: string): string => {
   return relativePath.split(path.sep).join("/");
-}
+};
 
-async function safeImageSize(filePath: string): Promise<{ width: number; height: number } | undefined> {
+const safeImageSize = async (filePath: string): Promise<{ width: number; height: number } | undefined> => {
   return new Promise((resolve) => {
     try {
       const dimensions = imageSize(filePath);
@@ -22,9 +22,9 @@ async function safeImageSize(filePath: string): Promise<{ width: number; height:
       resolve(undefined);
     }
   });
-}
+};
 
-function toNumber(value: unknown): number | undefined {
+const toNumber = (value: unknown): number | undefined => {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
@@ -41,9 +41,9 @@ function toNumber(value: unknown): number | undefined {
     }
   }
   return undefined;
-}
+};
 
-function toDateISO(value: unknown): string | undefined {
+const toDateISO = (value: unknown): string | undefined => {
   if (value instanceof Date) {
     if (!Number.isNaN(value.getTime())) {
       return value.toISOString();
@@ -57,9 +57,9 @@ function toDateISO(value: unknown): string | undefined {
     }
   }
   return undefined;
-}
+};
 
-function formatExposure(value: unknown): string | undefined {
+const formatExposure = (value: unknown): string | undefined => {
   const numeric = toNumber(value);
   if (numeric === undefined) {
     if (typeof value === "string") {
@@ -79,9 +79,9 @@ function formatExposure(value: unknown): string | undefined {
     return `1/${denominator}s`;
   }
   return `${numeric}s`;
-}
+};
 
-function formatAperture(value: unknown): string | undefined {
+const formatAperture = (value: unknown): string | undefined => {
   const numeric = toNumber(value);
   if (numeric === undefined) {
     if (typeof value === "string" && value.length > 0) {
@@ -91,9 +91,9 @@ function formatAperture(value: unknown): string | undefined {
   }
   const rounded = Math.round(numeric * 10) / 10;
   return `f/${rounded}`;
-}
+};
 
-function formatFocalLength(value: unknown): string | undefined {
+const formatFocalLength = (value: unknown): string | undefined => {
   const numeric = toNumber(value);
   if (numeric === undefined) {
     if (typeof value === "string" && value.length > 0) {
@@ -103,9 +103,9 @@ function formatFocalLength(value: unknown): string | undefined {
   }
   const rounded = Math.round(numeric * 10) / 10;
   return `${rounded}mm`;
-}
+};
 
-async function extractImageMetadata(filePath: string): Promise<Record<string, any> | null> {
+const extractImageMetadata = async (filePath: string): Promise<Record<string, any> | null> => {
   try {
     const parsed = await exifr.parse(filePath, {
       exif: true,
@@ -121,7 +121,77 @@ async function extractImageMetadata(filePath: string): Promise<Record<string, an
     console.warn(`[indexer] Failed to parse metadata for ${filePath}`, error);
     return null;
   }
-}
+};
+
+const enrichImageMetadata = async (metadata: IndexedFileRecord["metadata"], filePath: string): Promise<void> => {
+  const parsed = await extractImageMetadata(filePath);
+  
+  if (!parsed) {
+    // Fallback for files without EXIF data
+    const fallback = await safeImageSize(filePath);
+    if (fallback) {
+      metadata.dimensions = fallback;
+    }
+    return;
+  }
+
+  // Extract date taken
+  metadata.dateTaken = toDateISO(parsed.DateTimeOriginal) ??
+    toDateISO(parsed.CreateDate) ??
+    metadata.dateTaken;
+
+  // Extract dimensions
+  const width = toNumber(parsed.ExifImageWidth) ??
+    toNumber(parsed.ImageWidth) ??
+    toNumber(parsed.PixelXDimension);
+  const height = toNumber(parsed.ExifImageHeight) ??
+    toNumber(parsed.ImageHeight) ??
+    toNumber(parsed.PixelYDimension);
+  if (width && height) {
+    metadata.dimensions = { width, height };
+  }
+
+  // Extract location
+  const latitude = toNumber(parsed.latitude ?? parsed.GPSLatitude ?? parsed.Latitude);
+  const longitude = toNumber(parsed.longitude ?? parsed.GPSLongitude ?? parsed.Longitude);
+  if (latitude !== undefined && longitude !== undefined) {
+    metadata.location = { latitude, longitude };
+  }
+
+  // Extract camera information
+  metadata.cameraMake = typeof parsed.Make === "string" ? parsed.Make : undefined;
+  metadata.cameraModel = typeof parsed.Model === "string" ? parsed.Model : undefined;
+  metadata.exposureTime = formatExposure(parsed.ExposureTime ?? parsed.ShutterSpeedValue);
+  metadata.aperture = formatAperture(parsed.FNumber ?? parsed.ApertureValue);
+  metadata.iso = toNumber(parsed.ISO ?? parsed.ISOSpeedRatings);
+  metadata.focalLength = formatFocalLength(parsed.FocalLength);
+  metadata.lens = typeof parsed.LensModel === "string" ? parsed.LensModel : undefined;
+
+  // Extract rating
+  const rating = toNumber(parsed.Rating ?? parsed.XPSubject ?? parsed.xmp?.Rating);
+  if (rating !== undefined) {
+    metadata.rating = rating;
+  }
+
+  // Extract tags
+  const tagSources = [parsed.Keywords, parsed.Subject, parsed.Categories];
+  const tags = tagSources
+    .flatMap(source => Array.isArray(source) ? source : (source ? [source] : []))
+    .filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
+    .map(tag => tag.trim());
+  
+  if (tags.length > 0) {
+    metadata.tags = Array.from(new Set(tags));
+  }
+
+  // Fallback for dimensions if not found in EXIF
+  if (!metadata.dimensions) {
+    const fallback = await safeImageSize(filePath);
+    if (fallback) {
+      metadata.dimensions = fallback;
+    }
+  }
+};
 
 export async function buildIndexedRecord(rootDir: string, filePath: string): Promise<IndexedFileRecord> {
   const stats = await fs.stat(filePath);
@@ -153,69 +223,8 @@ export async function buildIndexedRecord(rootDir: string, filePath: string): Pro
     dateTaken: dateCreated ?? dateModified,
   };
 
-  if (mimeType && mimeType.startsWith("image/")) {
-    const parsed = await extractImageMetadata(filePath);
-
-    if (parsed) {
-      metadata.dateTaken = toDateISO(parsed.DateTimeOriginal) ??
-        toDateISO(parsed.CreateDate) ??
-        metadata.dateTaken;
-
-      const width = toNumber(parsed.ExifImageWidth) ??
-        toNumber(parsed.ImageWidth) ??
-        toNumber(parsed.PixelXDimension);
-      const height = toNumber(parsed.ExifImageHeight) ??
-        toNumber(parsed.ImageHeight) ??
-        toNumber(parsed.PixelYDimension);
-      if (width && height) {
-        metadata.dimensions = { width, height };
-      }
-
-  const latitude = toNumber(parsed.latitude ?? parsed.GPSLatitude ?? parsed.Latitude);
-  const longitude = toNumber(parsed.longitude ?? parsed.GPSLongitude ?? parsed.Longitude);
-      if (latitude !== undefined && longitude !== undefined) {
-        metadata.location = { latitude, longitude };
-      }
-
-      metadata.cameraMake = typeof parsed.Make === "string" ? parsed.Make : undefined;
-      metadata.cameraModel = typeof parsed.Model === "string" ? parsed.Model : undefined;
-      metadata.exposureTime = formatExposure(parsed.ExposureTime ?? parsed.ShutterSpeedValue);
-      metadata.aperture = formatAperture(parsed.FNumber ?? parsed.ApertureValue);
-      metadata.iso = toNumber(parsed.ISO ?? parsed.ISOSpeedRatings);
-      metadata.focalLength = formatFocalLength(parsed.FocalLength);
-      metadata.lens = typeof parsed.LensModel === "string" ? parsed.LensModel : undefined;
-
-      const rating = toNumber(parsed.Rating ?? parsed.XPSubject ?? parsed.xmp?.Rating);
-      if (rating !== undefined) {
-        metadata.rating = rating;
-      }
-
-      const tagSources = [parsed.Keywords, parsed.Subject, parsed.Categories];
-      const tags = new Set<string>();
-      for (const source of tagSources) {
-        if (Array.isArray(source)) {
-          for (const entry of source) {
-            if (typeof entry === "string" && entry.trim().length > 0) {
-              tags.add(entry.trim());
-            }
-          }
-        } else if (typeof source === "string" && source.trim().length > 0) {
-          tags.add(source.trim());
-        }
-      }
-      if (tags.size > 0) {
-        metadata.tags = Array.from(tags);
-      }
-    }
-
-    if (!metadata.dimensions) {
-      // Some files omit width/height in EXIF entirely (screenshots, scans, stripped metadata).
-      // Fall back to inspecting the binary header so we still index dimensions when possible.
-      const fallback = await safeImageSize(filePath);
-      if (fallback) {
-        metadata.dimensions = fallback;
-      }
-    }
+  if (mimeType?.startsWith("image/")) {
+    await enrichImageMetadata(metadata, filePath);
   }
 
   if (!metadata.dateTaken) {

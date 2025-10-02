@@ -134,69 +134,55 @@ export class IndexDatabase {
   }
 }
 
-function matchesRecord(record: IndexedFileRecord, filter: Filter): boolean {
-  if (filter.path && filter.path.length > 0 && !matchesPath(record, filter.path)) {
+const matchesRecord = (record: IndexedFileRecord, filter: Filter): boolean => {
+  if (filter.path?.length && !matchesPath(record, filter.path)) {
     return false;
   }
-  if (
-    filter.filename &&
-    filter.filename.length > 0 &&
-    !matchesFilename(record, filter.filename)
-  ) {
+  
+  if (filter.filename?.length && !matchesFilename(record, filter.filename)) {
     return false;
   }
-  if (
-    filter.directory &&
-    filter.directory.length > 0 &&
-    !matchesDirectory(record, filter.directory)
-  ) {
+  
+  if (filter.directory?.length && !matchesDirectory(record, filter.directory)) {
     return false;
   }
-  if (
-    filter.mimeType &&
-    filter.mimeType.length > 0 &&
-    !matchesMimeType(record, filter.mimeType)
-  ) {
+  
+  if (filter.mimeType?.length && !matchesMimeType(record, filter.mimeType)) {
     return false;
   }
-  if (
-    filter.cameraMake &&
-    filter.cameraMake.length > 0 &&
-    !matchesCameraMake(record, filter.cameraMake)
-  ) {
+  
+  if (filter.cameraMake?.length && !matchesCameraMake(record, filter.cameraMake)) {
     return false;
   }
-  if (
-    filter.cameraModel &&
-    filter.cameraModel.length > 0 &&
-    !matchesCameraModel(record, filter.cameraModel)
-  ) {
+  
+  if (filter.cameraModel?.length && !matchesCameraModel(record, filter.cameraModel)) {
     return false;
   }
+  
   if (filter.location && !matchesLocation(record, filter.location)) {
     return false;
   }
+  
   if (filter.dateRange && !matchesDateRange(record, filter.dateRange)) {
     return false;
   }
+  
   if (filter.rating && !matchesRating(record, filter.rating)) {
     return false;
   }
-  if (
-    filter.tags &&
-    filter.tags.length > 0 &&
-    !matchesTags(record, filter.tags, filter.tagsMatchAll ?? false)
-  ) {
+  
+  if (filter.tags?.length && !matchesTags(record, filter.tags, filter.tagsMatchAll ?? false)) {
     return false;
   }
-  if (filter.q && filter.q.trim().length > 0 && !matchesQuery(record, filter.q)) {
+  
+  if (filter.q?.trim().length && !matchesQuery(record, filter.q)) {
     return false;
   }
 
   return true;
-}
+};
 
-function matchesPath(record: IndexedFileRecord, patterns: string[]): boolean {
+const matchesPath = (record: IndexedFileRecord, patterns: string[]): boolean => {
   const pathLower = record.path.toLowerCase();
   return patterns.some((pattern) => {
     const normalized = normalizePattern(pattern);
@@ -205,9 +191,9 @@ function matchesPath(record: IndexedFileRecord, patterns: string[]): boolean {
     }
     return minimatch(record.path, normalized, MINIMATCH_OPTIONS);
   });
-}
+};
 
-function matchesFilename(record: IndexedFileRecord, patterns: string[]): boolean {
+const matchesFilename = (record: IndexedFileRecord, patterns: string[]): boolean => {
   const nameLower = record.name.toLowerCase();
   return patterns.some((pattern) => {
     const normalized = normalizePattern(pattern);
@@ -219,9 +205,9 @@ function matchesFilename(record: IndexedFileRecord, patterns: string[]): boolean
     }
     return minimatch(record.name, normalized, MINIMATCH_OPTIONS);
   });
-}
+};
 
-function matchesDirectory(record: IndexedFileRecord, patterns: string[]): boolean {
+const matchesDirectory = (record: IndexedFileRecord, patterns: string[]): boolean => {
   const directoryLower = record.directory.toLowerCase();
   return patterns.some((pattern) => {
     const normalized = stripTrailingSlash(normalizePattern(pattern));
@@ -237,9 +223,9 @@ function matchesDirectory(record: IndexedFileRecord, patterns: string[]): boolea
     }
     return minimatch(record.directory, normalized, MINIMATCH_OPTIONS);
   });
-}
+};
 
-function matchesMimeType(record: IndexedFileRecord, mimeTypes: string[]): boolean {
+const matchesMimeType = (record: IndexedFileRecord, mimeTypes: string[]): boolean => {
   if (!record.mimeType) {
     return false;
   }
@@ -251,30 +237,30 @@ function matchesMimeType(record: IndexedFileRecord, mimeTypes: string[]): boolea
     }
     return minimatch(value, normalized, MINIMATCH_OPTIONS);
   });
-}
+};
 
-function matchesCameraMake(record: IndexedFileRecord, makes: string[]): boolean {
+const matchesCameraMake = (record: IndexedFileRecord, makes: string[]): boolean => {
   const cameraMake = record.metadata.cameraMake;
   if (!cameraMake) {
     return false;
   }
   const value = cameraMake.toLowerCase();
   return makes.some((make) => value === make.trim().toLowerCase());
-}
+};
 
-function matchesCameraModel(record: IndexedFileRecord, models: string[]): boolean {
+const matchesCameraModel = (record: IndexedFileRecord, models: string[]): boolean => {
   const cameraModel = record.metadata.cameraModel;
   if (!cameraModel) {
     return false;
   }
   const value = cameraModel.toLowerCase();
   return models.some((model) => value === model.trim().toLowerCase());
-}
+};
 
-function matchesLocation(
+const matchesLocation = (
   record: IndexedFileRecord,
   bounds: NonNullable<Filter["location"]>
-): boolean {
+): boolean => {
   if (!bounds) {
     return true;
   }
@@ -304,12 +290,12 @@ function matchesLocation(
     location.longitude >= minLon &&
     location.longitude <= maxLon
   );
-}
+};
 
-function matchesDateRange(
+const matchesDateRange = (
   record: IndexedFileRecord,
   range: NonNullable<Filter["dateRange"]>
-): boolean {
+): boolean => {
   if (!range) {
     return true;
   }
@@ -344,12 +330,12 @@ function matchesDateRange(
     return false;
   }
   return true;
-}
+};
 
-function matchesRating(
+const matchesRating = (
   record: IndexedFileRecord,
   ratingFilter: NonNullable<Filter["rating"]>
-): boolean {
+): boolean => {
   const rating = typeof record.metadata.rating === "number" ? record.metadata.rating : undefined;
   if (rating === undefined) {
     return false;
@@ -362,13 +348,13 @@ function matchesRating(
   const min = ratingFilter.min ?? -Infinity;
   const max = ratingFilter.max ?? Infinity;
   return rating >= min && rating <= max;
-}
+};
 
-function matchesTags(
+const matchesTags = (
   record: IndexedFileRecord,
   tags: string[],
   matchAll: boolean
-): boolean {
+): boolean => {
   const recordTags = Array.isArray(record.metadata.tags)
     ? record.metadata.tags.map((tag) => tag.toLowerCase())
     : [];
@@ -382,18 +368,18 @@ function matchesTags(
     return desired.every((tag) => recordTags.includes(tag));
   }
   return desired.some((tag) => recordTags.includes(tag));
-}
+};
 
-function matchesQuery(record: IndexedFileRecord, query: string): boolean {
+const matchesQuery = (record: IndexedFileRecord, query: string): boolean => {
   const q = query.trim().toLowerCase();
   if (!q) {
     return true;
   }
   const tokens = collectSearchTokens(record);
   return tokens.some((token) => token.includes(q));
-}
+};
 
-function collectSearchTokens(record: IndexedFileRecord): string[] {
+const collectSearchTokens = (record: IndexedFileRecord): string[] => {
   const tokens = new Set<string>();
   tokens.add(record.path.toLowerCase());
   tokens.add(record.name.toLowerCase());
@@ -435,23 +421,23 @@ function collectSearchTokens(record: IndexedFileRecord): string[] {
   }
 
   return Array.from(tokens);
-}
+};
 
-function sortRecords(
+const sortRecords = (
   records: IndexedFileRecord[],
   sort?: QuerySort
-): IndexedFileRecord[] {
+): IndexedFileRecord[] => {
   const sortBy = sort?.sortBy ?? "name";
   const order = sort?.order ?? "asc";
   return records.sort((a, b) => compareByField(a, b, sortBy, order));
-}
+};
 
-function compareByField(
+const compareByField = (
   a: IndexedFileRecord,
   b: IndexedFileRecord,
   sortBy: QuerySort["sortBy"],
   order: QuerySort["order"]
-): number {
+): number => {
   switch (sortBy) {
     case "dateTaken":
       return compareNumeric(getDateTakenTimestamp(a), getDateTakenTimestamp(b), order);
@@ -477,13 +463,13 @@ function compareByField(
       return order === "asc" ? pathComparison : -pathComparison;
     }
   }
-}
+};
 
-function compareNumeric(
+const compareNumeric = (
   a: number | undefined,
   b: number | undefined,
   order: QuerySort["order"]
-): number {
+): number => {
   if (order === "asc") {
     if (a === undefined && b === undefined) {
       return 0;
@@ -514,9 +500,9 @@ function compareNumeric(
     return 0;
   }
   return b - a;
-}
+};
 
-function getDateTakenTimestamp(record: IndexedFileRecord): number | undefined {
+const getDateTakenTimestamp = (record: IndexedFileRecord): number | undefined => {
   const candidate =
     record.metadata.dateTaken ??
     record.metadata.dateCreated ??
@@ -524,9 +510,9 @@ function getDateTakenTimestamp(record: IndexedFileRecord): number | undefined {
     record.dateModified;
 
   return toTimestamp(candidate);
-}
+};
 
-function toTimestamp(value: string | Date | undefined | null): number | undefined {
+const toTimestamp = (value: string | Date | undefined | null): number | undefined => {
   if (!value) {
     return undefined;
   }
@@ -536,9 +522,9 @@ function toTimestamp(value: string | Date | undefined | null): number | undefine
   }
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? undefined : ms;
-}
+};
 
-function buildFullMetadata(record: IndexedFileRecord): Partial<AllMetadata> {
+const buildFullMetadata = (record: IndexedFileRecord): Partial<AllMetadata> => {
   const merged: Partial<AllMetadata> = {
     ...record.metadata,
   };
@@ -557,26 +543,27 @@ function buildFullMetadata(record: IndexedFileRecord): Partial<AllMetadata> {
   }
 
   return merged;
-}
+};
 
-function pickMetadata<K extends keyof AllMetadata>(
+const pickMetadata = <K extends keyof AllMetadata>(
   source: Partial<AllMetadata>,
   keys: K[]
-): Pick<AllMetadata, K> {
+): Pick<AllMetadata, K> => {
   const result: Partial<AllMetadata> = {};
   for (const key of keys) {
     result[key] = source[key];
   }
   return result as Pick<AllMetadata, K>;
-}
+};
 
-function normalizePattern(pattern: string): string {
+const normalizePattern = (pattern: string): string => {
   return pattern.replace(/\\/g, "/").replace(/^\.\/+/, "").trim();
-}
-function stripTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, "");
-}
+};
 
-function hasGlob(pattern: string): boolean {
+const stripTrailingSlash = (value: string): string => {
+  return value.replace(/\/+$/, "");
+};
+
+const hasGlob = (pattern: string): boolean => {
   return /[*?\[\]{}]/.test(pattern);
-}
+};

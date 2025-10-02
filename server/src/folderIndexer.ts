@@ -57,8 +57,10 @@ export class FolderIndexer {
 
   async indexFile(filePath: string): Promise<void> {
     try {
+      console.log(`[indexer] Processing file: ${path.relative(this.root, filePath)}`);
       const record = await buildIndexedRecord(this.root, filePath);
       this.db.upsertFile(record);
+      console.log(`[indexer] Successfully indexed: ${path.relative(this.root, filePath)}`);
     } catch (error) {
       // Log and continue.
       console.error(`[indexer] Failed to index ${filePath}:`, error);
@@ -88,10 +90,16 @@ export class FolderIndexer {
   }
 
   private async indexExistingFiles(): Promise<void> {
+    console.log(`[indexer] Starting to index existing files in ${this.root}`);
     const files = await this.walkFiles(this.root);
+    console.log(`[indexer] Found ${files.length} files to index`);
+    
+    // Process files sequentially to avoid overwhelming the system
     for (const file of files) {
       await this.indexFile(file);
     }
+    
+    console.log(`[indexer] Completed indexing ${files.length} files`);
   }
 
   private async startWatcher(): Promise<void> {
@@ -118,17 +126,17 @@ export class FolderIndexer {
 
   private async walkFiles(dir: string): Promise<string[]> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
-    const files: string[] = [];
-    for (const entry of entries) {
+    
+    const filePromises = entries.map(async (entry) => {
       const absolutePath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        const childFiles = await this.walkFiles(absolutePath);
-        files.push(...childFiles);
-      } else if (entry.isFile()) {
-        files.push(absolutePath);
+        return await this.walkFiles(absolutePath);
       }
-    }
-    return files;
+      return entry.isFile() ? [absolutePath] : [];
+    });
+
+    const results = await Promise.all(filePromises);
+    return results.flat();
   }
 
   private toRelative(filePath: string): string {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Button,
   Caption1,
@@ -46,27 +46,28 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PhotoItem | null>(null);
 
+  const handleLoadPhotos = useCallback(async (signal?: AbortSignal): Promise<void> => {
+    try {
+      setLoading(true);
+      setError(null);
+      const results = await fetchPhotos(signal);
+      setPhotos(results);
+    } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        return;
+      }
+      console.error(err);
+      setError((err as Error).message ?? "Failed to load photos");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
-    async function load() {
-      try {
-        setLoading(true);
-        setError(null);
-        const results = await fetchPhotos(controller.signal);
-        setPhotos(results);
-      } catch (err) {
-        if ((err as Error).name !== "AbortError") {
-          console.error(err);
-          setError((err as Error).message ?? "Failed to load photos");
-        }
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    void load();
+    handleLoadPhotos(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [handleLoadPhotos]);
 
   const statusMessage = useMemo(() => {
     if (loading) {
@@ -88,21 +89,7 @@ export default function App() {
         <Tooltip content="Refresh" relationship="description">
           <Button
             icon={<ArrowClockwise24Regular />}
-            onClick={() => {
-              setLoading(true);
-              void (async () => {
-                try {
-                  const results = await fetchPhotos();
-                  setPhotos(results);
-                  setError(null);
-                } catch (err) {
-                  console.error(err);
-                  setError((err as Error).message ?? "Failed to refresh");
-                } finally {
-                  setLoading(false);
-                }
-              })();
-            }}
+            onClick={() => handleLoadPhotos()}
             appearance="secondary"
           >
             Refresh

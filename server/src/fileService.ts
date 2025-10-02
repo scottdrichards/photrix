@@ -105,19 +105,19 @@ export class FileService {
   }
 }
 
-function inferContentType(record: IndexedFileRecord): string | null {
+const inferContentType = (record: IndexedFileRecord): string | null => {
   const guessed = lookupMimeType(record.name);
   return (
     record.metadata.mimeType ??
     record.mimeType ??
     (typeof guessed === "string" ? guessed : null)
   ) ?? null;
-}
+};
 
-function selectMetadata(
+const selectMetadata = (
   record: IndexedFileRecord,
   keys: Array<keyof AllMetadata>
-): Partial<AllMetadata> {
+): Partial<AllMetadata> => {
   const full: Partial<AllMetadata> = {
     name: record.metadata.name ?? record.name,
     size: record.metadata.size ?? record.size,
@@ -130,23 +130,23 @@ function selectMetadata(
     (result as Record<string, unknown>)[key as string] = full[key];
   }
   return result;
-}
+};
 
-async function convertToWebSafe(
+const convertToWebSafe = async (
   record: IndexedFileRecord,
   absolutePath: string
-): Promise<Buffer> {
+): Promise<Buffer> => {
   const source = await fs.readFile(absolutePath);
   const baseBuffer = await ensureJpegBuffer(record, source);
   return sharp(baseBuffer).rotate().jpeg({ quality: 85 }).toBuffer();
-}
+};
 
-async function resizeImage(
+const resizeImage = async (
   record: IndexedFileRecord,
   absolutePath: string,
   maxWidth?: number,
   maxHeight?: number
-): Promise<Buffer> {
+): Promise<Buffer> => {
   const source = await fs.readFile(absolutePath);
   const baseBuffer = await ensureJpegBuffer(record, source);
   const transformer = sharp(baseBuffer).rotate();
@@ -159,19 +159,19 @@ async function resizeImage(
     });
   }
   return transformer.jpeg({ quality: 85 }).toBuffer();
-}
+};
 
-function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
+const bufferToArrayBuffer = (buffer: Buffer): ArrayBuffer => {
   const arrayBuffer = new ArrayBuffer(buffer.length);
   const view = new Uint8Array(arrayBuffer);
   view.set(buffer);
   return arrayBuffer;
-}
+};
 
-async function ensureJpegBuffer(
+const ensureJpegBuffer = async (
   record: IndexedFileRecord,
   source: Buffer
-): Promise<Buffer> {
+): Promise<Buffer> => {
   if (isHeic(record)) {
     const converted = await heicConvert({
       buffer: source as any, // heic-convert types are wrong; it really wants a Buffer
@@ -181,12 +181,12 @@ async function ensureJpegBuffer(
     return Buffer.from(converted);
   }
   return source;
-}
+};
 
-function isHeic(record: IndexedFileRecord): boolean {
+const isHeic = (record: IndexedFileRecord): boolean => {
   const mime = (record.metadata.mimeType ?? record.mimeType ?? "").toLowerCase();
   if (mime === "image/heic" || mime === "image/heif") {
     return true;
   }
   return record.name.toLowerCase().endsWith(".heic");
-}
+};

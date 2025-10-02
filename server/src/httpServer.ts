@@ -209,12 +209,11 @@ export class PhotrixHttpServer {
   private async handleGetFile(url: URL, res: http.ServerResponse): Promise<void> {
     const params = url.searchParams;
     const representation = parseRepresentation(params);
-
     const pathParam = params.get("path");
     const filenameParam = params.get("filename");
 
     if (!pathParam && !filenameParam) {
-      throw new BadRequestError("Query parameter \"path\" or \"filename\" is required");
+      throw new BadRequestError('Query parameter "path" or "filename" is required');
     }
 
     try {
@@ -318,22 +317,22 @@ export class PhotrixHttpServer {
   }
 }
 
-function buildRequestUrl(requestUrl: string, hostHeader: string): URL {
+const buildRequestUrl = (requestUrl: string, hostHeader: string): URL => {
   const base = hostHeader.startsWith("http") ? hostHeader : `http://${hostHeader}`;
   return new URL(requestUrl, base);
-}
+};
 
-function normalizePrefix(value: string): string {
+const normalizePrefix = (value: string): string => {
   if (!value.startsWith("/")) {
     return `/${value}`;
   }
   return value.replace(/\/+$/, "");
-}
+};
 
-function buildQueryParameters(params: URLSearchParams): {
+const buildQueryParameters = (params: URLSearchParams): {
   filter?: Filter;
   options: QueryOptionsType;
-} {
+} => {
   const filter: Filter = {};
   let hasFilter = false;
 
@@ -436,9 +435,9 @@ function buildQueryParameters(params: URLSearchParams): {
     filter: hasFilter ? filter : undefined,
     options,
   };
-}
+};
 
-function parseSort(sortBy: string, orderRaw: string | null): QueryOptionsType["sort"] {
+const parseSort = (sortBy: string, orderRaw: string | null): QueryOptionsType["sort"] => {
   const allowedSortFields = new Set(["name", "dateTaken", "dateCreated", "rating"] as const);
   if (!allowedSortFields.has(sortBy as any)) {
     return undefined;
@@ -449,9 +448,9 @@ function parseSort(sortBy: string, orderRaw: string | null): QueryOptionsType["s
     sortBy: sortBy as "name" | "dateTaken" | "dateCreated" | "rating",
     order,
   };
-}
+};
 
-function buildLocationFilter(params: URLSearchParams): Filter["location"] | undefined {
+const buildLocationFilter = (params: URLSearchParams): Filter["location"] | undefined => {
   const minLatitude = parseOptionalFloat("minLatitude", params.get("minLatitude"));
   const maxLatitude = parseOptionalFloat("maxLatitude", params.get("maxLatitude"));
   const minLongitude = parseOptionalFloat("minLongitude", params.get("minLongitude"));
@@ -471,9 +470,9 @@ function buildLocationFilter(params: URLSearchParams): Filter["location"] | unde
     minLongitude,
     maxLongitude,
   };
-}
+};
 
-function buildDateRangeFilter(params: URLSearchParams): Filter["dateRange"] | undefined {
+const buildDateRangeFilter = (params: URLSearchParams): Filter["dateRange"] | undefined => {
   const start = params.get("dateStart") ?? params.get("startDate");
   const end = params.get("dateEnd") ?? params.get("endDate");
 
@@ -485,9 +484,9 @@ function buildDateRangeFilter(params: URLSearchParams): Filter["dateRange"] | un
     start: start ?? undefined,
     end: end ?? undefined,
   };
-}
+};
 
-function buildRatingFilter(params: URLSearchParams): Filter["rating"] | undefined {
+const buildRatingFilter = (params: URLSearchParams): Filter["rating"] | undefined => {
   const ratingValues = getStringList(params, "rating").map((value) => parseFloatStrict("rating", value));
   if (ratingValues.length > 0) {
     return ratingValues;
@@ -501,9 +500,9 @@ function buildRatingFilter(params: URLSearchParams): Filter["rating"] | undefine
   }
 
   return { min, max };
-}
+};
 
-function parseRepresentation(params: URLSearchParams): FileRepresentation {
+const parseRepresentation = (params: URLSearchParams): FileRepresentation => {
   const type = (params.get("representation") ?? "original").toLowerCase();
 
   switch (type) {
@@ -528,9 +527,9 @@ function parseRepresentation(params: URLSearchParams): FileRepresentation {
     default:
       return { type: "original" };
   }
-}
+};
 
-function parseMetadataKeys(params: URLSearchParams): MetadataKeyList {
+const parseMetadataKeys = (params: URLSearchParams): MetadataKeyList => {
   const values = getStringList(params, "metadata");
   const result: MetadataKeyList = [];
   for (const value of values) {
@@ -540,15 +539,15 @@ function parseMetadataKeys(params: URLSearchParams): MetadataKeyList {
     }
   }
   return result;
-}
+};
 
-function getStringList(params: URLSearchParams, key: string): string[] {
+const getStringList = (params: URLSearchParams, key: string): string[] => {
   const values = params.get(key)?.split(",").map(v=>v.trim());
   // Deduplicate values
   return Array.from(new Set(values));
-}
+};
 
-function sanitizeRelativePath(raw: string): string {
+const sanitizeRelativePath = (raw: string): string => {
   let decoded: string;
   try {
     decoded = decodeURIComponent(raw);
@@ -571,22 +570,22 @@ function sanitizeRelativePath(raw: string): string {
     throw new BadRequestError("Path cannot be empty");
   }
   return safeSegments.join("/");
-}
+};
 
-function parseBoolean(value: string): boolean {
+const parseBoolean = (value: string): boolean => {
   const normalized = value.trim().toLowerCase();
   return normalized === "true" || normalized === "1";
-}
+};
 
-function parsePositiveInteger(name: string, value: string): number {
+const parsePositiveInteger = (name: string, value: string): number => {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed < 1) {
-    throw new BadRequestError(`Query parameter \"${name}\" must be a positive integer`);
+    throw new BadRequestError(`Query parameter "${name}" must be a positive integer`);
   }
   return parsed;
-}
+};
 
-function parseOptionalPositiveInteger(name: string, value: string | null): number | undefined {
+const parseOptionalPositiveInteger = (name: string, value: string | null): number | undefined => {
   if (value === null) {
     return undefined;
   }
@@ -595,38 +594,38 @@ function parseOptionalPositiveInteger(name: string, value: string | null): numbe
   }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new BadRequestError(`Query parameter \"${name}\" must be a positive integer`);
+    throw new BadRequestError(`Query parameter "${name}" must be a positive integer`);
   }
   return parsed;
-}
+};
 
-function parseOptionalFloat(name: string, value: string | null): number | undefined {
+const parseOptionalFloat = (name: string, value: string | null): number | undefined => {
   if (value === null || value.trim().length === 0) {
     return undefined;
   }
   const parsed = Number.parseFloat(value);
   if (!Number.isFinite(parsed)) {
-    throw new BadRequestError(`Query parameter \"${name}\" must be a valid number`);
+    throw new BadRequestError(`Query parameter "${name}" must be a valid number`);
   }
   return parsed;
-}
+};
 
-function parseFloatStrict(name: string, value: string): number {
+const parseFloatStrict = (name: string, value: string): number => {
   const parsed = Number.parseFloat(value);
   if (!Number.isFinite(parsed)) {
-    throw new BadRequestError(`Query parameter \"${name}\" must be a valid number`);
+    throw new BadRequestError(`Query parameter "${name}" must be a valid number`);
   }
   return parsed;
-}
+};
 
-function arrayBufferToBuffer(data: ArrayBuffer): Buffer {
+const arrayBufferToBuffer = (data: ArrayBuffer): Buffer => {
   return Buffer.from(data instanceof Uint8Array ? data : new Uint8Array(data));
-}
+};
 
-function isFileMissingError(error: unknown): boolean {
+const isFileMissingError = (error: unknown): boolean => {
   if (!(error instanceof Error)) {
     return false;
   }
   const message = error.message.toLowerCase();
   return message.includes("not currently indexed") || message.includes("not found");
-}
+};
