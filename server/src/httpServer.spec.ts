@@ -50,8 +50,9 @@ describe("PhotrixHttpServer", () => {
     expect(payload.total).toBe(1);
     expect(payload.items).toHaveLength(1);
     expect(payload.items[0].path).toBe("sample.png");
-    expect(payload.items[0].metadata?.name).toBe("sample.png");
+    expect(payload.items[0].metadata?.name).toBeUndefined();
     expect(payload.items[0].metadata?.mimeType).toContain("image/png");
+    expect(Object.keys(payload.items[0].metadata ?? {})).toEqual(["mimeType"]);
   });
 
   it("uses the first metadata entry when provided multiple times", async () => {
@@ -62,9 +63,9 @@ describe("PhotrixHttpServer", () => {
     const payload = await response.json();
     const metadata = payload.items[0].metadata ?? {};
     expect(metadata.mimeType).toContain("image/png");
-    expect(metadata.name).toBeUndefined();
-    expect(metadata.dimensions).toBeUndefined();
-    expect(Object.keys(metadata)).toEqual(["mimeType"]);
+  expect(metadata.name).toBeUndefined();
+  expect(metadata.dimensions).toEqual({ width: 1, height: 1 });
+  expect(Object.keys(metadata)).toEqual(["mimeType", "dimensions"]);
   });
 
   it("serves the original file bytes", async () => {
@@ -79,12 +80,26 @@ describe("PhotrixHttpServer", () => {
 
   it("serves file metadata as JSON", async () => {
     const response = await fetch(
+      `${baseUrl}/api/file?path=sample.png&representation=metadata&metadata=mimeType,size`,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const metadata = await response.json();
+    expect(metadata.name).toBeUndefined();
+    expect(metadata.mimeType).toContain("image/png");
+    expect(typeof metadata.size).toBe("number");
+    expect(metadata.size).toBeGreaterThan(0);
+    expect(Object.keys(metadata)).toEqual(["mimeType", "size"]);
+  });
+
+  it("returns an empty metadata object when unsupported keys are requested", async () => {
+    const response = await fetch(
       `${baseUrl}/api/file?path=sample.png&representation=metadata&metadata=name`,
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/json");
     const metadata = await response.json();
-    expect(metadata.name).toBe("sample.png");
+    expect(metadata).toEqual({});
   });
 
   it("exposes static uploads path", async () => {

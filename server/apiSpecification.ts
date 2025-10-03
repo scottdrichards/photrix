@@ -43,7 +43,6 @@ export type Filter = {
 };
 
 export type FileMetadata = {
-  name: string;
   size: number; // bytes
   mimeType: string;
   // Use ISO string on the wire (e.g. 2025-09-29T12:00:00Z)

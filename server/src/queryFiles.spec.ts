@@ -82,13 +82,15 @@ describe("FolderIndexer queryFiles", () => {
     try {
       const result = await indexer.queryFiles(
         { filename: ["sewing-threads.heic"] },
-        { metadata: ["name", "cameraMake"] },
+        { metadata: ["cameraMake"] },
       );
       expect(result.total).toBe(1);
       const metadata = result.items[0]?.metadata;
       expect(metadata).toBeDefined();
-      expect(Object.keys(metadata ?? {})).toEqual(["name", "cameraMake"]);
-      expect(metadata?.name).toBe("sewing-threads.heic");
+      expect(Object.keys(metadata ?? {})).toEqual(["cameraMake"]);
+      expect(
+        Object.prototype.hasOwnProperty.call(metadata ?? {}, "name"),
+      ).toBe(false);
       expect(metadata?.cameraMake?.toLowerCase()).toBe("samsung");
     } finally {
       await indexer.stop(true);

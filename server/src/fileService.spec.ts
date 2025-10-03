@@ -46,13 +46,19 @@ describe("FileService", () => {
     const { indexer, service } = await createService();
     try {
       const result = await service.getFile("sewing-threads.heic", {
-        representation: { type: "metadata", metadataKeys: ["name", "cameraMake"] },
+        representation: { type: "metadata", metadataKeys: ["cameraMake", "mimeType"] },
       });
       expect(result.contentType).toBe("application/json");
       const text = Buffer.from(result.data).toString("utf8");
-      const parsed = JSON.parse(text);
-      expect(parsed.name).toBe("sewing-threads.heic");
-      expect(parsed.cameraMake?.toLowerCase()).toBe("samsung");
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      expect(parsed.name).toBeUndefined();
+      expect((parsed.mimeType as string | undefined)?.toLowerCase()).toContain(
+        "image/heic",
+      );
+      expect((parsed.cameraMake as string | undefined)?.toLowerCase()).toBe(
+        "samsung",
+      );
+      expect(Object.keys(parsed)).toEqual(["cameraMake", "mimeType"]);
     } finally {
       await indexer.stop(true);
     }

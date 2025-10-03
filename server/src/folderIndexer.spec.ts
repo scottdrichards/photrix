@@ -47,7 +47,10 @@ describe("FolderIndexer", () => {
         (value) => value !== undefined,
       );
 
-      expect(record?.metadata.name).toBe("notes.txt");
+      expect(record?.path).toBe("notes.txt");
+      expect(
+        Object.prototype.hasOwnProperty.call(record?.metadata ?? {}, "name"),
+      ).toBe(false);
       expect(record?.metadata.size).toBeGreaterThan(0);
     } finally {
       await indexer.stop(true);
@@ -132,7 +135,10 @@ describe("FolderIndexer", () => {
         (value) => value !== undefined,
       );
 
-      expect(record?.metadata.name).toBe(newRel);
+      expect(record?.name).toBe(newRel);
+      expect(
+        Object.prototype.hasOwnProperty.call(record?.metadata ?? {}, "name"),
+      ).toBe(false);
     } finally {
       await indexer.stop(true);
     }

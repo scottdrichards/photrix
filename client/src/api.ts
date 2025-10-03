@@ -37,7 +37,7 @@ export interface FetchPhotosResult {
   pageSize: number;
 }
 
-const DEFAULT_METADATA_KEYS = ["name", "mimeType", "dimensions"] as const;
+const DEFAULT_METADATA_KEYS = ["mimeType", "dimensions"] as const;
 
 const buildFileUrl = (path: string, params: Record<string, string>): string => {
   const url = new URL("/api/file", window.location.origin);

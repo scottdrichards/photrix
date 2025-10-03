@@ -118,11 +118,13 @@ const selectMetadata = (
   record: IndexedFileRecord,
   keys: Array<keyof AllMetadata>,
 ): Partial<AllMetadata> => {
-  const full: Partial<AllMetadata> = {
-    name: record.metadata.name ?? record.name,
+  const base: Partial<AllMetadata> = {
     size: record.metadata.size ?? record.size,
     mimeType: record.metadata.mimeType ?? record.mimeType ?? undefined,
     dateCreated: record.metadata.dateCreated ?? record.dateCreated,
+  };
+  const full: Partial<AllMetadata> = {
+    ...base,
     ...record.metadata,
   };
   const result: Partial<AllMetadata> = {};

@@ -284,7 +284,6 @@ export async function buildIndexedRecord(
   const dateModified = stats.mtime ? stats.mtime.toISOString() : undefined;
 
   const metadata: IndexedFileRecord["metadata"] = {
-    name,
     size: stats.size,
     mimeType: mimeType ?? undefined,
     dateCreated,

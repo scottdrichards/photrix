@@ -12,7 +12,6 @@ const DEFAULT_PORT = 3000;
 const DEFAULT_UPLOAD_PREFIX = "/uploads";
 
 const METADATA_FIELDS = [
-  "name",
   "size",
   "mimeType",
   "dateCreated",
@@ -440,9 +439,14 @@ const buildQueryParameters = (
     hasFilter = true;
   }
 
-  const metadataKeys = parseMetadataKeys(params);
+  const { keys: metadataKeys, requested: metadataRequested } = collectMetadataKeys(params);
   const options: QueryOptionsType = {
-    metadata: metadataKeys.length > 0 ? metadataKeys : undefined,
+    metadata:
+      metadataKeys.length > 0
+        ? metadataKeys
+        : metadataRequested
+        ? []
+        : undefined,
   };
 
   const sortBy = params.get("sortBy");
@@ -557,8 +561,8 @@ const parseRepresentation = (params: URLSearchParams): FileRepresentation => {
       };
     }
     case "metadata": {
-      const metadataKeys = parseMetadataKeys(params);
-      const keys = metadataKeys.length > 0 ? metadataKeys : [...METADATA_FIELDS];
+      const { keys: metadataKeys, requested } = collectMetadataKeys(params);
+      const keys = metadataKeys.length > 0 ? metadataKeys : requested ? [] : [...METADATA_FIELDS];
       return { type: "metadata", metadataKeys: keys };
     }
     case "original":
@@ -567,24 +571,32 @@ const parseRepresentation = (params: URLSearchParams): FileRepresentation => {
   }
 };
 
-const parseMetadataKeys = (params: URLSearchParams): MetadataKeyList => {
+const collectMetadataKeys = (
+  params: URLSearchParams,
+): { keys: MetadataKeyList; requested: boolean } => {
+  if (!params.has("metadata")) {
+    return { keys: [], requested: false };
+  }
   const values = getStringList(params, "metadata");
-  const result: MetadataKeyList = [];
+  const keys: MetadataKeyList = [];
   for (const value of values) {
     const key = value as keyof AllMetadata;
     if (METADATA_KEY_SET.has(key)) {
-      result.push(key);
+      keys.push(key);
     }
   }
-  return result;
+  return { keys, requested: true };
 };
 
 const getStringList = (params: URLSearchParams, key: string): string[] => {
-  const values = params
-    .get(key)
-    ?.split(",")
-    .map((v) => v.trim());
-  // Deduplicate values
+  const rawValues = params.getAll(key);
+  if (rawValues.length === 0) {
+    return [];
+  }
+  const values = rawValues
+    .flatMap((entry) => entry.split(","))
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
   return Array.from(new Set(values));
 };
 

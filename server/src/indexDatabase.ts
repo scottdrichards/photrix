@@ -91,7 +91,10 @@ export class IndexDatabase {
 
     const items = paged.map((record) => {
       const fullMetadata = buildFullMetadata(record);
-      if (metadataKeys && metadataKeys.length > 0) {
+      if (metadataKeys !== undefined) {
+        if (metadataKeys.length === 0) {
+          return { path: record.path } as QueryResult<T>["items"][number];
+        }
         const picked = pickMetadata(fullMetadata, metadataKeys);
         const hasValues = metadataKeys.some((key) => picked[key] !== undefined);
         if (!hasValues) {
@@ -540,9 +543,6 @@ const buildFullMetadata = (record: IndexedFileRecord): Partial<AllMetadata> => {
     ...record.metadata,
   };
 
-  if (merged.name === undefined) {
-    merged.name = record.name;
-  }
   if (merged.size === undefined) {
     merged.size = record.size;
   }
