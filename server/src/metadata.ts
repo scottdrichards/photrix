@@ -1,9 +1,13 @@
 import { promises as fs } from "fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import path from "path";
 import { lookup as lookupMimeType } from "mime-types";
 import { imageSize } from "image-size";
 import exifr from "exifr";
 import type { IndexedFileRecord } from "./models.js";
+
+const execFileAsync = promisify(execFile);
 
 type ValueWithValueOf = {
   valueOf: () => unknown;
@@ -258,6 +262,38 @@ const enrichImageMetadata = async (
   }
 };
 
+const enrichVideoMetadata = async (
+  metadata: IndexedFileRecord["metadata"],
+  filePath: string,
+): Promise<void> => {
+  const probe = await videoMetadataProbe.probe(filePath);
+  if (!probe) {
+    return;
+  }
+
+  const { width, height, duration, framerate, videoCodec, audioCodec } = probe;
+
+  if (width !== undefined && height !== undefined) {
+    metadata.dimensions = { width, height };
+  }
+
+  if (duration !== undefined) {
+    metadata.duration = duration;
+  }
+
+  if (framerate !== undefined) {
+    metadata.framerate = framerate;
+  }
+
+  if (videoCodec) {
+    metadata.videoCodec = videoCodec;
+  }
+
+  if (audioCodec) {
+    metadata.audioCodec = audioCodec;
+  }
+};
+
 export async function buildIndexedRecord(
   rootDir: string,
   filePath: string,
@@ -294,6 +330,10 @@ export async function buildIndexedRecord(
     await enrichImageMetadata(metadata, filePath);
   }
 
+  if (isVideoFile(mimeType, name)) {
+    await enrichVideoMetadata(metadata, filePath);
+  }
+
   if (!metadata.dateTaken) {
     metadata.dateTaken = dateModified ?? dateCreated;
   }
@@ -310,3 +350,128 @@ export async function buildIndexedRecord(
     lastIndexedAt: new Date().toISOString(),
   };
 }
+
+type FfprobeStream = {
+  codec_type?: string;
+  width?: unknown;
+  height?: unknown;
+  codec_name?: unknown;
+  duration?: unknown;
+  avg_frame_rate?: unknown;
+  r_frame_rate?: unknown;
+};
+
+type FfprobeFormat = {
+  duration?: unknown;
+};
+
+type FfprobeResult = {
+  streams?: unknown;
+  format?: FfprobeFormat;
+};
+
+export type VideoProbeMetadata = {
+  width?: number;
+  height?: number;
+  duration?: number;
+  framerate?: number;
+  videoCodec?: string;
+  audioCodec?: string;
+};
+
+const probeVideoMetadata = async (
+  filePath: string,
+): Promise<VideoProbeMetadata | null> => {
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v",
+      "error",
+      "-print_format",
+      "json",
+      "-show_streams",
+      "-show_format",
+      filePath,
+    ]);
+
+    const parsed = JSON.parse(stdout) as FfprobeResult;
+    const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
+    const videoStream = streams.find(
+      (stream): stream is FfprobeStream =>
+        typeof stream === "object" &&
+        stream !== null &&
+        (stream as FfprobeStream).codec_type === "video",
+    );
+    const audioStream = streams.find(
+      (stream): stream is FfprobeStream =>
+        typeof stream === "object" &&
+        stream !== null &&
+        (stream as FfprobeStream).codec_type === "audio",
+    );
+
+    const width = toNumber(videoStream?.width);
+    const height = toNumber(videoStream?.height);
+    const duration =
+      toNumber(videoStream?.duration) ?? toNumber(parsed.format?.duration) ?? undefined;
+
+    const frameRate = parseFrameRate(
+      videoStream?.avg_frame_rate ?? videoStream?.r_frame_rate,
+    );
+
+    const videoCodec =
+      typeof videoStream?.codec_name === "string" ? videoStream.codec_name : undefined;
+    const audioCodec =
+      typeof audioStream?.codec_name === "string" ? audioStream.codec_name : undefined;
+
+    return {
+      width: width ?? undefined,
+      height: height ?? undefined,
+      duration,
+      framerate: frameRate,
+      videoCodec,
+      audioCodec,
+    };
+  } catch (error) {
+    console.warn(`[indexer] Failed to probe video metadata for ${filePath}`, error);
+    return null;
+  }
+};
+
+export const videoMetadataProbe = {
+  probe: probeVideoMetadata,
+};
+
+const parseFrameRate = (value: unknown): number | undefined => {
+  if (typeof value === "string") {
+    const parts = value.split("/");
+    if (parts.length === 2) {
+      const numerator = Number(parts[0]);
+      const denominator = Number(parts[1]);
+      if (Number.isFinite(numerator) && Number.isFinite(denominator) && denominator !== 0) {
+        return numerator / denominator;
+      }
+    }
+    return toNumber(value);
+  }
+  return toNumber(value);
+};
+
+const isVideoFile = (mimeType: string | null, name: string): boolean => {
+  const lowerMime = mimeType?.toLowerCase() ?? "";
+  if (lowerMime.startsWith("video/")) {
+    return true;
+  }
+  const lowerName = name.toLowerCase();
+  return VIDEO_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
+};
+
+const VIDEO_EXTENSIONS = [
+  ".mp4",
+  ".mov",
+  ".m4v",
+  ".mkv",
+  ".webm",
+  ".avi",
+  ".wmv",
+  ".mpg",
+  ".mpeg",
+];
