@@ -1,5 +1,5 @@
-import { makeStyles, shorthands, tokens } from "@fluentui/react-components";
-import { memo } from "react";
+import { Spinner, makeStyles, shorthands, tokens } from "@fluentui/react-components";
+import { memo, useEffect, useRef } from "react";
 import type { PhotoItem } from "../api";
 
 const useStyles = makeStyles({
@@ -46,15 +46,57 @@ const useStyles = makeStyles({
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
+  sentinel: {
+    gridColumn: "1 / -1",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: tokens.spacingHorizontalL,
+    color: tokens.colorNeutralForeground3,
+  },
 });
 
 export interface ThumbnailGridProps {
   items: PhotoItem[];
   onSelect: (photo: PhotoItem) => void;
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
 }
 
-const ThumbnailGridComponent = ({ items, onSelect }: ThumbnailGridProps) => {
+const ThumbnailGridComponent = ({
+  items,
+  onSelect,
+  onLoadMore,
+  hasMore = false,
+  loadingMore = false,
+}: ThumbnailGridProps) => {
   const styles = useStyles();
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!hasMore || !onLoadMore) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            onLoadMore();
+          }
+        });
+      },
+      { root: null, rootMargin: "25%" }
+    );
+
+    const node = sentinelRef.current;
+    if (node) {
+      observer.observe(node);
+    }
+
+    return () => observer.disconnect();
+  }, [hasMore, onLoadMore]);
 
   if (!items.length) {
     return <p>No photos yet. Upload some to get started.</p>;
@@ -78,6 +120,11 @@ const ThumbnailGridComponent = ({ items, onSelect }: ThumbnailGridProps) => {
           <span className={styles.caption}>{photo.name}</span>
         </button>
       ))}
+      {(hasMore || loadingMore) && (
+        <div ref={sentinelRef} className={styles.sentinel}>
+          {loadingMore ? <Spinner size="extra-tiny" /> : null}
+        </div>
+      )}
     </div>
   );
 };

@@ -11,6 +11,7 @@ applyTo: '**/*.js, **/*.jsx, **/*.ts, **/*.tsx, **/*.mjs, **/*.cjs'
 - Classes should only be used to avoid complexities surrounding shared state and mutability is inevitable. For example, a database could be a class.
 - Arrow functions are preferred over function declarations and expressions.
 - Use template literals instead of string concatenation.
+- Prefer `type` to `interface`
 - Use destructuring assignment to extract values from objects and arrays.
 - Use optional chaining and nullish coalescing to handle undefined or null values.
 - Each file should have one purpose. Avoid "utils" or helper functions. Each file should have one export.

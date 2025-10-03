@@ -40,44 +40,100 @@ const useStyles = makeStyles({
 });
 
 export default function App() {
+  const PAGE_SIZE = 200;
   const styles = useStyles();
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PhotoItem | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
 
-  const handleLoadPhotos = useCallback(async (signal?: AbortSignal): Promise<void> => {
-    try {
-      setLoading(true);
+  const loadInitial = useCallback(
+    async (signal: AbortSignal) => {
+      setInitialLoading(true);
       setError(null);
-      const results = await fetchPhotos(signal);
-      setPhotos(results);
-    } catch (err) {
-      if ((err as Error).name === "AbortError") {
-        return;
+      try {
+  const result = await fetchPhotos({ page: 1, pageSize: PAGE_SIZE, signal });
+        if (signal.aborted) {
+          return;
+        }
+  setPhotos(result.items);
+  setTotal(result.total);
+  setPage(result.page);
+  setHasMore(result.items.length > 0 && result.items.length < result.total);
+      } catch (err) {
+        if ((err as Error).name === "AbortError") {
+          return;
+        }
+        console.error(err);
+        setError((err as Error).message ?? "Failed to load photos");
+      } finally {
+        if (!signal.aborted) {
+          setInitialLoading(false);
+        }
       }
-      console.error(err);
-      setError((err as Error).message ?? "Failed to load photos");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    []
+  );
 
   useEffect(() => {
     const controller = new AbortController();
-    handleLoadPhotos(controller.signal);
+    loadInitial(controller.signal);
     return () => controller.abort();
-  }, [handleLoadPhotos]);
+  }, [loadInitial, refreshToken]);
+
+  const handleLoadMore = useCallback(async () => {
+    if (!hasMore || loadingMore || initialLoading) {
+      return;
+    }
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const nextPage = page + 1;
+  const result = await fetchPhotos({ page: nextPage, pageSize: PAGE_SIZE });
+      setPhotos((current) => {
+        const next = [...current, ...result.items];
+        const hasNext = result.items.length > 0 && next.length < result.total;
+        setHasMore(hasNext);
+        return next;
+      });
+      setPage(result.page);
+      setTotal(result.total);
+    } catch (err) {
+      console.error(err);
+      setError((err as Error).message ?? "Failed to load more photos");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loadingMore, initialLoading, page]);
+
+  const handleRefresh = useCallback(() => {
+    setRefreshToken((value) => value + 1);
+  }, []);
+
+  const totalDisplayed = photos.length;
+  const showTotal = total > 0 ? total : totalDisplayed;
+  const hasAllPhotos = total > 0 && totalDisplayed >= total;
 
   const statusMessage = useMemo(() => {
-    if (loading) {
+    if (initialLoading) {
       return "Loading photos...";
     }
     if (error) {
       return error;
     }
-    return `${photos.length} photo${photos.length === 1 ? "" : "s"}`;
-  }, [loading, error, photos.length]);
+    if (!totalDisplayed) {
+      return "No photos found.";
+    }
+    if (hasAllPhotos) {
+      return `Showing all ${showTotal} photo${showTotal === 1 ? "" : "s"}`;
+    }
+    return `Showing ${totalDisplayed} of ${showTotal} photos`;
+  }, [initialLoading, error, totalDisplayed, hasAllPhotos, showTotal]);
 
   return (
     <div className={styles.app}>
@@ -89,7 +145,7 @@ export default function App() {
         <Tooltip content="Refresh" relationship="description">
           <Button
             icon={<ArrowClockwise24Regular />}
-            onClick={() => handleLoadPhotos()}
+            onClick={handleRefresh}
             appearance="secondary"
           >
             Refresh
@@ -100,11 +156,17 @@ export default function App() {
       <Divider />
 
       <div className={styles.statusRow}>
-        {loading ? <Spinner size="extra-tiny" /> : <Subtitle2>📸</Subtitle2>}
+        {initialLoading ? <Spinner size="extra-tiny" /> : <Subtitle2>📸</Subtitle2>}
         <Subtitle2>{statusMessage}</Subtitle2>
       </div>
 
-      <ThumbnailGrid items={photos} onSelect={setSelected} />
+      <ThumbnailGrid
+        items={photos}
+        onSelect={setSelected}
+        onLoadMore={handleLoadMore}
+        hasMore={hasMore}
+        loadingMore={loadingMore}
+      />
 
       <FullscreenViewer photo={selected} onDismiss={() => setSelected(null)} />
     </div>

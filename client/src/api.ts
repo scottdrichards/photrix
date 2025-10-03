@@ -9,18 +9,32 @@ export interface ApiPhotoItem {
   };
 }
 
-export interface ApiPhotoResponse {
-  items: ApiPhotoItem[];
-  total: number;
-  page: number;
-}
-
 export interface PhotoItem {
   path: string;
   name: string;
   thumbnailUrl: string;
   fullUrl: string;
   metadata?: ApiPhotoItem["metadata"];
+}
+
+export interface ApiPhotoResponse {
+  items: ApiPhotoItem[];
+  total: number;
+  page: number;
+}
+
+export interface FetchPhotosOptions {
+  page?: number;
+  pageSize?: number;
+  metadata?: ReadonlyArray<string>;
+  signal?: AbortSignal;
+}
+
+export interface FetchPhotosResult {
+  items: PhotoItem[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 const DEFAULT_METADATA_KEYS = ["name", "mimeType", "dimensions"] as const;
@@ -59,19 +73,30 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
   };
 };
 
-export const fetchPhotos = async (signal?: AbortSignal): Promise<PhotoItem[]> => {
+export const fetchPhotos = async ({
+  page = 1,
+  pageSize = 200,
+  metadata = DEFAULT_METADATA_KEYS,
+  signal,
+}: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
   const params = new URLSearchParams();
-  params.set("metadata", DEFAULT_METADATA_KEYS.join(","));
-  params.set("pageSize", "200");
+  params.set("metadata", Array.from(metadata).join(","));
+  params.set("page", page.toString());
+  params.set("pageSize", pageSize.toString());
 
   const response = await fetch(`/api/files?${params.toString()}`, { signal });
-  
+
   if (!response.ok) {
     throw new Error(`Failed to fetch photos (status ${response.status})`);
   }
 
   const payload = (await response.json()) as ApiPhotoResponse;
-  return payload.items.map(createPhotoItem);
+  return {
+    items: payload.items.map(createPhotoItem),
+    total: payload.total,
+    page: payload.page,
+    pageSize,
+  };
 };
 
 export const createFallbackPhoto = (path: string): PhotoItem => {
