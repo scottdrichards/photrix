@@ -81,7 +81,7 @@ describe("FileService", () => {
       const result = await service.getFile("sewing-threads.heic", {
         representation: { type: "resize", maxWidth: 800 },
       });
-      expect(result.contentType).toBe("image/jpeg");
+      expect(result.contentType).toBe("image/webp");
       const buffer = Buffer.from(result.data);
       expect(buffer.byteLength).toBeGreaterThan(0);
       const dimensions = imageSize(buffer);

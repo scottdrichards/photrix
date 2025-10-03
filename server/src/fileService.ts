@@ -79,7 +79,7 @@ export class FileService {
         );
         return {
           data: bufferToArrayBuffer(buffer),
-          contentType: "image/jpeg",
+          contentType: "image/webp",
         };
       }
       case "original":
@@ -158,7 +158,7 @@ const resizeImage = async (
       withoutEnlargement: true,
     });
   }
-  return transformer.jpeg({ quality: 85 }).toBuffer();
+  return transformer.webp({ quality: 85 }).toBuffer();
 };
 
 const bufferToArrayBuffer = (buffer: Buffer): ArrayBuffer => {
