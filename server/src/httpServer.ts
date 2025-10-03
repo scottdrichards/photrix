@@ -2,11 +2,11 @@ import http from "node:http";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
-import { lookup as lookupMimeType } from "mime-types";
 import type { Filter, AllMetadata, Representation } from "../apiSpecification.js";
 import { FolderIndexer } from "./folderIndexer.js";
 import { FileService } from "./fileService.js";
 import type { QueryOptions } from "./indexDatabase.js";
+import { mimeTypeForFilename } from "./mimeTypes.js";
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_UPLOAD_PREFIX = "/uploads";
@@ -271,7 +271,7 @@ export class PhotrixHttpServer {
     try {
       const data = await fs.readFile(absolute);
       const contentType =
-        lookupMimeType(path.basename(normalized)) || "application/octet-stream";
+        mimeTypeForFilename(path.basename(normalized)) || "application/octet-stream";
       this.sendFile(res, data, contentType);
     } catch (error) {
       if (

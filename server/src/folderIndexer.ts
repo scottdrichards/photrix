@@ -93,7 +93,12 @@ export class FolderIndexer {
 
   private async indexExistingFiles(): Promise<void> {
     console.log(`[indexer] Starting to index existing files in ${this.root}`);
-    const files = await this.walkFiles(this.root);
+    
+    const files: string[] = [];
+    for await (const file of walkFiles(this.root)) {
+      files.push(file);
+    }
+
     console.log(`[indexer] Found ${files.length} files to index`);
 
     // Process files sequentially to avoid overwhelming the system
@@ -126,21 +131,6 @@ export class FolderIndexer {
     this.watcher = watcher;
   }
 
-  private async walkFiles(dir: string): Promise<string[]> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-
-    const filePromises = entries.map(async (entry) => {
-      const absolutePath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        return await this.walkFiles(absolutePath);
-      }
-      return entry.isFile() ? [absolutePath] : [];
-    });
-
-    const results = await Promise.all(filePromises);
-    return results.flat();
-  }
-
   private toRelative(filePath: string): string {
     const absolute = path.resolve(filePath);
     if (!absolute.startsWith(this.root)) {
@@ -152,5 +142,21 @@ export class FolderIndexer {
 
   private toPosix(relativePath: string): string {
     return relativePath.split(path.sep).join("/");
+  }
+}
+
+
+async function* walkFiles(dir: string): AsyncGenerator<string> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const absolutePath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      yield* walkFiles(absolutePath);
+    } else if (entry.isFile()) {
+      yield absolutePath;
+    } else {
+      throw new Error(`Unknown file type: ${absolutePath}`);
+    }
   }
 }

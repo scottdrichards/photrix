@@ -2,10 +2,10 @@ import { promises as fs } from "fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "path";
-import { lookup as lookupMimeType } from "mime-types";
 import { imageSize } from "image-size";
 import exifr from "exifr";
 import type { IndexedFileRecord } from "./models.js";
+import { mimeTypeForFilename } from "./mimeTypes.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -315,7 +315,7 @@ export async function buildIndexedRecord(
   const directory = directoryRaw === "." ? "" : toPosixPath(directoryRaw);
   const name = path.basename(filePath);
 
-  const mimeType = lookupMimeType(name) || null;
+  const mimeType = mimeTypeForFilename(name);
   const dateCreated = stats.birthtime ? stats.birthtime.toISOString() : undefined;
   const dateModified = stats.mtime ? stats.mtime.toISOString() : undefined;
 
@@ -323,7 +323,6 @@ export async function buildIndexedRecord(
     size: stats.size,
     mimeType: mimeType ?? undefined,
     dateCreated,
-    dateTaken: dateCreated ?? dateModified,
   };
 
   if (mimeType?.startsWith("image/")) {

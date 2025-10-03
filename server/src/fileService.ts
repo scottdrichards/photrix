@@ -1,12 +1,12 @@
 import { promises as fs } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { lookup as lookupMimeType } from "mime-types";
 import sharp from "sharp";
 import type { Representation, AllMetadata } from "../apiSpecification.js";
 import { FolderIndexer } from "./folderIndexer.js";
 import type { IndexedFileRecord } from "./models.js";
 import heicConvert from "heic-convert";
+import { mimeTypeForFilename } from "./mimeTypes.js";
 
 export type MediaType = "photo" | "video";
 
@@ -147,11 +147,11 @@ export class FileService {
 }
 
 const inferContentType = (record: IndexedFileRecord): string | null => {
-  const guessed = lookupMimeType(record.name);
+  const guessed = mimeTypeForFilename(record.name);
   return (
     record.metadata.mimeType ??
     record.mimeType ??
-    (typeof guessed === "string" ? guessed : null) ??
+    guessed ??
     null
   );
 };
