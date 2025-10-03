@@ -9,13 +9,18 @@ const DEFAULT_HOST = "0.0.0.0";
 
 async function main(): Promise<void> {
   const mediaRoot = await resolveMediaRoot();
-  const indexDatabaseFile = resolveOptionalPath(process.env.PHOTRIX_INDEX_DB ?? process.env.PHOTRIX_INDEX_PATH);
+  const indexDatabaseFile = resolveOptionalPath(
+    process.env.PHOTRIX_INDEX_DB ?? process.env.PHOTRIX_INDEX_PATH,
+  );
 
   const watch = parseBooleanEnv(process.env.PHOTRIX_WATCH, true);
   const awaitWriteFinish = parseBooleanEnv(process.env.PHOTRIX_AWAIT_WRITE_FINISH, true);
 
   const corsOrigin = process.env.PHOTRIX_CORS_ORIGIN;
-  const corsAllowCredentials = parseBooleanEnv(process.env.PHOTRIX_CORS_CREDENTIALS, false);
+  const corsAllowCredentials = parseBooleanEnv(
+    process.env.PHOTRIX_CORS_CREDENTIALS,
+    false,
+  );
 
   const host = process.env.PHOTRIX_HTTP_HOST ?? DEFAULT_HOST;
   const port = parsePort(process.env.PHOTRIX_HTTP_PORT, DEFAULT_PORT);

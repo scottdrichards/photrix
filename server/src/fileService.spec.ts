@@ -96,7 +96,7 @@ describe("FileService", () => {
     const { indexer, service } = await createService();
     try {
       await expect(service.getFile("missing.jpg")).rejects.toThrow(
-        /not currently indexed/i
+        /not currently indexed/i,
       );
     } finally {
       await indexer.stop(true);
@@ -107,7 +107,7 @@ describe("FileService", () => {
     const { indexer, service } = await createService();
     try {
       await expect(service.getFileByFilename("missing.jpg")).rejects.toThrow(
-        /not found/i
+        /not found/i,
       );
     } finally {
       await indexer.stop(true);

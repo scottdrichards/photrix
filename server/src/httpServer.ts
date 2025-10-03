@@ -42,6 +42,13 @@ type QueryOptionsType = QueryOptions<MetadataKeyList | undefined>;
 
 type FileRepresentation = Representation<"photo">;
 
+const SORT_FIELDS = ["name", "dateTaken", "dateCreated", "rating"] as const;
+type SortField = (typeof SORT_FIELDS)[number];
+
+const isSortField = (value: string): value is SortField => {
+  return (SORT_FIELDS as ReadonlyArray<string>).includes(value);
+};
+
 class BadRequestError extends Error {}
 class NotFoundError extends Error {}
 
@@ -81,7 +88,10 @@ export class PhotrixHttpServer {
     this.uploadPrefix = normalizePrefix(options.uploadPrefix ?? DEFAULT_UPLOAD_PREFIX);
   }
 
-  async start(port = DEFAULT_PORT, host = "0.0.0.0"): Promise<{ port: number; host: string }> {
+  async start(
+    port = DEFAULT_PORT,
+    host = "0.0.0.0",
+  ): Promise<{ port: number; host: string }> {
     if (this.server) {
       throw new Error("Server is already running");
     }
@@ -144,7 +154,10 @@ export class PhotrixHttpServer {
     };
   }
 
-  private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     let parsedUrl: URL | null = null;
     try {
       if (!req.url) {
@@ -159,7 +172,10 @@ export class PhotrixHttpServer {
         return;
       }
 
-      parsedUrl = buildRequestUrl(req.url, this.currentHost ?? req.headers.host ?? "localhost");
+      parsedUrl = buildRequestUrl(
+        req.url,
+        this.currentHost ?? req.headers.host ?? "localhost",
+      );
       const pathname = parsedUrl.pathname;
 
       if (method === "GET" && pathname === "/api/files") {
@@ -229,7 +245,9 @@ export class PhotrixHttpServer {
       }
 
       if (filenameParam) {
-        const result = await this.fileService.getFileByFilename(filenameParam, { representation });
+        const result = await this.fileService.getFileByFilename(filenameParam, {
+          representation,
+        });
         this.sendFile(res, result.data, result.contentType);
         return;
       }
@@ -253,10 +271,15 @@ export class PhotrixHttpServer {
     const absolute = this.resolveAbsolutePath(normalized);
     try {
       const data = await fs.readFile(absolute);
-      const contentType = lookupMimeType(path.basename(normalized)) || "application/octet-stream";
+      const contentType =
+        lookupMimeType(path.basename(normalized)) || "application/octet-stream";
       this.sendFile(res, data, contentType);
     } catch (error) {
-      if (error && typeof (error as NodeJS.ErrnoException).code === "string" && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (
+        error &&
+        typeof (error as NodeJS.ErrnoException).code === "string" &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
         throw new NotFoundError("File not found");
       }
       throw error;
@@ -280,12 +303,19 @@ export class PhotrixHttpServer {
     res.end(JSON.stringify(payload));
   }
 
-  private sendFile(res: http.ServerResponse, data: ArrayBuffer | Buffer, contentType: string): void {
+  private sendFile(
+    res: http.ServerResponse,
+    data: ArrayBuffer | Buffer,
+    contentType: string,
+  ): void {
     const buffer = Buffer.isBuffer(data) ? data : arrayBufferToBuffer(data);
     res.statusCode = 200;
     res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Length", buffer.length.toString());
-    res.setHeader("Cache-Control", contentType === "application/json" ? "no-store" : "public, max-age=3600");
+    res.setHeader(
+      "Cache-Control",
+      contentType === "application/json" ? "no-store" : "public, max-age=3600",
+    );
     res.end(buffer);
   }
 
@@ -297,7 +327,7 @@ export class PhotrixHttpServer {
     req: http.IncomingMessage,
     res: http.ServerResponse,
     error: unknown,
-    url: URL | null
+    url: URL | null,
   ): void {
     const method = (req.method ?? "GET").toUpperCase();
     const requestUrl = url?.toString() ?? req.url ?? "";
@@ -329,7 +359,9 @@ const normalizePrefix = (value: string): string => {
   return value.replace(/\/+$/, "");
 };
 
-const buildQueryParameters = (params: URLSearchParams): {
+const buildQueryParameters = (
+  params: URLSearchParams,
+): {
   filter?: Filter;
   options: QueryOptionsType;
 } => {
@@ -438,14 +470,13 @@ const buildQueryParameters = (params: URLSearchParams): {
 };
 
 const parseSort = (sortBy: string, orderRaw: string | null): QueryOptionsType["sort"] => {
-  const allowedSortFields = new Set(["name", "dateTaken", "dateCreated", "rating"] as const);
-  if (!allowedSortFields.has(sortBy as any)) {
+  if (!isSortField(sortBy)) {
     return undefined;
   }
 
   const order = orderRaw?.toLowerCase() === "desc" ? "desc" : "asc";
   return {
-    sortBy: sortBy as "name" | "dateTaken" | "dateCreated" | "rating",
+    sortBy,
     order,
   };
 };
@@ -457,7 +488,7 @@ const buildLocationFilter = (params: URLSearchParams): Filter["location"] | unde
   const maxLongitude = parseOptionalFloat("maxLongitude", params.get("maxLongitude"));
 
   const hasValue = [minLatitude, maxLatitude, minLongitude, maxLongitude].some(
-    (value) => value !== undefined
+    (value) => value !== undefined,
   );
 
   if (!hasValue) {
@@ -472,7 +503,9 @@ const buildLocationFilter = (params: URLSearchParams): Filter["location"] | unde
   };
 };
 
-const buildDateRangeFilter = (params: URLSearchParams): Filter["dateRange"] | undefined => {
+const buildDateRangeFilter = (
+  params: URLSearchParams,
+): Filter["dateRange"] | undefined => {
   const start = params.get("dateStart") ?? params.get("startDate");
   const end = params.get("dateEnd") ?? params.get("endDate");
 
@@ -487,7 +520,9 @@ const buildDateRangeFilter = (params: URLSearchParams): Filter["dateRange"] | un
 };
 
 const buildRatingFilter = (params: URLSearchParams): Filter["rating"] | undefined => {
-  const ratingValues = getStringList(params, "rating").map((value) => parseFloatStrict("rating", value));
+  const ratingValues = getStringList(params, "rating").map((value) =>
+    parseFloatStrict("rating", value),
+  );
   if (ratingValues.length > 0) {
     return ratingValues;
   }
@@ -511,7 +546,10 @@ const parseRepresentation = (params: URLSearchParams): FileRepresentation => {
       return { type: "webSafe" };
     case "resize": {
       const maxWidth = parseOptionalPositiveInteger("maxWidth", params.get("maxWidth"));
-      const maxHeight = parseOptionalPositiveInteger("maxHeight", params.get("maxHeight"));
+      const maxHeight = parseOptionalPositiveInteger(
+        "maxHeight",
+        params.get("maxHeight"),
+      );
       return {
         type: "resize",
         maxWidth,
@@ -542,7 +580,10 @@ const parseMetadataKeys = (params: URLSearchParams): MetadataKeyList => {
 };
 
 const getStringList = (params: URLSearchParams, key: string): string[] => {
-  const values = params.get(key)?.split(",").map(v=>v.trim());
+  const values = params
+    .get(key)
+    ?.split(",")
+    .map((v) => v.trim());
   // Deduplicate values
   return Array.from(new Set(values));
 };
@@ -585,7 +626,10 @@ const parsePositiveInteger = (name: string, value: string): number => {
   return parsed;
 };
 
-const parseOptionalPositiveInteger = (name: string, value: string | null): number | undefined => {
+const parseOptionalPositiveInteger = (
+  name: string,
+  value: string | null,
+): number | undefined => {
   if (value === null) {
     return undefined;
   }

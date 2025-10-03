@@ -63,9 +63,7 @@ export class IndexDatabase {
   }
 
   listFiles(): IndexedFileRecord[] {
-    return Array.from(this.records.values()).sort((a, b) =>
-      a.path.localeCompare(b.path)
-    );
+    return Array.from(this.records.values()).sort((a, b) => a.path.localeCompare(b.path));
   }
 
   getFile(pathRelative: string): IndexedFileRecord | undefined {
@@ -74,7 +72,7 @@ export class IndexDatabase {
 
   queryFiles<T extends MetadataKeys | undefined = undefined>(
     filter?: Filter,
-    options?: QueryOptions<T>
+    options?: QueryOptions<T>,
   ): QueryResult<T> {
     const metadataKeys = options?.metadata;
     const page = Math.max(options?.page ?? 1, 1);
@@ -138,43 +136,46 @@ const matchesRecord = (record: IndexedFileRecord, filter: Filter): boolean => {
   if (filter.path?.length && !matchesPath(record, filter.path)) {
     return false;
   }
-  
+
   if (filter.filename?.length && !matchesFilename(record, filter.filename)) {
     return false;
   }
-  
+
   if (filter.directory?.length && !matchesDirectory(record, filter.directory)) {
     return false;
   }
-  
+
   if (filter.mimeType?.length && !matchesMimeType(record, filter.mimeType)) {
     return false;
   }
-  
+
   if (filter.cameraMake?.length && !matchesCameraMake(record, filter.cameraMake)) {
     return false;
   }
-  
+
   if (filter.cameraModel?.length && !matchesCameraModel(record, filter.cameraModel)) {
     return false;
   }
-  
+
   if (filter.location && !matchesLocation(record, filter.location)) {
     return false;
   }
-  
+
   if (filter.dateRange && !matchesDateRange(record, filter.dateRange)) {
     return false;
   }
-  
+
   if (filter.rating && !matchesRating(record, filter.rating)) {
     return false;
   }
-  
-  if (filter.tags?.length && !matchesTags(record, filter.tags, filter.tagsMatchAll ?? false)) {
+
+  if (
+    filter.tags?.length &&
+    !matchesTags(record, filter.tags, filter.tagsMatchAll ?? false)
+  ) {
     return false;
   }
-  
+
   if (filter.q?.trim().length && !matchesQuery(record, filter.q)) {
     return false;
   }
@@ -216,10 +217,7 @@ const matchesDirectory = (record: IndexedFileRecord, patterns: string[]): boolea
         return directoryLower === "";
       }
       const target = normalized.toLowerCase();
-      return (
-        directoryLower === target ||
-        directoryLower.startsWith(`${target}/`)
-      );
+      return directoryLower === target || directoryLower.startsWith(`${target}/`);
     }
     return minimatch(record.directory, normalized, MINIMATCH_OPTIONS);
   });
@@ -259,7 +257,7 @@ const matchesCameraModel = (record: IndexedFileRecord, models: string[]): boolea
 
 const matchesLocation = (
   record: IndexedFileRecord,
-  bounds: NonNullable<Filter["location"]>
+  bounds: NonNullable<Filter["location"]>,
 ): boolean => {
   if (!bounds) {
     return true;
@@ -294,7 +292,7 @@ const matchesLocation = (
 
 const matchesDateRange = (
   record: IndexedFileRecord,
-  range: NonNullable<Filter["dateRange"]>
+  range: NonNullable<Filter["dateRange"]>,
 ): boolean => {
   if (!range) {
     return true;
@@ -334,9 +332,10 @@ const matchesDateRange = (
 
 const matchesRating = (
   record: IndexedFileRecord,
-  ratingFilter: NonNullable<Filter["rating"]>
+  ratingFilter: NonNullable<Filter["rating"]>,
 ): boolean => {
-  const rating = typeof record.metadata.rating === "number" ? record.metadata.rating : undefined;
+  const rating =
+    typeof record.metadata.rating === "number" ? record.metadata.rating : undefined;
   if (rating === undefined) {
     return false;
   }
@@ -353,7 +352,7 @@ const matchesRating = (
 const matchesTags = (
   record: IndexedFileRecord,
   tags: string[],
-  matchAll: boolean
+  matchAll: boolean,
 ): boolean => {
   const recordTags = Array.isArray(record.metadata.tags)
     ? record.metadata.tags.map((tag) => tag.toLowerCase())
@@ -409,11 +408,7 @@ const collectSearchTokens = (record: IndexedFileRecord): string[] => {
           tokens.add(String(item).toLowerCase());
         }
       }
-    } else if (
-      typeof value === "object" &&
-      "latitude" in value &&
-      "longitude" in value
-    ) {
+    } else if (typeof value === "object" && "latitude" in value && "longitude" in value) {
       const location = value as { latitude: number; longitude: number };
       tokens.add(location.latitude.toString());
       tokens.add(location.longitude.toString());
@@ -425,7 +420,7 @@ const collectSearchTokens = (record: IndexedFileRecord): string[] => {
 
 const sortRecords = (
   records: IndexedFileRecord[],
-  sort?: QuerySort
+  sort?: QuerySort,
 ): IndexedFileRecord[] => {
   const sortBy = sort?.sortBy ?? "dateTaken";
   const order = sort?.order ?? (sort ? "asc" : "desc");
@@ -436,7 +431,7 @@ const compareByField = (
   a: IndexedFileRecord,
   b: IndexedFileRecord,
   sortBy: QuerySort["sortBy"],
-  order: QuerySort["order"]
+  order: QuerySort["order"],
 ): number => {
   switch (sortBy) {
     case "dateTaken":
@@ -454,7 +449,7 @@ const compareByField = (
         compareNumeric(
           typeof a.metadata.rating === "number" ? a.metadata.rating : undefined,
           typeof b.metadata.rating === "number" ? b.metadata.rating : undefined,
-          order
+          order,
         ) || compareByNameThenPath(a, b, "asc")
       );
     case "name":
@@ -467,7 +462,7 @@ const compareByField = (
 const compareNumeric = (
   a: number | undefined,
   b: number | undefined,
-  order: QuerySort["order"]
+  order: QuerySort["order"],
 ): number => {
   if (order === "asc") {
     if (a === undefined && b === undefined) {
@@ -504,7 +499,7 @@ const compareNumeric = (
 const compareByNameThenPath = (
   a: IndexedFileRecord,
   b: IndexedFileRecord,
-  order: QuerySort["order"]
+  order: QuerySort["order"],
 ): number => {
   const comparison = a.name.localeCompare(b.name, undefined, {
     sensitivity: "base",
@@ -563,7 +558,7 @@ const buildFullMetadata = (record: IndexedFileRecord): Partial<AllMetadata> => {
 
 const pickMetadata = <K extends keyof AllMetadata>(
   source: Partial<AllMetadata>,
-  keys: K[]
+  keys: K[],
 ): Pick<AllMetadata, K> => {
   const result: Partial<AllMetadata> = {};
   for (const key of keys) {
@@ -573,7 +568,10 @@ const pickMetadata = <K extends keyof AllMetadata>(
 };
 
 const normalizePattern = (pattern: string): string => {
-  return pattern.replace(/\\/g, "/").replace(/^\.\/+/, "").trim();
+  return pattern
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .trim();
 };
 
 const stripTrailingSlash = (value: string): string => {
@@ -581,5 +579,5 @@ const stripTrailingSlash = (value: string): string => {
 };
 
 const hasGlob = (pattern: string): boolean => {
-  return /[*?\[\]{}]/.test(pattern);
+  return ["*", "?", "[", "]", "{", "}"].some((token) => pattern.includes(token));
 };

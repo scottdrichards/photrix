@@ -8,7 +8,7 @@ export async function waitForCondition<T>(
   fn: () => Promise<T> | T,
   predicate: (value: T) => boolean,
   timeoutMs = 5000,
-  intervalMs = 100
+  intervalMs = 100,
 ): Promise<T> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -21,7 +21,9 @@ export async function waitForCondition<T>(
   throw new Error("Condition not met within timeout");
 }
 
-export async function createExampleWorkspace(prefix = "photrix-indexer-"): Promise<string> {
+export async function createExampleWorkspace(
+  prefix = "photrix-indexer-",
+): Promise<string> {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const source = path.resolve(__dirname, "../exampleFolder");

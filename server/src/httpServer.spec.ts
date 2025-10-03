@@ -42,7 +42,9 @@ describe("PhotrixHttpServer", () => {
   });
 
   it("lists indexed files with selected metadata", async () => {
-    const response = await fetch(`${baseUrl}/api/files?metadata=name,mimeType&pageSize=10`);
+    const response = await fetch(
+      `${baseUrl}/api/files?metadata=name,mimeType&pageSize=10`,
+    );
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.total).toBe(1);
@@ -54,19 +56,21 @@ describe("PhotrixHttpServer", () => {
 
   it("uses the first metadata entry when provided multiple times", async () => {
     const response = await fetch(
-      `${baseUrl}/api/files?metadata=mimeType&metadata=name,dimensions&pageSize=5`
+      `${baseUrl}/api/files?metadata=mimeType&metadata=name,dimensions&pageSize=5`,
     );
     expect(response.status).toBe(200);
     const payload = await response.json();
-  const metadata = payload.items[0].metadata ?? {};
-  expect(metadata.mimeType).toContain("image/png");
-  expect(metadata.name).toBeUndefined();
-  expect(metadata.dimensions).toBeUndefined();
-  expect(Object.keys(metadata)).toEqual(["mimeType"]);
+    const metadata = payload.items[0].metadata ?? {};
+    expect(metadata.mimeType).toContain("image/png");
+    expect(metadata.name).toBeUndefined();
+    expect(metadata.dimensions).toBeUndefined();
+    expect(Object.keys(metadata)).toEqual(["mimeType"]);
   });
 
   it("serves the original file bytes", async () => {
-    const response = await fetch(`${baseUrl}/api/file?path=sample.png&representation=original`);
+    const response = await fetch(
+      `${baseUrl}/api/file?path=sample.png&representation=original`,
+    );
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("image/png");
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -74,7 +78,9 @@ describe("PhotrixHttpServer", () => {
   });
 
   it("serves file metadata as JSON", async () => {
-    const response = await fetch(`${baseUrl}/api/file?path=sample.png&representation=metadata&metadata=name`);
+    const response = await fetch(
+      `${baseUrl}/api/file?path=sample.png&representation=metadata&metadata=name`,
+    );
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/json");
     const metadata = await response.json();

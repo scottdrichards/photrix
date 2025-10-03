@@ -13,10 +13,7 @@ describe("FolderIndexer", () => {
       await indexer.start();
       const records = indexer.listIndexedFiles();
       const indexedPaths = records.map((r) => r.path).sort();
-      expect(indexedPaths).toEqual([
-        "sewing-threads.heic",
-        "subFolder/soundboard.heic",
-      ]);
+      expect(indexedPaths).toEqual(["sewing-threads.heic", "subFolder/soundboard.heic"]);
     } finally {
       await indexer.stop(true);
     }
@@ -47,7 +44,7 @@ describe("FolderIndexer", () => {
 
       const record = await waitForCondition(
         () => indexer.getIndexedFile("notes.txt"),
-        (value) => value !== undefined
+        (value) => value !== undefined,
       );
 
       expect(record?.metadata.name).toBe("notes.txt");
@@ -67,7 +64,7 @@ describe("FolderIndexer", () => {
 
       await waitForCondition(
         () => indexer.getIndexedFile("sewing-threads.heic"),
-        (value) => value === undefined
+        (value) => value === undefined,
       );
 
       const remaining = indexer.listIndexedFiles().map((r) => r.path);
@@ -87,7 +84,7 @@ describe("FolderIndexer", () => {
 
       const original = await waitForCondition(
         () => indexer.getIndexedFile(targetRelative),
-        (value) => value !== undefined
+        (value) => value !== undefined,
       );
 
       // Append a byte to update the file size and mtime.
@@ -97,11 +94,9 @@ describe("FolderIndexer", () => {
 
       const updated = await waitForCondition(
         () => indexer.getIndexedFile(targetRelative),
-        (value) => (value?.lastIndexedAt ?? "") !== (original?.lastIndexedAt ?? "")
+        (value) => (value?.lastIndexedAt ?? "") !== (original?.lastIndexedAt ?? ""),
       );
-      expect(updated?.metadata.size ?? 0).toBeGreaterThan(
-        original?.metadata.size ?? 0
-      );
+      expect(updated?.metadata.size ?? 0).toBeGreaterThan(original?.metadata.size ?? 0);
       expect(updated?.dateModified).not.toBe(original?.dateModified);
     } finally {
       await indexer.stop(true);
@@ -120,7 +115,7 @@ describe("FolderIndexer", () => {
 
       await waitForCondition(
         () => indexer.getIndexedFile(oldRel),
-        (value) => value !== undefined
+        (value) => value !== undefined,
       );
 
       // Move the file (copy then remove to avoid cross-filesystem issues)
@@ -129,12 +124,12 @@ describe("FolderIndexer", () => {
 
       await waitForCondition(
         () => indexer.getIndexedFile(oldRel),
-        (value) => value === undefined
+        (value) => value === undefined,
       );
 
       const record = await waitForCondition(
         () => indexer.getIndexedFile(newRel),
-        (value) => value !== undefined
+        (value) => value !== undefined,
       );
 
       expect(record?.metadata.name).toBe(newRel);

@@ -5,11 +5,61 @@ import { imageSize } from "image-size";
 import exifr from "exifr";
 import type { IndexedFileRecord } from "./models.js";
 
+type ValueWithValueOf = {
+  valueOf: () => unknown;
+};
+
+type ExifrMetadata = {
+  DateTimeOriginal?: unknown;
+  CreateDate?: unknown;
+  ExifImageWidth?: unknown;
+  ImageWidth?: unknown;
+  PixelXDimension?: unknown;
+  ExifImageHeight?: unknown;
+  ImageHeight?: unknown;
+  PixelYDimension?: unknown;
+  latitude?: unknown;
+  GPSLatitude?: unknown;
+  Latitude?: unknown;
+  longitude?: unknown;
+  GPSLongitude?: unknown;
+  Longitude?: unknown;
+  Make?: unknown;
+  Model?: unknown;
+  ExposureTime?: unknown;
+  ShutterSpeedValue?: unknown;
+  FNumber?: unknown;
+  ApertureValue?: unknown;
+  ISO?: unknown;
+  ISOSpeedRatings?: unknown;
+  FocalLength?: unknown;
+  LensModel?: unknown;
+  Rating?: unknown;
+  XPSubject?: unknown;
+  xmp?: {
+    Rating?: unknown;
+  };
+  Keywords?: unknown;
+  Subject?: unknown;
+  Categories?: unknown;
+} & Record<string, unknown>;
+
+const hasValueOf = (value: unknown): value is ValueWithValueOf => {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "valueOf" in value &&
+    typeof (value as ValueWithValueOf).valueOf === "function"
+  );
+};
+
 const toPosixPath = (relativePath: string): string => {
   return relativePath.split(path.sep).join("/");
 };
 
-const safeImageSize = async (filePath: string): Promise<{ width: number; height: number } | undefined> => {
+const safeImageSize = async (
+  filePath: string,
+): Promise<{ width: number; height: number } | undefined> => {
   return new Promise((resolve) => {
     try {
       const dimensions = imageSize(filePath);
@@ -34,8 +84,8 @@ const toNumber = (value: unknown): number | undefined => {
       return parsed;
     }
   }
-  if (typeof value === "object" && value !== null && typeof (value as any).valueOf === "function") {
-    const numeric = Number((value as any).valueOf());
+  if (hasValueOf(value)) {
+    const numeric = Number(value.valueOf());
     if (Number.isFinite(numeric)) {
       return numeric;
     }
@@ -105,7 +155,13 @@ const formatFocalLength = (value: unknown): string | undefined => {
   return `${rounded}mm`;
 };
 
-const extractImageMetadata = async (filePath: string): Promise<Record<string, any> | null> => {
+const isExifrMetadata = (value: unknown): value is ExifrMetadata => {
+  return typeof value === "object" && value !== null;
+};
+
+const extractImageMetadata = async (
+  filePath: string,
+): Promise<ExifrMetadata | null> => {
   try {
     const parsed = await exifr.parse(filePath, {
       exif: true,
@@ -116,16 +172,22 @@ const extractImageMetadata = async (filePath: string): Promise<Record<string, an
       reviveValues: true,
       translateKeys: true,
     });
-    return parsed ?? null;
+    if (isExifrMetadata(parsed)) {
+      return parsed;
+    }
+    return null;
   } catch (error) {
     console.warn(`[indexer] Failed to parse metadata for ${filePath}`, error);
     return null;
   }
 };
 
-const enrichImageMetadata = async (metadata: IndexedFileRecord["metadata"], filePath: string): Promise<void> => {
+const enrichImageMetadata = async (
+  metadata: IndexedFileRecord["metadata"],
+  filePath: string,
+): Promise<void> => {
   const parsed = await extractImageMetadata(filePath);
-  
+
   if (!parsed) {
     // Fallback for files without EXIF data
     const fallback = await safeImageSize(filePath);
@@ -136,15 +198,18 @@ const enrichImageMetadata = async (metadata: IndexedFileRecord["metadata"], file
   }
 
   // Extract date taken
-  metadata.dateTaken = toDateISO(parsed.DateTimeOriginal) ??
+  metadata.dateTaken =
+    toDateISO(parsed.DateTimeOriginal) ??
     toDateISO(parsed.CreateDate) ??
     metadata.dateTaken;
 
   // Extract dimensions
-  const width = toNumber(parsed.ExifImageWidth) ??
+  const width =
+    toNumber(parsed.ExifImageWidth) ??
     toNumber(parsed.ImageWidth) ??
     toNumber(parsed.PixelXDimension);
-  const height = toNumber(parsed.ExifImageHeight) ??
+  const height =
+    toNumber(parsed.ExifImageHeight) ??
     toNumber(parsed.ImageHeight) ??
     toNumber(parsed.PixelYDimension);
   if (width && height) {
@@ -176,10 +241,10 @@ const enrichImageMetadata = async (metadata: IndexedFileRecord["metadata"], file
   // Extract tags
   const tagSources = [parsed.Keywords, parsed.Subject, parsed.Categories];
   const tags = tagSources
-    .flatMap(source => Array.isArray(source) ? source : (source ? [source] : []))
+    .flatMap((source) => (Array.isArray(source) ? source : source ? [source] : []))
     .filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
-    .map(tag => tag.trim());
-  
+    .map((tag) => tag.trim());
+
   if (tags.length > 0) {
     metadata.tags = Array.from(new Set(tags));
   }
@@ -193,7 +258,10 @@ const enrichImageMetadata = async (metadata: IndexedFileRecord["metadata"], file
   }
 };
 
-export async function buildIndexedRecord(rootDir: string, filePath: string): Promise<IndexedFileRecord> {
+export async function buildIndexedRecord(
+  rootDir: string,
+  filePath: string,
+): Promise<IndexedFileRecord> {
   const stats = await fs.stat(filePath);
   if (!stats.isFile()) {
     throw new Error(`Cannot index non-file path: ${filePath}`);

@@ -13,7 +13,9 @@ interface FolderIndexerOptions {
   awaitWriteFinish?: boolean;
 }
 
-const DEFAULT_OPTIONS: Required<Pick<FolderIndexerOptions, "watch" | "awaitWriteFinish">> = {
+const DEFAULT_OPTIONS: Required<
+  Pick<FolderIndexerOptions, "watch" | "awaitWriteFinish">
+> = {
   watch: true,
   awaitWriteFinish: true,
 };
@@ -60,7 +62,9 @@ export class FolderIndexer {
       console.log(`[indexer] Processing file: ${path.relative(this.root, filePath)}`);
       const record = await buildIndexedRecord(this.root, filePath);
       this.db.upsertFile(record);
-      console.log(`[indexer] Successfully indexed: ${path.relative(this.root, filePath)}`);
+      console.log(
+        `[indexer] Successfully indexed: ${path.relative(this.root, filePath)}`,
+      );
     } catch (error) {
       // Log and continue.
       console.error(`[indexer] Failed to index ${filePath}:`, error);
@@ -80,11 +84,9 @@ export class FolderIndexer {
     return this.db.getFile(this.toPosix(pathRelative));
   }
 
-  async queryFiles<
-    T extends Array<keyof AllMetadata> | undefined = undefined
-  >(
+  async queryFiles<T extends Array<keyof AllMetadata> | undefined = undefined>(
     filter?: Filter,
-    options?: QueryOptions<T>
+    options?: QueryOptions<T>,
   ): Promise<QueryResult<T>> {
     return this.db.queryFiles(filter, options);
   }
@@ -93,12 +95,12 @@ export class FolderIndexer {
     console.log(`[indexer] Starting to index existing files in ${this.root}`);
     const files = await this.walkFiles(this.root);
     console.log(`[indexer] Found ${files.length} files to index`);
-    
+
     // Process files sequentially to avoid overwhelming the system
     for (const file of files) {
       await this.indexFile(file);
     }
-    
+
     console.log(`[indexer] Completed indexing ${files.length} files`);
   }
 
@@ -126,7 +128,7 @@ export class FolderIndexer {
 
   private async walkFiles(dir: string): Promise<string[]> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
-    
+
     const filePromises = entries.map(async (entry) => {
       const absolutePath = path.join(dir, entry.name);
       if (entry.isDirectory()) {

@@ -25,11 +25,11 @@ export class FileService {
 
   async getFileByFilename(
     filename: string,
-    options?: FileRetrievalOptions
+    options?: FileRetrievalOptions,
   ): Promise<FileRetrievalResult> {
     const query = await this.indexer.queryFiles(
       { filename: [filename] },
-      { pageSize: 1 }
+      { pageSize: 1 },
     );
     const match = query.items[0];
     if (!match) {
@@ -40,7 +40,7 @@ export class FileService {
 
   async getFile(
     relativePath: string,
-    options?: FileRetrievalOptions
+    options?: FileRetrievalOptions,
   ): Promise<FileRetrievalResult> {
     const record = this.indexer.getIndexedFile(relativePath);
     if (!record) {
@@ -48,9 +48,9 @@ export class FileService {
     }
 
     const absolutePath = this.resolveAbsolutePath(relativePath);
-      const representation = (options?.representation ?? {
-        type: "original",
-      }) as Representation<MediaType>;
+    const representation = (options?.representation ?? {
+      type: "original",
+    }) as Representation<MediaType>;
 
     switch (representation.type) {
       case "metadata": {
@@ -74,7 +74,7 @@ export class FileService {
           record,
           absolutePath,
           representation.maxWidth,
-          representation.maxHeight
+          representation.maxHeight,
         );
         return {
           data: bufferToArrayBuffer(buffer),
@@ -109,13 +109,14 @@ const inferContentType = (record: IndexedFileRecord): string | null => {
   return (
     record.metadata.mimeType ??
     record.mimeType ??
-    (typeof guessed === "string" ? guessed : null)
-  ) ?? null;
+    (typeof guessed === "string" ? guessed : null) ??
+    null
+  );
 };
 
 const selectMetadata = (
   record: IndexedFileRecord,
-  keys: Array<keyof AllMetadata>
+  keys: Array<keyof AllMetadata>,
 ): Partial<AllMetadata> => {
   const full: Partial<AllMetadata> = {
     name: record.metadata.name ?? record.name,
@@ -133,7 +134,7 @@ const selectMetadata = (
 
 const convertToWebSafe = async (
   record: IndexedFileRecord,
-  absolutePath: string
+  absolutePath: string,
 ): Promise<Buffer> => {
   const source = await fs.readFile(absolutePath);
   const baseBuffer = await ensureJpegBuffer(record, source);
@@ -144,7 +145,7 @@ const resizeImage = async (
   record: IndexedFileRecord,
   absolutePath: string,
   maxWidth?: number,
-  maxHeight?: number
+  maxHeight?: number,
 ): Promise<Buffer> => {
   const source = await fs.readFile(absolutePath);
   const baseBuffer = await ensureJpegBuffer(record, source);
@@ -169,11 +170,11 @@ const bufferToArrayBuffer = (buffer: Buffer): ArrayBuffer => {
 
 const ensureJpegBuffer = async (
   record: IndexedFileRecord,
-  source: Buffer
+  source: Buffer,
 ): Promise<Buffer> => {
   if (isHeic(record)) {
     const converted = await heicConvert({
-      buffer: source as any, // heic-convert types are wrong; it really wants a Buffer
+      buffer: source as unknown as ArrayBuffer,
       format: "JPEG",
       quality: 0.85,
     });

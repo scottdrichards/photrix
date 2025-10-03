@@ -22,12 +22,12 @@ const useStyles = makeStyles({
     transitionDuration: tokens.durationUltraFast,
     transitionTimingFunction: tokens.curveAccelerateMid,
     ":hover": {
-        transform: "translateY(-2px)",
-        boxShadow: tokens.shadow16,
+      transform: "translateY(-2px)",
+      boxShadow: tokens.shadow16,
     },
     ":focus-visible": {
-        outline: `2px solid ${tokens.colorBrandBackground}`,
-        outlineOffset: "2px",
+      outline: `2px solid ${tokens.colorBrandBackground}`,
+      outlineOffset: "2px",
     },
   },
   image: {
@@ -87,7 +87,7 @@ const ThumbnailGridComponent = ({
           }
         });
       },
-      { root: null, rootMargin: "25%" }
+      { root: null, rootMargin: "25%" },
     );
 
     const node = sentinelRef.current;

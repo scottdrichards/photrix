@@ -39,10 +39,7 @@ describe("FolderIndexer queryFiles", () => {
     try {
       const result = await indexer.queryFiles({ path: ["**/*.heic"] });
       const paths = result.items.map((item) => item.path).sort();
-      expect(paths).toEqual([
-        "sewing-threads.heic",
-        "subFolder/soundboard.heic",
-      ]);
+      expect(paths).toEqual(["sewing-threads.heic", "subFolder/soundboard.heic"]);
     } finally {
       await indexer.stop(true);
     }
@@ -85,7 +82,7 @@ describe("FolderIndexer queryFiles", () => {
     try {
       const result = await indexer.queryFiles(
         { filename: ["sewing-threads.heic"] },
-        { metadata: ["name", "cameraMake"] }
+        { metadata: ["name", "cameraMake"] },
       );
       expect(result.total).toBe(1);
       const metadata = result.items[0]?.metadata;

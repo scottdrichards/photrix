@@ -1,0 +1,19 @@
+# Generated assets
+build
+coverage
+dist
+
+# Dependencies
+node_modules
+
+# Database and uploads
+backend/photrix.db
+backend/uploads/
+server/data-index.json
+server/exampleFolder/
+server/dist/
+client/dist/
+client/build/
+
+# Misc
+*.log

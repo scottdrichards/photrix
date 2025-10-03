@@ -52,33 +52,30 @@ export default function App() {
   const [selected, setSelected] = useState<PhotoItem | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
 
-  const loadInitial = useCallback(
-    async (signal: AbortSignal) => {
-      setInitialLoading(true);
-      setError(null);
-      try {
-  const result = await fetchPhotos({ page: 1, pageSize: PAGE_SIZE, signal });
-        if (signal.aborted) {
-          return;
-        }
-  setPhotos(result.items);
-  setTotal(result.total);
-  setPage(result.page);
-  setHasMore(result.items.length > 0 && result.items.length < result.total);
-      } catch (err) {
-        if ((err as Error).name === "AbortError") {
-          return;
-        }
-        console.error(err);
-        setError((err as Error).message ?? "Failed to load photos");
-      } finally {
-        if (!signal.aborted) {
-          setInitialLoading(false);
-        }
+  const loadInitial = useCallback(async (signal: AbortSignal) => {
+    setInitialLoading(true);
+    setError(null);
+    try {
+      const result = await fetchPhotos({ page: 1, pageSize: PAGE_SIZE, signal });
+      if (signal.aborted) {
+        return;
       }
-    },
-    []
-  );
+      setPhotos(result.items);
+      setTotal(result.total);
+      setPage(result.page);
+      setHasMore(result.items.length > 0 && result.items.length < result.total);
+    } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        return;
+      }
+      console.error(err);
+      setError((err as Error).message ?? "Failed to load photos");
+    } finally {
+      if (!signal.aborted) {
+        setInitialLoading(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -94,7 +91,7 @@ export default function App() {
     setError(null);
     try {
       const nextPage = page + 1;
-  const result = await fetchPhotos({ page: nextPage, pageSize: PAGE_SIZE });
+      const result = await fetchPhotos({ page: nextPage, pageSize: PAGE_SIZE });
       setPhotos((current) => {
         const next = [...current, ...result.items];
         const hasNext = result.items.length > 0 && next.length < result.total;

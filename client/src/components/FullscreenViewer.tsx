@@ -38,19 +38,28 @@ export function FullscreenViewer({ photo, onDismiss }: FullscreenViewerProps) {
   const open = Boolean(photo);
 
   return (
-    <Dialog open={open} modalType="alert" onOpenChange={(_, data) => !data.open && onDismiss()}>
+    <Dialog
+      open={open}
+      modalType="alert"
+      onOpenChange={(_, data) => !data.open && onDismiss()}
+    >
       <DialogSurface aria-describedby={undefined}>
         <DialogBody className={styles.dialogBody}>
-          <DialogTitle action={<Button appearance="subtle" icon={<Dismiss24Regular />} onClick={onDismiss} aria-label="Close" />}> 
+          <DialogTitle
+            action={
+              <Button
+                appearance="subtle"
+                icon={<Dismiss24Regular />}
+                onClick={onDismiss}
+                aria-label="Close"
+              />
+            }
+          >
             {photo?.name ?? ""}
           </DialogTitle>
           <DialogContent>
             {photo && (
-              <img
-                src={photo.fullUrl}
-                alt={photo.name}
-                className={styles.image}
-              />
+              <img src={photo.fullUrl} alt={photo.name} className={styles.image} />
             )}
           </DialogContent>
           <DialogActions>
