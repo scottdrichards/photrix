@@ -21,11 +21,10 @@ const useStyles = makeStyles({
   tile: {
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     ...shorthands.overflow("hidden"),
-    position: "relative",
-    cursor: "pointer",
     display: "flex",
     flexDirection: "column",
     justifyContent: "flex-start",
+    cursor: "pointer",
     minHeight: "var(--thumbnail-size)",
     minWidth: "calc(min(100%, calc(var(--thumbnail-size) * var(--ratio))))",
     flexBasis: "calc(var(--thumbnail-size) * var(--ratio))",
@@ -34,7 +33,7 @@ const useStyles = makeStyles({
     transitionProperty: "transform, box-shadow",
     transitionDuration: tokens.durationUltraFast,
     transitionTimingFunction: tokens.curveAccelerateMid,
-    backgroundColor: "transparent",
+    backgroundColor: tokens.colorNeutralBackground4,
     border: "none",
     padding: 0,
     ":hover": {
@@ -52,7 +51,6 @@ const useStyles = makeStyles({
     display: "block",
     flexGrow: 1,
     objectFit: "contain",
-    backgroundColor: tokens.colorNeutralBackground4,
   },
   caption: {
     display: "none",
@@ -116,19 +114,13 @@ const ThumbnailGridComponent = ({
   return (
     <div className={styles.grid}>
       {items.map((photo) => (
-        <div
+        <button
           key={photo.path}
+          type="button"
           className={styles.tile}
           style={createTileStyle(photo)}
-          role="button"
-          tabIndex={0}
           onClick={() => onSelect(photo)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              onSelect(photo);
-            }
-          }}
+          aria-label={photo.name}
         >
           <img
             src={photo.thumbnailUrl}
@@ -136,7 +128,7 @@ const ThumbnailGridComponent = ({
             loading="lazy"
             className={styles.image}
           />
-        </div>
+        </button>
       ))}
       {(hasMore || loadingMore) && (
         <div ref={sentinelRef} className={styles.sentinel}>
@@ -170,3 +162,4 @@ const getAspectRatio = (photo: PhotoItem): number => {
   }
   return DEFAULT_RATIO;
 };
+
