@@ -115,10 +115,6 @@ export default function App() {
     setRefreshToken((value) => value + 1);
   }, []);
 
-  const totalDisplayed = photos.length;
-  const showTotal = total > 0 ? total : totalDisplayed;
-  const hasAllPhotos = total > 0 && totalDisplayed >= total;
-
   const statusMessage = useMemo(() => {
     if (initialLoading) {
       return "Loading photos...";
@@ -126,14 +122,8 @@ export default function App() {
     if (error) {
       return error;
     }
-    if (!totalDisplayed) {
-      return "No photos found.";
-    }
-    if (hasAllPhotos) {
-      return `Showing all ${showTotal} photo${showTotal === 1 ? "" : "s"}`;
-    }
-    return `Showing ${totalDisplayed} of ${showTotal} photos`;
-  }, [initialLoading, error, totalDisplayed, hasAllPhotos, showTotal]);
+    return `${total} photos`;
+  }, [initialLoading, total]);
 
   return (
     <div className={styles.app}>
