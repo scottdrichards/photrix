@@ -123,7 +123,7 @@ export default function App() {
       return error;
     }
     return `${total} photos`;
-  }, [initialLoading, total]);
+  }, [initialLoading, error, total]);
 
   return (
     <div className={styles.app}>

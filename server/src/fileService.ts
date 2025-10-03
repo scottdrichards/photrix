@@ -48,10 +48,9 @@ export class FileService {
     }
 
     const absolutePath = this.resolveAbsolutePath(relativePath);
-    const mediaType = options?.mediaType ?? "photo";
-    const representation = (options?.representation ?? {
-      type: "original",
-    }) as Representation<typeof mediaType>;
+      const representation = (options?.representation ?? {
+        type: "original",
+      }) as Representation<MediaType>;
 
     switch (representation.type) {
       case "metadata": {
