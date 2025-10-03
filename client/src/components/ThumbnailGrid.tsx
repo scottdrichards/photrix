@@ -1,26 +1,42 @@
 import { Spinner, makeStyles, shorthands, tokens } from "@fluentui/react-components";
+import type { CSSProperties } from "react";
 import { memo, useEffect, useRef } from "react";
 import type { PhotoItem } from "../api";
 
+type TileStyle = CSSProperties & {
+  "--ratio"?: string;
+};
+
+const DEFAULT_RATIO = 4 / 3;
+
 const useStyles = makeStyles({
   grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "stretch",
     gap: tokens.spacingHorizontalM,
     paddingBlockEnd: tokens.spacingHorizontalXXL,
+    "--thumbnail-size": "clamp(50px, 10vw, 260px)",
   },
   tile: {
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     ...shorthands.overflow("hidden"),
     position: "relative",
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
     cursor: "pointer",
     display: "flex",
     flexDirection: "column",
+    justifyContent: "flex-start",
+    minHeight: "var(--thumbnail-size)",
+    minWidth: "calc(min(100%, calc(var(--thumbnail-size) * var(--ratio))))",
+    flexBasis: "calc(var(--thumbnail-size) * var(--ratio))",
+    flex: "var(--ratio)",
+    maxWidth: "100%",
     transitionProperty: "transform, box-shadow",
     transitionDuration: tokens.durationUltraFast,
     transitionTimingFunction: tokens.curveAccelerateMid,
+    backgroundColor: "transparent",
+    border: "none",
+    padding: 0,
     ":hover": {
       transform: "translateY(-2px)",
       boxShadow: tokens.shadow16,
@@ -32,22 +48,17 @@ const useStyles = makeStyles({
   },
   image: {
     width: "100%",
-    aspectRatio: "4 / 3",
-    objectFit: "cover",
+    height: "auto",
+    display: "block",
+    flexGrow: 1,
+    objectFit: "contain",
     backgroundColor: tokens.colorNeutralBackground4,
   },
   caption: {
-    padding: tokens.spacingHorizontalS,
-    textAlign: "center",
-    fontSize: tokens.fontSizeBase300,
-    fontWeight: tokens.fontWeightRegular,
-    color: tokens.colorNeutralForeground1,
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
+    display: "none",
   },
   sentinel: {
-    gridColumn: "1 / -1",
+    flexBasis: "100%",
     display: "flex",
     justifyContent: "center",
     alignItems: "center",
@@ -105,11 +116,19 @@ const ThumbnailGridComponent = ({
   return (
     <div className={styles.grid}>
       {items.map((photo) => (
-        <button
+        <div
           key={photo.path}
-          type="button"
           className={styles.tile}
+          style={createTileStyle(photo)}
+          role="button"
+          tabIndex={0}
           onClick={() => onSelect(photo)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onSelect(photo);
+            }
+          }}
         >
           <img
             src={photo.thumbnailUrl}
@@ -117,8 +136,7 @@ const ThumbnailGridComponent = ({
             loading="lazy"
             className={styles.image}
           />
-          <span className={styles.caption}>{photo.name}</span>
-        </button>
+        </div>
       ))}
       {(hasMore || loadingMore) && (
         <div ref={sentinelRef} className={styles.sentinel}>
@@ -130,3 +148,25 @@ const ThumbnailGridComponent = ({
 };
 
 export const ThumbnailGrid = memo(ThumbnailGridComponent);
+const createTileStyle = (photo: PhotoItem): TileStyle => {
+  const ratio = getAspectRatio(photo);
+  return {
+    "--ratio": ratio.toString(),
+  };
+};
+
+const getAspectRatio = (photo: PhotoItem): number => {
+  const width = photo.metadata?.dimensions?.width;
+  const height = photo.metadata?.dimensions?.height;
+  if (
+    typeof width === "number" &&
+    width > 0 &&
+    typeof height === "number" &&
+    height > 0 &&
+    Number.isFinite(width / height)
+  ) {
+    const ratio = width / height;
+    return Math.min(Math.max(ratio, 0.25), 4);
+  }
+  return DEFAULT_RATIO;
+};
