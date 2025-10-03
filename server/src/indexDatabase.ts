@@ -427,8 +427,8 @@ const sortRecords = (
   records: IndexedFileRecord[],
   sort?: QuerySort
 ): IndexedFileRecord[] => {
-  const sortBy = sort?.sortBy ?? "name";
-  const order = sort?.order ?? "asc";
+  const sortBy = sort?.sortBy ?? "dateTaken";
+  const order = sort?.order ?? (sort ? "asc" : "desc");
   return records.sort((a, b) => compareByField(a, b, sortBy, order));
 };
 
@@ -440,27 +440,26 @@ const compareByField = (
 ): number => {
   switch (sortBy) {
     case "dateTaken":
-      return compareNumeric(getDateTakenTimestamp(a), getDateTakenTimestamp(b), order);
+      return (
+        compareNumeric(getDateTakenTimestamp(a), getDateTakenTimestamp(b), order) ||
+        compareByNameThenPath(a, b, "asc")
+      );
     case "dateCreated":
-      return compareNumeric(toTimestamp(a.dateCreated), toTimestamp(b.dateCreated), order);
+      return (
+        compareNumeric(toTimestamp(a.dateCreated), toTimestamp(b.dateCreated), order) ||
+        compareByNameThenPath(a, b, "asc")
+      );
     case "rating":
-      return compareNumeric(
-        typeof a.metadata.rating === "number" ? a.metadata.rating : undefined,
-        typeof b.metadata.rating === "number" ? b.metadata.rating : undefined,
-        order
+      return (
+        compareNumeric(
+          typeof a.metadata.rating === "number" ? a.metadata.rating : undefined,
+          typeof b.metadata.rating === "number" ? b.metadata.rating : undefined,
+          order
+        ) || compareByNameThenPath(a, b, "asc")
       );
     case "name":
     default: {
-      const comparison = a.name.localeCompare(b.name, undefined, {
-        sensitivity: "base",
-      });
-      if (comparison !== 0) {
-        return order === "asc" ? comparison : -comparison;
-      }
-      const pathComparison = a.path.localeCompare(b.path, undefined, {
-        sensitivity: "base",
-      });
-      return order === "asc" ? pathComparison : -pathComparison;
+      return compareByNameThenPath(a, b, order);
     }
   }
 };
@@ -500,6 +499,23 @@ const compareNumeric = (
     return 0;
   }
   return b - a;
+};
+
+const compareByNameThenPath = (
+  a: IndexedFileRecord,
+  b: IndexedFileRecord,
+  order: QuerySort["order"]
+): number => {
+  const comparison = a.name.localeCompare(b.name, undefined, {
+    sensitivity: "base",
+  });
+  if (comparison !== 0) {
+    return order === "asc" ? comparison : -comparison;
+  }
+  const pathComparison = a.path.localeCompare(b.path, undefined, {
+    sensitivity: "base",
+  });
+  return order === "asc" ? pathComparison : -pathComparison;
 };
 
 const getDateTakenTimestamp = (record: IndexedFileRecord): number | undefined => {
