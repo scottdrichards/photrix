@@ -25,6 +25,7 @@ export class FolderIndexer {
   private readonly db: IndexDatabase;
   private readonly options: typeof DEFAULT_OPTIONS & FolderIndexerOptions;
   private readonly root: string;
+  private isInitialIndexing = false;
 
   constructor(rootDir: string, options: FolderIndexerOptions = {}) {
     this.root = path.resolve(rootDir);
@@ -59,12 +60,16 @@ export class FolderIndexer {
 
   async indexFile(filePath: string): Promise<void> {
     try {
-      console.log(`[indexer] Processing file: ${path.relative(this.root, filePath)}`);
+      if (!this.isInitialIndexing) {
+        console.log(`[indexer] Processing file: ${path.relative(this.root, filePath)}`);
+      }
       const record = await buildIndexedRecord(this.root, filePath);
       this.db.upsertFile(record);
-      console.log(
-        `[indexer] Successfully indexed: ${path.relative(this.root, filePath)}`,
-      );
+      if (!this.isInitialIndexing) {
+        console.log(
+          `[indexer] Successfully indexed: ${path.relative(this.root, filePath)}`,
+        );
+      }
     } catch (error) {
       // Log and continue.
       console.error(`[indexer] Failed to index ${filePath}:`, error);
@@ -95,18 +100,60 @@ export class FolderIndexer {
     console.log(`[indexer] Starting to index existing files in ${this.root}`);
     
     const files: string[] = [];
+    let discoveredCount = 0;
+    
+    // Collect files with live progress
     for await (const file of walkFiles(this.root)) {
       files.push(file);
+      discoveredCount++;
+      const relativePath = path.relative(this.root, file);
+      const displayPath = relativePath.length > 60 
+        ? "..." + relativePath.slice(-57) 
+        : relativePath;
+      // Clear line and write status
+      process.stdout.write(
+        `\r\x1b[K[indexer] Scanned ${discoveredCount} files — current: ${displayPath}`,
+      );
     }
-
+    
+    process.stdout.write("\n");
     console.log(`[indexer] Found ${files.length} files to index`);
 
-    // Process files sequentially to avoid overwhelming the system
+    // Process files sequentially with progress
+    this.isInitialIndexing = true;
+    let indexed = 0;
+    const total = files.length;
+    const barWidth = 30;
+    const startTime = Date.now();
+    
     for (const file of files) {
       await this.indexFile(file);
+      indexed++;
+      
+      const percentage = Math.round((indexed / total) * 100 * 10) / 10;
+      const filledWidth = Math.round((indexed / total) * barWidth);
+      const bar = "█".repeat(filledWidth) + "─".repeat(barWidth - filledWidth);
+      const rate = indexed > 0 ? (indexed / ((Date.now() - startTime) / 1000)).toFixed(2) : "0.00";
+      const eta = indexed > 0 && indexed < total
+        ? this.formatTime((total - indexed) / (indexed / ((Date.now() - startTime) / 1000)))
+        : "00:00:00";
+      
+      // Clear line and write progress
+      process.stdout.write(
+        `\r\x1b[K[indexer] ${indexed}/${total} ${percentage}% |${bar}| ETA ${eta} (${rate} f/s)`,
+      );
     }
-
+    
+    process.stdout.write("\n");
+    this.isInitialIndexing = false;
     console.log(`[indexer] Completed indexing ${files.length} files`);
+  }
+
+  private formatTime(seconds: number): string {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   }
 
   private async startWatcher(): Promise<void> {

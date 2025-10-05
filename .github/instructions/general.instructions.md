@@ -26,6 +26,7 @@ applyTo: '**/*.js, **/*.jsx, **/*.ts, **/*.tsx, **/*.mjs, **/*.cjs'
 - Do not abstract unecessarily. If a function is only used once, and is not complex, consider inlining it.
 - If it is challenging to find a simple name for a function, that is an indicator that the function is doing too much and should be broken up.
 - Functions should avoid nesting and complexity. The general form should be validate, execute, return. "Else" statements should be avoid in favor of early returns.
+- If a method doesn't reference class state (no "this.") then it should be extracted as an independent function
 
 
 # General Principles
