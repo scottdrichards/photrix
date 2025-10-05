@@ -167,15 +167,22 @@ const extractImageMetadata = async (
   filePath: string,
 ): Promise<ExifrMetadata | null> => {
   try {
-    const parsed = await exifr.parse(filePath, {
-      exif: true,
-      gps: true,
-      iptc: true,
-      xmp: true,
-      tiff: true,
-      reviveValues: true,
-      translateKeys: true,
-    });
+    // Only pick the fields we actually use - this significantly speeds up parsing
+    // by avoiding reading and parsing unnecessary EXIF data
+    const parsed = await exifr.parse(filePath, [
+      'DateTimeOriginal', 'CreateDate',
+      'ExifImageWidth', 'ImageWidth', 'PixelXDimension',
+      'ExifImageHeight', 'ImageHeight', 'PixelYDimension',
+      'latitude', 'GPSLatitude', 'Latitude',
+      'longitude', 'GPSLongitude', 'Longitude',
+      'Make', 'Model',
+      'ExposureTime', 'ShutterSpeedValue',
+      'FNumber', 'ApertureValue',
+      'ISO', 'ISOSpeedRatings',
+      'FocalLength', 'LensModel',
+      'Rating', 'XPSubject',
+      'Keywords', 'Subject', 'Categories'
+    ]);
     if (isExifrMetadata(parsed)) {
       return parsed;
     }

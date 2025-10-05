@@ -58,11 +58,20 @@ export class FolderIndexer {
     return this.root;
   }
 
-  async indexFile(filePath: string): Promise<void> {
+  async indexFile(filePath: string, skipIfUnchanged = false): Promise<boolean> {
     try {
       if (!this.isInitialIndexing) {
         console.log(`[indexer] Processing file: ${path.relative(this.root, filePath)}`);
       }
+      
+      // Check if file needs reindexing (optimization for unchanged files)
+      if (skipIfUnchanged) {
+        const needsUpdate = await this.fileNeedsReindex(filePath);
+        if (!needsUpdate) {
+          return false; // Skipped
+        }
+      }
+      
       const record = await buildIndexedRecord(this.root, filePath);
       this.db.upsertFile(record);
       if (!this.isInitialIndexing) {
@@ -70,9 +79,31 @@ export class FolderIndexer {
           `[indexer] Successfully indexed: ${path.relative(this.root, filePath)}`,
         );
       }
+      return true; // Indexed
     } catch (error) {
       // Log and continue.
       console.error(`[indexer] Failed to index ${filePath}:`, error);
+      return false;
+    }
+  }
+
+  private async fileNeedsReindex(filePath: string): Promise<boolean> {
+    try {
+      const stats = await fs.stat(filePath);
+      const relativePath = this.toRelative(filePath);
+      const existing = this.db.getFile(relativePath);
+      
+      if (!existing) {
+        return true; // New file
+      }
+      
+      // Check if size or modification time changed
+      const sizeChanged = existing.size !== stats.size;
+      const mtimeChanged = existing.dateModified !== stats.mtime.toISOString();
+      
+      return sizeChanged || mtimeChanged;
+    } catch {
+      return true; // If error checking, reindex to be safe
     }
   }
 
@@ -119,34 +150,46 @@ export class FolderIndexer {
     process.stdout.write("\n");
     console.log(`[indexer] Found ${files.length} files to index`);
 
-    // Process files sequentially with progress
+    // Process files in parallel with progress
     this.isInitialIndexing = true;
-    let indexed = 0;
     const total = files.length;
     const barWidth = 30;
     const startTime = Date.now();
+    const concurrency = 20; // Process 20 files at a time (optimized for network shares)
+    let indexed = 0;
+    let skipped = 0;
     
-    for (const file of files) {
-      await this.indexFile(file);
-      indexed++;
-      
-      const percentage = Math.round((indexed / total) * 100 * 10) / 10;
-      const filledWidth = Math.round((indexed / total) * barWidth);
-      const bar = "█".repeat(filledWidth) + "─".repeat(barWidth - filledWidth);
-      const rate = indexed > 0 ? (indexed / ((Date.now() - startTime) / 1000)).toFixed(2) : "0.00";
-      const eta = indexed > 0 && indexed < total
-        ? this.formatTime((total - indexed) / (indexed / ((Date.now() - startTime) / 1000)))
-        : "00:00:00";
-      
-      // Clear line and write progress
-      process.stdout.write(
-        `\r\x1b[K[indexer] ${indexed}/${total} ${percentage}% |${bar}| ETA ${eta} (${rate} f/s)`,
-      );
+    // Process files in batches
+    for (let i = 0; i < files.length; i += concurrency) {
+      const batch = files.slice(i, i + concurrency);
+      await Promise.all(batch.map(async (file) => {
+        const wasIndexed = await this.indexFile(file, true); // Enable smart caching
+        if (wasIndexed) {
+          indexed++;
+        } else {
+          skipped++;
+        }
+        
+        const processed = indexed + skipped;
+        const percentage = Math.round((processed / total) * 100 * 10) / 10;
+        const filledWidth = Math.round((processed / total) * barWidth);
+        const bar = "█".repeat(filledWidth) + "─".repeat(barWidth - filledWidth);
+        const rate = indexed > 0 ? (indexed / ((Date.now() - startTime) / 1000)).toFixed(2) : "0.00";
+        const eta = processed > 0 && processed < total
+          ? this.formatTime((total - processed) / (processed / ((Date.now() - startTime) / 1000)))
+          : "00:00:00";
+        
+        // Clear line and write progress
+        const skipInfo = skipped > 0 ? ` (${skipped} skipped)` : "";
+        process.stdout.write(
+          `\r\x1b[K[indexer] ${processed}/${total} ${percentage}% |${bar}| ETA ${eta} (${rate} f/s)${skipInfo}`,
+        );
+      }));
     }
     
     process.stdout.write("\n");
     this.isInitialIndexing = false;
-    console.log(`[indexer] Completed indexing ${files.length} files`);
+    console.log(`[indexer] Completed indexing: ${indexed} indexed, ${skipped} skipped, ${files.length} total`);
   }
 
   private formatTime(seconds: number): string {
