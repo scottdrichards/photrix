@@ -8,26 +8,46 @@ const DEFAULT_PORT = 3000;
 const DEFAULT_HOST = "0.0.0.0";
 
 async function main(): Promise<void> {
-  const mediaRoot = await resolveMediaRoot();
-  const indexDatabaseFile = resolveOptionalPath(
-    process.env.PHOTRIX_INDEX_DB ?? process.env.PHOTRIX_INDEX_PATH,
-  );
+  if (!process.env.PHOTRIX_MEDIA_ROOT) {
+    throw new Error("No PHOTRIX_MEDIA_ROOT specified in environmental variables");
+  }
+  
+  if (!process.env.PHOTRIX_INDEX_DB){
+    throw new Error("No PHOTRIX_INDEX_DB specified in environmental variables");
+  }
 
-  const watch = parseBooleanEnv(process.env.PHOTRIX_WATCH, true);
-  const awaitWriteFinish = parseBooleanEnv(process.env.PHOTRIX_AWAIT_WRITE_FINISH, true);
+  const envToBoolean = (envKey:string):boolean|null=>{
+    const envString = process.env[envKey];
+    if (!envString){
+      return null
+    }
+    const envStringLower = envString.toLocaleLowerCase();
+    if (['1','true','yes','on'].includes(envStringLower)){
+      return true;
+    }
+    if (['0','false','no','off'].includes(envStringLower)){
+      return false;
+    }
+    throw new Error(`Env key ${envKey} contains value that can't be cast to boolean: ${envString}`)
+  }
+
+  const watch = envToBoolean('PHOTRIX_WATCH') ?? true;
+  const awaitWriteFinish = envToBoolean('PHOTRIX_AWAIT_WRITE_FINISH') ?? true;
 
   const corsOrigin = process.env.PHOTRIX_CORS_ORIGIN;
-  const corsAllowCredentials = parseBooleanEnv(
-    process.env.PHOTRIX_CORS_CREDENTIALS,
-    false,
-  );
+  const corsAllowCredentials = envToBoolean('PHOTRIX_CORS_CREDENTIALS') ?? false;
 
   const host = process.env.PHOTRIX_HTTP_HOST ?? DEFAULT_HOST;
-  const port = parsePort(process.env.PHOTRIX_HTTP_PORT, DEFAULT_PORT);
 
-  const server = new PhotrixHttpServer({
-    mediaRoot,
-    indexDatabaseFile,
+  const port = process.env.PHOTRIX_HTTP_PORT ? +process.env.PHOTRIX_HTTP_PORT : DEFAULT_PORT;
+
+  if (isNaN(port)){
+    throw new Error(`Invalid port: ${process.env.PHOTRIX_HTTP_PORT}`)
+  }
+
+  const serverConfig: ConstructorParameters<typeof PhotrixHttpServer>[0] = {
+    mediaRoot: path.resolve(process.env.PHOTRIX_MEDIA_ROOT),
+    indexDatabaseFile: path.resolve(process.env.PHOTRIX_INDEX_DB),
     indexer: {
       watch,
       awaitWriteFinish,
@@ -36,12 +56,14 @@ async function main(): Promise<void> {
       origin: corsOrigin,
       allowCredentials: corsAllowCredentials,
     },
-  });
+  };
+
+  const server = new PhotrixHttpServer(serverConfig);
 
   const { port: listeningPort, host: listeningHost } = await server.start(port, host);
 
   const displayHost = listeningHost === "0.0.0.0" ? "localhost" : listeningHost;
-  console.log(`[photrix] Serving media from ${mediaRoot}`);
+  console.log(`[photrix] Serving media from ${serverConfig.mediaRoot}`);
   console.log(`[photrix] Listening on http://${displayHost}:${listeningPort}`);
 
   let shuttingDown = false;
@@ -63,70 +85,6 @@ async function main(): Promise<void> {
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 }
-
-const parsePort = (raw: string | undefined, fallback: number): number => {
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 65535) {
-    console.warn(`[photrix] Invalid port "${raw}"; using ${fallback}`);
-    return fallback;
-  }
-  return parsed;
-};
-
-const resolveMediaRoot = async (): Promise<string> => {
-  const envRoot = process.env.PHOTRIX_MEDIA_ROOT;
-  if (envRoot && envRoot.trim().length > 0) {
-    const absolute = path.resolve(envRoot);
-    await ensureDirectory(absolute);
-    return absolute;
-  }
-
-  const candidates = [
-    path.resolve(process.cwd(), "exampleFolder"),
-    path.resolve(process.cwd(), "../uploads"),
-  ];
-
-  for (const candidate of candidates) {
-    try {
-      await ensureDirectory(candidate);
-      return candidate;
-    } catch {
-      // continue to next candidate
-    }
-  }
-
-  const fallback = path.resolve(process.cwd(), "media");
-  await ensureDirectory(fallback);
-  return fallback;
-};
-
-const ensureDirectory = async (target: string): Promise<void> => {
-  await fs.mkdir(target, { recursive: true });
-};
-
-const resolveOptionalPath = (raw: string | undefined): string | undefined => {
-  if (!raw || raw.trim().length === 0) {
-    return undefined;
-  }
-  return path.resolve(raw);
-};
-
-const parseBooleanEnv = (raw: string | undefined, fallback: boolean): boolean => {
-  if (!raw || raw.trim().length === 0) {
-    return fallback;
-  }
-  const normalized = raw.trim().toLowerCase();
-  if (["1", "true", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  if (["0", "false", "no", "off"].includes(normalized)) {
-    return false;
-  }
-  return fallback;
-};
 
 main().catch((error) => {
   console.error("[photrix] Failed to start HTTP server", error);
