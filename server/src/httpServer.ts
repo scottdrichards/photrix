@@ -50,6 +50,7 @@ const isSortField = (value: string): value is SortField => {
 
 class BadRequestError extends Error {}
 class NotFoundError extends Error {}
+class FileIndexingError extends Error {}
 
 export interface PhotrixHttpServerOptions {
   mediaRoot: string;
@@ -65,6 +66,10 @@ export interface PhotrixHttpServerOptions {
   uploadPrefix?: string;
 }
 
+export interface PhotrixHttpServerStartOptions {
+  waitForIndexer?: boolean;
+}
+
 export class PhotrixHttpServer {
   private readonly indexer: FolderIndexer;
   private readonly fileService: FileService;
@@ -74,6 +79,7 @@ export class PhotrixHttpServer {
   private server: http.Server | null = null;
   private currentHost: string | null = null;
   private currentPort: number | null = null;
+  private indexerStartupPromise: Promise<void> | null = null;
 
   constructor(private readonly options: PhotrixHttpServerOptions) {
     this.indexer = new FolderIndexer(options.mediaRoot, {
@@ -90,12 +96,17 @@ export class PhotrixHttpServer {
   async start(
     port = DEFAULT_PORT,
     host = "0.0.0.0",
+    options?: PhotrixHttpServerStartOptions,
   ): Promise<{ port: number; host: string }> {
     if (this.server) {
       throw new Error("Server is already running");
     }
 
-    await this.indexer.start();
+    const indexerPromise = this.startIndexerIfNeeded();
+    const shouldWaitForIndexer = options?.waitForIndexer ?? true;
+    if (shouldWaitForIndexer) {
+      await indexerPromise;
+    }
 
     const actualPort = await new Promise<number>((resolve, reject) => {
       const server = http.createServer((req, res) => {
@@ -141,9 +152,23 @@ export class PhotrixHttpServer {
       this.server = null;
     }
 
+    if (this.indexerStartupPromise) {
+      try {
+        await this.indexerStartupPromise;
+      } catch {
+        // Already logged during startup handling.
+      } finally {
+        this.indexerStartupPromise = null;
+      }
+    }
+
     await this.indexer.stop(true);
     this.currentPort = null;
     this.currentHost = null;
+  }
+
+  waitForIndexer(): Promise<void> {
+    return this.indexerStartupPromise ?? Promise.resolve();
   }
 
   getAddress(): { host: string | null; port: number | null } {
@@ -254,6 +279,10 @@ export class PhotrixHttpServer {
       if (error instanceof NotFoundError || isFileMissingError(error)) {
         throw new NotFoundError("File not found");
       }
+      // Check if file is still being indexed
+      if (error instanceof Error && error.message.includes("still being indexed")) {
+        throw new FileIndexingError(error.message);
+      }
       throw error;
     }
 
@@ -322,6 +351,16 @@ export class PhotrixHttpServer {
     this.sendJson(res, status, { error: message });
   }
 
+  private startIndexerIfNeeded(): Promise<void> {
+    if (!this.indexerStartupPromise) {
+      this.indexerStartupPromise = this.indexer.start();
+      this.indexerStartupPromise.catch((error) => {
+        console.error("[photrix] Initial indexing failed", error);
+      });
+    }
+    return this.indexerStartupPromise;
+  }
+
   private handleError(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -339,6 +378,11 @@ export class PhotrixHttpServer {
     if (error instanceof NotFoundError) {
       console.info(`[photrix] 404 ${method} ${requestUrl}: ${error.message}`);
       this.sendError(res, 404, error.message);
+      return;
+    }
+    if (error instanceof FileIndexingError) {
+      console.info(`[photrix] 202 ${method} ${requestUrl}: ${error.message}`);
+      this.sendError(res, 202, "File is still being indexed");
       return;
     }
     console.error(`[photrix] 500 ${method} ${requestUrl}`, error);

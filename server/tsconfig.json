@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-  "module": "NodeNext",
+    "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "dist",
     "rootDir": ".",
@@ -10,6 +10,7 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    "sourceMap": true,
     "types": ["node", "vitest/globals"]
   },
   "include": ["apiSpecification.ts", "src/**/*.ts"],

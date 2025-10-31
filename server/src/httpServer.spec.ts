@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PhotrixHttpServer } from "./httpServer.js";
+import { FolderIndexer } from "./folderIndexer.js";
 
 const SAMPLE_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABDQottAAAAABJRU5ErkJggg==";
@@ -112,5 +113,51 @@ describe("PhotrixHttpServer", () => {
   it("returns 404 for unknown paths", async () => {
     const response = await fetch(`${baseUrl}/api/file?path=missing.jpg`);
     expect(response.status).toBe(404);
+  });
+
+  it("can start serving while initial indexing runs in the background", async () => {
+    const concurrencyDelayMs = 400;
+    const originalStart = FolderIndexer.prototype.start;
+    const startSpy = vi
+      .spyOn(FolderIndexer.prototype, "start")
+      .mockImplementation(async function (this: FolderIndexer) {
+        await new Promise((resolve) => setTimeout(resolve, concurrencyDelayMs));
+        return originalStart.apply(this);
+      });
+
+    const tempWorkspace = await mkdtemp(path.join(tmpdir(), "photrix-http-concurrent-"));
+    await writeFile(path.join(tempWorkspace, "sample.png"), sampleBuffer);
+
+    const concurrentServer = new PhotrixHttpServer({
+      mediaRoot: tempWorkspace,
+      indexer: {
+        watch: false,
+        awaitWriteFinish: false,
+      },
+      cors: {
+        origin: "http://localhost:5173",
+        allowCredentials: false,
+      },
+    });
+
+    try {
+      const startTime = Date.now();
+      await concurrentServer.start(0, "127.0.0.1", { waitForIndexer: false });
+      const elapsed = Date.now() - startTime;
+      expect(elapsed).toBeLessThan(concurrencyDelayMs);
+
+      const indexingPromise = concurrentServer.waitForIndexer();
+      const raceResult = await Promise.race([
+        indexingPromise.then(() => "completed"),
+        new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 50)),
+      ]);
+      expect(raceResult).toBe("pending");
+
+      await expect(indexingPromise).resolves.toBeUndefined();
+    } finally {
+      await concurrentServer.stop().catch(() => undefined);
+      startSpy.mockRestore();
+      await rm(tempWorkspace, { recursive: true, force: true });
+    }
   });
 });

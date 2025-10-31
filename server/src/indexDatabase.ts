@@ -2,10 +2,88 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { minimatch } from "minimatch";
 import type { AllMetadata, Filter } from "../apiSpecification.js";
-import type { IndexedFileRecord } from "./models.js";
 
 const MINIMATCH_OPTIONS = { nocase: true, dot: true, nocomment: true } as const;
 const DEFAULT_PAGE_SIZE = 50;
+
+// Incremental Indexing Types
+// Stage 1: File discovered during tree walk - only filename-based info
+export type DiscoveredFileRecord = {
+  relativePath: string;
+  mimeType: string | null;
+  lastIndexedAt: null; // null indicates incomplete indexing
+};
+
+// Stage 2: File info gathered from stat calls - has basic file system metadata
+export type FileInfoRecord = {
+  relativePath: string;
+  size: number;
+  mimeType: string | null;
+  dateCreated?: string;
+  dateModified: string;
+  lastIndexedAt: string; // non-null indicates at least file-info stage complete
+};
+
+// Stage 3: Full metadata extracted (EXIF, video metadata, etc.)
+export type FullFileRecord = {
+  path: string; // posix path for client consumption
+  relativePath: string; // same as path, for consistency with other record types
+  directory: string;
+  name: string;
+  size: number;
+  mimeType: string | null;
+  dateCreated?: string;
+  dateModified: string;
+  metadata: {
+    size?: number;
+    mimeType?: string;
+    dateCreated?: string;
+    dateTaken?: string | null;
+    dimensions?: { width: number; height: number };
+    location?: { latitude: number; longitude: number } | null;
+    cameraMake?: string;
+    cameraModel?: string;
+    exposureTime?: string;
+    aperture?: string;
+    iso?: number;
+    focalLength?: string;
+    lens?: string;
+    duration?: number;
+    framerate?: number;
+    videoCodec?: string;
+    audioCodec?: string;
+    rating?: number;
+    tags?: string[];
+  };
+  lastIndexedAt: string;
+};
+
+// Union type representing any stage of indexing
+export type IndexFileRecord = DiscoveredFileRecord | FileInfoRecord | FullFileRecord;
+
+// Type guards to determine indexing stage
+export const isDiscoveredRecord = (record: IndexFileRecord): record is DiscoveredFileRecord => {
+  return record.lastIndexedAt === null;
+};
+
+export const isFileInfoRecord = (record: IndexFileRecord): record is FileInfoRecord => {
+  return (
+    record.lastIndexedAt !== null &&
+    !('path' in record) &&
+    'size' in record
+  );
+};
+
+export const isFullFileRecord = (record: IndexFileRecord): record is FullFileRecord => {
+  return (
+    record.lastIndexedAt !== null &&
+    'path' in record &&
+    'metadata' in record
+  );
+};
+
+// For backward compatibility and external use
+export type { IndexFileRecord as IndexedFileRecord };
 
 type MetadataKeys = Array<keyof AllMetadata>;
 
@@ -34,16 +112,27 @@ export type QueryResult<T extends MetadataKeys | undefined = undefined> = {
 
 export class IndexDatabase {
   private readonly storagePath?: string;
-  private readonly records = new Map<string, IndexedFileRecord>();
+  private readonly records = new Map<string, IndexFileRecord>();
+  private persistTimer: NodeJS.Timeout | null = null;
+  private persistPromise: Promise<void> | null = null;
+  private isDirty = false;
+  private readonly persistDebounceMs = 1000; // 1 second debounce
 
   constructor(dbFile?: string) {
     this.storagePath = dbFile;
     if (dbFile && existsSync(dbFile)) {
       try {
         const raw = readFileSync(dbFile, "utf8");
-        const parsed = JSON.parse(raw) as IndexedFileRecord[];
+        const parsed = JSON.parse(raw) as IndexFileRecord[];
         for (const record of parsed) {
-          this.records.set(record.path, record);
+          // Backward compatibility: if FullFileRecord is missing relativePath, add it from path
+          if (isFullFileRecord(record) && !record.relativePath) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (record as any).relativePath = record.path;
+          }
+          // Always use relativePath for consistency
+          const key = isFullFileRecord(record) ? record.relativePath : record.relativePath;
+          this.records.set(key, record);
         }
       } catch (error) {
         console.warn(`[indexer] Failed to load existing index at ${dbFile}`, error);
@@ -51,22 +140,28 @@ export class IndexDatabase {
     }
   }
 
-  upsertFile(record: IndexedFileRecord): void {
-    this.records.set(record.path, record);
-    this.persist();
+  upsertFile(record: IndexFileRecord): void {
+    // Always use relativePath for consistency
+    const key = isFullFileRecord(record) ? record.relativePath : record.relativePath;
+    this.records.set(key, record);
+    this.schedulePersist();
   }
 
   removeFile(pathRelative: string): void {
     if (this.records.delete(pathRelative)) {
-      this.persist();
+      this.schedulePersist();
     }
   }
 
-  listFiles(): IndexedFileRecord[] {
-    return Array.from(this.records.values()).sort((a, b) => a.path.localeCompare(b.path));
+  listFiles(): IndexFileRecord[] {
+    return Array.from(this.records.values()).sort((a, b) => {
+      const pathA = isFullFileRecord(a) ? a.relativePath : a.relativePath;
+      const pathB = isFullFileRecord(b) ? b.relativePath : b.relativePath;
+      return pathA.localeCompare(pathB);
+    });
   }
 
-  getFile(pathRelative: string): IndexedFileRecord | undefined {
+  getFile(pathRelative: string): IndexFileRecord | undefined {
     return this.records.get(pathRelative);
   }
 
@@ -79,15 +174,19 @@ export class IndexDatabase {
     const pageSize = Math.max(options?.pageSize ?? DEFAULT_PAGE_SIZE, 1);
     const normalizedFilter = filter ?? {};
 
-    let records = Array.from(this.records.values());
+    const records = Array.from(this.records.values());
 
-    records = records.filter((record) => matchesRecord(record, normalizedFilter));
+    // Filter by match criteria (this also filters out non-full records)
+    const matchedRecords = records.filter((record): record is FullFileRecord => 
+      matchesRecord(record, normalizedFilter)
+    );
 
-    records = sortRecords(records, options?.sort);
+    // Sort the matched full records
+    const sortedRecords = sortRecords(matchedRecords, options?.sort);
 
-    const total = records.length;
+    const total = sortedRecords.length;
     const start = (page - 1) * pageSize;
-    const paged = records.slice(start, start + pageSize);
+    const paged = sortedRecords.slice(start, start + pageSize);
 
     const items = paged.map((record) => {
       const fullMetadata = buildFullMetadata(record);
@@ -120,22 +219,104 @@ export class IndexDatabase {
   }
 
   close(): void {
-    this.persist();
+    // Cancel any pending persist timer
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    
+    // Force immediate persist if there are unsaved changes
+    if (this.isDirty) {
+      this.persistSync();
+    }
+    
+    // Note: We don't await persistPromise here because close() is synchronous
+    // Any in-flight async persist will complete, but we've ensured dirty data is saved
   }
 
-  private persist(): void {
+  private schedulePersist(): void {
+    this.isDirty = true;
+    
+    // Clear existing timer if any
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+    }
+    
+    // Schedule a new persist after debounce delay
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      this.persist();
+    }, this.persistDebounceMs);
+  }
+
+  private async persist(): Promise<void> {
+    // If a persist is already in progress, don't start another
+    if (this.persistPromise) {
+      return this.persistPromise;
+    }
+    
+    // If nothing to save, skip
+    if (!this.isDirty || !this.storagePath) {
+      return;
+    }
+    
+    // Mark as not dirty before starting (so new changes during persist will trigger another save)
+    this.isDirty = false;
+    
+    // Start the persist operation
+    this.persistPromise = this.persistAsync();
+    
+    try {
+      await this.persistPromise;
+    } finally {
+      this.persistPromise = null;
+    }
+  }
+
+  private async persistAsync(): Promise<void> {
     if (!this.storagePath) {
       return;
     }
 
-    const directory = path.dirname(this.storagePath);
-    mkdirSync(directory, { recursive: true });
-    const serialized = JSON.stringify(this.listFiles(), null, 2);
-    writeFileSync(this.storagePath, serialized, "utf8");
+    try {
+      const directory = path.dirname(this.storagePath);
+      mkdirSync(directory, { recursive: true });
+      const serialized = JSON.stringify(this.listFiles(), null, 2);
+      
+      // Use async writeFile for non-blocking I/O
+      await import('node:fs/promises').then(fs => 
+        fs.writeFile(this.storagePath!, serialized, "utf8")
+      );
+    } catch (error) {
+      console.error(`[indexer] Failed to persist index to ${this.storagePath}`, error);
+      // Re-mark as dirty so we'll try again
+      this.isDirty = true;
+    }
+  }
+
+  private persistSync(): void {
+    if (!this.storagePath) {
+      return;
+    }
+
+    try {
+      const directory = path.dirname(this.storagePath);
+      mkdirSync(directory, { recursive: true });
+      const serialized = JSON.stringify(this.listFiles(), null, 2);
+      writeFileSync(this.storagePath, serialized, "utf8");
+      this.isDirty = false;
+    } catch (error) {
+      console.error(`[indexer] Failed to persist index to ${this.storagePath}`, error);
+    }
   }
 }
 
-const matchesRecord = (record: IndexedFileRecord, filter: Filter): boolean => {
+const matchesRecord = (record: IndexFileRecord, filter: Filter): boolean => {
+  // Only match full records in queries - partial records should be filtered out
+  if (!isFullFileRecord(record)) {
+    return false;
+  }
+
   if (filter.path?.length && !matchesPath(record, filter.path)) {
     return false;
   }
@@ -186,7 +367,7 @@ const matchesRecord = (record: IndexedFileRecord, filter: Filter): boolean => {
   return true;
 };
 
-const matchesPath = (record: IndexedFileRecord, patterns: string[]): boolean => {
+const matchesPath = (record: FullFileRecord, patterns: string[]): boolean => {
   const pathLower = record.path.toLowerCase();
   return patterns.some((pattern) => {
     const normalized = normalizePattern(pattern);
@@ -197,7 +378,7 @@ const matchesPath = (record: IndexedFileRecord, patterns: string[]): boolean => 
   });
 };
 
-const matchesFilename = (record: IndexedFileRecord, patterns: string[]): boolean => {
+const matchesFilename = (record: FullFileRecord, patterns: string[]): boolean => {
   const nameLower = record.name.toLowerCase();
   return patterns.some((pattern) => {
     const normalized = normalizePattern(pattern);
@@ -211,7 +392,7 @@ const matchesFilename = (record: IndexedFileRecord, patterns: string[]): boolean
   });
 };
 
-const matchesDirectory = (record: IndexedFileRecord, patterns: string[]): boolean => {
+const matchesDirectory = (record: FullFileRecord, patterns: string[]): boolean => {
   const directoryLower = record.directory.toLowerCase();
   return patterns.some((pattern) => {
     const normalized = stripTrailingSlash(normalizePattern(pattern));
@@ -226,7 +407,7 @@ const matchesDirectory = (record: IndexedFileRecord, patterns: string[]): boolea
   });
 };
 
-const matchesMimeType = (record: IndexedFileRecord, mimeTypes: string[]): boolean => {
+const matchesMimeType = (record: FullFileRecord, mimeTypes: string[]): boolean => {
   if (!record.mimeType) {
     return false;
   }
@@ -240,7 +421,7 @@ const matchesMimeType = (record: IndexedFileRecord, mimeTypes: string[]): boolea
   });
 };
 
-const matchesCameraMake = (record: IndexedFileRecord, makes: string[]): boolean => {
+const matchesCameraMake = (record: FullFileRecord, makes: string[]): boolean => {
   const cameraMake = record.metadata.cameraMake;
   if (!cameraMake) {
     return false;
@@ -249,7 +430,7 @@ const matchesCameraMake = (record: IndexedFileRecord, makes: string[]): boolean 
   return makes.some((make) => value === make.trim().toLowerCase());
 };
 
-const matchesCameraModel = (record: IndexedFileRecord, models: string[]): boolean => {
+const matchesCameraModel = (record: FullFileRecord, models: string[]): boolean => {
   const cameraModel = record.metadata.cameraModel;
   if (!cameraModel) {
     return false;
@@ -259,7 +440,7 @@ const matchesCameraModel = (record: IndexedFileRecord, models: string[]): boolea
 };
 
 const matchesLocation = (
-  record: IndexedFileRecord,
+  record: FullFileRecord,
   bounds: NonNullable<Filter["location"]>,
 ): boolean => {
   if (!bounds) {
@@ -294,7 +475,7 @@ const matchesLocation = (
 };
 
 const matchesDateRange = (
-  record: IndexedFileRecord,
+  record: FullFileRecord,
   range: NonNullable<Filter["dateRange"]>,
 ): boolean => {
   if (!range) {
@@ -334,7 +515,7 @@ const matchesDateRange = (
 };
 
 const matchesRating = (
-  record: IndexedFileRecord,
+  record: FullFileRecord,
   ratingFilter: NonNullable<Filter["rating"]>,
 ): boolean => {
   const rating =
@@ -353,12 +534,12 @@ const matchesRating = (
 };
 
 const matchesTags = (
-  record: IndexedFileRecord,
+  record: FullFileRecord,
   tags: string[],
   matchAll: boolean,
 ): boolean => {
   const recordTags = Array.isArray(record.metadata.tags)
-    ? record.metadata.tags.map((tag) => tag.toLowerCase())
+    ? record.metadata.tags.map((tag: string) => tag.toLowerCase())
     : [];
 
   if (recordTags.length === 0) {
@@ -372,7 +553,7 @@ const matchesTags = (
   return desired.some((tag) => recordTags.includes(tag));
 };
 
-const matchesQuery = (record: IndexedFileRecord, query: string): boolean => {
+const matchesQuery = (record: FullFileRecord, query: string): boolean => {
   const q = query.trim().toLowerCase();
   if (!q) {
     return true;
@@ -381,7 +562,7 @@ const matchesQuery = (record: IndexedFileRecord, query: string): boolean => {
   return tokens.some((token) => token.includes(q));
 };
 
-const collectSearchTokens = (record: IndexedFileRecord): string[] => {
+const collectSearchTokens = (record: FullFileRecord): string[] => {
   const tokens = new Set<string>();
   tokens.add(record.path.toLowerCase());
   tokens.add(record.name.toLowerCase());
@@ -422,17 +603,18 @@ const collectSearchTokens = (record: IndexedFileRecord): string[] => {
 };
 
 const sortRecords = (
-  records: IndexedFileRecord[],
+  records: FullFileRecord[],
   sort?: QuerySort,
-): IndexedFileRecord[] => {
+): FullFileRecord[] => {
   const sortBy = sort?.sortBy ?? "dateTaken";
   const order = sort?.order ?? (sort ? "asc" : "desc");
+  // No need to filter again since input is already FullFileRecord[]
   return records.sort((a, b) => compareByField(a, b, sortBy, order));
 };
 
 const compareByField = (
-  a: IndexedFileRecord,
-  b: IndexedFileRecord,
+  a: FullFileRecord,
+  b: FullFileRecord,
   sortBy: QuerySort["sortBy"],
   order: QuerySort["order"],
 ): number => {
@@ -500,8 +682,8 @@ const compareNumeric = (
 };
 
 const compareByNameThenPath = (
-  a: IndexedFileRecord,
-  b: IndexedFileRecord,
+  a: FullFileRecord,
+  b: FullFileRecord,
   order: QuerySort["order"],
 ): number => {
   const comparison = a.name.localeCompare(b.name, undefined, {
@@ -516,7 +698,7 @@ const compareByNameThenPath = (
   return order === "asc" ? pathComparison : -pathComparison;
 };
 
-const getDateTakenTimestamp = (record: IndexedFileRecord): number | undefined => {
+const getDateTakenTimestamp = (record: FullFileRecord): number | undefined => {
   const candidate =
     record.metadata.dateTaken ??
     record.metadata.dateCreated ??
@@ -538,7 +720,7 @@ const toTimestamp = (value: string | Date | undefined | null): number | undefine
   return Number.isNaN(ms) ? undefined : ms;
 };
 
-const buildFullMetadata = (record: IndexedFileRecord): Partial<AllMetadata> => {
+const buildFullMetadata = (record: FullFileRecord): Partial<AllMetadata> => {
   const merged: Partial<AllMetadata> = {
     ...record.metadata,
   };

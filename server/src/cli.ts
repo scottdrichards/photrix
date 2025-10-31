@@ -1,5 +1,4 @@
 import "dotenv/config";
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { PhotrixHttpServer } from "./httpServer.js";
@@ -60,7 +59,19 @@ async function main(): Promise<void> {
 
   const server = new PhotrixHttpServer(serverConfig);
 
-  const { port: listeningPort, host: listeningHost } = await server.start(port, host);
+  const { port: listeningPort, host: listeningHost } = await server.start(port, host, {
+    waitForIndexer: false,
+  });
+
+  server
+    .waitForIndexer()
+    .then(() => {
+      console.log("[photrix] Initial indexing complete");
+    })
+    .catch((error) => {
+      console.error("[photrix] Initial indexing failed", error);
+      process.exit(1);
+    });
 
   const displayHost = listeningHost === "0.0.0.0" ? "localhost" : listeningHost;
   console.log(`[photrix] Serving media from ${serverConfig.mediaRoot}`);

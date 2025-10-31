@@ -4,7 +4,8 @@ import path from "node:path";
 import sharp from "sharp";
 import type { Representation, AllMetadata } from "../apiSpecification.js";
 import { FolderIndexer } from "./folderIndexer.js";
-import type { IndexedFileRecord } from "./models.js";
+import type { FullFileRecord } from "./models.js";
+import { isFullFileRecord } from "./models.js";
 import heicConvert from "heic-convert";
 import { mimeTypeForFilename } from "./mimeTypes.js";
 
@@ -60,6 +61,11 @@ export class FileService {
     const record = this.indexer.getIndexedFile(relativePath);
     if (!record) {
       throw new Error(`File ${relativePath} is not currently indexed`);
+    }
+    
+    // Ensure we have a fully indexed record
+    if (!isFullFileRecord(record)) {
+      throw new Error(`File ${relativePath} is still being indexed`);
     }
 
     const absolutePath = this.resolveAbsolutePath(relativePath);
@@ -121,7 +127,7 @@ export class FileService {
   }
 
   private async loadPreviewBuffer(
-    record: IndexedFileRecord,
+    record: FullFileRecord,
     absolutePath: string,
     mediaType: MediaType,
   ): Promise<Buffer> {
@@ -146,7 +152,7 @@ export class FileService {
   }
 }
 
-const inferContentType = (record: IndexedFileRecord): string | null => {
+const inferContentType = (record: FullFileRecord): string | null => {
   const guessed = mimeTypeForFilename(record.name);
   return (
     record.metadata.mimeType ??
@@ -157,7 +163,7 @@ const inferContentType = (record: IndexedFileRecord): string | null => {
 };
 
 const selectMetadata = (
-  record: IndexedFileRecord,
+  record: FullFileRecord,
   keys: Array<keyof AllMetadata>,
 ): Partial<AllMetadata> => {
   const base: Partial<AllMetadata> = {
@@ -205,7 +211,7 @@ const bufferToArrayBuffer = (buffer: Buffer): ArrayBuffer => {
 };
 
 const ensureJpegBuffer = async (
-  record: IndexedFileRecord,
+  record: FullFileRecord,
   source: Buffer,
 ): Promise<Buffer> => {
   if (isHeic(record)) {
@@ -219,7 +225,7 @@ const ensureJpegBuffer = async (
   return source;
 };
 
-const isHeic = (record: IndexedFileRecord): boolean => {
+const isHeic = (record: FullFileRecord): boolean => {
   const mime = (record.metadata.mimeType ?? record.mimeType ?? "").toLowerCase();
   if (mime === "image/heic" || mime === "image/heif") {
     return true;
@@ -227,7 +233,7 @@ const isHeic = (record: IndexedFileRecord): boolean => {
   return record.name.toLowerCase().endsWith(".heic");
 };
 
-const getMediaType = (record: IndexedFileRecord, override?: MediaType): MediaType => {
+const getMediaType = (record: FullFileRecord, override?: MediaType): MediaType => {
   if (override) {
     return override;
   }

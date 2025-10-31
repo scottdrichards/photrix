@@ -1,11 +1,11 @@
+import chokidar, { FSWatcher } from "chokidar";
 import { promises as fs } from "fs";
 import path from "path";
-import chokidar, { FSWatcher } from "chokidar";
-import { IndexDatabase } from "./indexDatabase.js";
-import { buildIndexedRecord } from "./metadata.js";
-import type { IndexedFileRecord } from "./models.js";
 import type { AllMetadata, Filter } from "../apiSpecification.js";
-import type { QueryOptions, QueryResult } from "./indexDatabase.js";
+import type { DiscoveredFileRecord, IndexFileRecord, QueryOptions, QueryResult } from "./indexDatabase.js";
+import { IndexDatabase, isDiscoveredRecord } from "./indexDatabase.js";
+import { buildIndexedRecord } from "./metadata.js";
+import { mimeTypeForFilename } from "./mimeTypes.js";
 
 interface FolderIndexerOptions {
   dbFile?: string;
@@ -34,7 +34,8 @@ export class FolderIndexer {
   }
 
   async start(): Promise<void> {
-    await this.indexExistingFiles();
+    await this.discoverFiles();
+    await this.processDiscoveredFiles();
     if (this.options.watch) {
       await this.startWatcher();
     }
@@ -90,11 +91,16 @@ export class FolderIndexer {
   private async fileNeedsReindex(filePath: string): Promise<boolean> {
     try {
       const stats = await fs.stat(filePath);
-      const relativePath = this.toRelative(filePath);
+      const relativePath = toRelative(filePath, this.root);
       const existing = this.db.getFile(relativePath);
       
       if (!existing) {
         return true; // New file
+      }
+      
+      // Discovered records always need reindexing
+      if (isDiscoveredRecord(existing)) {
+        return true;
       }
       
       // Check if size or modification time changed
@@ -108,16 +114,16 @@ export class FolderIndexer {
   }
 
   removeFile(filePath: string): void {
-    const relative = this.toRelative(filePath);
+    const relative = toRelative(filePath, this.root);
     this.db.removeFile(relative);
   }
 
-  listIndexedFiles(): IndexedFileRecord[] {
+  listIndexedFiles(): IndexFileRecord[] {
     return this.db.listFiles();
   }
 
-  getIndexedFile(pathRelative: string): IndexedFileRecord | undefined {
-    return this.db.getFile(this.toPosix(pathRelative));
+  getIndexedFile(pathRelative: string): IndexFileRecord | undefined {
+    return this.db.getFile(toPosix(pathRelative));
   }
 
   async queryFiles<T extends Array<keyof AllMetadata> | undefined = undefined>(
@@ -127,69 +133,152 @@ export class FolderIndexer {
     return this.db.queryFiles(filter, options);
   }
 
-  private async indexExistingFiles(): Promise<void> {
-    console.log(`[indexer] Starting to index existing files in ${this.root}`);
+  // Phase 1: Discovery - just register filenames from directory walking
+  private async discoverFiles(): Promise<void> {
+    console.log(`[indexer] Phase 1: Discovering files in ${this.root}`);
     
-    const files: string[] = [];
     let discoveredCount = 0;
+    let registeredCount = 0;
+    let lastLogTime = Date.now();
     
-    // Collect files with live progress
-    for await (const file of walkFiles(this.root)) {
-      files.push(file);
-      discoveredCount++;
-      const relativePath = path.relative(this.root, file);
-      const displayPath = relativePath.length > 60 
-        ? "..." + relativePath.slice(-57) 
-        : relativePath;
-      // Clear line and write status
-      process.stdout.write(
-        `\r\x1b[K[indexer] Scanned ${discoveredCount} files — current: ${displayPath}`,
-      );
+    try {
+      for await (const file of walkFiles(this.root)) {
+        discoveredCount++;
+        
+        const wasRegistered = this.registerDiscoveredFile(file);
+        if (wasRegistered) {
+          registeredCount++;
+        }
+        
+        // Update display every file or every 1 second, whichever is less frequent
+        const now = Date.now();
+        if (now - lastLogTime > 1000 || discoveredCount % 100 === 0) {
+          const relativePath = path.relative(this.root, file);
+          const displayPath = relativePath.length > 60 
+            ? "..." + relativePath.slice(-57) 
+            : relativePath;
+          process.stdout.write(
+            `\r\x1b[K[indexer] Discovered ${discoveredCount} files (${registeredCount} new) — current: ${displayPath}`,
+          );
+          lastLogTime = now;
+        }
+      }
+    } catch (error) {
+      console.error(`[indexer] Error during file discovery:`, error);
     }
     
     process.stdout.write("\n");
-    console.log(`[indexer] Found ${files.length} files to index`);
+    console.log(`[indexer] Phase 1 complete: ${discoveredCount} total, ${registeredCount} new files registered`);
+  }
 
-    // Process files in parallel with progress
+  // Phase 2: Process all discovered files (gather file info + extract metadata in one pass)
+  private async processDiscoveredFiles(): Promise<void> {
+    console.log(`[indexer] Phase 2: Processing discovered files`);
+    
+    const files = this.db.listFiles().filter((f): f is DiscoveredFileRecord => isDiscoveredRecord(f));
+    
+    if (files.length === 0) {
+      console.log(`[indexer] Phase 2 complete: No files to process`);
+      return;
+    }
+    
+    console.log(`[indexer] Processing ${files.length} files`);
+    
     this.isInitialIndexing = true;
     const total = files.length;
-    const barWidth = 30;
+    const concurrency = 20; // Balanced concurrency for full processing
+    let processed = 0;
+    let failed = 0;
     const startTime = Date.now();
-    const concurrency = 20; // Process 20 files at a time (optimized for network shares)
-    let indexed = 0;
-    let skipped = 0;
     
-    // Process files in batches
     for (let i = 0; i < files.length; i += concurrency) {
       const batch = files.slice(i, i + concurrency);
-      await Promise.all(batch.map(async (file) => {
-        const wasIndexed = await this.indexFile(file, true); // Enable smart caching
-        if (wasIndexed) {
-          indexed++;
+      await Promise.all(batch.map(async (fileRecord) => {
+        const filePath = path.join(this.root, fileRecord.relativePath);
+        const success = await this.processFile(filePath);
+        if (success) {
+          processed++;
         } else {
-          skipped++;
+          failed++;
         }
         
-        const processed = indexed + skipped;
-        const percentage = Math.round((processed / total) * 100 * 10) / 10;
-        const filledWidth = Math.round((processed / total) * barWidth);
-        const bar = "█".repeat(filledWidth) + "─".repeat(barWidth - filledWidth);
-        const rate = indexed > 0 ? (indexed / ((Date.now() - startTime) / 1000)).toFixed(2) : "0.00";
-        const eta = processed > 0 && processed < total
-          ? this.formatTime((total - processed) / (processed / ((Date.now() - startTime) / 1000)))
-          : "00:00:00";
-        
-        // Clear line and write progress
-        const skipInfo = skipped > 0 ? ` (${skipped} skipped)` : "";
-        process.stdout.write(
-          `\r\x1b[K[indexer] ${processed}/${total} ${percentage}% |${bar}| ETA ${eta} (${rate} f/s)${skipInfo}`,
-        );
+        this.displayProgress(processed + failed, total, processed, failed, startTime);
       }));
     }
     
     process.stdout.write("\n");
     this.isInitialIndexing = false;
-    console.log(`[indexer] Completed indexing: ${indexed} indexed, ${skipped} skipped, ${files.length} total`);
+    console.log(`[indexer] Phase 2 complete: ${processed} processed, ${failed} failed, ${total} total`);
+  }
+
+  // Helper: Register a discovered file (state 1: discovered)
+  private registerDiscoveredFile(filePath: string): boolean {
+    try {
+      const relativePath = toRelative(filePath, this.root);
+      const existing = this.db.getFile(relativePath);
+      
+      // Skip if already exists
+      if (existing) {
+        return false;
+      }
+      
+      // Create stub record with only filename-based info
+      const mimeType = mimeTypeForFilename(path.basename(filePath));
+      
+      const stub: DiscoveredFileRecord = {
+        relativePath,
+        mimeType: mimeType ?? null,
+        lastIndexedAt: null,
+      };
+      
+      this.db.upsertFile(stub);
+      return true;
+    } catch (error) {
+      console.error(`[indexer] Failed to register ${filePath}:`, error);
+      return false;
+    }
+  }
+
+  // Helper: Process a single file (gather file info + extract full metadata)
+  private async processFile(filePath: string): Promise<boolean> {
+    try {
+      // buildIndexedRecord does both stat() and metadata extraction
+      const record = await buildIndexedRecord(this.root, filePath);
+      this.db.upsertFile(record);
+      return true;
+    } catch (error) {
+      console.error(`[indexer] Failed to process ${filePath}:`, error);
+      return false;
+    }
+  }
+
+  private progressLastDisplayed = 0;
+
+  // Helper: Display progress bar
+  private displayProgress(
+    completed: number,
+    total: number,
+    processed: number,
+    failed: number,
+    startTime: number,
+  ): void {
+    if (Date.now() - this.progressLastDisplayed < 200 && completed !== total) {
+      return; // Throttle updates to every 200ms
+    }
+    this.progressLastDisplayed = Date.now();
+    const percentage = Math.round((completed / total) * 100 * 10) / 10;
+    const barWidth = 30;
+    const filledWidth = Math.round((completed / total) * barWidth);
+    const bar = "█".repeat(filledWidth) + "─".repeat(barWidth - filledWidth);
+    const rate = processed > 0 ? (processed / ((Date.now() - startTime) / 1000)).toFixed(2) : "0.00";
+    const eta = completed > 0 && completed < total
+      ? this.formatTime((total - completed) / (completed / ((Date.now() - startTime) / 1000)))
+      : "00:00:00";
+    
+    const failInfo = failed > 0 ? ` (${failed} failed)` : "";
+    process.stdout.write(
+      `\r\x1b[K[indexer] ${completed}/${total} ${percentage}% |${bar}| ETA ${eta} (${rate} f/s)${failInfo}`,
+    );
   }
 
   private formatTime(seconds: number): string {
@@ -220,33 +309,43 @@ export class FolderIndexer {
 
     this.watcher = watcher;
   }
-
-  private toRelative(filePath: string): string {
-    const absolute = path.resolve(filePath);
-    if (!absolute.startsWith(this.root)) {
-      throw new Error(`File ${filePath} is outside of watched root ${this.root}`);
-    }
-    const relative = path.relative(this.root, absolute);
-    return this.toPosix(relative);
-  }
-
-  private toPosix(relativePath: string): string {
-    return relativePath.split(path.sep).join("/");
-  }
 }
 
+const toRelative = (filePath: string, root: string): string => {
+    const absolute = path.resolve(filePath);
+    if (!absolute.startsWith(root)) {
+      throw new Error(`File ${filePath} is outside of watched root ${root}`);
+    }
+    const relative = path.relative(root, absolute);
+    return toPosix(relative);
+  }
+
+const toPosix = (relativePath: string): string => relativePath.split(path.sep).join("/")
 
 async function* walkFiles(dir: string): AsyncGenerator<string> {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    console.error(`[indexer] Error reading directory ${dir}:`, error);
+    return; // Skip this directory
+  }
 
   for (const entry of entries) {
     const absolutePath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      yield* walkFiles(absolutePath);
-    } else if (entry.isFile()) {
-      yield absolutePath;
-    } else {
-      throw new Error(`Unknown file type: ${absolutePath}`);
+    
+    try {
+      if (entry.isDirectory()) {
+        yield* walkFiles(absolutePath);
+      } else if (entry.isFile()) {
+        yield absolutePath;
+      } else {
+        // Skip unknown file types (symlinks, sockets, etc.) instead of throwing
+        console.warn(`[indexer] Skipping non-file entry: ${absolutePath}`);
+      }
+    } catch (error) {
+      console.error(`[indexer] Error processing ${absolutePath}:`, error);
+      // Continue with next entry
     }
   }
 }

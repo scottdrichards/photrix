@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import path from "path";
 import { imageSize } from "image-size";
 import exifr from "exifr";
-import type { IndexedFileRecord } from "./models.js";
+import type { FullFileRecord } from "./models.js";
 import { mimeTypeForFilename } from "./mimeTypes.js";
 
 const execFileAsync = promisify(execFile);
@@ -188,25 +188,28 @@ const extractImageMetadata = async (
     }
     return null;
   } catch (error) {
-    console.warn(`[indexer] Failed to parse metadata for ${filePath}`, error);
+    // Log but don't fail - corrupted or unsupported image files should not kill indexing
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(`[indexer] Failed to parse EXIF metadata for ${filePath}: ${errorMessage}`);
     return null;
   }
 };
 
 const enrichImageMetadata = async (
-  metadata: IndexedFileRecord["metadata"],
+  metadata: FullFileRecord["metadata"],
   filePath: string,
 ): Promise<void> => {
-  const parsed = await extractImageMetadata(filePath);
+  try {
+    const parsed = await extractImageMetadata(filePath);
 
-  if (!parsed) {
-    // Fallback for files without EXIF data
-    const fallback = await safeImageSize(filePath);
-    if (fallback) {
-      metadata.dimensions = fallback;
+    if (!parsed) {
+      // Fallback for files without EXIF data
+      const fallback = await safeImageSize(filePath);
+      if (fallback) {
+        metadata.dimensions = fallback;
+      }
+      return;
     }
-    return;
-  }
 
   // Extract date taken
   metadata.dateTaken =
@@ -260,51 +263,62 @@ const enrichImageMetadata = async (
     metadata.tags = Array.from(new Set(tags));
   }
 
-  // Fallback for dimensions if not found in EXIF
-  if (!metadata.dimensions) {
-    const fallback = await safeImageSize(filePath);
-    if (fallback) {
-      metadata.dimensions = fallback;
+    // Fallback for dimensions if not found in EXIF
+    if (!metadata.dimensions) {
+      const fallback = await safeImageSize(filePath);
+      if (fallback) {
+        metadata.dimensions = fallback;
+      }
     }
+  } catch (error) {
+    // Log but don't fail - corrupted or unsupported image files should not kill indexing
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(`[indexer] Failed to enrich image metadata for ${filePath}: ${errorMessage}`);
   }
 };
 
 const enrichVideoMetadata = async (
-  metadata: IndexedFileRecord["metadata"],
+  metadata: FullFileRecord["metadata"],
   filePath: string,
 ): Promise<void> => {
-  const probe = await videoMetadataProbe.probe(filePath);
-  if (!probe) {
-    return;
-  }
+  try {
+    const probe = await videoMetadataProbe.probe(filePath);
+    if (!probe) {
+      return;
+    }
 
-  const { width, height, duration, framerate, videoCodec, audioCodec } = probe;
+    const { width, height, duration, framerate, videoCodec, audioCodec } = probe;
 
-  if (width !== undefined && height !== undefined) {
-    metadata.dimensions = { width, height };
-  }
+    if (width !== undefined && height !== undefined) {
+      metadata.dimensions = { width, height };
+    }
 
-  if (duration !== undefined) {
-    metadata.duration = duration;
-  }
+    if (duration !== undefined) {
+      metadata.duration = duration;
+    }
 
-  if (framerate !== undefined) {
-    metadata.framerate = framerate;
-  }
+    if (framerate !== undefined) {
+      metadata.framerate = framerate;
+    }
 
-  if (videoCodec) {
-    metadata.videoCodec = videoCodec;
-  }
+    if (videoCodec) {
+      metadata.videoCodec = videoCodec;
+    }
 
-  if (audioCodec) {
-    metadata.audioCodec = audioCodec;
+    if (audioCodec) {
+      metadata.audioCodec = audioCodec;
+    }
+  } catch (error) {
+    // Log but don't fail - corrupted or unsupported video files should not kill indexing
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(`[indexer] Failed to enrich video metadata for ${filePath}: ${errorMessage}`);
   }
 };
 
 export async function buildIndexedRecord(
   rootDir: string,
   filePath: string,
-): Promise<IndexedFileRecord> {
+): Promise<FullFileRecord> {
   const stats = await fs.stat(filePath);
   if (!stats.isFile()) {
     throw new Error(`Cannot index non-file path: ${filePath}`);
@@ -324,9 +338,9 @@ export async function buildIndexedRecord(
 
   const mimeType = mimeTypeForFilename(name);
   const dateCreated = stats.birthtime ? stats.birthtime.toISOString() : undefined;
-  const dateModified = stats.mtime ? stats.mtime.toISOString() : undefined;
+  const dateModified = stats.mtime.toISOString();
 
-  const metadata: IndexedFileRecord["metadata"] = {
+  const metadata: FullFileRecord["metadata"] = {
     size: stats.size,
     mimeType: mimeType ?? undefined,
     dateCreated,
@@ -346,6 +360,7 @@ export async function buildIndexedRecord(
 
   return {
     path: relativePath,
+    relativePath: relativePath, // Include for consistency with other record types
     directory,
     name,
     size: stats.size,
