@@ -30,6 +30,17 @@ generateAITags(imagePath, (topK = 5), (minConfidence = 0.1));
 - `topK`: Maximum number of tags to generate (default: 5)
 - `minConfidence`: Minimum confidence threshold (default: 0.1, range: 0-1)
 
+### Model Configuration
+
+The implementation uses MobileNet v1 with alpha=0.25, which is the smallest and fastest configuration:
+
+**Trade-offs:**
+
+- **Pros:** Minimal memory footprint (~4MB model, ~50-100MB runtime), fast inference, works without GPU
+- **Cons:** Lower accuracy compared to larger models (alpha=1.0 would be ~4x more accurate but also ~4x larger)
+
+This configuration prioritizes resource efficiency over tagging quality, making it suitable for CPU-only environments with limited RAM. For better accuracy, you could modify the `alpha` parameter in `aiTagger.ts`, but this will increase memory usage and inference time.
+
 ## Dependencies
 
 - `@tensorflow/tfjs`: TensorFlow.js core library

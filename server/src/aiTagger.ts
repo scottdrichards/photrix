@@ -62,15 +62,18 @@ const preprocessImage = async (imagePath: string): Promise<tf.Tensor3D> => {
     .raw()
     .toBuffer({ resolveWithObject: true });
 
-  // Convert to tensor
+  // Convert to tensor and normalize to [0, 1] range
   const tensor = tf.tensor3d(new Uint8Array(imageBuffer.data), [
     imageBuffer.info.height,
     imageBuffer.info.width,
     imageBuffer.info.channels,
   ]);
 
-  // Normalize to [0, 1] if needed (MobileNet expects this)
-  return tensor as tf.Tensor3D;
+  // MobileNet expects pixel values in [0, 1] range
+  const normalized = tensor.div(255.0);
+  tensor.dispose(); // Clean up the unnormalized tensor
+
+  return normalized as tf.Tensor3D;
 };
 
 export const generateAITags = async (
