@@ -14,6 +14,7 @@ import { ArrowClockwise24Regular } from "@fluentui/react-icons";
 import { fetchPhotos, PhotoItem } from "./api";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { FullscreenViewer } from "./components/FullscreenViewer";
+import { PeopleFilter } from "./components/PeopleFilter";
 
 const useStyles = makeStyles({
   app: {
@@ -37,6 +38,11 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     color: tokens.colorNeutralForeground2,
   },
+  filterSection: {
+    display: "flex",
+    flexDirection: "column",
+    gap: tokens.spacingVerticalM,
+  },
 });
 
 export default function App() {
@@ -51,31 +57,40 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PhotoItem | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [selectedPeople, setSelectedPeople] = useState<string[]>([]);
 
-  const loadInitial = useCallback(async (signal: AbortSignal) => {
-    setInitialLoading(true);
-    setError(null);
-    try {
-      const result = await fetchPhotos({ page: 1, pageSize: PAGE_SIZE, signal });
-      if (signal.aborted) {
-        return;
+  const loadInitial = useCallback(
+    async (signal: AbortSignal) => {
+      setInitialLoading(true);
+      setError(null);
+      try {
+        const result = await fetchPhotos({
+          page: 1,
+          pageSize: PAGE_SIZE,
+          signal,
+          people: selectedPeople.length > 0 ? selectedPeople : undefined,
+        });
+        if (signal.aborted) {
+          return;
+        }
+        setPhotos(result.items);
+        setTotal(result.total);
+        setPage(result.page);
+        setHasMore(result.items.length > 0 && result.items.length < result.total);
+      } catch (err) {
+        if ((err as Error).name === "AbortError") {
+          return;
+        }
+        console.error(err);
+        setError((err as Error).message ?? "Failed to load photos");
+      } finally {
+        if (!signal.aborted) {
+          setInitialLoading(false);
+        }
       }
-      setPhotos(result.items);
-      setTotal(result.total);
-      setPage(result.page);
-      setHasMore(result.items.length > 0 && result.items.length < result.total);
-    } catch (err) {
-      if ((err as Error).name === "AbortError") {
-        return;
-      }
-      console.error(err);
-      setError((err as Error).message ?? "Failed to load photos");
-    } finally {
-      if (!signal.aborted) {
-        setInitialLoading(false);
-      }
-    }
-  }, []);
+    },
+    [selectedPeople]
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -91,7 +106,11 @@ export default function App() {
     setError(null);
     try {
       const nextPage = page + 1;
-      const result = await fetchPhotos({ page: nextPage, pageSize: PAGE_SIZE });
+      const result = await fetchPhotos({
+        page: nextPage,
+        pageSize: PAGE_SIZE,
+        people: selectedPeople.length > 0 ? selectedPeople : undefined,
+      });
       setPhotos((current) => {
         const next = [...current, ...result.items];
         const hasNext = result.items.length > 0 && next.length < result.total;
@@ -106,9 +125,14 @@ export default function App() {
     } finally {
       setLoadingMore(false);
     }
-  }, [hasMore, loadingMore, initialLoading, page]);
+  }, [hasMore, loadingMore, initialLoading, page, selectedPeople]);
 
   const handleRefresh = useCallback(() => {
+    setRefreshToken((value) => value + 1);
+  }, []);
+
+  const handlePeopleSelectionChange = useCallback((newSelectedPeople: string[]) => {
+    setSelectedPeople(newSelectedPeople);
     setRefreshToken((value) => value + 1);
   }, []);
 
@@ -119,8 +143,11 @@ export default function App() {
     if (error) {
       return error;
     }
+    if (selectedPeople.length > 0) {
+      return `${total} photos (filtered by ${selectedPeople.length} ${selectedPeople.length === 1 ? "person" : "people"})`;
+    }
     return `${total} photos`;
-  }, [initialLoading, error, total]);
+  }, [initialLoading, error, total, selectedPeople]);
 
   return (
     <div className={styles.app}>
@@ -139,6 +166,15 @@ export default function App() {
           </Button>
         </Tooltip>
       </header>
+
+      <Divider />
+
+      <div className={styles.filterSection}>
+        <PeopleFilter
+          selectedPeople={selectedPeople}
+          onSelectionChange={handlePeopleSelectionChange}
+        />
+      </div>
 
       <Divider />
 
