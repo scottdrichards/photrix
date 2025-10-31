@@ -14,6 +14,8 @@ import { ArrowClockwise24Regular } from "@fluentui/react-icons";
 import { fetchPhotos, PhotoItem } from "./api";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { FullscreenViewer } from "./components/FullscreenViewer";
+import { FilterPanel } from "./components/filters/FilterPanel";
+import type { FilterState } from "./types/filters";
 
 const useStyles = makeStyles({
   app: {
@@ -51,12 +53,27 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PhotoItem | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [filters, setFilters] = useState<FilterState>({});
 
   const loadInitial = useCallback(async (signal: AbortSignal) => {
     setInitialLoading(true);
     setError(null);
     try {
-      const result = await fetchPhotos({ page: 1, pageSize: PAGE_SIZE, signal });
+      const apiFilter = {
+        directory: filters.directories,
+        cameraMake: filters.cameraMake,
+        cameraModel: filters.cameraModel,
+        location: filters.location,
+        dateRange: filters.dateRange,
+        rating: filters.minRating !== undefined ? { min: filters.minRating } : undefined,
+        tags: filters.tags,
+      };
+      const result = await fetchPhotos({ 
+        page: 1, 
+        pageSize: PAGE_SIZE, 
+        filter: apiFilter,
+        signal 
+      });
       if (signal.aborted) {
         return;
       }
@@ -75,7 +92,7 @@ export default function App() {
         setInitialLoading(false);
       }
     }
-  }, []);
+  }, [filters]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -91,7 +108,20 @@ export default function App() {
     setError(null);
     try {
       const nextPage = page + 1;
-      const result = await fetchPhotos({ page: nextPage, pageSize: PAGE_SIZE });
+      const apiFilter = {
+        directory: filters.directories,
+        cameraMake: filters.cameraMake,
+        cameraModel: filters.cameraModel,
+        location: filters.location,
+        dateRange: filters.dateRange,
+        rating: filters.minRating !== undefined ? { min: filters.minRating } : undefined,
+        tags: filters.tags,
+      };
+      const result = await fetchPhotos({ 
+        page: nextPage, 
+        pageSize: PAGE_SIZE,
+        filter: apiFilter,
+      });
       setPhotos((current) => {
         const next = [...current, ...result.items];
         const hasNext = result.items.length > 0 && next.length < result.total;
@@ -106,9 +136,19 @@ export default function App() {
     } finally {
       setLoadingMore(false);
     }
-  }, [hasMore, loadingMore, initialLoading, page]);
+  }, [hasMore, loadingMore, initialLoading, page, filters]);
 
   const handleRefresh = useCallback(() => {
+    setRefreshToken((value) => value + 1);
+  }, []);
+
+  const handleFilterChange = useCallback((newFilters: FilterState) => {
+    setFilters(newFilters);
+    setRefreshToken((value) => value + 1);
+  }, []);
+
+  const handleClearFilters = useCallback(() => {
+    setFilters({});
     setRefreshToken((value) => value + 1);
   }, []);
 
@@ -139,6 +179,14 @@ export default function App() {
           </Button>
         </Tooltip>
       </header>
+
+      <Divider />
+
+      <FilterPanel 
+        filters={filters} 
+        onChange={handleFilterChange}
+        onClear={handleClearFilters}
+      />
 
       <Divider />
 
