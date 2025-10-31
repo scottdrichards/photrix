@@ -3,9 +3,10 @@ import { promises as fs } from "fs";
 import path from "path";
 import type { AllMetadata, Filter } from "../apiSpecification.js";
 import type { DiscoveredFileRecord, IndexFileRecord, QueryOptions, QueryResult } from "./indexDatabase.js";
-import { IndexDatabase, isDiscoveredRecord } from "./indexDatabase.js";
+import { IndexDatabase, isDiscoveredRecord, isFullFileRecord } from "./indexDatabase.js";
 import { buildIndexedRecord } from "./metadata.js";
 import { mimeTypeForFilename } from "./mimeTypes.js";
+import { clusterFaces } from "./faceDetection.js";
 
 interface FolderIndexerOptions {
   dbFile?: string;
@@ -131,6 +132,76 @@ export class FolderIndexer {
     options?: QueryOptions<T>,
   ): Promise<QueryResult<T>> {
     return this.db.queryFiles(filter, options);
+  }
+
+  listPeople(): Array<{
+    personId: string;
+    faceCount: number;
+    sampleImages: string[];
+  }> {
+    const allFiles = this.db.listFiles();
+    const facesWithEmbeddings: Array<{
+      faceId: string;
+      imagePath: string;
+      embedding: number[];
+    }> = [];
+
+    // Collect all faces with embeddings
+    for (const file of allFiles) {
+      if (
+        isFullFileRecord(file) &&
+        file.metadata.faces &&
+        Array.isArray(file.metadata.faces)
+      ) {
+        for (const face of file.metadata.faces) {
+          if (face.embedding) {
+            facesWithEmbeddings.push({
+              faceId: face.faceId,
+              imagePath: file.path,
+              embedding: face.embedding,
+            });
+          }
+        }
+      }
+    }
+
+    // Cluster faces
+    const clusters = clusterFaces(facesWithEmbeddings);
+
+    // Assign person IDs to faces in the database
+    for (const [personId, faceInstances] of clusters.entries()) {
+      for (const { faceId, imagePath } of faceInstances) {
+        const file = this.db.getFile(imagePath);
+        if (file && isFullFileRecord(file) && file.metadata.faces) {
+          const face = file.metadata.faces.find((f) => f.faceId === faceId);
+          if (face) {
+            face.personId = personId;
+            this.db.upsertFile(file);
+          }
+        }
+      }
+    }
+
+    // Build response with sample images per person
+    const people: Array<{
+      personId: string;
+      faceCount: number;
+      sampleImages: string[];
+    }> = [];
+
+    for (const [personId, faceInstances] of clusters.entries()) {
+      const sampleImages: string[] = Array.from(
+        new Set(faceInstances.map((f) => f.imagePath))
+      ).slice(0, 5); // Up to 5 sample images
+
+      people.push({
+        personId,
+        faceCount: faceInstances.length,
+        sampleImages,
+      });
+    }
+
+    return people;
   }
 
   // Phase 1: Discovery - just register filenames from directory walking

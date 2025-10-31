@@ -54,6 +54,17 @@ export type FullFileRecord = {
     audioCodec?: string;
     rating?: number;
     tags?: string[];
+    faces?: Array<{
+      faceId: string;
+      boundingBox: {
+        originX: number;
+        originY: number;
+        width: number;
+        height: number;
+      };
+      embedding?: number[];
+      personId?: string;
+    }>;
   };
   lastIndexedAt: string;
 };
@@ -360,6 +371,10 @@ const matchesRecord = (record: IndexFileRecord, filter: Filter): boolean => {
     return false;
   }
 
+  if (filter.people?.length && !matchesPeople(record, filter.people)) {
+    return false;
+  }
+
   if (filter.q?.trim().length && !matchesQuery(record, filter.q)) {
     return false;
   }
@@ -551,6 +566,16 @@ const matchesTags = (
     return desired.every((tag) => recordTags.includes(tag));
   }
   return desired.some((tag) => recordTags.includes(tag));
+};
+
+const matchesPeople = (record: FullFileRecord, peopleIds: string[]): boolean => {
+  const faces = record.metadata.faces;
+  if (!faces || !Array.isArray(faces) || faces.length === 0) {
+    return false;
+  }
+
+  // Check if any face in the image belongs to one of the requested people
+  return faces.some((face) => face.personId && peopleIds.includes(face.personId));
 };
 
 const matchesQuery = (record: FullFileRecord, query: string): boolean => {
