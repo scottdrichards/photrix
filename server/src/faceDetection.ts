@@ -107,8 +107,12 @@ export const computeFaceEmbedding = (
   features.push(face.boundingBox.width / imageDimensions.width);
   features.push(face.boundingBox.height / imageDimensions.height);
 
-  // Add aspect ratio
-  features.push(face.boundingBox.width / face.boundingBox.height);
+  // Add aspect ratio (guard against division by zero)
+  if (face.boundingBox.height > 0) {
+    features.push(face.boundingBox.width / face.boundingBox.height);
+  } else {
+    features.push(0);
+  }
 
   // Add detection score
   features.push(face.score);

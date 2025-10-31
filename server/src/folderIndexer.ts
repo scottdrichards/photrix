@@ -168,18 +168,32 @@ export class FolderIndexer {
     // Cluster faces
     const clusters = clusterFaces(facesWithEmbeddings);
 
-    // Assign person IDs to faces in the database
+    // Assign person IDs to faces in the database (batch updates per file)
+    const updatedFiles = new Map<string, IndexFileRecord>();
+    
     for (const [personId, faceInstances] of clusters.entries()) {
       for (const { faceId, imagePath } of faceInstances) {
-        const file = this.db.getFile(imagePath);
+        // Get file from cache or database
+        let file = updatedFiles.get(imagePath);
+        if (!file) {
+          file = this.db.getFile(imagePath);
+          if (file) {
+            updatedFiles.set(imagePath, file);
+          }
+        }
+        
         if (file && isFullFileRecord(file) && file.metadata.faces) {
           const face = file.metadata.faces.find((f) => f.faceId === faceId);
           if (face) {
             face.personId = personId;
-            this.db.upsertFile(file);
           }
         }
       }
+    }
+    
+    // Batch write all updated files
+    for (const file of updatedFiles.values()) {
+      this.db.upsertFile(file);
     }
 
     // Build response with sample images per person
