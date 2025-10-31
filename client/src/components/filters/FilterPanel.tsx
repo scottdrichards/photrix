@@ -1,21 +1,17 @@
-import { useState } from "react";
 import {
-  Accordion,
-  AccordionHeader,
-  AccordionItem,
-  AccordionPanel,
   Button,
   Label,
   makeStyles,
   tokens,
+  Card,
 } from "@fluentui/react-components";
-import { ChevronDown24Regular, Dismiss24Regular } from "@fluentui/react-icons";
+import { Dismiss24Regular } from "@fluentui/react-icons";
 import type { FilterState } from "../../types/filters";
 import { StarRatingFilter } from "./StarRatingFilter";
 import { TagFilter } from "./TagFilter";
 import { DateRangeFilter } from "./DateRangeFilter";
 import { CameraFilter } from "./CameraFilter";
-import { FolderBrowser } from "./FolderBrowser";
+import { FolderTreeFilter } from "./FolderTreeFilter";
 import { MapFilter } from "./MapFilter";
 
 const useStyles = makeStyles({
@@ -30,13 +26,22 @@ const useStyles = makeStyles({
     alignItems: "center",
     marginBottom: tokens.spacingVerticalM,
   },
-  filterSection: {
+  filtersGrid: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: tokens.spacingHorizontalM,
+  },
+  filterCard: {
+    flex: "1 1 300px",
+    minWidth: "300px",
+    padding: tokens.spacingVerticalM,
     display: "flex",
     flexDirection: "column",
-    gap: tokens.spacingVerticalXS,
+    gap: tokens.spacingVerticalS,
   },
-  accordionItem: {
-    backgroundColor: tokens.colorNeutralBackground1,
+  filterTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    marginBottom: tokens.spacingVerticalXS,
   },
 });
 
@@ -48,7 +53,6 @@ export type FilterPanelProps = {
 
 export const FilterPanel = ({ filters, onChange, onClear }: FilterPanelProps) => {
   const styles = useStyles();
-  const [openItems, setOpenItems] = useState<string[]>(["folders", "ratings"]);
 
   const hasActiveFilters =
     (filters.directories && filters.directories.length > 0) ||
@@ -76,117 +80,76 @@ export const FilterPanel = ({ filters, onChange, onClear }: FilterPanelProps) =>
         )}
       </div>
 
-      <Accordion
-        multiple
-        openItems={openItems}
-        onToggle={(_, data) => setOpenItems(data.openItems as string[])}
-        collapsible
-      >
-        <AccordionItem value="folders" className={styles.accordionItem}>
-          <AccordionHeader icon={<ChevronDown24Regular />}>
-            Folders
-          </AccordionHeader>
-          <AccordionPanel>
-            <div className={styles.filterSection}>
-              <FolderBrowser
-                value={filters.directories ?? []}
-                onChange={(directories) =>
-                  onChange({
-                    ...filters,
-                    directories: directories.length > 0 ? directories : undefined,
-                  })
-                }
-              />
-            </div>
-          </AccordionPanel>
-        </AccordionItem>
+      <div className={styles.filtersGrid}>
+        <Card className={styles.filterCard}>
+          <Label className={styles.filterTitle}>Folders</Label>
+          <FolderTreeFilter
+            value={filters.directories ?? []}
+            onChange={(directories) =>
+              onChange({
+                ...filters,
+                directories: directories.length > 0 ? directories : undefined,
+              })
+            }
+          />
+        </Card>
 
-        <AccordionItem value="ratings" className={styles.accordionItem}>
-          <AccordionHeader icon={<ChevronDown24Regular />}>
-            Star Rating
-          </AccordionHeader>
-          <AccordionPanel>
-            <div className={styles.filterSection}>
-              <Label>Minimum rating</Label>
-              <StarRatingFilter
-                value={filters.minRating}
-                onChange={(minRating) => onChange({ ...filters, minRating })}
-              />
-            </div>
-          </AccordionPanel>
-        </AccordionItem>
+        <Card className={styles.filterCard}>
+          <Label className={styles.filterTitle}>Star Rating</Label>
+          <Label size="small">Minimum rating</Label>
+          <StarRatingFilter
+            value={filters.minRating}
+            onChange={(minRating) => onChange({ ...filters, minRating })}
+          />
+        </Card>
 
-        <AccordionItem value="tags" className={styles.accordionItem}>
-          <AccordionHeader icon={<ChevronDown24Regular />}>
-            Keywords/Tags
-          </AccordionHeader>
-          <AccordionPanel>
-            <div className={styles.filterSection}>
-              <TagFilter
-                value={filters.tags ?? []}
-                onChange={(tags) =>
-                  onChange({ ...filters, tags: tags.length > 0 ? tags : undefined })
-                }
-              />
-            </div>
-          </AccordionPanel>
-        </AccordionItem>
+        <Card className={styles.filterCard}>
+          <Label className={styles.filterTitle}>Keywords/Tags</Label>
+          <TagFilter
+            value={filters.tags ?? []}
+            onChange={(tags) =>
+              onChange({ ...filters, tags: tags.length > 0 ? tags : undefined })
+            }
+          />
+        </Card>
 
-        <AccordionItem value="dateRange" className={styles.accordionItem}>
-          <AccordionHeader icon={<ChevronDown24Regular />}>
-            Date Range
-          </AccordionHeader>
-          <AccordionPanel>
-            <div className={styles.filterSection}>
-              <DateRangeFilter
-                value={filters.dateRange}
-                onChange={(dateRange) => onChange({ ...filters, dateRange })}
-              />
-            </div>
-          </AccordionPanel>
-        </AccordionItem>
+        <Card className={styles.filterCard}>
+          <Label className={styles.filterTitle}>Date Range</Label>
+          <DateRangeFilter
+            value={filters.dateRange}
+            onChange={(dateRange) => onChange({ ...filters, dateRange })}
+          />
+        </Card>
 
-        <AccordionItem value="map" className={styles.accordionItem}>
-          <AccordionHeader icon={<ChevronDown24Regular />}>
-            Location (Map)
-          </AccordionHeader>
-          <AccordionPanel>
-            <div className={styles.filterSection}>
-              <Label>Move the map to filter by location</Label>
-              <MapFilter
-                value={filters.location}
-                onChange={(location) => onChange({ ...filters, location })}
-              />
-            </div>
-          </AccordionPanel>
-        </AccordionItem>
+        <Card className={styles.filterCard}>
+          <Label className={styles.filterTitle}>Location (Map)</Label>
+          <Label size="small">Move the map to filter by location</Label>
+          <MapFilter
+            value={filters.location}
+            onChange={(location) => onChange({ ...filters, location })}
+          />
+        </Card>
 
-        <AccordionItem value="camera" className={styles.accordionItem}>
-          <AccordionHeader icon={<ChevronDown24Regular />}>
-            Camera Make/Model
-          </AccordionHeader>
-          <AccordionPanel>
-            <div className={styles.filterSection}>
-              <CameraFilter
-                makes={filters.cameraMake ?? []}
-                models={filters.cameraModel ?? []}
-                onMakesChange={(cameraMake) =>
-                  onChange({
-                    ...filters,
-                    cameraMake: cameraMake.length > 0 ? cameraMake : undefined,
-                  })
-                }
-                onModelsChange={(cameraModel) =>
-                  onChange({
-                    ...filters,
-                    cameraModel: cameraModel.length > 0 ? cameraModel : undefined,
-                  })
-                }
-              />
-            </div>
-          </AccordionPanel>
-        </AccordionItem>
-      </Accordion>
+        <Card className={styles.filterCard}>
+          <Label className={styles.filterTitle}>Camera Make/Model</Label>
+          <CameraFilter
+            makes={filters.cameraMake ?? []}
+            models={filters.cameraModel ?? []}
+            onMakesChange={(cameraMake) =>
+              onChange({
+                ...filters,
+                cameraMake: cameraMake.length > 0 ? cameraMake : undefined,
+              })
+            }
+            onModelsChange={(cameraModel) =>
+              onChange({
+                ...filters,
+                cameraModel: cameraModel.length > 0 ? cameraModel : undefined,
+              })
+            }
+          />
+        </Card>
+      </div>
     </div>
   );
 };
