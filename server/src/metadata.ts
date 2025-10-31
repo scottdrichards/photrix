@@ -6,6 +6,7 @@ import { imageSize } from "image-size";
 import exifr from "exifr";
 import type { FullFileRecord } from "./models.js";
 import { mimeTypeForFilename } from "./mimeTypes.js";
+import { generateAITags } from "./aiTagger.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -252,15 +253,20 @@ const enrichImageMetadata = async (
     metadata.rating = rating;
   }
 
-  // Extract tags
+  // Extract tags from EXIF
   const tagSources = [parsed.Keywords, parsed.Subject, parsed.Categories];
-  const tags = tagSources
+  const exifTags = tagSources
     .flatMap((source) => (Array.isArray(source) ? source : source ? [source] : []))
     .filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
     .map((tag) => tag.trim());
 
-  if (tags.length > 0) {
-    metadata.tags = Array.from(new Set(tags));
+  // Generate AI tags
+  const aiTags = await generateAITags(filePath);
+
+  // Combine EXIF tags and AI tags
+  const allTags = [...exifTags, ...aiTags];
+  if (allTags.length > 0) {
+    metadata.tags = Array.from(new Set(allTags));
   }
 
     // Fallback for dimensions if not found in EXIF
