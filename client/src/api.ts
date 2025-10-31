@@ -28,6 +28,7 @@ export interface FetchPhotosOptions {
   pageSize?: number;
   metadata?: ReadonlyArray<string>;
   signal?: AbortSignal;
+  people?: string[];
 }
 
 export interface FetchPhotosResult {
@@ -78,11 +79,16 @@ export const fetchPhotos = async ({
   pageSize = 200,
   metadata = DEFAULT_METADATA_KEYS,
   signal,
+  people,
 }: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
   const params = new URLSearchParams();
   params.set("metadata", Array.from(metadata).join(","));
   params.set("page", page.toString());
   params.set("pageSize", pageSize.toString());
+
+  if (people && people.length > 0) {
+    people.forEach((personId) => params.append("people", personId));
+  }
 
   const response = await fetch(`/api/files?${params.toString()}`, { signal });
 

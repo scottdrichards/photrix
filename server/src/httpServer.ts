@@ -20,6 +20,7 @@ const METADATA_FIELDS = [
   "location",
   "rating",
   "tags",
+  "faces",
   "cameraMake",
   "cameraModel",
   "exposureTime",
@@ -207,6 +208,11 @@ export class PhotrixHttpServer {
         return;
       }
 
+      if (method === "GET" && pathname === "/api/people") {
+        await this.handleListPeople(res);
+        return;
+      }
+
       if (method === "GET" && pathname === "/api/file") {
         await this.handleGetFile(parsedUrl, res);
         return;
@@ -244,6 +250,11 @@ export class PhotrixHttpServer {
     const { filter, options } = buildQueryParameters(url.searchParams);
     const result = await this.indexer.queryFiles(filter, options);
     this.sendJson(res, 200, result);
+  }
+
+  private async handleListPeople(res: http.ServerResponse): Promise<void> {
+    const people = this.indexer.listPeople();
+    this.sendJson(res, 200, { people });
   }
 
   private async handleGetFile(url: URL, res: http.ServerResponse): Promise<void> {
@@ -456,6 +467,12 @@ const buildQueryParameters = (
   const tagsMatchAll = params.get("tagsMatchAll");
   if (tagsMatchAll !== null) {
     filter.tagsMatchAll = parseBoolean(tagsMatchAll);
+    hasFilter = true;
+  }
+
+  const people = getStringList(params, "people");
+  if (people.length > 0) {
+    filter.people = people;
     hasFilter = true;
   }
 

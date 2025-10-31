@@ -38,6 +38,9 @@ export type Filter = {
   /** When true require all tags to be present instead of any. */
   tagsMatchAll?: boolean;
 
+  /** Filter by person IDs detected in images. */
+  people?: string[];
+
   /** Free-text search over filename, description, etc. */
   q?: string;
 };
@@ -66,6 +69,16 @@ export type MediaMetadata = {
   location?: Location | null;
   rating?: number;
   tags?: string[];
+  faces?: Array<{
+    faceId: string;
+    boundingBox: {
+      originX: number;
+      originY: number;
+      width: number;
+      height: number;
+    };
+    personId?: string;
+  }>;
 };
 
 export type PhotoMetadata = MediaMetadata & {
@@ -126,6 +139,18 @@ export type ApiSpecification = {
     }>;
     total: number;
     page: number;
+  }>;
+
+  /**
+   * List all detected people/face groups with sample images.
+   * Returns person IDs that can be used for filtering.
+   */
+  listPeople: () => Promise<{
+    people: Array<{
+      personId: string;
+      faceCount: number;
+      sampleImages: string[]; // paths to sample images containing this person
+    }>;
   }>;
 
   /**

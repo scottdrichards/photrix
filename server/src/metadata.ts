@@ -1,11 +1,13 @@
 import { promises as fs } from "fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createHash } from "crypto";
 import path from "path";
 import { imageSize } from "image-size";
 import exifr from "exifr";
 import type { FullFileRecord } from "./models.js";
 import { mimeTypeForFilename } from "./mimeTypes.js";
+import { detectFaces, computeFaceEmbedding } from "./faceDetection.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -269,6 +271,29 @@ const enrichImageMetadata = async (
       if (fallback) {
         metadata.dimensions = fallback;
       }
+    }
+
+    // Detect faces in the image
+    try {
+      const faces = await detectFaces(filePath);
+      if (faces.length > 0 && metadata.dimensions) {
+        metadata.faces = faces.map((face, index) => {
+          // Generate a unique ID for each face based on file path and index
+          const faceId = createHash("md5")
+            .update(`${filePath}:${index}`)
+            .digest("hex")
+            .substring(0, 16);
+
+          return {
+            faceId,
+            boundingBox: face.boundingBox,
+            embedding: computeFaceEmbedding(face, metadata.dimensions!),
+          };
+        });
+      }
+    } catch (error) {
+      // Face detection is optional - don't fail indexing if it fails
+      console.warn(`[indexer] Failed to detect faces in ${filePath}:`, error);
     }
   } catch (error) {
     // Log but don't fail - corrupted or unsupported image files should not kill indexing
