@@ -1,5 +1,5 @@
 export { PhotrixHttpServer } from "./httpServer.js";
 export type {
-	PhotrixHttpServerOptions,
-	PhotrixHttpServerStartOptions,
+  PhotrixHttpServerOptions,
+  PhotrixHttpServerStartOptions,
 } from "./httpServer.js";

@@ -88,9 +88,7 @@ describe("FolderIndexer queryFiles", () => {
       const metadata = result.items[0]?.metadata;
       expect(metadata).toBeDefined();
       expect(Object.keys(metadata ?? {})).toEqual(["cameraMake"]);
-      expect(
-        Object.prototype.hasOwnProperty.call(metadata ?? {}, "name"),
-      ).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(metadata ?? {}, "name")).toBe(false);
       expect(metadata?.cameraMake?.toLowerCase()).toBe("samsung");
     } finally {
       await indexer.stop(true);
