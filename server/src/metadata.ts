@@ -164,25 +164,40 @@ const isExifrMetadata = (value: unknown): value is ExifrMetadata => {
   return typeof value === "object" && value !== null;
 };
 
-const extractImageMetadata = async (
-  filePath: string,
-): Promise<ExifrMetadata | null> => {
+const extractImageMetadata = async (filePath: string): Promise<ExifrMetadata | null> => {
   try {
     // Only pick the fields we actually use - this significantly speeds up parsing
     // by avoiding reading and parsing unnecessary EXIF data
     const parsed = await exifr.parse(filePath, [
-      'DateTimeOriginal', 'CreateDate',
-      'ExifImageWidth', 'ImageWidth', 'PixelXDimension',
-      'ExifImageHeight', 'ImageHeight', 'PixelYDimension',
-      'latitude', 'GPSLatitude', 'Latitude',
-      'longitude', 'GPSLongitude', 'Longitude',
-      'Make', 'Model',
-      'ExposureTime', 'ShutterSpeedValue',
-      'FNumber', 'ApertureValue',
-      'ISO', 'ISOSpeedRatings',
-      'FocalLength', 'LensModel',
-      'Rating', 'XPSubject',
-      'Keywords', 'Subject', 'Categories'
+      "DateTimeOriginal",
+      "CreateDate",
+      "ExifImageWidth",
+      "ImageWidth",
+      "PixelXDimension",
+      "ExifImageHeight",
+      "ImageHeight",
+      "PixelYDimension",
+      "latitude",
+      "GPSLatitude",
+      "Latitude",
+      "longitude",
+      "GPSLongitude",
+      "Longitude",
+      "Make",
+      "Model",
+      "ExposureTime",
+      "ShutterSpeedValue",
+      "FNumber",
+      "ApertureValue",
+      "ISO",
+      "ISOSpeedRatings",
+      "FocalLength",
+      "LensModel",
+      "Rating",
+      "XPSubject",
+      "Keywords",
+      "Subject",
+      "Categories",
     ]);
     if (isExifrMetadata(parsed)) {
       return parsed;
@@ -191,7 +206,9 @@ const extractImageMetadata = async (
   } catch (error) {
     // Log but don't fail - corrupted or unsupported image files should not kill indexing
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.warn(`[indexer] Failed to parse EXIF metadata for ${filePath}: ${errorMessage}`);
+    console.warn(
+      `[indexer] Failed to parse EXIF metadata for ${filePath}: ${errorMessage}`,
+    );
     return null;
   }
 };
@@ -212,62 +229,66 @@ const enrichImageMetadata = async (
       return;
     }
 
-  // Extract date taken
-  metadata.dateTaken =
-    toDateISO(parsed.DateTimeOriginal) ??
-    toDateISO(parsed.CreateDate) ??
-    metadata.dateTaken;
+    // Extract date taken
+    metadata.dateTaken =
+      toDateISO(parsed.DateTimeOriginal) ??
+      toDateISO(parsed.CreateDate) ??
+      metadata.dateTaken;
 
-  // Extract dimensions
-  const width =
-    toNumber(parsed.ExifImageWidth) ??
-    toNumber(parsed.ImageWidth) ??
-    toNumber(parsed.PixelXDimension);
-  const height =
-    toNumber(parsed.ExifImageHeight) ??
-    toNumber(parsed.ImageHeight) ??
-    toNumber(parsed.PixelYDimension);
-  if (width && height) {
-    metadata.dimensions = { width, height };
-  }
+    // Extract dimensions
+    const width =
+      toNumber(parsed.ExifImageWidth) ??
+      toNumber(parsed.ImageWidth) ??
+      toNumber(parsed.PixelXDimension);
+    const height =
+      toNumber(parsed.ExifImageHeight) ??
+      toNumber(parsed.ImageHeight) ??
+      toNumber(parsed.PixelYDimension);
+    if (width && height) {
+      metadata.dimensions = { width, height };
+    }
 
-  // Extract location
-  const latitude = toNumber(parsed.latitude ?? parsed.GPSLatitude ?? parsed.Latitude);
-  const longitude = toNumber(parsed.longitude ?? parsed.GPSLongitude ?? parsed.Longitude);
-  if (latitude !== undefined && longitude !== undefined) {
-    metadata.location = { latitude, longitude };
-  }
+    // Extract location
+    const latitude = toNumber(parsed.latitude ?? parsed.GPSLatitude ?? parsed.Latitude);
+    const longitude = toNumber(
+      parsed.longitude ?? parsed.GPSLongitude ?? parsed.Longitude,
+    );
+    if (latitude !== undefined && longitude !== undefined) {
+      metadata.location = { latitude, longitude };
+    }
 
-  // Extract camera information
-  metadata.cameraMake = typeof parsed.Make === "string" ? parsed.Make : undefined;
-  metadata.cameraModel = typeof parsed.Model === "string" ? parsed.Model : undefined;
-  metadata.exposureTime = formatExposure(parsed.ExposureTime ?? parsed.ShutterSpeedValue);
-  metadata.aperture = formatAperture(parsed.FNumber ?? parsed.ApertureValue);
-  metadata.iso = toNumber(parsed.ISO ?? parsed.ISOSpeedRatings);
-  metadata.focalLength = formatFocalLength(parsed.FocalLength);
-  metadata.lens = typeof parsed.LensModel === "string" ? parsed.LensModel : undefined;
+    // Extract camera information
+    metadata.cameraMake = typeof parsed.Make === "string" ? parsed.Make : undefined;
+    metadata.cameraModel = typeof parsed.Model === "string" ? parsed.Model : undefined;
+    metadata.exposureTime = formatExposure(
+      parsed.ExposureTime ?? parsed.ShutterSpeedValue,
+    );
+    metadata.aperture = formatAperture(parsed.FNumber ?? parsed.ApertureValue);
+    metadata.iso = toNumber(parsed.ISO ?? parsed.ISOSpeedRatings);
+    metadata.focalLength = formatFocalLength(parsed.FocalLength);
+    metadata.lens = typeof parsed.LensModel === "string" ? parsed.LensModel : undefined;
 
-  // Extract rating
-  const rating = toNumber(parsed.Rating ?? parsed.XPSubject ?? parsed.xmp?.Rating);
-  if (rating !== undefined) {
-    metadata.rating = rating;
-  }
+    // Extract rating
+    const rating = toNumber(parsed.Rating ?? parsed.XPSubject ?? parsed.xmp?.Rating);
+    if (rating !== undefined) {
+      metadata.rating = rating;
+    }
 
-  // Extract tags from EXIF
-  const tagSources = [parsed.Keywords, parsed.Subject, parsed.Categories];
-  const exifTags = tagSources
-    .flatMap((source) => (Array.isArray(source) ? source : source ? [source] : []))
-    .filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
-    .map((tag) => tag.trim());
+    // Extract tags from EXIF
+    const tagSources = [parsed.Keywords, parsed.Subject, parsed.Categories];
+    const exifTags = tagSources
+      .flatMap((source) => (Array.isArray(source) ? source : source ? [source] : []))
+      .filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
+      .map((tag) => tag.trim());
 
-  // Generate AI tags
-  const aiTags = await generateAITags(filePath);
+    // Generate AI tags
+    const aiTags = await generateAITags(filePath);
 
-  // Combine EXIF tags and AI tags
-  const allTags = [...exifTags, ...aiTags];
-  if (allTags.length > 0) {
-    metadata.tags = Array.from(new Set(allTags));
-  }
+    // Combine EXIF tags and AI tags
+    const allTags = [...exifTags, ...aiTags];
+    if (allTags.length > 0) {
+      metadata.tags = Array.from(new Set(allTags));
+    }
 
     // Fallback for dimensions if not found in EXIF
     if (!metadata.dimensions) {
@@ -279,7 +300,9 @@ const enrichImageMetadata = async (
   } catch (error) {
     // Log but don't fail - corrupted or unsupported image files should not kill indexing
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.warn(`[indexer] Failed to enrich image metadata for ${filePath}: ${errorMessage}`);
+    console.warn(
+      `[indexer] Failed to enrich image metadata for ${filePath}: ${errorMessage}`,
+    );
   }
 };
 
@@ -317,7 +340,9 @@ const enrichVideoMetadata = async (
   } catch (error) {
     // Log but don't fail - corrupted or unsupported video files should not kill indexing
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.warn(`[indexer] Failed to enrich video metadata for ${filePath}: ${errorMessage}`);
+    console.warn(
+      `[indexer] Failed to enrich video metadata for ${filePath}: ${errorMessage}`,
+    );
   }
 };
 
@@ -473,7 +498,11 @@ const parseFrameRate = (value: unknown): number | undefined => {
     if (parts.length === 2) {
       const numerator = Number(parts[0]);
       const denominator = Number(parts[1]);
-      if (Number.isFinite(numerator) && Number.isFinite(denominator) && denominator !== 0) {
+      if (
+        Number.isFinite(numerator) &&
+        Number.isFinite(denominator) &&
+        denominator !== 0
+      ) {
         return numerator / denominator;
       }
     }

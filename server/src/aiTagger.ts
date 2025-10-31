@@ -45,7 +45,9 @@ const loadModel = async (): Promise<MobileNetModel> => {
       modelLoadPromise = null;
       modelLoadFailed = true;
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.warn(`[ai-tagger] Failed to load model, AI tagging will be disabled: ${errorMessage}`);
+      console.warn(
+        `[ai-tagger] Failed to load model, AI tagging will be disabled: ${errorMessage}`,
+      );
       throw error;
     }
   })();
@@ -53,9 +55,7 @@ const loadModel = async (): Promise<MobileNetModel> => {
   return modelLoadPromise;
 };
 
-const preprocessImage = async (
-  imagePath: string,
-): Promise<tf.Tensor3D> => {
+const preprocessImage = async (imagePath: string): Promise<tf.Tensor3D> => {
   // Read and resize image using Sharp
   const imageBuffer = await sharp(imagePath)
     .resize(224, 224, { fit: "cover" })
@@ -63,10 +63,11 @@ const preprocessImage = async (
     .toBuffer({ resolveWithObject: true });
 
   // Convert to tensor
-  const tensor = tf.tensor3d(
-    new Uint8Array(imageBuffer.data),
-    [imageBuffer.info.height, imageBuffer.info.width, imageBuffer.info.channels],
-  );
+  const tensor = tf.tensor3d(new Uint8Array(imageBuffer.data), [
+    imageBuffer.info.height,
+    imageBuffer.info.width,
+    imageBuffer.info.channels,
+  ]);
 
   // Normalize to [0, 1] if needed (MobileNet expects this)
   return tensor as tf.Tensor3D;
@@ -111,7 +112,9 @@ export const generateAITags = async (
     const errorMessage = error instanceof Error ? error.message : String(error);
     // Only log if it's not a model load failure (already logged)
     if (!modelLoadFailed) {
-      console.warn(`[ai-tagger] Failed to generate AI tags for ${imagePath}: ${errorMessage}`);
+      console.warn(
+        `[ai-tagger] Failed to generate AI tags for ${imagePath}: ${errorMessage}`,
+      );
     }
     return [];
   }
