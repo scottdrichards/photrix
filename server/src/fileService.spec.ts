@@ -69,9 +69,7 @@ describe("FileService", () => {
       expect((parsed.mimeType as string | undefined)?.toLowerCase()).toContain(
         "image/heic",
       );
-      expect((parsed.cameraMake as string | undefined)?.toLowerCase()).toBe(
-        "samsung",
-      );
+      expect((parsed.cameraMake as string | undefined)?.toLowerCase()).toBe("samsung");
       expect(Object.keys(parsed)).toEqual(["cameraMake", "mimeType"]);
     } finally {
       await indexer.stop(true);

@@ -64,9 +64,9 @@ describe("PhotrixHttpServer", () => {
     const payload = await response.json();
     const metadata = payload.items[0].metadata ?? {};
     expect(metadata.mimeType).toContain("image/png");
-  expect(metadata.name).toBeUndefined();
-  expect(metadata.dimensions).toEqual({ width: 1, height: 1 });
-  expect(Object.keys(metadata)).toEqual(["mimeType", "dimensions"]);
+    expect(metadata.name).toBeUndefined();
+    expect(metadata.dimensions).toEqual({ width: 1, height: 1 });
+    expect(Object.keys(metadata)).toEqual(["mimeType", "dimensions"]);
   });
 
   it("serves the original file bytes", async () => {

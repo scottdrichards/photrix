@@ -31,7 +31,7 @@ describe("FolderIndexer", () => {
       expect(record).toBeDefined();
       if (!record || !isFullFileRecord(record)) {
         throw new Error("Expected full file record");
-      } 
+      }
       expect(record.metadata.dimensions).toEqual({ width: 4000, height: 3000 });
       // Check that dateTaken exists and is from December 2023 (timezone may vary)
       expect(record.metadata.dateTaken).toBeDefined();
@@ -58,9 +58,9 @@ describe("FolderIndexer", () => {
       expect(record).toBeDefined();
       if (record && isFullFileRecord(record)) {
         expect(record.path).toBe("notes.txt");
-        expect(
-          Object.prototype.hasOwnProperty.call(record.metadata ?? {}, "name"),
-        ).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(record.metadata ?? {}, "name")).toBe(
+          false,
+        );
         expect(record.metadata.size).toBeGreaterThan(0);
       } else {
         throw new Error("Expected full file record");
@@ -83,7 +83,8 @@ describe("FolderIndexer", () => {
         (value) => value === undefined,
       );
 
-      const remaining = indexer.listIndexedFiles()
+      const remaining = indexer
+        .listIndexedFiles()
         .filter(isFullFileRecord)
         .map((r) => r.path);
       expect(remaining).not.toContain("sewing-threads.heic");
@@ -112,10 +113,18 @@ describe("FolderIndexer", () => {
 
       const updated = await waitForCondition(
         () => indexer.getIndexedFile(targetRelative),
-        (value) => value !== undefined && isFullFileRecord(value) && value.lastIndexedAt !== original?.lastIndexedAt,
+        (value) =>
+          value !== undefined &&
+          isFullFileRecord(value) &&
+          value.lastIndexedAt !== original?.lastIndexedAt,
       );
-      
-      if (original && isFullFileRecord(original) && updated && isFullFileRecord(updated)) {
+
+      if (
+        original &&
+        isFullFileRecord(original) &&
+        updated &&
+        isFullFileRecord(updated)
+      ) {
         expect(updated.metadata.size ?? 0).toBeGreaterThan(original.metadata.size ?? 0);
         expect(updated.dateModified).not.toBe(original.dateModified);
       } else {
@@ -157,9 +166,9 @@ describe("FolderIndexer", () => {
 
       if (record && isFullFileRecord(record)) {
         expect(record.name).toBe(newRel);
-        expect(
-          Object.prototype.hasOwnProperty.call(record.metadata ?? {}, "name"),
-        ).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(record.metadata ?? {}, "name")).toBe(
+          false,
+        );
       } else {
         throw new Error("Expected full file record");
       }
@@ -170,10 +179,10 @@ describe("FolderIndexer", () => {
 
   it("handles files in discovery phase that are not yet fully indexed", async () => {
     const workspace = await createExampleWorkspace();
-    
+
     // Mock buildIndexedRecord to hang indefinitely, simulating slow metadata extraction
     const buildIndexedRecordSpy = vi.spyOn(metadataModule, "buildIndexedRecord");
-    
+
     // Create a promise that never resolves to simulate hanging metadata extraction
     buildIndexedRecordSpy.mockImplementation(async () => {
       return new Promise(() => {
@@ -193,11 +202,11 @@ describe("FolderIndexer", () => {
       // Check that files are discovered but not fully indexed
       const records = indexer.listIndexedFiles();
       expect(records.length).toBeGreaterThan(0);
-      
+
       // All records should be in discovered state (not fully indexed)
       const discoveredRecords = records.filter(isDiscoveredRecord);
       expect(discoveredRecords.length).toBe(2); // The two HEIC files in example folder
-      
+
       // Verify that the records have relativePath but no full metadata
       discoveredRecords.forEach((record) => {
         expect(record.relativePath).toBeDefined();
@@ -209,7 +218,7 @@ describe("FolderIndexer", () => {
       expect(specificRecord).toBeDefined();
       expect(isDiscoveredRecord(specificRecord!)).toBe(true);
       expect(isFullFileRecord(specificRecord!)).toBe(false);
-      
+
       // Don't await startPromise since it will hang
     } finally {
       // Restore the original implementation before stopping

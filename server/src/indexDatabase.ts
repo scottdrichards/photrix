@@ -62,24 +62,18 @@ export type FullFileRecord = {
 export type IndexFileRecord = DiscoveredFileRecord | FileInfoRecord | FullFileRecord;
 
 // Type guards to determine indexing stage
-export const isDiscoveredRecord = (record: IndexFileRecord): record is DiscoveredFileRecord => {
+export const isDiscoveredRecord = (
+  record: IndexFileRecord,
+): record is DiscoveredFileRecord => {
   return record.lastIndexedAt === null;
 };
 
 export const isFileInfoRecord = (record: IndexFileRecord): record is FileInfoRecord => {
-  return (
-    record.lastIndexedAt !== null &&
-    !('path' in record) &&
-    'size' in record
-  );
+  return record.lastIndexedAt !== null && !("path" in record) && "size" in record;
 };
 
 export const isFullFileRecord = (record: IndexFileRecord): record is FullFileRecord => {
-  return (
-    record.lastIndexedAt !== null &&
-    'path' in record &&
-    'metadata' in record
-  );
+  return record.lastIndexedAt !== null && "path" in record && "metadata" in record;
 };
 
 // For backward compatibility and external use
@@ -131,7 +125,9 @@ export class IndexDatabase {
             (record as any).relativePath = record.path;
           }
           // Always use relativePath for consistency
-          const key = isFullFileRecord(record) ? record.relativePath : record.relativePath;
+          const key = isFullFileRecord(record)
+            ? record.relativePath
+            : record.relativePath;
           this.records.set(key, record);
         }
       } catch (error) {
@@ -177,8 +173,8 @@ export class IndexDatabase {
     const records = Array.from(this.records.values());
 
     // Filter by match criteria (this also filters out non-full records)
-    const matchedRecords = records.filter((record): record is FullFileRecord => 
-      matchesRecord(record, normalizedFilter)
+    const matchedRecords = records.filter((record): record is FullFileRecord =>
+      matchesRecord(record, normalizedFilter),
     );
 
     // Sort the matched full records
@@ -224,24 +220,24 @@ export class IndexDatabase {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
     }
-    
+
     // Force immediate persist if there are unsaved changes
     if (this.isDirty) {
       this.persistSync();
     }
-    
+
     // Note: We don't await persistPromise here because close() is synchronous
     // Any in-flight async persist will complete, but we've ensured dirty data is saved
   }
 
   private schedulePersist(): void {
     this.isDirty = true;
-    
+
     // Clear existing timer if any
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
     }
-    
+
     // Schedule a new persist after debounce delay
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
@@ -254,18 +250,18 @@ export class IndexDatabase {
     if (this.persistPromise) {
       return this.persistPromise;
     }
-    
+
     // If nothing to save, skip
     if (!this.isDirty || !this.storagePath) {
       return;
     }
-    
+
     // Mark as not dirty before starting (so new changes during persist will trigger another save)
     this.isDirty = false;
-    
+
     // Start the persist operation
     this.persistPromise = this.persistAsync();
-    
+
     try {
       await this.persistPromise;
     } finally {
@@ -282,10 +278,10 @@ export class IndexDatabase {
       const directory = path.dirname(this.storagePath);
       mkdirSync(directory, { recursive: true });
       const serialized = JSON.stringify(this.listFiles(), null, 2);
-      
+
       // Use async writeFile for non-blocking I/O
-      await import('node:fs/promises').then(fs => 
-        fs.writeFile(this.storagePath!, serialized, "utf8")
+      await import("node:fs/promises").then((fs) =>
+        fs.writeFile(this.storagePath!, serialized, "utf8"),
       );
     } catch (error) {
       console.error(`[indexer] Failed to persist index to ${this.storagePath}`, error);
@@ -602,10 +598,7 @@ const collectSearchTokens = (record: FullFileRecord): string[] => {
   return Array.from(tokens);
 };
 
-const sortRecords = (
-  records: FullFileRecord[],
-  sort?: QuerySort,
-): FullFileRecord[] => {
+const sortRecords = (records: FullFileRecord[], sort?: QuerySort): FullFileRecord[] => {
   const sortBy = sort?.sortBy ?? "dateTaken";
   const order = sort?.order ?? (sort ? "asc" : "desc");
   // No need to filter again since input is already FullFileRecord[]

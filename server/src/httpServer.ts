@@ -580,14 +580,10 @@ const buildQueryParameters = (
     hasFilter = true;
   }
 
-  const { keys: metadataKeys, requested: metadataRequested } = collectMetadataKeys(params);
+  const { keys: metadataKeys, requested: metadataRequested } =
+    collectMetadataKeys(params);
   const options: QueryOptionsType = {
-    metadata:
-      metadataKeys.length > 0
-        ? metadataKeys
-        : metadataRequested
-        ? []
-        : undefined,
+    metadata: metadataKeys.length > 0 ? metadataKeys : metadataRequested ? [] : undefined,
   };
 
   const sortBy = params.get("sortBy");
@@ -703,7 +699,8 @@ const parseRepresentation = (params: URLSearchParams): FileRepresentation => {
     }
     case "metadata": {
       const { keys: metadataKeys, requested } = collectMetadataKeys(params);
-      const keys = metadataKeys.length > 0 ? metadataKeys : requested ? [] : [...METADATA_FIELDS];
+      const keys =
+        metadataKeys.length > 0 ? metadataKeys : requested ? [] : [...METADATA_FIELDS];
       return { type: "metadata", metadataKeys: keys };
     }
     case "original":

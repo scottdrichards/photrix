@@ -68,7 +68,7 @@ export class FileService {
     if (!record) {
       throw new Error(`File ${relativePath} is not currently indexed`);
     }
-    
+
     // Ensure we have a fully indexed record
     if (!isFullFileRecord(record)) {
       throw new Error(`File ${relativePath} is still being indexed`);
@@ -180,12 +180,7 @@ export class FileService {
 
 const inferContentType = (record: FullFileRecord): string | null => {
   const guessed = mimeTypeForFilename(record.name);
-  return (
-    record.metadata.mimeType ??
-    record.mimeType ??
-    guessed ??
-    null
-  );
+  return record.metadata.mimeType ?? record.mimeType ?? guessed ?? null;
 };
 
 const selectMetadata = (
@@ -277,15 +272,7 @@ const getMediaType = (record: FullFileRecord, override?: MediaType): MediaType =
   return "photo";
 };
 
-const VIDEO_EXTENSIONS = [
-  ".mp4",
-  ".mov",
-  ".m4v",
-  ".mkv",
-  ".webm",
-  ".avi",
-  ".wmv",
-];
+const VIDEO_EXTENSIONS = [".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".wmv"];
 
 const getFallbackVideoThumbnail = (() => {
   let cached: Promise<Buffer> | null = null;
@@ -347,7 +334,9 @@ const defaultVideoThumbnailExtractor: VideoThumbnailExtractor = (absolutePath) =
 
     ffmpeg.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `ffmpeg exited with code ${code ?? "unknown"}`));
+        reject(
+          new Error(stderr.trim() || `ffmpeg exited with code ${code ?? "unknown"}`),
+        );
         return;
       }
       if (chunks.length === 0) {
@@ -358,4 +347,3 @@ const defaultVideoThumbnailExtractor: VideoThumbnailExtractor = (absolutePath) =
     });
   });
 };
-
