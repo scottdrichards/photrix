@@ -25,10 +25,29 @@ export interface ApiPhotoResponse {
   page: number;
 }
 
+export interface ApiFilter {
+  directory?: string[];
+  cameraMake?: string[];
+  cameraModel?: string[];
+  location?: {
+    minLatitude?: number;
+    maxLatitude?: number;
+    minLongitude?: number;
+    maxLongitude?: number;
+  };
+  dateRange?: {
+    start?: string;
+    end?: string;
+  };
+  rating?: number[] | { min?: number; max?: number };
+  tags?: string[];
+}
+
 export interface FetchPhotosOptions {
   page?: number;
   pageSize?: number;
   metadata?: ReadonlyArray<string>;
+  filter?: ApiFilter;
   signal?: AbortSignal;
 }
 
@@ -100,12 +119,60 @@ export const fetchPhotos = async ({
   page = 1,
   pageSize = 200,
   metadata = DEFAULT_METADATA_KEYS,
+  filter,
   signal,
 }: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
   const params = new URLSearchParams();
   params.set("metadata", Array.from(metadata).join(","));
   params.set("page", page.toString());
   params.set("pageSize", pageSize.toString());
+
+  if (filter) {
+    if (filter.directory && filter.directory.length > 0) {
+      filter.directory.forEach((dir) => params.append("directory", dir));
+    }
+    if (filter.cameraMake && filter.cameraMake.length > 0) {
+      filter.cameraMake.forEach((make) => params.append("cameraMake", make));
+    }
+    if (filter.cameraModel && filter.cameraModel.length > 0) {
+      filter.cameraModel.forEach((model) => params.append("cameraModel", model));
+    }
+    if (filter.tags && filter.tags.length > 0) {
+      filter.tags.forEach((tag) => params.append("tags", tag));
+    }
+    if (filter.location) {
+      if (filter.location.minLatitude !== undefined) {
+        params.set("location.minLatitude", filter.location.minLatitude.toString());
+      }
+      if (filter.location.maxLatitude !== undefined) {
+        params.set("location.maxLatitude", filter.location.maxLatitude.toString());
+      }
+      if (filter.location.minLongitude !== undefined) {
+        params.set("location.minLongitude", filter.location.minLongitude.toString());
+      }
+      if (filter.location.maxLongitude !== undefined) {
+        params.set("location.maxLongitude", filter.location.maxLongitude.toString());
+      }
+    }
+    if (filter.dateRange) {
+      if (filter.dateRange.start) {
+        params.set("dateRange.start", filter.dateRange.start);
+      }
+      if (filter.dateRange.end) {
+        params.set("dateRange.end", filter.dateRange.end);
+      }
+    }
+    if (filter.rating) {
+      if (typeof filter.rating === "object" && !Array.isArray(filter.rating)) {
+        if (filter.rating.min !== undefined) {
+          params.set("rating.min", filter.rating.min.toString());
+        }
+        if (filter.rating.max !== undefined) {
+          params.set("rating.max", filter.rating.max.toString());
+        }
+      }
+    }
+  }
 
   const response = await fetch(`/api/files?${params.toString()}`, { signal });
 
