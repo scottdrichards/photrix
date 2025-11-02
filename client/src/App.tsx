@@ -153,13 +153,13 @@ export default function App() {
   }, []);
 
   const statusMessage = useMemo(() => {
-    if (initialLoading) {
-      return "Loading photos...";
-    }
     if (error) {
       return error;
     }
-    return `${total} photos`;
+    if (initialLoading && total === 0) {
+      return "Loading photos...";
+    }
+    return `${total} photo${total !== 1 ? "s" : ""}`;
   }, [initialLoading, error, total]);
 
   return (

@@ -43,7 +43,11 @@ export const MapFilter = ({ onChange }: MapFilterProps) => {
       target: mapRef.current,
       layers: [
         new TileLayer({
-          source: new OSM(),
+          source: new OSM({
+            url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            attributions: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            crossOrigin: "anonymous",
+          }),
         }),
       ],
       view: new View({

@@ -9,7 +9,7 @@ import { Dismiss24Regular } from "@fluentui/react-icons";
 import type { FilterState } from "../../types/filters";
 import { StarRatingFilter } from "./StarRatingFilter";
 import { TagFilter } from "./TagFilter";
-import { DateRangeFilter } from "./DateRangeFilter";
+import { DateSliderFilter } from "./DateSliderFilter";
 import { CameraFilter } from "./CameraFilter";
 import { FolderTreeFilter } from "./FolderTreeFilter";
 import { MapFilter } from "./MapFilter";
@@ -115,7 +115,7 @@ export const FilterPanel = ({ filters, onChange, onClear }: FilterPanelProps) =>
 
         <Card className={styles.filterCard}>
           <Label className={styles.filterTitle}>Date Range</Label>
-          <DateRangeFilter
+          <DateSliderFilter
             value={filters.dateRange}
             onChange={(dateRange) => onChange({ ...filters, dateRange })}
           />

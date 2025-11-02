@@ -1,15 +1,18 @@
 import { useState, useEffect } from "react";
 import {
-  Tree,
-  TreeItem,
-  TreeItemLayout,
   makeStyles,
   tokens,
   Checkbox,
   Input,
   Button,
 } from "@fluentui/react-components";
-import { Folder24Regular, FolderOpen24Regular, Search24Regular } from "@fluentui/react-icons";
+import { 
+  Folder24Regular, 
+  FolderOpen24Regular, 
+  Search24Regular,
+  ChevronRight20Regular,
+  ChevronDown20Regular
+} from "@fluentui/react-icons";
 
 const useStyles = makeStyles({
   container: {
@@ -29,12 +32,34 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     padding: tokens.spacingVerticalS,
   },
-  treeItem: {
-    paddingLeft: tokens.spacingHorizontalS,
+  folderItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    cursor: "pointer",
+    borderRadius: tokens.borderRadiusSmall,
+    ":hover": {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
   },
-  selectedCount: {
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase200,
+  folderItemContent: {
+    display: "flex",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalXS,
+    flex: 1,
+  },
+  folderChildren: {
+    paddingLeft: tokens.spacingHorizontalXL,
+  },
+  chevron: {
+    width: "20px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  folderIcon: {
+    color: tokens.colorBrandForeground1,
   },
 });
 
@@ -114,7 +139,8 @@ export const FolderTreeFilter = ({ value, onChange }: FolderTreeFilterProps) => 
     onChange(Array.from(newSelected));
   };
 
-  const handleExpandToggle = (path: string) => {
+  const handleExpandToggle = (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
     const newExpanded = new Set(expandedItems);
     if (newExpanded.has(path)) {
       newExpanded.delete(path);
@@ -124,7 +150,12 @@ export const FolderTreeFilter = ({ value, onChange }: FolderTreeFilterProps) => 
     setExpandedItems(newExpanded);
   };
 
-  const renderFolderNode = (node: FolderNode, depth = 0): JSX.Element | null => {
+  const handleCheckboxToggle = (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    handleToggle(path);
+  };
+
+  const renderFolderNode = (node: FolderNode): JSX.Element | null => {
     if (!node.path && node.children.length === 0) {
       return null;
     }
@@ -149,43 +180,44 @@ export const FolderTreeFilter = ({ value, onChange }: FolderTreeFilterProps) => 
     const isChecked = value.includes(node.path);
     const hasChildren = node.children.length > 0;
 
-    // Don't render root node
+    // Don't render root node, just its children
     if (!node.path) {
       return (
         <>
-          {node.children.map((child) => (
-            <TreeItem key={child.path} itemType="branch" value={child.path}>
-              {renderFolderNode(child, depth)}
-            </TreeItem>
-          ))}
+          {node.children.map((child) => renderFolderNode(child))}
         </>
       );
     }
 
     return (
-      <TreeItemLayout
-        iconBefore={
-          isExpanded ? <FolderOpen24Regular /> : <Folder24Regular />
-        }
-        aside={
+      <div key={node.path}>
+        <div className={styles.folderItem}>
+          <div className={styles.chevron}>
+            {hasChildren && (
+              <div onClick={(e) => handleExpandToggle(node.path, e)} style={{ cursor: "pointer" }}>
+                {isExpanded ? <ChevronDown20Regular /> : <ChevronRight20Regular />}
+              </div>
+            )}
+          </div>
+          <div className={styles.folderItemContent}>
+            {isExpanded ? (
+              <FolderOpen24Regular className={styles.folderIcon} />
+            ) : (
+              <Folder24Regular className={styles.folderIcon} />
+            )}
+            <span>{node.name}</span>
+          </div>
           <Checkbox
             checked={isChecked}
-            onChange={() => handleToggle(node.path)}
+            onChange={(e) => handleCheckboxToggle(node.path, e as unknown as React.MouseEvent)}
           />
-        }
-        onClick={() => hasChildren && handleExpandToggle(node.path)}
-      >
-        {node.name}
+        </div>
         {hasChildren && isExpanded && (
-          <Tree>
-            {node.children.map((child) => (
-              <TreeItem key={child.path} itemType={child.children.length > 0 ? "branch" : "leaf"} value={child.path}>
-                {renderFolderNode(child, depth + 1)}
-              </TreeItem>
-            ))}
-          </Tree>
+          <div className={styles.folderChildren}>
+            {node.children.map((child) => renderFolderNode(child))}
+          </div>
         )}
-      </TreeItemLayout>
+      </div>
     );
   };
 
@@ -213,9 +245,7 @@ export const FolderTreeFilter = ({ value, onChange }: FolderTreeFilterProps) => 
           </Button>
         )}
       </div>
-      <div className={styles.treeContainer}>
-        <Tree>{renderFolderNode(folderTree)}</Tree>
-      </div>
+      <div className={styles.treeContainer}>{renderFolderNode(folderTree)}</div>
     </div>
   );
 };
