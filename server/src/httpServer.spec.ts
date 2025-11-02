@@ -160,4 +160,43 @@ describe("PhotrixHttpServer", () => {
       await rm(tempWorkspace, { recursive: true, force: true });
     }
   });
+
+  it("streams original files with byte range support", async () => {
+    const tempVideoDir = await mkdtemp(path.join(tmpdir(), "photrix-http-video-"));
+    const sampleContent = Buffer.from("0123456789abcdef", "utf8");
+    const videoName = "clip.mp4";
+    await writeFile(path.join(tempVideoDir, videoName), sampleContent);
+
+    const streamingServer = new PhotrixHttpServer({
+      mediaRoot: tempVideoDir,
+      indexer: {
+        watch: false,
+        awaitWriteFinish: false,
+      },
+    });
+
+    try {
+      const { port, host } = await streamingServer.start(0, "127.0.0.1");
+      const streamingBaseUrl = `http://${host}:${port}`;
+
+      const response = await fetch(
+        `${streamingBaseUrl}/api/file?path=${encodeURIComponent(videoName)}&representation=original`,
+        {
+          headers: {
+            Range: "bytes=2-5",
+          },
+        },
+      );
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get("accept-ranges")).toBe("bytes");
+      expect(response.headers.get("content-type")).toBe("video/mp4");
+      expect(response.headers.get("content-range")).toBe("bytes 2-5/16");
+      const payload = Buffer.from(await response.arrayBuffer());
+      expect(payload.toString("utf8")).toBe(sampleContent.toString("utf8").slice(2, 6));
+    } finally {
+      await streamingServer.stop().catch(() => undefined);
+      await rm(tempVideoDir, { recursive: true, force: true });
+    }
+  });
 });

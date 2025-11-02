@@ -28,6 +28,12 @@ export interface FileRetrievalResult {
   metadata?: Partial<AllMetadata>;
 }
 
+export interface OriginalFileInfo {
+  absolutePath: string;
+  contentType: string;
+  size: number;
+}
+
 export class FileService {
   private readonly videoThumbnailExtractor: VideoThumbnailExtractor;
 
@@ -149,6 +155,26 @@ export class FileService {
 
     const source = await fs.readFile(absolutePath);
     return ensureJpegBuffer(record, source);
+  }
+
+  async getOriginalFileInfo(relativePath: string): Promise<OriginalFileInfo> {
+    const record = this.indexer.getIndexedFile(relativePath);
+    if (!record) {
+      throw new Error(`File ${relativePath} is not currently indexed`);
+    }
+    if (!isFullFileRecord(record)) {
+      throw new Error(`File ${relativePath} is still being indexed`);
+    }
+
+    const absolutePath = this.resolveAbsolutePath(relativePath);
+    const stats = await fs.stat(absolutePath);
+    const contentType = inferContentType(record) ?? "application/octet-stream";
+
+    return {
+      absolutePath,
+      contentType,
+      size: stats.size,
+    };
   }
 }
 

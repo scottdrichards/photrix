@@ -43,6 +43,19 @@ describe("FileService", () => {
     }
   });
 
+  it("provides original file info for streaming", async () => {
+    const { indexer, service, workspace } = await createService();
+    try {
+      const info = await service.getOriginalFileInfo("sewing-threads.heic");
+      const expectedPath = resolveWorkspacePath(workspace, "sewing-threads.heic");
+      expect(info.absolutePath).toBe(expectedPath);
+      expect(info.size).toBeGreaterThan(0);
+      expect(info.contentType).toBe("image/heic");
+    } finally {
+      await indexer.stop(true);
+    }
+  });
+
   it("returns metadata representation", async () => {
     const { indexer, service } = await createService();
     try {

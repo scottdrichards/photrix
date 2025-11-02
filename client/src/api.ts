@@ -12,7 +12,9 @@ export interface ApiPhotoItem {
 export interface PhotoItem {
   path: string;
   name: string;
+  mediaType: "photo" | "video";
   thumbnailUrl: string;
+  previewUrl: string;
   fullUrl: string;
   metadata?: ApiPhotoItem["metadata"];
 }
@@ -55,23 +57,44 @@ const buildFallbackUrl = (path: string): string => {
 
 const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
   const name = item.metadata?.name ?? item.path.split("/").pop() ?? item.path;
+  const mediaType = inferMediaType(item);
   const thumbnailUrl = buildFileUrl(item.path, {
     representation: "resize",
     maxWidth: "480",
     maxHeight: "480",
   });
-  const fullUrl = buildFileUrl(item.path, {
+  const previewUrl = buildFileUrl(item.path, {
     representation: "webSafe",
   });
+  const fullUrl =
+    mediaType === "video"
+      ? buildFileUrl(item.path, { representation: "original" })
+      : previewUrl;
 
   return {
     path: item.path,
     name,
+    mediaType,
     thumbnailUrl,
+    previewUrl,
     fullUrl,
     metadata: item.metadata,
   };
 };
+
+const inferMediaType = (item: ApiPhotoItem): "photo" | "video" => {
+  const mime = item.metadata?.mimeType ?? null;
+  if (typeof mime === "string" && mime.toLowerCase().startsWith("video/")) {
+    return "video";
+  }
+  const lowerPath = item.path.toLowerCase();
+  if (VIDEO_EXTENSIONS.some((ext) => lowerPath.endsWith(ext))) {
+    return "video";
+  }
+  return "photo";
+};
+
+const VIDEO_EXTENSIONS = [".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".wmv"];
 
 export const fetchPhotos = async ({
   page = 1,
@@ -104,7 +127,9 @@ export const createFallbackPhoto = (path: string): PhotoItem => {
   return {
     path,
     name,
+    mediaType: "photo",
     thumbnailUrl: buildFallbackUrl(path),
+    previewUrl: buildFallbackUrl(path),
     fullUrl: buildFallbackUrl(path),
   };
 };

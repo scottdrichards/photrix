@@ -13,13 +13,21 @@ import { Dismiss24Regular } from "@fluentui/react-icons";
 import type { PhotoItem } from "../api";
 
 const useStyles = makeStyles({
-  image: {
+  media: {
     width: "100%",
-    height: "100%",
     maxHeight: "75vh",
     objectFit: "contain",
     backgroundColor: tokens.colorNeutralBackground4,
     borderRadius: tokens.borderRadiusLarge,
+    display: "block",
+  },
+  video: {
+    width: "100%",
+    maxHeight: "75vh",
+    backgroundColor: tokens.colorNeutralBackground4,
+    borderRadius: tokens.borderRadiusLarge,
+    objectFit: "contain",
+    display: "block",
   },
   dialogBody: {
     display: "flex",
@@ -58,9 +66,29 @@ export function FullscreenViewer({ photo, onDismiss }: FullscreenViewerProps) {
             {photo?.name ?? ""}
           </DialogTitle>
           <DialogContent>
-            {photo && (
-              <img src={photo.fullUrl} alt={photo.name} className={styles.image} />
-            )}
+            {photo && photo.mediaType === "video" ? (
+              <video
+                key={photo.path}
+                controls
+                className={styles.video}
+                poster={photo.previewUrl}
+                preload="metadata"
+              >
+                <track
+                  kind="captions"
+                  src="data:,"
+                  label="Captions not provided"
+                />
+                <source
+                  src={photo.fullUrl}
+                  type={photo.metadata?.mimeType ?? "video/mp4"}
+                />
+                Your browser does not support HTML video playback.
+              </video>
+            ) : null}
+            {photo && photo.mediaType !== "video" ? (
+              <img src={photo.fullUrl} alt={photo.name} className={styles.media} />
+            ) : null}
           </DialogContent>
           <DialogActions>
             <Button appearance="primary" onClick={onDismiss}>

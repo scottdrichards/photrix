@@ -1,4 +1,10 @@
-import { Spinner, makeStyles, shorthands, tokens } from "@fluentui/react-components";
+import {
+  Spinner,
+  makeStyles,
+  shorthands,
+  tokens,
+} from "@fluentui/react-components";
+import { PlayCircle24Regular } from "@fluentui/react-icons";
 import type { CSSProperties } from "react";
 import { memo, useEffect, useRef } from "react";
 import type { PhotoItem } from "../api";
@@ -36,6 +42,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground4,
     border: "none",
     padding: 0,
+    position: "relative",
     ":hover": {
       transform: "translateY(-2px)",
       boxShadow: tokens.shadow16,
@@ -54,6 +61,20 @@ const useStyles = makeStyles({
   },
   caption: {
     display: "none",
+  },
+  videoBadge: {
+    position: "absolute",
+    top: tokens.spacingHorizontalXXS,
+    right: tokens.spacingHorizontalXXS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground2,
+    borderRadius: tokens.borderRadiusCircular,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: tokens.spacingHorizontalXS,
+    boxShadow: tokens.shadow4,
+    opacity: 0.86,
   },
   sentinel: {
     flexBasis: "100%",
@@ -122,6 +143,11 @@ const ThumbnailGridComponent = ({
           onClick={() => onSelect(photo)}
           aria-label={photo.name}
         >
+          {photo.mediaType === "video" ? (
+            <span className={styles.videoBadge} aria-hidden="true">
+              <PlayCircle24Regular />
+            </span>
+          ) : null}
           <img
             src={photo.thumbnailUrl}
             alt={photo.name}

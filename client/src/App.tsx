@@ -114,12 +114,13 @@ export default function App() {
 
   const statusMessage = useMemo(() => {
     if (initialLoading) {
-      return "Loading photos...";
+      return "Loading media...";
     }
     if (error) {
       return error;
     }
-    return `${total} photos`;
+    const label = total === 1 ? "item" : "items";
+    return `${total} ${label}`;
   }, [initialLoading, error, total]);
 
   return (
@@ -143,7 +144,7 @@ export default function App() {
       <Divider />
 
       <div className={styles.statusRow}>
-        {initialLoading ? <Spinner size="extra-tiny" /> : <Subtitle2>📸</Subtitle2>}
+  {initialLoading ? <Spinner size="extra-tiny" /> : <Subtitle2>📸🎬</Subtitle2>}
         <Subtitle2>{statusMessage}</Subtitle2>
       </div>
 

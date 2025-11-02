@@ -1,5 +1,6 @@
 import http from "node:http";
-import { promises as fs } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
+import type { ReadStream } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 import type { Filter, AllMetadata, Representation } from "../apiSpecification.js";
@@ -208,7 +209,7 @@ export class PhotrixHttpServer {
       }
 
       if (method === "GET" && pathname === "/api/file") {
-        await this.handleGetFile(parsedUrl, res);
+        await this.handleGetFile(req, parsedUrl, res);
         return;
       }
 
@@ -246,7 +247,11 @@ export class PhotrixHttpServer {
     this.sendJson(res, 200, result);
   }
 
-  private async handleGetFile(url: URL, res: http.ServerResponse): Promise<void> {
+  private async handleGetFile(
+    req: http.IncomingMessage,
+    url: URL,
+    res: http.ServerResponse,
+  ): Promise<void> {
     const params = url.searchParams;
     const representation = parseRepresentation(params);
     const pathParam = params.get("path");
@@ -263,6 +268,11 @@ export class PhotrixHttpServer {
         if (!record) {
           throw new NotFoundError(`File ${relativePath} is not indexed`);
         }
+        if (representation.type === "original") {
+          await this.streamOriginalFile(relativePath, req, res);
+          return;
+        }
+
         const result = await this.fileService.getFile(relativePath, { representation });
         this.sendFile(res, result.data, result.contentType);
         return;
@@ -351,6 +361,44 @@ export class PhotrixHttpServer {
     this.sendJson(res, status, { error: message });
   }
 
+  private async streamOriginalFile(
+    relativePath: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const { absolutePath, contentType, size } =
+      await this.fileService.getOriginalFileInfo(relativePath);
+    const rangeHeader = req.headers.range;
+
+    res.setHeader("Accept-Ranges", "bytes");
+
+    const range = rangeHeader && parseRangeHeader(rangeHeader, size);
+
+    if (rangeHeader && !range) {
+        res.statusCode = 416;
+        res.setHeader("Content-Range", `bytes */${size}`);
+        res.end();
+        return;
+      }
+
+    res.statusCode = 200;
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Length", size.toString());
+    res.setHeader(
+      "Cache-Control",
+      contentType === "application/json" ? "no-store" : "public, max-age=3600",
+    );
+
+    if (range) {
+      const { start, end } = range;
+      res.statusCode = 206;
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+      res.setHeader("Content-Length", (end - start + 1).toString());
+    }
+
+    await pipeStreamToResponse(createReadStream(absolutePath), res);
+  }
+
   private startIndexerIfNeeded(): Promise<void> {
     if (!this.indexerStartupPromise) {
       this.indexerStartupPromise = this.indexer.start();
@@ -400,6 +448,55 @@ const normalizePrefix = (value: string): string => {
     return `/${value}`;
   }
   return value.replace(/\/+$/, "");
+};
+
+const parseRangeHeader = (
+  header: string,
+  size: number,
+): { start: number; end: number } | null => {
+  if (!header.startsWith("bytes=")) {
+    return null;
+  }
+
+  const rangeValue = header.replace(/^bytes=/, "");
+  const [startPart, endPart] = rangeValue.split("-");
+
+  if (startPart === "" && endPart === "") {
+    return null;
+  }
+
+  let start: number;
+  let end: number;
+
+  if (startPart === "") {
+    const suffixLength = Number(endPart);
+    if (!Number.isFinite(suffixLength)) {
+      return null;
+    }
+    if (suffixLength <= 0) {
+      return null;
+    }
+    end = size - 1;
+    start = Math.max(size - suffixLength, 0);
+  } else {
+    start = Number(startPart);
+    if (!Number.isFinite(start) || start < 0) {
+      return null;
+    }
+    end = endPart ? Number(endPart) : size - 1;
+    if (!Number.isFinite(end) || end < start) {
+      return null;
+    }
+    if (end >= size) {
+      end = size - 1;
+    }
+  }
+
+  if (start >= size) {
+    return null;
+  }
+
+  return { start, end };
 };
 
 const buildQueryParameters = (
@@ -614,6 +711,68 @@ const parseRepresentation = (params: URLSearchParams): FileRepresentation => {
       return { type: "original" };
   }
 };
+
+const pipeStreamToResponse = (
+    stream: ReadStream,
+    res: http.ServerResponse,
+  ): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      let finished = false;
+
+      const cleanup = (): void => {
+        stream.off("error", onError);
+        stream.off("end", onEnd);
+        res.off("close", onClose);
+        res.off("error", onResponseError);
+      };
+
+      const onError = (error: NodeJS.ErrnoException): void => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        cleanup();
+        reject(error);
+      };
+
+      const onResponseError = (error: NodeJS.ErrnoException): void => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        cleanup();
+        reject(error);
+      };
+
+      const onEnd = (): void => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        cleanup();
+        resolve();
+      };
+
+      const onClose = (): void => {
+        if (!stream.destroyed) {
+          stream.destroy();
+        }
+        if (finished) {
+          return;
+        }
+        finished = true;
+        cleanup();
+        resolve();
+      };
+
+      stream.on("error", onError);
+      stream.on("end", onEnd);
+      res.on("close", onClose);
+      res.on("error", onResponseError);
+
+      stream.pipe(res);
+    });
+  }
 
 const collectMetadataKeys = (
   params: URLSearchParams,
