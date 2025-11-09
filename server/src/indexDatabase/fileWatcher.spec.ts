@@ -142,6 +142,7 @@ describe("FileWatcher", () => {
 
   it("detects files moved within the watched directory", async () => {
     const moveSpy = jest.spyOn(db, "moveFile");
+    const queueSpy = jest.spyOn(watcher, "addFileToJobQueue");
     const determineSpy = jest.spyOn(
       watcher as unknown as {
         determineIfMoveAndCompleteMove: (
@@ -201,5 +202,7 @@ describe("FileWatcher", () => {
     const newRecord = await db.getFileRecord("moved.jpg");
     expect(oldRecord).toBeUndefined();
     expect(newRecord?.relativePath).toBe("moved.jpg");
+    expect(queueSpy).not.toHaveBeenCalled();
+    queueSpy.mockRestore();
   });
 });

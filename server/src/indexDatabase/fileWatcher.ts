@@ -193,18 +193,8 @@ export class FileWatcher {
     clearTimeout(pending.timer);
     this.pendingMoves.delete(oldRelativePath);
 
-    try {
-      await this.fileIndexDatabase.moveFile(oldRelativePath, newRelativePath);
-    } catch (error) {
-      console.error(
-        `[fileWatcher] Failed to move ${oldRelativePath} -> ${newRelativePath}:`,
-        error,
-      );
-      this.addFileToJobQueue(newRelativePath);
-      return true;
-    }
+    await this.fileIndexDatabase.moveFile(oldRelativePath, newRelativePath);
 
-    this.addFileToJobQueue(newRelativePath);
     return true;
   }
 }
