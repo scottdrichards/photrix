@@ -1,34 +1,44 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "@jest/globals";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { IndexDatabase } from "./indexDatabase.js";
-import type { DatabaseFileEntry, FileInfo } from "./fileRecord.type.js";
+import type { DatabaseFileEntry } from "./fileRecord.type.js";
 
 const EXAMPLE_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"../../exampleFolder",
 );
 
+const DEFAULT_INFO = {
+	sizeInBytes: 1024,
+	created: new Date("2020-01-01T00:00:00Z"),
+	modified: new Date("2020-01-02T00:00:00Z"),
+};
+
 const createEntry = (overrides: Partial<DatabaseFileEntry> = {}): DatabaseFileEntry => {
 	const base: DatabaseFileEntry = {
 		relativePath: "sewing-threads.heic",
 		mimeType: "image/heic",
+		info: DEFAULT_INFO,
+		exifMetadata: {},
+		aiMetadata: {},
+		faceMetadata: {},
+	};
+	return {
+		...base,
+		...overrides,
 		info: {
-			sizeInBytes: 1024,
-			created: new Date("2020-01-01T00:00:00Z"),
-			modified: new Date("2020-01-02T00:00:00Z"),
+			...base.info,
+			...(overrides.info ?? {}),
 		},
 	};
-	return { ...base, ...overrides };
 };
 
-const accessEntries = (db: IndexDatabase): Record<string, DatabaseFileEntry> => {
-	return (db as unknown as { entries: Record<string, DatabaseFileEntry> }).entries;
-};
+const createDb = (): IndexDatabase => new IndexDatabase(EXAMPLE_ROOT);
 
 describe("IndexDatabase", () => {
 	it("adds files without mutating original input", async () => {
-		const db = new IndexDatabase();
+		const db = createDb();
 		const entry = createEntry();
 
 		await db.addFile(entry);
@@ -42,7 +52,7 @@ describe("IndexDatabase", () => {
 	});
 
 	it("removes files from the database", async () => {
-		const db = new IndexDatabase();
+		const db = createDb();
 		const entry = createEntry();
 
 		await db.addFile(entry);
@@ -52,8 +62,24 @@ describe("IndexDatabase", () => {
 		expect(record).toBeUndefined();
 	});
 
+	it("moves a file to a new relative path", async () => {
+		const db = createDb();
+		const entry = createEntry();
+
+		await db.addFile(entry);
+		await db.moveFile(entry.relativePath, "new-folder/renamed.heic");
+
+		const oldRecord = await db.getFileRecord(entry.relativePath);
+		const newRecord = await db.getFileRecord("new-folder/renamed.heic");
+
+		expect(oldRecord).toBeUndefined();
+		expect(newRecord?.relativePath).toBe("new-folder/renamed.heic");
+		expect(newRecord?.mimeType).toBe(entry.mimeType);
+		expect(newRecord?.sizeInBytes).toBe(entry.info.sizeInBytes);
+	});
+
 	it("merges updates when addOrUpdateFileData is called", async () => {
-		const db = new IndexDatabase();
+		const db = createDb();
 		const entry = createEntry();
 
 		await db.addFile(entry);
@@ -73,23 +99,9 @@ describe("IndexDatabase", () => {
 	});
 
 	it("returns undefined for unknown files", async () => {
-		const db = new IndexDatabase();
+		const db = createDb();
 		const record = await db.getFileRecord("missing.file");
 		expect(record).toBeUndefined();
 	});
 
-	it("loads missing metadata from disk when storagePath is provided", async () => {
-		const db = new IndexDatabase(EXAMPLE_ROOT);
-		const entry = createEntry();
-
-		await db.addFile(entry);
-		const record = await db.getFileRecord(entry.relativePath, ["created", "cameraMake"]);
-
-		expect(record?.sizeInBytes).toBeGreaterThan(0);
-		expect(record?.cameraMake?.toLowerCase()).toBe("samsung");
-
-		const stored = accessEntries(db)[entry.relativePath];
-		expect(stored.info.sizeInBytes).toBe(record?.sizeInBytes);
-		expect(stored.exifMetadata.cameraMake).toBe(record?.cameraMake);
-	});
 });

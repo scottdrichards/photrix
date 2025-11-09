@@ -7,13 +7,11 @@ import {
 import { getExifMetadataFromFile, getFileInfo } from "./fileUtils.js";
 import type { FileRecord } from "./indexDatabase.type.js";
 
-const DEFAULT_PAGE_SIZE = 50;
-
 export class IndexDatabase {
-  private readonly storagePath: string;
+  private readonly storagePath?: string;
   private entries: Record<string, DatabaseFileEntry>;
 
-  constructor(storagePath: string) {
+  constructor(storagePath?: string) {
     this.storagePath = storagePath;
     this.entries = {};
   }
@@ -24,6 +22,21 @@ export class IndexDatabase {
 
   async removeFile(relativePath: string): Promise<void> {
     delete this.entries[relativePath];
+  }
+
+  async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
+    const existing = this.entries[oldRelativePath];
+    if (!existing) {
+      return;
+    }
+
+    const updated: DatabaseFileEntry = {
+      ...existing,
+      relativePath: newRelativePath,
+    };
+
+    delete this.entries[oldRelativePath];
+    this.entries[newRelativePath] = updated;
   }
 
   async addOrUpdateFileData(
@@ -88,6 +101,11 @@ export class IndexDatabase {
     const promises = Array.from(new Set(groupsRequired))
       .filter((g) => g !== "groupAlreadyRetrieved")
       .map(async (groupName) => {
+        if (!this.storagePath) {
+          throw new Error(
+            `Cannot fetch missing metadata group "${groupName}" without storagePath configured on IndexDatabase.`,
+          );
+        }
         const fullPath = path.join(
           this.storagePath,
           relativePath,

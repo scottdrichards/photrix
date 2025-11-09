@@ -1,6 +1,7 @@
 import { parse } from "exifr";
 import { stat } from "node:fs/promises";
 import { AIMetadata, ExifMetadata, FaceMetadata, FileInfo } from "./fileRecord.type.js";
+import path from "node:path";
 
 export const getFileInfo = async (fullPath: string): Promise<FileInfo> => {
   const stats = await stat(fullPath);
@@ -78,4 +79,12 @@ export const getFaceMetadataFromFile = async (
 ): Promise<FaceMetadata> => {
   // not implemented yet
   return {};
+};
+
+export const toRelative = (root: string, absolute: string): string | null => {
+  const relative = path.relative(root, absolute);
+  if (relative.startsWith("..")) {
+    return null;
+  }
+  return relative.split(path.sep).join("/");
 };

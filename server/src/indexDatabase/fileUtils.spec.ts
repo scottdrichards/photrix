@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "@jest/globals";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getFileInfo, getExifMetadataFromFile } from "./fileUtils.js";
