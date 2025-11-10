@@ -65,9 +65,6 @@ export class FileWatcher {
     });
     watcher.on("change", (absolutePath) => {
       const relativePath = toRelative(this.watchedPath, absolutePath);
-      if (!relativePath) {
-        return;
-      }
       this.addFileToJobQueue(relativePath);
     });
     watcher.on("unlink", (absolutePath) => {
@@ -81,15 +78,12 @@ export class FileWatcher {
   }
 
   async stopWatching(): Promise<void> {
-    if (!this.watcher) {
-      return;
-    }
-    await this.watcher.close();
+    await this.watcher?.close();
     this.watcher = null;
 
-    for (const pending of this.pendingMoves.values()) {
+    this.pendingMoves.forEach((pending) => {
       clearTimeout(pending.timer);
-    }
+    });
     this.pendingMoves.clear();
   }
 
@@ -100,7 +94,8 @@ export class FileWatcher {
     >,
   ): void {
     for (const group of metadataGroups) {
-      const queue = (this.jobQueue[group] ??= { files: [], active: false, total: 0 });
+      this.jobQueue[group] ??= { files: [], active: false, total: 0 };
+      const queue = this.jobQueue[group];
       if (!queue.files.includes(relativePath)) {
         queue.files.push(relativePath);
         queue.total += 1;
@@ -110,9 +105,6 @@ export class FileWatcher {
 
   private async handleAddEvent(absolutePath: string): Promise<void> {
     const relativePath = toRelative(this.watchedPath, absolutePath);
-    if (!relativePath) {
-      return;
-    }
 
     if (await this.determineIfMoveAndCompleteMove(relativePath, absolutePath)) {
       return;
@@ -123,9 +115,6 @@ export class FileWatcher {
 
   private async handleUnlinkEvent(absolutePath: string): Promise<void> {
     const relativePath = toRelative(this.watchedPath, absolutePath);
-    if (!relativePath) {
-      return;
-    }
 
     const existing = this.pendingMoves.get(relativePath);
     if (existing) {

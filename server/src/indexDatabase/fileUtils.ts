@@ -81,10 +81,13 @@ export const getFaceMetadataFromFile = async (
   return {};
 };
 
-export const toRelative = (root: string, absolute: string): string | null => {
+/**
+ * Throws if absolute is outside of root.
+ */
+export const toRelative = (root: string, absolute: string): string=> {
   const relative = path.relative(root, absolute);
   if (relative.startsWith("..")) {
-    return null;
+      throw new Error(`Path ${absolute} is outside of root ${root}`);
   }
   return relative.split(path.sep).join("/");
 };

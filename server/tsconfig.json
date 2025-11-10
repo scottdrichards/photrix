@@ -11,8 +11,8 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "sourceMap": true,
-    "types": ["node", "vitest/globals"]
+    "types": ["node"]
   },
-  "include": ["apiSpecification.ts", "src/**/*.ts"],
+  "include": ["apiSpecification.ts", "src/**/*.ts", "types/**/*.d.ts"],
   "exclude": ["dist", "node_modules"]
 }

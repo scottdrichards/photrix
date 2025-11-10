@@ -27,7 +27,7 @@ export class IndexDatabase {
   async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
     const existing = this.entries[oldRelativePath];
     if (!existing) {
-      return;
+      throw new Error(`moveFile: File at path "${oldRelativePath}" does not exist in the database.`);
     }
 
     const updated: DatabaseFileEntry = {
@@ -56,11 +56,11 @@ export class IndexDatabase {
   async getFileRecord(
     relativePath: string,
     /**
-     * Optional array of metadata keys to ensure are loaded in the returned FileRecord.
+     * Optional set of metadata keys to ensure are loaded in the returned FileRecord.
      * This will fetch any missing metadata from storage if not already present in the database.
      * so if you want it to only use available data in the database, leave this undefined.
      */
-    requiredMetadata?: Array<keyof FileRecord>,
+    requiredMetadata?: Set<keyof FileRecord>,
   ): Promise<FileRecord | undefined> {
     const dbEntry = this.entries[relativePath];
     if (!dbEntry) {
@@ -69,13 +69,18 @@ export class IndexDatabase {
 
     const record = databaseEntryToFileRecord(dbEntry);
 
-    if (!requiredMetadata || requiredMetadata.length === 0) {
-		return record;
+    if (!requiredMetadata?.size) {
+		  return record;
     }
 
-    const groupsRequired = requiredMetadata.map<
-      keyof typeof MetadataGroupKeys | "groupAlreadyRetrieved"
-    >((m) => {
+    await this.hydrateMetadata(relativePath, requiredMetadata);
+    return this.getFileRecord(relativePath);
+  }
+
+  private async hydrateMetadata(relativePath: string, requiredMetadata: Set<keyof FileRecord>) {
+    const dbEntry = this.entries[relativePath];
+    const record = databaseEntryToFileRecord(dbEntry);
+    const promises = Array.from(requiredMetadata).map((m) => {
       if (m in record) {
         return "groupAlreadyRetrieved";
       }
@@ -96,19 +101,16 @@ export class IndexDatabase {
         return "groupAlreadyRetrieved";
       }
       return groupName;
-    });
-
-    const promises = Array.from(new Set(groupsRequired))
-      .filter((g) => g !== "groupAlreadyRetrieved")
+    }).filter((g) => g !== "groupAlreadyRetrieved")
       .map(async (groupName) => {
         if (!this.storagePath) {
           throw new Error(
-            `Cannot fetch missing metadata group "${groupName}" without storagePath configured on IndexDatabase.`,
+            `Cannot fetch missing metadata group "${groupName}" without storagePath configured on IndexDatabase.`
           );
         }
         const fullPath = path.join(
           this.storagePath,
-          relativePath,
+          relativePath
         );
         switch (groupName) {
           case 'info':
@@ -126,6 +128,5 @@ export class IndexDatabase {
         }
       });
     await Promise.all(promises);
-    return this.getFileRecord(relativePath);
   }
 }
