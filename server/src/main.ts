@@ -1,9 +1,8 @@
 import "dotenv/config";
 import http from "node:http";
-import { startIndexing } from "./startIndexing.ts";
 import path from "node:path";
-import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { FileWatcher } from "./indexDatabase/fileWatcher.ts";
+import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 
 const PORT = process.env.PORT || 3000;
 
@@ -23,9 +22,6 @@ const startServer = async () => {
   new FileWatcher(absolutePath, database);
 
   console.log("Indexing started");
-
-  return database;
-};
 
   const server = http.createServer((req, res) => {
     // Enable CORS for client
