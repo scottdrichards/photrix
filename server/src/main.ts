@@ -9,19 +9,14 @@ const PORT = process.env.PORT || 3000;
 const startServer = async () => {
   console.log("Starting photrix server...");
 
-  // Start indexing in the background
-  const watchPath = process.env.WATCH_PATH || "./exampleFolder";
-  console.log(`Starting indexing for: ${watchPath}`);
+  const mediaRoot = process.env.MEDIA_ROOT || "./exampleFolder";
+  console.log(`Starting indexing for: ${mediaRoot}`);
   
-  const absolutePath = path.resolve(watchPath);
-  console.log(`Indexing directory: ${absolutePath}`);
-
-  const database = new IndexDatabase(absolutePath);
-
-  // Start watching the directory
+  const absolutePath = path.resolve(mediaRoot);
+  
+  const database = new IndexDatabase(absolutePath); 
+  
   new FileWatcher(absolutePath, database);
-
-  console.log("Indexing started");
 
   const server = http.createServer((req, res) => {
     // Enable CORS for client
