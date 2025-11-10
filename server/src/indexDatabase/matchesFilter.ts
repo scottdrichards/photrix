@@ -1,11 +1,11 @@
 import { minimatch } from "minimatch";
-import type { FaceTag } from "./fileRecord.type.js";
+import type { FaceTag } from "./fileRecord.type.ts";
 import type {
   FileRecord,
   FilterCondition,
   FilterElement,
   Range
-} from "./indexDatabase.type.js";
+} from "./indexDatabase.type.ts";
 
 export const matchesFilter = (record: FileRecord, filter: FilterElement): boolean => {
   if ("operation" in filter) {

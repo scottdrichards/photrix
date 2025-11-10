@@ -6,9 +6,9 @@ import type {
   FileRecord,
   QueryOptions,
   QueryResult,
-  FilterElement,
 } from "./indexDatabase.type.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
+import { matchesFilter } from "./matchesFilter.ts";
 
 export class IndexDatabase {
   private readonly storagePath: string;
@@ -147,11 +147,11 @@ export class IndexDatabase {
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(
     options: QueryOptions,
   ): Promise<QueryResult<TMetadata>> {
-    const { filter, metadata, pageSize = 50, page = 1 } = options;
+    const { filter, metadata, pageSize = 1_000, page = 1 } = options;
 
-    const records = this.files()
-      .filter((record) => this.matchesFilter(record, filter))
-      .filter((r, index) => index >= (page - 1) * pageSize && index < page * pageSize);
+    const allRecords = Array.from(this.files()
+      .filter((record) => matchesFilter(record, filter)));
+    const records = allRecords.filter((r, index) => index >= (page - 1) * pageSize && index < page * pageSize);
 
     // Ensure required metadata is loaded for paginated items
     if (metadata.length) {
@@ -174,45 +174,10 @@ export class IndexDatabase {
     });
 
     return {
-      items: [...items],
+      items,
       page,
       pageSize,
+      total: allRecords.length,
     } as QueryResult<TMetadata>;
-  }
-
-  private matchesFilter(record: FileRecord, filter: FilterElement): boolean {
-    if ("operation" in filter) {
-      // LogicalFilter
-      if (filter.operation === "and") {
-        return filter.conditions.every((cond: FilterElement) =>
-          this.matchesFilter(record, cond),
-        );
-      } else {
-        return filter.conditions.some((cond: FilterElement) =>
-          this.matchesFilter(record, cond),
-        );
-      }
-    }
-
-    // FilterCondition
-    for (const [key, value] of Object.entries(filter)) {
-      if (value === null) {
-        // Field must be missing/undefined
-        if (record[key as keyof FileRecord] !== undefined) {
-          return false;
-        }
-      } else if (key in record) {
-        const recordValue = record[key as keyof FileRecord];
-        // Simple equality check for now - can be enhanced
-        if (recordValue !== value) {
-          return false;
-        }
-      } else {
-        // Field doesn't exist in record but filter expects it
-        return false;
-      }
-    }
-
-    return true;
   }
 }

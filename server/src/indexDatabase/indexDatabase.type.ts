@@ -59,6 +59,7 @@ export type QueryResultItem<TRequestedMetadata extends Array<keyof FileRecord> |
 
 export type QueryResult<TRequestedMetadata extends Array<keyof FileRecord> | undefined> = {
     items: QueryResultItem<TRequestedMetadata>[];
+    total: number;
     page: number;
     pageSize: number;
 };
