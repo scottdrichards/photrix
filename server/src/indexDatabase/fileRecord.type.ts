@@ -95,7 +95,7 @@ type _EnsureAllMetadataKeysListed = AssertTrue<
 /**
  * How a file is stored in the database, with metadata entries including determinedOn timestamps.
  */
-export type DatabaseFileEntry = BaseFileRecord & MetadataGroups;
+export type DatabaseFileEntry = BaseFileRecord & Partial<MetadataGroups>;
 
 /////////////////////////
 // This section is just to ensure no metadata key collisions occur when creating FileRecord type.

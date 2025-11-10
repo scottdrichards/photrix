@@ -1,8 +1,21 @@
 import chokidar, { FSWatcher } from "chokidar";
 import { stat } from "node:fs/promises";
 import { MetadataGroups } from "./fileRecord.type.js";
+import { toRelative, walkFiles } from "./fileUtils.js";
 import { IndexDatabase } from "./indexDatabase.js";
-import { toRelative } from "./fileUtils.js";
+import { mimeTypeForFilename } from "./mimeTypes.js";
+
+/**
+ * How long we wait after a potential unlink before deciding it really was a deletion.
+ * Any add that happens while this timer is running can be considered the target of a move.
+ */
+const MOVE_DETECTION_WINDOW_MS = 500;
+
+/**
+ * Filesystem timestamps can jitter slightly between unlink/add events during a move.
+ * We allow a small tolerance when comparing modified times so that legitimate moves still match.
+ */
+const MOVE_TIMESTAMP_TOLERANCE_MS = 20;
 
 type Queue = {
   files: string[];
@@ -23,37 +36,28 @@ export class FileWatcher {
 
   private readonly pendingMoves = new Map<string, PendingMove>();
 
-  private jobQueue: Record<keyof MetadataGroups, Queue> = {
+  public jobQueue: Record<keyof MetadataGroups, Queue> = {
     info: { files: [], active: false, total: 0 },
     exifMetadata: { files: [], active: false, total: 0 },
     aiMetadata: { files: [], active: false, total: 0 },
     faceMetadata: { files: [], active: false, total: 0 },
   };
 
-  /**
-   * How long we wait after a potential unlink before deciding it really was a deletion.
-   * Any add that happens while this timer is running can be considered the target of a move.
-   */
-  private static readonly MOVE_DETECTION_WINDOW_MS = 500;
-
-  /**
-   * Filesystem timestamps can jitter slightly between unlink/add events during a move.
-   * We allow a small tolerance when comparing modified times so that legitimate moves still match.
-   */
-  private static readonly MOVE_TIMESTAMP_TOLERANCE_MS = 20;
+  public scannedFilesCount = 0;
 
   constructor(watchedPath: string, fileIndexDatabase: IndexDatabase) {
     this.watchedPath = watchedPath;
     this.fileIndexDatabase = fileIndexDatabase;
+    this.scanExistingFiles().then(() => this.startWatching());
   }
 
-  startWatching(): void {
+  async startWatching(): Promise<void> {
     if (this.watcher) {
-      return;
+      throw new Error("FileWatcher is already started");
     }
 
     const watcher = chokidar.watch(this.watchedPath, {
-      ignoreInitial: false,
+      ignoreInitial: true,
       awaitWriteFinish: {
         stabilityThreshold: 200,
         pollInterval: 100,
@@ -75,6 +79,29 @@ export class FileWatcher {
     });
 
     this.watcher = watcher;
+  }
+
+  private async scanExistingFiles(): Promise<void> {
+    console.log(`[fileWatcher] Scanning existing files in ${this.watchedPath}`);
+    this.scannedFilesCount = 0;
+
+    for await (const absolutePath of walkFiles(this.watchedPath)) {
+      const relativePath = toRelative(this.watchedPath, absolutePath);
+      await this.fileIndexDatabase.addFile({
+        relativePath,
+        mimeType: mimeTypeForFilename(relativePath),
+      });
+
+      this.addFileToJobQueue(relativePath);
+
+      this.scannedFilesCount++;
+
+      if (this.scannedFilesCount % 100 === 0) {
+        console.log(`[fileWatcher] Scanned ${this.scannedFilesCount} files...`);
+      }
+    }
+
+    console.log(`[fileWatcher] Completed scanning ${this.scannedFilesCount} files`);
   }
 
   async stopWatching(): Promise<void> {
@@ -126,7 +153,7 @@ export class FileWatcher {
       void this.fileIndexDatabase.removeFile(relativePath).catch((error) => {
         console.error(`[fileWatcher] Failed to remove ${relativePath}:`, error);
       });
-    }, FileWatcher.MOVE_DETECTION_WINDOW_MS);
+    }, MOVE_DETECTION_WINDOW_MS);
 
     this.pendingMoves.set(relativePath, { timer });
 
@@ -166,7 +193,7 @@ export class FileWatcher {
       }
       if (pending.modifiedTimeMs !== undefined) {
         const delta = Math.abs(pending.modifiedTimeMs - stats.mtimeMs);
-        if (delta > FileWatcher.MOVE_TIMESTAMP_TOLERANCE_MS) {
+        if (delta > MOVE_TIMESTAMP_TOLERANCE_MS) {
           return false;
         }
       }

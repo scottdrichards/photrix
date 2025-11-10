@@ -1,5 +1,5 @@
 import exifr from "exifr";
-import { stat } from "node:fs/promises";
+import { stat, readdir } from "node:fs/promises";
 import { AIMetadata, ExifMetadata, FaceMetadata, FileInfo } from "./fileRecord.type.js";
 import path from "node:path";
 
@@ -84,10 +84,21 @@ export const getFaceMetadataFromFile = async (
 /**
  * Throws if absolute is outside of root.
  */
-export const toRelative = (root: string, absolute: string): string=> {
+export const toRelative = (root: string, absolute: string): string => {
   const relative = path.relative(root, absolute);
   if (relative.startsWith("..")) {
-      throw new Error(`Path ${absolute} is outside of root ${root}`);
+    throw new Error(`Path ${absolute} is outside of root ${root}`);
   }
   return relative.split(path.sep).join("/");
 };
+
+export async function* walkFiles(dir: string): AsyncGenerator<string> {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const absolutePath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      yield* walkFiles(absolutePath);
+    } else if (entry.isFile()) {
+      yield absolutePath;
+    }
+  }
+}
