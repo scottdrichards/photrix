@@ -1,9 +1,9 @@
 import chokidar, { FSWatcher } from "chokidar";
 import { stat } from "node:fs/promises";
-import { MetadataGroups } from "./fileRecord.type.js";
-import { toRelative, walkFiles } from "./fileUtils.js";
-import { IndexDatabase } from "./indexDatabase.js";
-import { mimeTypeForFilename } from "./mimeTypes.js";
+import { MetadataGroups } from "./fileRecord.type.ts";
+import { toRelative, walkFiles } from "./fileUtils.ts";
+import { IndexDatabase } from "./indexDatabase.ts";
+import { mimeTypeForFilename } from "./mimeTypes.ts";
 
 /**
  * How long we wait after a potential unlink before deciding it really was a deletion.

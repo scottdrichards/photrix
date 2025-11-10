@@ -1,5 +1,5 @@
-import { UnionToIntersection } from "../utils.js";
-import { BaseFileRecord, DatabaseFileEntry, MetadataGroups } from "./fileRecord.type.js";
+import { UnionToIntersection } from "../utils.ts";
+import { BaseFileRecord, DatabaseFileEntry, MetadataGroups } from "./fileRecord.type.ts";
 
 
 /**
@@ -43,7 +43,7 @@ export type FilterElement = FilterCondition | LogicalFilter;
 
 export type QueryOptions = {
     filter: FilterElement;
-    metadata?: Array<keyof FileRecord>;
+    metadata: Array<keyof FileRecord>;
     pageSize?: number;
     page?: number;
 };
@@ -59,7 +59,6 @@ export type QueryResultItem<TRequestedMetadata extends Array<keyof FileRecord> |
 
 export type QueryResult<TRequestedMetadata extends Array<keyof FileRecord> | undefined> = {
     items: QueryResultItem<TRequestedMetadata>[];
-    total: number;
     page: number;
     pageSize: number;
 };

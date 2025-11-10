@@ -1,5 +1,5 @@
-import { DatabaseFileEntry } from "./fileRecord.type.js";
-import { FileRecord } from "./indexDatabase.type.js";
+import { DatabaseFileEntry } from "./fileRecord.type.ts";
+import { FileRecord } from "./indexDatabase.type.ts";
 
 export const databaseEntryToFileRecord = (entry: DatabaseFileEntry): FileRecord => structuredClone({
   relativePath: entry.relativePath,

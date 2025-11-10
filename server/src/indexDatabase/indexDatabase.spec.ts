@@ -1,8 +1,8 @@
 import { describe, it, expect } from "@jest/globals";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { IndexDatabase } from "./indexDatabase.js";
-import type { DatabaseFileEntry } from "./fileRecord.type.js";
+import { IndexDatabase } from "./indexDatabase.ts";
+import type { DatabaseFileEntry } from "./fileRecord.type.ts";
 
 const EXAMPLE_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -13,17 +13,17 @@ const DEFAULT_INFO = {
 	sizeInBytes: 1024,
 	created: new Date("2020-01-01T00:00:00Z"),
 	modified: new Date("2020-01-02T00:00:00Z"),
-};
+} as const;
 
 const createEntry = (overrides: Partial<DatabaseFileEntry> = {}): DatabaseFileEntry => {
-	const base: DatabaseFileEntry = {
+	const base = {
 		relativePath: "sewing-threads.heic",
 		mimeType: "image/heic",
 		info: DEFAULT_INFO,
 		exifMetadata: {},
 		aiMetadata: {},
 		faceMetadata: {},
-	};
+	} as const satisfies DatabaseFileEntry;
 	return {
 		...base,
 		...overrides,
@@ -42,8 +42,8 @@ describe("IndexDatabase", () => {
 		const entry = createEntry();
 
 		await db.addFile(entry);
-		entry.info.sizeInBytes = 1;
-		entry.exifMetadata.cameraMake = "changed";
+		entry.info!.sizeInBytes = 1;
+		entry.exifMetadata!.cameraMake = "changed";
 
 		const record = await db.getFileRecord(entry.relativePath);
 
@@ -75,7 +75,7 @@ describe("IndexDatabase", () => {
 		expect(oldRecord).toBeUndefined();
 		expect(newRecord?.relativePath).toBe("new-folder/renamed.heic");
 		expect(newRecord?.mimeType).toBe(entry.mimeType);
-		expect(newRecord?.sizeInBytes).toBe(entry.info.sizeInBytes);
+		expect(newRecord?.sizeInBytes).toBe(entry.info!.sizeInBytes);
 	});
 
 	it("merges updates when addOrUpdateFileData is called", async () => {

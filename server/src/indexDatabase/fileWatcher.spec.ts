@@ -1,221 +1,160 @@
-import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals";
+import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { FileWatcher } from "./fileWatcher.js";
-import { IndexDatabase } from "./indexDatabase.js";
-import type { DatabaseFileEntry } from "./fileRecord.type.js";
+import { FileWatcher } from "./fileWatcher.ts";
+import { IndexDatabase } from "./indexDatabase.ts";
 
-type WatchEvent = "add" | "change" | "unlink" | "error";
-type WatchPayload = string | Error;
-type WatchHandler = (payload: WatchPayload) => unknown;
-
-type MockFsWatcher = {
-  on: (event: WatchEvent, handler: WatchHandler) => MockFsWatcher;
-  close: () => Promise<void>;
-};
-
-type MockWatcherEntry = {
-  handlers: Record<WatchEvent, WatchHandler[]>;
-  close: () => Promise<void>;
-};
-
-// Create a global registry that the mock can access
-const globalMockRegistry: {
-  watchers: MockWatcherEntry[];
-} = {
-  watchers: [],
-};
-
-const flushAsyncTasks = async (): Promise<void> => {
-  await Promise.resolve();
-  await Promise.resolve();
-};
-
-jest.mock("chokidar", () => {
-  const createWatcher = (_path: string, _options?: unknown) => {
-    const handlers: Record<WatchEvent, WatchHandler[]> = {
-      add: [],
-      change: [],
-      unlink: [],
-      error: [],
-    };
-
-    const close = async () => {
-      const index = globalMockRegistry.watchers.findIndex((entry) => entry.handlers === handlers);
-      if (index !== -1) {
-        globalMockRegistry.watchers.splice(index, 1);
-      }
-    };
-
-    const watcher: MockFsWatcher = {
-      on(event: WatchEvent, handler: WatchHandler) {
-        handlers[event].push(handler);
-        return watcher;
-      },
-      close,
-    };
-
-    globalMockRegistry.watchers.push({ handlers, close });
-    return watcher;
-  };
-
-  return {
-    __esModule: true,
-    default: {
-      watch: createWatcher,
-    },
-    watch: createWatcher,
-  };
-});
-
-const resetWatcherMocks = () => {
-  globalMockRegistry.watchers.length = 0;
-};
-
-const triggerWatcherEvent = async (event: WatchEvent, payload: WatchPayload): Promise<void> => {
-  if (globalMockRegistry.watchers.length === 0) {
-    throw new Error("No active mock watchers");
-  }
-
-  const handlers = globalMockRegistry.watchers.flatMap((entry) => entry.handlers[event]);
-  await Promise.all(handlers.map((handler) => handler(payload)));
-};
-
-const createEntry = (relativePath: string): DatabaseFileEntry => ({
-  relativePath,
-  mimeType: "image/jpeg",
-  info: {
-    sizeInBytes: 64,
-    created: new Date("2020-01-01T00:00:00Z"),
-    modified: new Date("2020-01-01T00:00:00Z"),
-  },
-  exifMetadata: {},
-  aiMetadata: {},
-  faceMetadata: {},
-});
+const waitFor = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("FileWatcher", () => {
-  it("placeholder test - chokidar mocking not working with experimental-vm-modules", () => {
-    expect(true).toBe(true);
+  let tempDir: string;
+  let db: IndexDatabase;
+  let watcher: FileWatcher;
+
+  beforeEach(async () => {
+    // Create a temporary directory for testing
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "photrix-watcher-"));
+    db = new IndexDatabase(tempDir);
+  });
+
+  afterEach(async () => {
+    // Clean up
+    if (watcher) {
+      await watcher.stopWatching();
+    }
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("scans existing files on initialization", async () => {
+    // Create some test files
+    await fs.writeFile(path.join(tempDir, "test1.jpg"), "test content 1");
+    await fs.writeFile(path.join(tempDir, "test2.png"), "test content 2");
+
+    // Create FileWatcher - it will scan existing files
+    watcher = new FileWatcher(tempDir, db);
+
+    // Wait for scanning to complete
+    await waitFor(500);
+
+    expect(watcher.scannedFilesCount).toBe(2);
+
+    const file1 = await db.getFileRecord("test1.jpg");
+    const file2 = await db.getFileRecord("test2.png");
+
+    expect(file1).toBeDefined();
+    expect(file1?.relativePath).toBe("test1.jpg");
+    expect(file2).toBeDefined();
+    expect(file2?.relativePath).toBe("test2.png");
+  });
+
+  it("adds files to job queue when they are detected", async () => {
+    watcher = new FileWatcher(tempDir, db);
+    await waitFor(500);
+
+    // Create a new file after watcher is running
+    await fs.writeFile(path.join(tempDir, "new-file.jpg"), "new content");
+
+    // Wait for watcher to detect the file
+    await waitFor(500);
+
+    // Check that the file was added to the job queue
+    const hasFileInQueue =
+      watcher.jobQueue.info.files.includes("new-file.jpg") ||
+      watcher.jobQueue.exifMetadata.files.includes("new-file.jpg");
+
+    expect(hasFileInQueue).toBe(true);
+  });
+
+  it("detects file changes and adds to job queue", async () => {
+    // Create initial file
+    const testFile = path.join(tempDir, "change-test.jpg");
+    await fs.writeFile(testFile, "initial content");
+
+    watcher = new FileWatcher(tempDir, db);
+    await waitFor(500);
+
+    // Clear the job queue
+    watcher.jobQueue.info.files = [];
+    watcher.jobQueue.exifMetadata.files = [];
+
+    // Modify the file
+    await fs.writeFile(testFile, "modified content");
+
+    // Wait for change detection
+    await waitFor(500);
+
+    // Check that the file was added to job queue
+    const hasFileInQueue =
+      watcher.jobQueue.info.files.includes("change-test.jpg") ||
+      watcher.jobQueue.exifMetadata.files.includes("change-test.jpg");
+
+    expect(hasFileInQueue).toBe(true);
+  });
+
+  it("removes files from database when deleted", async () => {
+    // Create initial file
+    const testFile = path.join(tempDir, "delete-test.jpg");
+    await fs.writeFile(testFile, "content to delete");
+
+    watcher = new FileWatcher(tempDir, db);
+    await waitFor(500);
+
+    // Verify file is in database
+    let record = await db.getFileRecord("delete-test.jpg");
+    expect(record).toBeDefined();
+
+    // Delete the file
+    await fs.unlink(testFile);
+
+    // Wait for unlink detection and move window timeout (500ms + buffer)
+    await waitFor(700);
+
+    // Verify file is removed from database
+    record = await db.getFileRecord("delete-test.jpg");
+    expect(record).toBeUndefined();
+  });
+
+  it("detects file moves within watched directory", async () => {
+    // Create initial file with specific content
+    const originalPath = path.join(tempDir, "original.jpg");
+    const content = Buffer.from("test content for move detection");
+    await fs.writeFile(originalPath, content);
+
+    watcher = new FileWatcher(tempDir, db);
+    await waitFor(500);
+
+    // Verify original file is tracked
+    let originalRecord = await db.getFileRecord("original.jpg");
+    expect(originalRecord).toBeDefined();
+
+    // Move the file (rename within same directory)
+    const movedPath = path.join(tempDir, "moved.jpg");
+    await fs.rename(originalPath, movedPath);
+
+    // Wait for move detection (unlink + add within 500ms window + processing)
+    await waitFor(800);
+
+    // Verify the file was moved (not deleted/added)
+    originalRecord = await db.getFileRecord("original.jpg");
+    const movedRecord = await db.getFileRecord("moved.jpg");
+
+    expect(originalRecord).toBeUndefined();
+    expect(movedRecord).toBeDefined();
+    expect(movedRecord?.relativePath).toBe("moved.jpg");
+  });
+
+  it("can stop watching", async () => {
+    watcher = new FileWatcher(tempDir, db);
+    await waitFor(300);
+
+    await watcher.stopWatching();
+
+    // Create a file after stopping - it should not be detected
+    await fs.writeFile(path.join(tempDir, "after-stop.jpg"), "content");
+    await waitFor(500);
+
+    const record = await db.getFileRecord("after-stop.jpg");
+    expect(record).toBeUndefined();
   });
 });
-
-if (false)
-  describe("FileWatcher - DISABLED", () => {
-    const MOVE_WINDOW_MS = 500;
-    let tempDir: string;
-    let db: IndexDatabase;
-    let watcher: FileWatcher;
-    let absoluteOriginal: string;
-
-    beforeEach(async () => {
-      resetWatcherMocks();
-      jest.useFakeTimers();
-
-      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "photrix-watcher-"));
-      absoluteOriginal = path.join(tempDir, "original.jpg");
-      await fs.writeFile(absoluteOriginal, Buffer.alloc(64));
-      const timestamp = new Date("2020-01-01T00:00:00Z");
-      await fs.utimes(absoluteOriginal, timestamp, timestamp);
-
-      db = new IndexDatabase(tempDir);
-      await db.addFile(createEntry("original.jpg"));
-
-      watcher = new FileWatcher(tempDir, db);
-      watcher.startWatching();
-    });
-
-    afterEach(async () => {
-      await watcher.stopWatching();
-      resetWatcherMocks();
-      await fs.rm(tempDir, { recursive: true, force: true });
-      jest.useRealTimers();
-      jest.clearAllMocks();
-    });
-
-    it("queues metadata refresh on change events", async () => {
-      const queueSpy = jest.spyOn(watcher, "addFileToJobQueue");
-
-      await triggerWatcherEvent("change", absoluteOriginal);
-
-      expect(queueSpy).toHaveBeenCalledWith("original.jpg");
-      queueSpy.mockRestore();
-    });
-
-    it("removes entries when files are deleted", async () => {
-      await triggerWatcherEvent("unlink", absoluteOriginal);
-
-      jest.advanceTimersByTime(MOVE_WINDOW_MS + 10);
-      await flushAsyncTasks();
-
-      const record = await db.getFileRecord("original.jpg");
-      expect(record).toBeUndefined();
-    });
-
-    it("detects files moved within the watched directory", async () => {
-      const moveSpy = jest.spyOn(db, "moveFile");
-      const queueSpy = jest.spyOn(watcher, "addFileToJobQueue");
-      const determineSpy = jest.spyOn(
-        watcher as unknown as {
-          determineIfMoveAndCompleteMove: (
-            newRelativePath: string,
-            absolutePath: string,
-          ) => Promise<boolean>;
-        },
-        "determineIfMoveAndCompleteMove",
-      );
-
-      await triggerWatcherEvent("unlink", absoluteOriginal);
-
-      const movedPath = path.join(tempDir, "moved.jpg");
-      await fs.rename(absoluteOriginal, movedPath);
-      const timestamp = new Date("2020-01-01T00:00:00Z");
-      await fs.utimes(movedPath, timestamp, timestamp);
-
-      const internalWatcher = watcher as unknown as {
-        pendingMoves: Map<
-          string,
-          {
-            sizeInBytes?: number;
-            modifiedTimeMs?: number;
-          }
-        >;
-      };
-      const pendingMove = internalWatcher.pendingMoves.get("original.jpg");
-      if (pendingMove) {
-        const stats = await fs.stat(movedPath);
-        pendingMove.sizeInBytes = stats.size;
-        pendingMove.modifiedTimeMs = undefined;
-      }
-
-      expect(internalWatcher.pendingMoves.size).toBe(1);
-
-      await triggerWatcherEvent("add", movedPath);
-
-      expect(determineSpy).toHaveBeenCalled();
-      const { mock } = determineSpy as unknown as {
-        mock: {
-          results: Array<{
-            type: "return" | "throw";
-            value: Promise<boolean>;
-          }>;
-        };
-      };
-      const lastResult = mock.results[mock.results.length - 1];
-      expect(lastResult?.type).toBe("return");
-      await expect(lastResult?.value).resolves.toBe(true);
-      expect(moveSpy).toHaveBeenCalledWith("original.jpg", "moved.jpg");
-
-      const entries = (db as unknown as { entries: Record<string, DatabaseFileEntry> }).entries;
-      expect(Object.keys(entries)).toContain("moved.jpg");
-      expect(Object.keys(entries)).not.toContain("original.jpg");
-      expect(entries["original.jpg"]).toBeUndefined();
-      const oldRecord = await db.getFileRecord("original.jpg");
-      const newRecord = await db.getFileRecord("moved.jpg");
-      expect(oldRecord).toBeUndefined();
-      expect(newRecord?.relativePath).toBe("moved.jpg");
-      expect(queueSpy).not.toHaveBeenCalled();
-      queueSpy.mockRestore();
-    });
-  });

@@ -1,60 +1,58 @@
 import path from "node:path";
-import { databaseEntryToFileRecord } from "./databaseEntryToFileRecord.js";
-import { MetadataGroupKeys, type DatabaseFileEntry } from "./fileRecord.type.js";
-import { getExifMetadataFromFile, getFileInfo } from "./fileUtils.js";
+import { databaseEntryToFileRecord } from "./databaseEntryToFileRecord.ts";
+import { MetadataGroupKeys, type DatabaseFileEntry } from "./fileRecord.type.ts";
+import { getExifMetadataFromFile, getFileInfo } from "./fileUtils.ts";
 import type {
   FileRecord,
   QueryOptions,
   QueryResult,
   FilterElement,
-} from "./indexDatabase.type.js";
+} from "./indexDatabase.type.ts";
+import { mimeTypeForFilename } from "./mimeTypes.ts";
 
 export class IndexDatabase {
-  private readonly storagePath?: string;
-  private entries: Record<string, DatabaseFileEntry>;
+  private readonly storagePath: string;
+  private entries: Map<string, DatabaseFileEntry>;
 
-  constructor(storagePath?: string) {
+  constructor(storagePath: string) {
     this.storagePath = storagePath;
-    this.entries = {};
+    this.entries = new Map();
   }
 
   async addFile(fileData: DatabaseFileEntry): Promise<void> {
-    this.entries[fileData.relativePath] = structuredClone(fileData);
+    this.entries.set(fileData.relativePath, structuredClone(fileData));
   }
 
   async removeFile(relativePath: string): Promise<void> {
-    delete this.entries[relativePath];
+    this.entries.delete(relativePath);
   }
 
   async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
-    const existing = this.entries[oldRelativePath];
-    if (!existing) {
+    const originalEntry = this.entries.get(oldRelativePath);
+    if (!originalEntry) {
       throw new Error(
         `moveFile: File at path "${oldRelativePath}" does not exist in the database.`,
       );
     }
 
     const updated: DatabaseFileEntry = {
-      ...existing,
+      ...originalEntry,
       relativePath: newRelativePath,
     };
 
-    delete this.entries[oldRelativePath];
-    this.entries[newRelativePath] = updated;
+    this.entries.delete(oldRelativePath);
+    this.entries.set(newRelativePath, updated);
   }
 
   async addOrUpdateFileData(
     relativePath: string,
     fileData: Partial<DatabaseFileEntry>,
   ): Promise<void> {
-    const existingEntry = this.entries[relativePath];
-    if (!existingEntry) {
-      throw new Error(`File at path "${relativePath}" does not exist in the database.`);
-    }
-    this.entries[relativePath] = {
-      ...existingEntry,
+    const existingEntry = this.entries.get(relativePath);
+    this.entries.set(relativePath, {
+      ...(existingEntry ?? { relativePath, mimeType: mimeTypeForFilename(relativePath) }),
       ...fileData,
-    };
+    });
   }
 
   async getFileRecord(
@@ -64,67 +62,66 @@ export class IndexDatabase {
      * This will fetch any missing metadata from storage if not already present in the database.
      * so if you want it to only use available data in the database, leave this undefined.
      */
-    requiredMetadata?: Set<keyof FileRecord>,
+    requiredMetadata?: Array<keyof FileRecord>,
   ): Promise<FileRecord | undefined> {
-    const dbEntry = this.entries[relativePath];
+    const dbEntry = this.entries.get(relativePath);
     if (!dbEntry) {
       return undefined;
     }
 
     const record = databaseEntryToFileRecord(dbEntry);
 
-    if (!requiredMetadata?.size) {
+    if (!requiredMetadata?.length) {
       return record;
     }
 
-    await this.hydrateMetadata(relativePath, requiredMetadata);
-    return this.getFileRecord(relativePath);
+    return await this.hydrateMetadata(relativePath, requiredMetadata);
   }
 
   private async hydrateMetadata(
     relativePath: string,
-    requiredMetadata: Set<keyof FileRecord>,
+    requiredMetadata: Array<keyof FileRecord>,
   ) {
-    const dbEntry = this.entries[relativePath];
-    const record = databaseEntryToFileRecord(dbEntry);
+    const originalDBEntry = this.entries.get(relativePath);
+    if (!originalDBEntry) {
+      throw new Error(
+        `hydrateMetadata: File at path "${relativePath}" does not exist in the database.`,
+      );
+    }
+    const record = databaseEntryToFileRecord(originalDBEntry);
     const promises = Array.from(requiredMetadata)
       .map((m) => {
         if (m in record) {
           return "groupAlreadyRetrieved";
         }
 
-        const found = Object.entries(MetadataGroupKeys).find(([_, keys]) => {
+        const metadataGroupKey = Object.entries(MetadataGroupKeys).find(([_, keys]) => {
           // Union causing issues... so have to cast as unknown
           if ((keys as unknown as Array<keyof FileRecord>).includes(m)) {
             return true;
           }
           return false;
         });
-        if (!found) {
+        if (!metadataGroupKey) {
           throw new Error(`Requested metadata key "${String(m)}" is not recognized.`);
         }
 
-        const groupName = found[0] as keyof typeof MetadataGroupKeys;
-        if (groupName in dbEntry) {
+        const groupName = metadataGroupKey[0] as keyof typeof MetadataGroupKeys;
+        if (groupName in originalDBEntry!) {
           return "groupAlreadyRetrieved";
         }
         return groupName;
       })
       .filter((g) => g !== "groupAlreadyRetrieved")
       .map(async (groupName) => {
-        if (!this.storagePath) {
-          throw new Error(
-            `Cannot fetch missing metadata group "${groupName}" without storagePath configured on IndexDatabase.`,
-          );
-        }
         const fullPath = path.join(this.storagePath, relativePath);
+        let extraData = {};
         switch (groupName) {
           case "info":
-            this.entries[relativePath].info = await getFileInfo(fullPath);
+            extraData = { info: await getFileInfo(fullPath) };
             break;
           case "exifMetadata":
-            this.entries[relativePath].exifMetadata =
-              await getExifMetadataFromFile(fullPath);
+            extraData = { exifMetadata: await getExifMetadataFromFile(fullPath) };
             break;
           case "aiMetadata":
           case "faceMetadata":
@@ -133,60 +130,51 @@ export class IndexDatabase {
           default:
             throw new Error(`Unhandled metadata group "${groupName}"`);
         }
+        this.addOrUpdateFileData(relativePath, extraData);
       });
     await Promise.all(promises);
+    return this.entries.get(relativePath);
   }
 
-  async listFiles(): Promise<FileRecord[]> {
-    const records: FileRecord[] = [];
-    for (const entry of Object.values(this.entries)) {
-      records.push(databaseEntryToFileRecord(entry));
-    }
-    return records;
+  getFileCount(): number {
+    return this.entries.size;
   }
 
-  async queryFiles<TMetadata extends Array<keyof FileRecord> | undefined = undefined>(
+  files() {
+    return this.entries.values().map(databaseEntryToFileRecord);
+  }
+
+  async queryFiles<TMetadata extends Array<keyof FileRecord>>(
     options: QueryOptions,
   ): Promise<QueryResult<TMetadata>> {
     const { filter, metadata, pageSize = 50, page = 1 } = options;
 
-    // Get all records
-    const allRecords = await this.listFiles();
-
-    // Apply filter
-    const filteredRecords = allRecords.filter((record) =>
-      this.matchesFilter(record, filter),
-    );
-
-    // Paginate
-    const startIndex = (page - 1) * pageSize;
-    const endIndex = startIndex + pageSize;
-    const paginatedRecords = filteredRecords.slice(startIndex, endIndex);
+    const records = this.files()
+      .filter((record) => this.matchesFilter(record, filter))
+      .filter((r, index) => index >= (page - 1) * pageSize && index < page * pageSize);
 
     // Ensure required metadata is loaded for paginated items
-    if (metadata) {
-      const metadataSet = new Set(metadata) as Set<keyof FileRecord>;
+    if (metadata.length) {
       await Promise.all(
-        paginatedRecords.map((record) =>
-          this.hydrateMetadata(record.relativePath, metadataSet),
+        records.map((record) =>
+          this.hydrateMetadata(record.relativePath, metadata),
         ),
       );
     }
 
     // Build result items
-    const items = paginatedRecords.map((record) => {
+    const items = records.map((record) => {
       const item: Record<string, unknown> = { relativePath: record.relativePath };
       if (metadata) {
         for (const key of metadata) {
           item[key as string] = record[key];
         }
       }
-      return item;
+      return item as {relativePath: string} & Pick<FileRecord, TMetadata[number]>;
     });
 
     return {
-      items,
-      total: filteredRecords.length,
+      items: [...items],
       page,
       pageSize,
     } as QueryResult<TMetadata>;
