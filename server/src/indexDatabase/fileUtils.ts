@@ -1,4 +1,4 @@
-import { parse } from "exifr";
+import exifr from "exifr";
 import { stat } from "node:fs/promises";
 import { AIMetadata, ExifMetadata, FaceMetadata, FileInfo } from "./fileRecord.type.js";
 import path from "node:path";
@@ -43,7 +43,7 @@ export const getExifMetadataFromFile = async (
     [key: string]: keyof ExifMetadata | `${keyof ExifMetadata}.${string}`;
   };
 
-  const rawData = await parse(fullPath, Object.keys(exifRMetadataToFileField));
+  const rawData = await exifr.parse(fullPath, Object.keys(exifRMetadataToFileField));
 
   return Object.entries(exifRMetadataToFileField).reduce((acc, [key, value]) => {
     const [mainKey, subkey] = value.split(".") as [keyof ExifMetadata, string?];
