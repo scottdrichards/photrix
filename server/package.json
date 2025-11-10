@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prestart": "npm run build",
-    "start": "node dist/src/cli.js",
+    "start": "node dist/src/main.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
