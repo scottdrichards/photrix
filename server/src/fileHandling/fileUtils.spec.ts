@@ -1,7 +1,7 @@
 import { describe, it, expect } from "@jest/globals";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getFileInfo, getExifMetadataFromFile } from "../fileHandling/fileUtils.ts";
+import { getFileInfo, getExifMetadataFromFile } from "./fileUtils.ts";
 
 const EXAMPLE_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),

@@ -1,14 +1,14 @@
 import path from "node:path";
 import { databaseEntryToFileRecord } from "./databaseEntryToFileRecord.ts";
 import { MetadataGroupKeys, type DatabaseFileEntry } from "./fileRecord.type.ts";
-import { getExifMetadataFromFile, getFileInfo } from "./fileUtils.ts";
+import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.ts";
 import type {
   FileRecord,
   QueryOptions,
   QueryResult,
   FilterElement,
 } from "./indexDatabase.type.ts";
-import { mimeTypeForFilename } from "./mimeTypes.ts";
+import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 
 export class IndexDatabase {
   private readonly storagePath: string;

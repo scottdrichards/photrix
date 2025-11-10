@@ -1,6 +1,6 @@
 import exifr from "exifr";
 import { stat, readdir } from "node:fs/promises";
-import { AIMetadata, ExifMetadata, FaceMetadata, FileInfo } from "./fileRecord.type.ts";
+import { AIMetadata, ExifMetadata, FaceMetadata, FileInfo } from "../indexDatabase/fileRecord.type.ts";
 import path from "node:path";
 
 export const getFileInfo = async (fullPath: string): Promise<FileInfo> => {
