@@ -58,6 +58,8 @@ export class FileWatcher {
 
     const watcher = chokidar.watch(this.watchedPath, {
       ignoreInitial: true,
+      usePolling: true,
+      interval: 5_000,
       awaitWriteFinish: {
         stabilityThreshold: 200,
         pollInterval: 100,
