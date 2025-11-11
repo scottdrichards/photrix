@@ -1,5 +1,6 @@
 import exifr from "exifr";
-import { stat, readdir } from "node:fs/promises";
+import { stat } from "node:fs/promises";
+import { readdirSync } from "node:fs";
 import { AIMetadata, ExifMetadata, FaceMetadata, FileInfo } from "../indexDatabase/fileRecord.type.ts";
 import path from "node:path";
 
@@ -92,8 +93,8 @@ export const toRelative = (root: string, absolute: string): string => {
   return relative.split(path.sep).join("/");
 };
 
-export async function* walkFiles(dir: string): AsyncGenerator<string> {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
+export function* walkFiles(dir: string): Generator<string> {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const absolutePath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       yield* walkFiles(absolutePath);

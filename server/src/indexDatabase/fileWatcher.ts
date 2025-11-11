@@ -85,7 +85,7 @@ export class FileWatcher {
     console.log(`[fileWatcher] Scanning existing files in ${this.watchedPath}`);
     this.scannedFilesCount = 0;
 
-    for await (const absolutePath of walkFiles(this.watchedPath)) {
+    for (const absolutePath of walkFiles(this.watchedPath)) {
       const relativePath = toRelative(this.watchedPath, absolutePath);
       await this.fileIndexDatabase.addFile({
         relativePath,
@@ -96,7 +96,7 @@ export class FileWatcher {
 
       this.scannedFilesCount++;
 
-      if (this.scannedFilesCount % 100 === 0) {
+      if (this.scannedFilesCount % 10000 === 0) {
         console.log(`[fileWatcher] Scanned ${this.scannedFilesCount} files...`);
       }
     }
@@ -123,10 +123,8 @@ export class FileWatcher {
     for (const group of metadataGroups) {
       this.jobQueue[group] ??= { files: [], active: false, total: 0 };
       const queue = this.jobQueue[group];
-      if (!queue.files.includes(relativePath)) {
         queue.files.push(relativePath);
         queue.total += 1;
-      }
     }
   }
 
