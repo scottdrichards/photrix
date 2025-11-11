@@ -2,11 +2,7 @@ import path from "node:path";
 import { databaseEntryToFileRecord } from "./databaseEntryToFileRecord.ts";
 import { MetadataGroupKeys, type DatabaseFileEntry } from "./fileRecord.type.ts";
 import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.ts";
-import type {
-  FileRecord,
-  QueryOptions,
-  QueryResult,
-} from "./indexDatabase.type.ts";
+import type { FileRecord, QueryOptions, QueryResult } from "./indexDatabase.type.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { matchesFilter } from "./matchesFilter.ts";
 
@@ -144,21 +140,46 @@ export class IndexDatabase {
     return this.entries.values().map(databaseEntryToFileRecord);
   }
 
+  /**
+   * 
+   * @param relativePath Does not include trailing slash
+   * @returns 
+   */
+  getFolders(relativePath: string): Array<string> {
+    const folders = this.entries
+      .keys()
+      .filter((entryPath) => entryPath.startsWith(relativePath))
+      .map((entryPath) =>
+        entryPath
+          .substring(relativePath.length)
+          .split("/"),
+      )
+      .map(([_, ...entryPathParts]) => entryPathParts) // Currently relativePath does not have trailing slash
+      .filter((entryPathParts) => entryPathParts.length > 1)
+      .reduce((folderSet, entryPathParts) => {
+        folderSet.add(entryPathParts[0]);
+        return folderSet;
+      }, new Set<string>());
+
+    return Array.from(folders).sort((a, b) => a.localeCompare(b));
+  }
+
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(
     options: QueryOptions,
   ): Promise<QueryResult<TMetadata>> {
     const { filter, metadata, pageSize = 1_000, page = 1 } = options;
 
-    const allRecords = Array.from(this.files()
-      .filter((record) => matchesFilter(record, filter)));
-    const records = allRecords.filter((r, index) => index >= (page - 1) * pageSize && index < page * pageSize);
+    const allRecords = Array.from(
+      this.files().filter((record) => matchesFilter(record, filter)),
+    );
+    const records = allRecords.filter(
+      (r, index) => index >= (page - 1) * pageSize && index < page * pageSize,
+    );
 
     // Ensure required metadata is loaded for paginated items
     if (metadata.length) {
       await Promise.all(
-        records.map((record) =>
-          this.hydrateMetadata(record.relativePath, metadata),
-        ),
+        records.map((record) => this.hydrateMetadata(record.relativePath, metadata)),
       );
     }
 
@@ -170,7 +191,7 @@ export class IndexDatabase {
           item[key as string] = record[key];
         }
       }
-      return item as {relativePath: string} & Pick<FileRecord, TMetadata[number]>;
+      return item as { relativePath: string } & Pick<FileRecord, TMetadata[number]>;
     });
 
     return {
