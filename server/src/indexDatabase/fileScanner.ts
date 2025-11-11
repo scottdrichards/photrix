@@ -29,7 +29,7 @@ type PendingMove = {
   sizeInBytes?: number;
   modifiedTimeMs?: number;
 };
-export class FileWatcher {
+export class FileScanner {
   private readonly watchedPath: string;
   private readonly fileIndexDatabase: IndexDatabase;
   private watcher: FSWatcher | null = null;

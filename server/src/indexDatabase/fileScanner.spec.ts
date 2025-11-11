@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { FileWatcher } from "./fileWatcher.ts";
+import { FileScanner } from "./fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 
 const waitFor = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -10,7 +10,7 @@ const waitFor = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)
 describe("FileWatcher", () => {
   let tempDir: string;
   let db: IndexDatabase;
-  let watcher: FileWatcher;
+  let watcher: FileScanner;
 
   beforeEach(async () => {
     // Create a temporary directory for testing
@@ -32,7 +32,7 @@ describe("FileWatcher", () => {
     await fs.writeFile(path.join(tempDir, "test2.png"), "test content 2");
 
     // Create FileWatcher - it will scan existing files
-    watcher = new FileWatcher(tempDir, db);
+    watcher = new FileScanner(tempDir, db);
 
     // Wait for scanning to complete
     await waitFor(500);
@@ -49,7 +49,7 @@ describe("FileWatcher", () => {
   });
 
   it("adds files to job queue when they are detected", async () => {
-    watcher = new FileWatcher(tempDir, db);
+    watcher = new FileScanner(tempDir, db);
     await waitFor(500);
 
     // Create a new file after watcher is running
@@ -71,7 +71,7 @@ describe("FileWatcher", () => {
     const testFile = path.join(tempDir, "change-test.jpg");
     await fs.writeFile(testFile, "initial content");
 
-    watcher = new FileWatcher(tempDir, db);
+    watcher = new FileScanner(tempDir, db);
     await waitFor(500);
 
     // Clear the job queue
@@ -97,7 +97,7 @@ describe("FileWatcher", () => {
     const testFile = path.join(tempDir, "delete-test.jpg");
     await fs.writeFile(testFile, "content to delete");
 
-    watcher = new FileWatcher(tempDir, db);
+    watcher = new FileScanner(tempDir, db);
     await waitFor(500);
 
     // Verify file is in database
@@ -121,7 +121,7 @@ describe("FileWatcher", () => {
     const content = Buffer.from("test content for move detection");
     await fs.writeFile(originalPath, content);
 
-    watcher = new FileWatcher(tempDir, db);
+    watcher = new FileScanner(tempDir, db);
     await waitFor(500);
 
     // Verify original file is tracked
@@ -145,7 +145,7 @@ describe("FileWatcher", () => {
   });
 
   it("can stop watching", async () => {
-    watcher = new FileWatcher(tempDir, db);
+    watcher = new FileScanner(tempDir, db);
     await waitFor(300);
 
     await watcher.stopWatching();

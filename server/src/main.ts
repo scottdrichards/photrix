@@ -1,7 +1,7 @@
 import "dotenv/config";
 import http from "node:http";
 import path from "node:path";
-import { FileWatcher } from "./indexDatabase/fileWatcher.ts";
+import { FileScanner } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "./indexDatabase/indexDatabase.type.ts";
 
@@ -17,7 +17,7 @@ const startServer = async () => {
   
   const database = new IndexDatabase(absolutePath); 
   
-  new FileWatcher(absolutePath, database);
+  new FileScanner(absolutePath, database);
 
   const server = http.createServer((req, res) => {
     // Enable CORS for client
