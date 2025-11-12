@@ -1,24 +1,15 @@
 import "dotenv/config";
+import { realpath } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { FileScanner } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "./indexDatabase/indexDatabase.type.ts";
 
 const PORT = process.env.PORT || 3000;
 
-const startServer = async () => {
-  console.log("Starting photrix server...");
-
-  const mediaRoot = process.env.MEDIA_ROOT || "./exampleFolder";
-  console.log(`Starting indexing for: ${mediaRoot}`);
-  
-  const absolutePath = path.resolve(mediaRoot);
-  
-  const database = new IndexDatabase(absolutePath); 
-  
-  new FileScanner(absolutePath, database);
-
+export const createServer = (database: IndexDatabase) => {
   const server = http.createServer((req, res) => {
     // Enable CORS for client
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -51,24 +42,26 @@ const startServer = async () => {
     if (req.url?.startsWith("/folders") && req.method === "GET") {
       try {
         const url = new URL(req.url!, `http://${req.headers.host}`);
-        
+
         // Extract path after /folders/ and decode URL escape characters
         const pathMatch = url.pathname.match(/^\/folders\/(.+)/);
         const subPath = pathMatch ? decodeURIComponent(pathMatch[1]) : "";
-        
+
         // Remove trailing slash if present
         const cleanPath = subPath.endsWith("/") ? subPath.slice(0, -1) : subPath;
-        
+
         const folders = database.getFolders(cleanPath);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ folders }));
       } catch (error) {
         console.error("Error getting folders:", error);
         res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ 
-          error: "Internal server error", 
-          message: error instanceof Error ? error.message : String(error) 
-        }));
+        res.end(
+          JSON.stringify({
+            error: "Internal server error",
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        );
       }
       return;
     }
@@ -78,11 +71,11 @@ const startServer = async () => {
       (async () => {
         try {
           const url = new URL(req.url!, `http://${req.headers.host}`);
-          
+
           // Extract path after /files/ and decode URL escape characters
           const pathMatch = url.pathname.match(/^\/files\/(.+)/);
           const subPath = pathMatch ? decodeURIComponent(pathMatch[1]) : null;
-          
+
           // Parse query parameters
           const filterParam = url.searchParams.get("filter");
           const metadataParam = url.searchParams.get("metadata");
@@ -100,15 +93,15 @@ const startServer = async () => {
             const cleanPath = subPath.endsWith("/") ? subPath.slice(0, -1) : subPath;
             filter = {
               relativePath: {
-                regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/[^/]+$`
-              }
+                regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^/]+$`,
+              },
             };
           } else {
             // Default: match files at root level only (no subfolders)
             filter = {
               relativePath: {
-                regex: `^[^/]+$`
-              }
+                regex: `^[^/]+$`,
+              },
             };
           }
 
@@ -120,7 +113,10 @@ const startServer = async () => {
               metadata = JSON.parse(metadataParam);
             } catch {
               // Fall back to comma-separated string
-              metadata = metadataParam.split(",").map(s => s.trim()).filter(Boolean);
+              metadata = metadataParam
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean);
             }
           }
 
@@ -137,10 +133,12 @@ const startServer = async () => {
         } catch (error) {
           console.error("Error processing query:", error);
           res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ 
-            error: "Internal server error", 
-            message: error instanceof Error ? error.message : String(error) 
-          }));
+          res.end(
+            JSON.stringify({
+              error: "Internal server error",
+              message: error instanceof Error ? error.message : String(error),
+            }),
+          );
         }
       })();
       return;
@@ -151,13 +149,43 @@ const startServer = async () => {
     res.end(JSON.stringify({ error: "Not found" }));
   });
 
+  return server;
+};
+
+const startServer = async () => {
+  console.log("Starting photrix server...");
+
+  const mediaRoot = process.env.MEDIA_ROOT || "./exampleFolder";
+  console.log(`Starting indexing for: ${mediaRoot}`);
+
+  const absolutePath = path.resolve(mediaRoot);
+
+  const database = new IndexDatabase(absolutePath);
+
+  new FileScanner(absolutePath, database);
+
+  const server = createServer(database);
+
   server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/health`);
   });
+
+  return server;
 };
 
-startServer().catch((error) => {
-  console.error("Failed to start server:", error);
-  process.exit(1);
-});
+const modulePath = fileURLToPath(import.meta.url);
+let isMain = true;
+if (!process.argv[1]) isMain = false;
+
+try {
+  const mainPath = await realpath(process.argv[1]);
+  const currentPath = await realpath(modulePath);
+  isMain = mainPath === currentPath;
+} catch {
+  isMain = false;
+}
+
+if (isMain) {
+  startServer();
+}

@@ -142,24 +142,18 @@ export class IndexDatabase {
 
   /**
    * 
-   * @param relativePath Does not include trailing slash
+   * @param relativePath Start without slash, end in "/" - root is ""
    * @returns 
    */
   getFolders(relativePath: string): Array<string> {
+    const baseFolderPath = relativePath !== "" ? (relativePath.endsWith("/") ? relativePath : relativePath + "/") : "";
+    
     const folders = this.entries
       .keys()
-      .filter((entryPath) => entryPath.startsWith(relativePath))
-      .map((entryPath) =>
-        entryPath
-          .substring(relativePath.length)
-          .split("/"),
-      )
-      .map(([_, ...entryPathParts]) => entryPathParts) // Currently relativePath does not have trailing slash
-      .filter((entryPathParts) => entryPathParts.length > 1)
-      .reduce((folderSet, entryPathParts) => {
-        folderSet.add(entryPathParts[0]);
-        return folderSet;
-      }, new Set<string>());
+      .filter((entryPath) => entryPath.startsWith(baseFolderPath))
+      .map((entryPath) => entryPath.substring(baseFolderPath.length).split("/"))
+      .filter((pathParts) => pathParts.length > 1) // Must have at least a folder and filename
+      .reduce((folderSet, pathParts) => folderSet.add(pathParts[0]), new Set<string>());
 
     return Array.from(folders).sort((a, b) => a.localeCompare(b));
   }
