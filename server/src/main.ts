@@ -81,6 +81,7 @@ export const createServer = (database: IndexDatabase) => {
           const metadataParam = url.searchParams.get("metadata");
           const pageSize = url.searchParams.get("pageSize");
           const page = url.searchParams.get("page");
+          const countOnly = url.searchParams.get("count") === "true";
 
           // Build filter
           let filter;
@@ -129,7 +130,7 @@ export const createServer = (database: IndexDatabase) => {
 
           const result = await database.queryFiles(queryOptions);
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(result));
+          res.end(JSON.stringify(countOnly ? { count: result.total } : result));
         } catch (error) {
           console.error("Error processing query:", error);
           res.writeHead(500, { "Content-Type": "application/json" });

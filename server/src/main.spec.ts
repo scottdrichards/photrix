@@ -230,6 +230,33 @@ describe("main.ts HTTP Server", () => {
         expect(data.items).toHaveLength(1);
       }
     });
+
+    it("should return count only when count=true", async () => {
+      const response = await makeRequest(TEST_PORT, "/files?count=true");
+      expect(response.status).toBe(200);
+      const data = JSON.parse(response.body);
+      expect(data).toHaveProperty("count");
+      expect(typeof data.count).toBe("number");
+      expect(data).not.toHaveProperty("items");
+      expect(data).not.toHaveProperty("page");
+      expect(data.count).toBe(1); // Only 1 file at root
+    });
+
+    it("should return count for subfolder when count=true", async () => {
+      const response = await makeRequest(TEST_PORT, "/files/subFolder?count=true");
+      expect(response.status).toBe(200);
+      const data = JSON.parse(response.body);
+      expect(data).toHaveProperty("count");
+      expect(data.count).toBeGreaterThanOrEqual(1);
+    });
+
+    it("should return count with custom filter when count=true", async () => {
+      const filter = JSON.stringify({ relativePath: { regex: ".*\\.heic$" } });
+      const response = await makeRequest(TEST_PORT, `/files?filter=${encodeURIComponent(filter)}&count=true`);
+      expect(response.status).toBe(200);
+      const data = JSON.parse(response.body);
+      expect(data.count).toBe(2); // Both .heic files
+    });
   });
 
   describe("404 handler", () => {
