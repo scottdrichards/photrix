@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { FileScanner } from "./fileScanner.ts";
+import { FileScanner, POLLING_INTERVAL_MS } from "./fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 
 const waitFor = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,13 +50,11 @@ describe("FileWatcher", () => {
 
   it("adds files to job queue when they are detected", async () => {
     watcher = new FileScanner(tempDir, db);
-    await waitFor(500);
-
-    // Create a new file after watcher is running
+    await waitFor(50);
     await fs.writeFile(path.join(tempDir, "new-file.jpg"), "new content");
 
     // Wait for watcher to detect the file
-    await waitFor(500);
+    await waitFor(POLLING_INTERVAL_MS + 300);
 
     // Check that the file was added to the job queue
     const hasFileInQueue =
@@ -72,7 +70,7 @@ describe("FileWatcher", () => {
     await fs.writeFile(testFile, "initial content");
 
     watcher = new FileScanner(tempDir, db);
-    await waitFor(500);
+    await waitFor(50);
 
     // Clear the job queue
     watcher.jobQueue.info.files = [];
@@ -82,7 +80,7 @@ describe("FileWatcher", () => {
     await fs.writeFile(testFile, "modified content");
 
     // Wait for change detection
-    await waitFor(500);
+    await waitFor(POLLING_INTERVAL_MS + 300);
 
     // Check that the file was added to job queue
     const hasFileInQueue =
@@ -122,7 +120,7 @@ describe("FileWatcher", () => {
     await fs.writeFile(originalPath, content);
 
     watcher = new FileScanner(tempDir, db);
-    await waitFor(500);
+    await waitFor(50);
 
     // Verify original file is tracked
     let originalRecord = await db.getFileRecord("original.jpg");
@@ -132,8 +130,7 @@ describe("FileWatcher", () => {
     const movedPath = path.join(tempDir, "moved.jpg");
     await fs.rename(originalPath, movedPath);
 
-    // Wait for move detection (unlink + add within 500ms window + processing)
-    await waitFor(800);
+    await waitFor(POLLING_INTERVAL_MS * 2 + 300);
 
     // Verify the file was moved (not deleted/added)
     originalRecord = await db.getFileRecord("original.jpg");

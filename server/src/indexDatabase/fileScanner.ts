@@ -17,6 +17,11 @@ const MOVE_DETECTION_WINDOW_MS = 500;
  */
 const MOVE_TIMESTAMP_TOLERANCE_MS = 20;
 
+/**
+ * Exported so that tests can know how long to wait for file changes
+ */
+export const POLLING_INTERVAL_MS = 500;
+
 type Queue = {
   files: string[];
   active: boolean;
@@ -59,7 +64,7 @@ export class FileScanner {
     const watcher = chokidar.watch(this.watchedPath, {
       ignoreInitial: true,
       usePolling: true,
-      interval: 5_000,
+      interval: POLLING_INTERVAL_MS,
       awaitWriteFinish: {
         stabilityThreshold: 200,
         pollInterval: 100,
