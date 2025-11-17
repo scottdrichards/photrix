@@ -19,18 +19,11 @@ const createEntry = (overrides: Partial<DatabaseFileEntry> = {}): DatabaseFileEn
 	const base = {
 		relativePath: "sewing-threads.heic",
 		mimeType: "image/heic",
-		info: DEFAULT_INFO,
-		exifMetadata: {},
-		aiMetadata: {},
-		faceMetadata: {},
+		...DEFAULT_INFO,
 	} as const satisfies DatabaseFileEntry;
 	return {
 		...base,
 		...overrides,
-		info: {
-			...base.info,
-			...(overrides.info ?? {}),
-		},
 	};
 };
 
@@ -42,8 +35,8 @@ describe("IndexDatabase", () => {
 		const entry = createEntry();
 
 		await db.addFile(entry);
-		entry.info!.sizeInBytes = 1;
-		entry.exifMetadata!.cameraMake = "changed";
+		(entry as any).sizeInBytes = 1;
+		(entry as any).cameraMake = "changed";
 
 		const record = await db.getFileRecord(entry.relativePath);
 
@@ -75,7 +68,7 @@ describe("IndexDatabase", () => {
 		expect(oldRecord).toBeUndefined();
 		expect(newRecord?.relativePath).toBe("new-folder/renamed.heic");
 		expect(newRecord?.mimeType).toBe(entry.mimeType);
-		expect(newRecord?.sizeInBytes).toBe(entry.info!.sizeInBytes);
+		expect(newRecord?.sizeInBytes).toBe(entry.sizeInBytes);
 	});
 
 	it("merges updates when addOrUpdateFileData is called", async () => {
@@ -84,12 +77,10 @@ describe("IndexDatabase", () => {
 
 		await db.addFile(entry);
 		await db.addOrUpdateFileData(entry.relativePath, {
-			info: {
-				sizeInBytes: 2048,
-				created: new Date("2021-01-01T00:00:00Z"),
-				modified: new Date("2021-01-02T00:00:00Z"),
-			},
-			exifMetadata: { cameraMake: "Canon" },
+			sizeInBytes: 2048,
+			created: new Date("2021-01-01T00:00:00Z"),
+			modified: new Date("2021-01-02T00:00:00Z"),
+			cameraMake: "Canon",
 		});
 
 		const record = await db.getFileRecord(entry.relativePath);

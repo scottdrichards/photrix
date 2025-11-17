@@ -93,9 +93,10 @@ type _EnsureAllMetadataKeysListed = AssertTrue<
 >;
 
 /**
- * How a file is stored in the database, with metadata entries including determinedOn timestamps.
+ * How a file is stored in the database - now a flat record for performance.
+ * All metadata properties are at the top level instead of nested in groups.
  */
-export type DatabaseFileEntry = BaseFileRecord & Partial<MetadataGroups>;
+export type DatabaseFileEntry = BaseFileRecord & Partial<FileInfo & ExifMetadata & AIMetadata & FaceMetadata>;
 
 /////////////////////////
 // This section is just to ensure no metadata key collisions occur when creating FileRecord type.

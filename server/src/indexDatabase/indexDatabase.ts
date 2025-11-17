@@ -1,5 +1,4 @@
 import path from "node:path";
-import { databaseEntryToFileRecord } from "./databaseEntryToFileRecord.ts";
 import { MetadataGroupKeys, type DatabaseFileEntry } from "./fileRecord.type.ts";
 import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.ts";
 import type { FileRecord, QueryOptions, QueryResult } from "./indexDatabase.type.ts";
@@ -65,7 +64,8 @@ export class IndexDatabase {
       return undefined;
     }
 
-    const record = databaseEntryToFileRecord(dbEntry);
+    // Already flat, just return a clone
+    const record = structuredClone(dbEntry) as FileRecord;
 
     if (!requiredMetadata?.length) {
       return record;
@@ -84,74 +84,74 @@ export class IndexDatabase {
         `hydrateMetadata: File at path "${relativePath}" does not exist in the database.`,
       );
     }
-    const record = databaseEntryToFileRecord(originalDBEntry);
-    const promises = Array.from(requiredMetadata)
-      .map((m) => {
-        if (m in record) {
-          return "groupAlreadyRetrieved";
-        }
-
-        const metadataGroupKey = Object.entries(MetadataGroupKeys).find(([_, keys]) => {
-          // Union causing issues... so have to cast as unknown
-          if ((keys as unknown as Array<keyof FileRecord>).includes(m)) {
-            return true;
-          }
-          return false;
-        });
-        if (!metadataGroupKey) {
-          throw new Error(`Requested metadata key "${m}" is not recognized.`);
-        }
-
-        const groupName = metadataGroupKey[0] as keyof typeof MetadataGroupKeys;
-        if (groupName in originalDBEntry!) {
-          return "groupAlreadyRetrieved";
-        }
-        return groupName;
-      })
-      .filter((g) => g !== "groupAlreadyRetrieved")
-      .map(async (groupName) => {
-        const fullPath = path.join(this.storagePath, relativePath);
-        let extraData = {};
-        switch (groupName) {
-          case "info":
-            extraData = { info: await getFileInfo(fullPath) };
-            break;
-          case "exifMetadata": {
-            // Only attempt EXIF parsing for media files
-            const mimeType = originalDBEntry?.mimeType || mimeTypeForFilename(relativePath);
-            if (mimeType?.startsWith("image/") || mimeType?.startsWith("video/")) {
-              try {
-                console.log(`[metadata] Reading EXIF for ${relativePath} (${mimeType})`);
-                const exifStart = Date.now();
-                extraData = { exifMetadata: await getExifMetadataFromFile(fullPath) };
-                console.log(`[metadata] EXIF read for ${relativePath} took ${Date.now() - exifStart}ms`);
-              } catch (error) {
-                // File format doesn't support EXIF or parsing failed
-                console.warn(`[metadata] Could not read EXIF metadata for ${relativePath}:`, error instanceof Error ? error.message : String(error));
-                extraData = { exifMetadata: {} };
-              }
-            } else {
-              // Non-media file, skip EXIF parsing
-              console.log(`[metadata] Skipping EXIF for non-media file ${relativePath} (${mimeType})`);;
-              extraData = { exifMetadata: {} };
-            }
-            break;
-          }
-          case "aiMetadata":
-          case "faceMetadata":
-            // Not implemented yet
-            return Promise.resolve({});
-          default:
-            throw new Error(`Unhandled metadata group "${groupName}"`);
-        }
-        this.addOrUpdateFileData(relativePath, extraData);
+    
+    // Determine which metadata groups need to be loaded
+    const groupsToLoad = new Set<keyof typeof MetadataGroupKeys>();
+    
+    for (const metadataKey of requiredMetadata) {
+      // Skip if already present
+      if (metadataKey in originalDBEntry) {
+        continue;
+      }
+      
+      // Find which group this key belongs to
+      const metadataGroupKey = Object.entries(MetadataGroupKeys).find(([_, keys]) => {
+        return (keys as unknown as Array<keyof FileRecord>).includes(metadataKey);
       });
+      
+      if (!metadataGroupKey) {
+        throw new Error(`Requested metadata key "${metadataKey}" is not recognized.`);
+      }
+      
+      groupsToLoad.add(metadataGroupKey[0] as keyof typeof MetadataGroupKeys);
+    }
+    
+    // Load each required group
+    const promises = Array.from(groupsToLoad).map(async (groupName) => {
+      const fullPath = path.join(this.storagePath, relativePath);
+      let extraData = {};
+      switch (groupName) {
+        case "info":
+          extraData = await getFileInfo(fullPath);
+          break;
+        case "exifMetadata": {
+          // Only attempt EXIF parsing for media files
+          const mimeType = originalDBEntry?.mimeType || mimeTypeForFilename(relativePath);
+          if (mimeType?.startsWith("image/") || mimeType?.startsWith("video/")) {
+            try {
+              console.log(`[metadata] Reading EXIF for ${relativePath} (${mimeType})`);
+              const exifStart = Date.now();
+              extraData = await getExifMetadataFromFile(fullPath);
+              console.log(`[metadata] EXIF read for ${relativePath} took ${Date.now() - exifStart}ms`);
+            } catch (error) {
+              // File format doesn't support EXIF or parsing failed
+              console.warn(`[metadata] Could not read EXIF metadata for ${relativePath}:`, error instanceof Error ? error.message : String(error));
+              extraData = {};
+            }
+          } else {
+            // Non-media file, skip EXIF parsing
+            console.log(`[metadata] Skipping EXIF for non-media file ${relativePath} (${mimeType})`);
+            extraData = {};
+          }
+          break;
+        }
+        case "aiMetadata":
+        case "faceMetadata":
+          // Not implemented yet
+          return;
+        default:
+          throw new Error(`Unhandled metadata group "${groupName}"`);
+      }
+      await this.addOrUpdateFileData(relativePath, extraData);
+    });
+    
     await Promise.all(promises);
-    return this.entries.get(relativePath);
+    return structuredClone(this.entries.get(relativePath)) as FileRecord;
   }
 
-  files() {
-    return this.entries.values().map(databaseEntryToFileRecord);
+  files(): IterableIterator<FileRecord> {
+    // Entries are already flat, just cast to FileRecord
+    return this.entries.values() as IterableIterator<FileRecord>;
   }
 
   /**
@@ -179,9 +179,7 @@ export class IndexDatabase {
     console.log(`[query] Starting query: filter=${JSON.stringify(filter)}, metadata=${JSON.stringify(metadata)}, page=${page}, pageSize=${pageSize}`);
     const startTime = Date.now();
 
-    const allRecords = Array.from(
-      this.files().filter((record) => matchesFilter(record, filter)),
-    );
+    const allRecords = Array.from(this.files()).filter((record) => matchesFilter(record, filter));
     console.log(`[query] Filter matched ${allRecords.length} files`);
     const records = allRecords.filter(
       (r, index) => index >= (page - 1) * pageSize && index < page * pageSize,
@@ -196,12 +194,13 @@ export class IndexDatabase {
       );
     }
 
-    // Build result items
+    // Build result items - get fresh data after hydration
     const items = records.map((record) => {
-      const item: Record<string, unknown> = { relativePath: record.relativePath };
+      const freshRecord = this.entries.get(record.relativePath)!;
+      const item: Record<string, unknown> = { relativePath: freshRecord.relativePath };
       if (metadata) {
         for (const key of metadata) {
-          item[key as string] = record[key];
+          item[key as string] = freshRecord[key as keyof DatabaseFileEntry];
         }
       }
       return item as { relativePath: string } & Pick<FileRecord, TMetadata[number]>;
