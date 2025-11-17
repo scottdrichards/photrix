@@ -80,8 +80,16 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PhotoItem | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
-  const [includeSubfolders, setIncludeSubfolders] = useState(false);
-  const [currentPath, setCurrentPath] = useState<string>("");
+  
+  // Initialize state from URL
+  const [includeSubfolders, setIncludeSubfolders] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("includeSubfolders") === "true";
+  });
+  const [currentPath, setCurrentPath] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("path") || "";
+  });
   const [folders, setFolders] = useState<string[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
 
@@ -111,6 +119,19 @@ export default function App() {
     }
   }, [includeSubfolders, currentPath]);
 
+  // Sync URL with state
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (currentPath) {
+      params.set("path", currentPath);
+    }
+    if (includeSubfolders) {
+      params.set("includeSubfolders", "true");
+    }
+    const newUrl = params.toString() ? `?${params.toString()}` : window.location.pathname;
+    window.history.replaceState(null, "", newUrl);
+  }, [currentPath, includeSubfolders]);
+
   useEffect(() => {
     const controller = new AbortController();
     loadInitial(controller.signal);
@@ -131,6 +152,17 @@ export default function App() {
     };
     loadFolders();
   }, [currentPath, refreshToken]);
+
+  // Handle browser back/forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      setCurrentPath(params.get("path") || "");
+      setIncludeSubfolders(params.get("includeSubfolders") === "true");
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   const handleLoadMore = useCallback(async () => {
     if (!hasMore || loadingMore || initialLoading) {
