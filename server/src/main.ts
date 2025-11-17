@@ -86,21 +86,32 @@ export const createServer = (database: IndexDatabase, storagePath: string) => {
             const pageSize = url.searchParams.get("pageSize");
             const page = url.searchParams.get("page");
             const countOnly = url.searchParams.get("count") === "true";
+            const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
 
             // Build filter
             let filter;
             if (filterParam) {
               // Use explicit filter from query string
               filter = JSON.parse(filterParam);
-            } else if (subPath && subPath !== "count") {
-              // Convert path to filter that matches files directly in this path only (no subfolders)
+            } else if (subPath) {
+              // Convert path to filter
               // Remove trailing slash if present
               const cleanPath = subPath.endsWith("/") ? subPath.slice(0, -1) : subPath;
-              filter = {
-                relativePath: {
-                  regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^/]+$`,
-                },
-              };
+              if (includeSubfolders) {
+                // Match files in this folder and all subfolders
+                filter = {
+                  relativePath: {
+                    regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`,
+                  },
+                };
+              } else {
+                // Match files directly in this path only (no subfolders)
+                filter = {
+                  relativePath: {
+                    regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^/]+$`,
+                  },
+                };
+              }
             } else {
               // Default: match files at root level only (no subfolders)
               filter = {
