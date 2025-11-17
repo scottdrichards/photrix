@@ -1,15 +1,17 @@
 import "dotenv/config";
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FileScanner } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "./indexDatabase/indexDatabase.type.ts";
+import { mimeTypeForFilename } from "./fileHandling/mimeTypes.ts";
 
 const PORT = process.env.PORT || 3000;
 
-export const createServer = (database: IndexDatabase) => {
+export const createServer = (database: IndexDatabase, storagePath: string) => {
   const server = http.createServer((req, res) => {
     // Enable CORS for client
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -27,14 +29,6 @@ export const createServer = (database: IndexDatabase) => {
     if (req.url === "/health" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok", message: "Server is running" }));
-      return;
-    }
-
-    // Get file count endpoint
-    if (req.url === "/files/count" && req.method === "GET") {
-      const count = database.getFileCount();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ count }));
       return;
     }
 
@@ -66,8 +60,10 @@ export const createServer = (database: IndexDatabase) => {
       return;
     }
 
-    // Query files endpoint - supports both path-based and query string filters
-    if (req.url?.startsWith("/files") && req.method === "GET") {
+    // Files endpoint - serves individual files or queries for multiple files
+    // Query mode REQUIRES trailing slash: /files/ or /files/subfolder/
+    // File serving has NO trailing slash: /files/image.jpg
+    if (req.url?.startsWith("/files/") && req.method === "GET") {
       (async () => {
         try {
           const url = new URL(req.url!, `http://${req.headers.host}`);
@@ -76,70 +72,137 @@ export const createServer = (database: IndexDatabase) => {
           const pathMatch = url.pathname.match(/^\/files\/(.+)/);
           const subPath = pathMatch ? decodeURIComponent(pathMatch[1]) : null;
 
-          // Parse query parameters
-          const filterParam = url.searchParams.get("filter");
-          const metadataParam = url.searchParams.get("metadata");
-          const pageSize = url.searchParams.get("pageSize");
-          const page = url.searchParams.get("page");
-          const countOnly = url.searchParams.get("count") === "true";
+          // Determine if this is a query (ends with /) or file request (no trailing slash)
+          // Query mode REQUIRES trailing slash (e.g., /files/ or /files/subfolder/)
+          const isQuery = !subPath || subPath.endsWith("/");
 
-          // Build filter
-          let filter;
-          if (filterParam) {
-            // Use explicit filter from query string
-            filter = JSON.parse(filterParam);
-          } else if (subPath && subPath !== "count") {
-            // Convert path to filter that matches files directly in this path only (no subfolders)
-            // Remove trailing slash if present
-            const cleanPath = subPath.endsWith("/") ? subPath.slice(0, -1) : subPath;
-            filter = {
-              relativePath: {
-                regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^/]+$`,
-              },
-            };
-          } else {
-            // Default: match files at root level only (no subfolders)
-            filter = {
-              relativePath: {
-                regex: `^[^/]+$`,
-              },
-            };
-          }
+          if (isQuery) {
+            // QUERY MODE: Return list of files
+            const filterParam = url.searchParams.get("filter");
+            const metadataParam = url.searchParams.get("metadata");
+            const pageSize = url.searchParams.get("pageSize");
+            const page = url.searchParams.get("page");
+            const countOnly = url.searchParams.get("count") === "true";
 
-          // Parse metadata (comma-separated list or JSON array)
-          let metadata: Array<string> = [];
-          if (metadataParam) {
-            try {
-              // Try parsing as JSON array first
-              metadata = JSON.parse(metadataParam);
-            } catch {
-              // Fall back to comma-separated string
-              metadata = metadataParam
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean);
+            // Build filter
+            let filter;
+            if (filterParam) {
+              // Use explicit filter from query string
+              filter = JSON.parse(filterParam);
+            } else if (subPath && subPath !== "count") {
+              // Convert path to filter that matches files directly in this path only (no subfolders)
+              // Remove trailing slash if present
+              const cleanPath = subPath.endsWith("/") ? subPath.slice(0, -1) : subPath;
+              filter = {
+                relativePath: {
+                  regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^/]+$`,
+                },
+              };
+            } else {
+              // Default: match files at root level only (no subfolders)
+              filter = {
+                relativePath: {
+                  regex: `^[^/]+$`,
+                },
+              };
             }
+
+            // Parse metadata (comma-separated list or JSON array)
+            let metadata: Array<string> = [];
+            if (metadataParam) {
+              try {
+                // Try parsing as JSON array first
+                metadata = JSON.parse(metadataParam);
+              } catch {
+                // Fall back to comma-separated string
+                metadata = metadataParam
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean);
+              }
+            }
+
+            const queryOptions = {
+              filter,
+              metadata: metadata as QueryOptions["metadata"],
+              ...(pageSize && { pageSize: parseInt(pageSize, 10) }),
+              ...(page && { page: parseInt(page, 10) }),
+            };
+
+            const result = await database.queryFiles(queryOptions);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(countOnly ? { count: result.total } : result));
+          } else {
+            // FILE MODE: Serve individual file
+            if (!subPath) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Missing file path" }));
+              return;
+            }
+
+            // Construct absolute path and check if it's within the storage path
+            const normalizedPath = path.resolve(storagePath, subPath);
+            
+            // Security check: ensure the path is within the storage directory
+            // Use path.relative to check - if it starts with "..", it's outside
+            const relativeToStorage = path.relative(storagePath, normalizedPath);
+            if (relativeToStorage.startsWith("..") || path.isAbsolute(relativeToStorage)) {
+              res.writeHead(403, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Access denied" }));
+              return;
+            }
+
+            // Check if file exists and is a file
+            let fileStats;
+            try {
+              fileStats = await stat(normalizedPath);
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+                res.writeHead(404, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "File not found" }));
+                return;
+              }
+              throw err;
+            }
+
+            if (!fileStats.isFile()) {
+              res.writeHead(404, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "File not found" }));
+              return;
+            }
+
+            // Determine content type
+            const mimeType = mimeTypeForFilename(subPath) || "application/octet-stream";
+
+            // Stream the file
+            res.writeHead(200, {
+              "Content-Type": mimeType,
+              "Content-Length": fileStats.size,
+              "Cache-Control": "public, max-age=31536000", // Cache for 1 year
+            });
+
+            const fileStream = createReadStream(normalizedPath);
+            fileStream.pipe(res);
+
+            fileStream.on("error", (error) => {
+              console.error("Error streaming file:", error);
+              if (!res.headersSent) {
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Error streaming file" }));
+              }
+            });
           }
-
-          const queryOptions = {
-            filter,
-            metadata: metadata as QueryOptions["metadata"],
-            ...(pageSize && { pageSize: parseInt(pageSize, 10) }),
-            ...(page && { page: parseInt(page, 10) }),
-          };
-
-          const result = await database.queryFiles(queryOptions);
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(countOnly ? { count: result.total } : result));
         } catch (error) {
-          console.error("Error processing query:", error);
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Internal server error",
-              message: error instanceof Error ? error.message : String(error),
-            }),
-          );
+          console.error("Error processing files request:", error);
+          if (!res.headersSent) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                error: "Internal server error",
+                message: error instanceof Error ? error.message : String(error),
+              }),
+            );
+          }
         }
       })();
       return;
@@ -165,7 +228,7 @@ const startServer = async () => {
 
   new FileScanner(absolutePath, database);
 
-  const server = createServer(database);
+  const server = createServer(database, absolutePath);
 
   server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);

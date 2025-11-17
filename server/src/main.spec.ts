@@ -35,24 +35,25 @@ const makeRequest = (
 describe("main.ts HTTP Server", () => {
   let server: http.Server;
   let database: IndexDatabase;
+  let storagePath: string;
   const TEST_PORT = 3001;
 
   beforeEach(async () => {
     await new Promise(resolve => setTimeout(resolve, 100));
     
-    const absolutePath = path.resolve("./exampleFolder");
-    database = new IndexDatabase(absolutePath);
+    storagePath = path.resolve("./exampleFolder");
+    database = new IndexDatabase(storagePath);
     
     // Scan existing files to populate the database
-    for (const filePath of walkFiles(absolutePath)) {
-      const relativePath = toRelative(absolutePath, filePath);
+    for (const filePath of walkFiles(storagePath)) {
+      const relativePath = toRelative(storagePath, filePath);
       await database.addFile({
         relativePath,
         mimeType: mimeTypeForFilename(relativePath),
       });
     }
 
-    server = createServer(database);
+    server = createServer(database, storagePath);
 
     await new Promise<void>((resolve) => {
       server.listen(TEST_PORT, resolve);
@@ -103,24 +104,6 @@ describe("main.ts HTTP Server", () => {
     });
   });
 
-  describe("GET /files/count", () => {
-    it("should return 200 with file count", async () => {
-      const response = await makeRequest(TEST_PORT, "/files/count");
-      expect(response.status).toBe(200);
-      const data = JSON.parse(response.body);
-      expect(data).toHaveProperty("count");
-      expect(typeof data.count).toBe("number");
-      // exampleFolder has 3 files: sewing-threads.heic, subFolder/soundboard.heic, and subFolder/grandchildFolder/.gitkeep
-      expect(data.count).toBe(3);
-    });
-
-    it("should return actual file count from database", async () => {
-      const response = await makeRequest(TEST_PORT, "/files/count");
-      const data = JSON.parse(response.body);
-      expect(data.count).toBe(database.getFileCount());
-    });
-  });
-
   describe("GET /folders", () => {
     it("should return folders for root path", async () => {
       const response = await makeRequest(TEST_PORT, "/folders");
@@ -154,9 +137,9 @@ describe("main.ts HTTP Server", () => {
     });
   });
 
-  describe("GET /files", () => {
+  describe("GET /files/ - query mode (with trailing slash or query params)", () => {
     it("should return files at root path", async () => {
-      const response = await makeRequest(TEST_PORT, "/files");
+      const response = await makeRequest(TEST_PORT, "/files/");
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data.items).toHaveLength(1);
@@ -164,8 +147,8 @@ describe("main.ts HTTP Server", () => {
       expect(data.total).toBe(1);
     });
 
-    it("should return files in subfolder", async () => {
-      const response = await makeRequest(TEST_PORT, "/files/subFolder");
+    it("should return files in subfolder with trailing slash", async () => {
+      const response = await makeRequest(TEST_PORT, "/files/subFolder/");
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       // subFolder has 2 files: soundboard.heic and grandchildFolder/.gitkeep
@@ -175,7 +158,7 @@ describe("main.ts HTTP Server", () => {
     });
 
     it("should decode URL-encoded paths", async () => {
-      const response = await makeRequest(TEST_PORT, "/files/sub%20Folder");
+      const response = await makeRequest(TEST_PORT, "/files/sub%20Folder/");
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data.items).toHaveLength(0);
@@ -183,7 +166,7 @@ describe("main.ts HTTP Server", () => {
 
     it("should handle explicit filter parameter", async () => {
       const filter = JSON.stringify({ relativePath: { regex: ".*\\.heic$" } });
-      const response = await makeRequest(TEST_PORT, `/files?filter=${encodeURIComponent(filter)}`);
+      const response = await makeRequest(TEST_PORT, `/files/?filter=${encodeURIComponent(filter)}`);
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       // Should match both .heic files
@@ -192,14 +175,14 @@ describe("main.ts HTTP Server", () => {
 
     it("should parse metadata as JSON array", async () => {
       const metadata = JSON.stringify(["mimeType"]);
-      const response = await makeRequest(TEST_PORT, `/files?metadata=${encodeURIComponent(metadata)}`);
+      const response = await makeRequest(TEST_PORT, `/files/?metadata=${encodeURIComponent(metadata)}`);
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data.items[0]).toHaveProperty("mimeType");
     });
 
     it("should parse metadata as comma-separated string", async () => {
-      const response = await makeRequest(TEST_PORT, "/files?metadata=mimeType,relativePath");
+      const response = await makeRequest(TEST_PORT, "/files/?metadata=mimeType,relativePath");
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data.items[0]).toHaveProperty("mimeType");
@@ -207,7 +190,7 @@ describe("main.ts HTTP Server", () => {
     });
 
     it("should parse pageSize parameter", async () => {
-      const response = await makeRequest(TEST_PORT, "/files?pageSize=1");
+      const response = await makeRequest(TEST_PORT, "/files/?pageSize=1");
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data.pageSize).toBe(1);
@@ -216,11 +199,11 @@ describe("main.ts HTTP Server", () => {
 
     it("should parse page parameter", async () => {
       // Get all files first to see total
-      const allResponse = await makeRequest(TEST_PORT, "/files");
+      const allResponse = await makeRequest(TEST_PORT, "/files/");
       const allData = JSON.parse(allResponse.body);
       const totalFiles = allData.total;
       
-      const response = await makeRequest(TEST_PORT, "/files?page=2&pageSize=1");
+      const response = await makeRequest(TEST_PORT, "/files/?page=2&pageSize=1");
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data.page).toBe(2);
@@ -232,7 +215,7 @@ describe("main.ts HTTP Server", () => {
     });
 
     it("should return count only when count=true", async () => {
-      const response = await makeRequest(TEST_PORT, "/files?count=true");
+      const response = await makeRequest(TEST_PORT, "/files/?count=true");
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data).toHaveProperty("count");
@@ -243,7 +226,7 @@ describe("main.ts HTTP Server", () => {
     });
 
     it("should return count for subfolder when count=true", async () => {
-      const response = await makeRequest(TEST_PORT, "/files/subFolder?count=true");
+      const response = await makeRequest(TEST_PORT, "/files/subFolder/?count=true");
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data).toHaveProperty("count");
@@ -252,10 +235,40 @@ describe("main.ts HTTP Server", () => {
 
     it("should return count with custom filter when count=true", async () => {
       const filter = JSON.stringify({ relativePath: { regex: ".*\\.heic$" } });
-      const response = await makeRequest(TEST_PORT, `/files?filter=${encodeURIComponent(filter)}&count=true`);
+      const response = await makeRequest(TEST_PORT, `/files/?filter=${encodeURIComponent(filter)}&count=true`);
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data.count).toBe(2); // Both .heic files
+    });
+  });
+
+  describe("GET /files/{path} - individual file serving", () => {
+    it("should serve existing file (no trailing slash)", async () => {
+      const response = await makeRequest(TEST_PORT, "/files/sewing-threads.heic");
+      expect(response.status).toBe(200);
+      expect(response.headers["content-type"]).toContain("image/");
+      expect(response.body.length).toBeGreaterThan(0);
+    });
+
+    it("should return 404 for non-existent file", async () => {
+      const response = await makeRequest(TEST_PORT, "/files/nonexistent.jpg");
+      expect(response.status).toBe(404);
+      const data = JSON.parse(response.body);
+      expect(data.error).toBe("File not found");
+    });
+
+    it("should return 403 for path traversal attempts", async () => {
+      // Try to access a file outside the storage directory using ../ in the filename
+      const response = await makeRequest(TEST_PORT, "/files/..%2F..%2F..%2Fetc%2Fpasswd");
+      expect(response.status).toBe(403);
+      const data = JSON.parse(response.body);
+      expect(data.error).toBe("Access denied");
+    });
+
+    it("should serve file from subfolder", async () => {
+      const response = await makeRequest(TEST_PORT, "/files/subFolder/soundboard.heic");
+      expect(response.status).toBe(200);
+      expect(response.headers["content-type"]).toContain("image/");
     });
   });
 

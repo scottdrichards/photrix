@@ -1,12 +1,12 @@
 export interface ApiPhotoItem {
-  path: string;
-  metadata?: {
-    name?: string;
-    mimeType?: string | null;
-    dateTaken?: string | null;
-    dimensions?: { width: number; height: number };
-    [key: string]: unknown;
-  };
+  relativePath: string;
+  mimeType?: string | null;
+  dateTaken?: string | null;
+  dimensions?: { width: number; height: number };
+  sizeInBytes?: number;
+  created?: string;
+  modified?: string;
+  [key: string]: unknown;
 }
 
 export interface PhotoItem {
@@ -16,13 +16,19 @@ export interface PhotoItem {
   thumbnailUrl: string;
   previewUrl: string;
   fullUrl: string;
-  metadata?: ApiPhotoItem["metadata"];
+  metadata?: {
+    mimeType?: string | null;
+    dateTaken?: string | null;
+    dimensions?: { width: number; height: number };
+    [key: string]: unknown;
+  };
 }
 
 export interface ApiPhotoResponse {
   items: ApiPhotoItem[];
   total: number;
   page: number;
+  pageSize: number;
 }
 
 export interface FetchPhotosOptions {
@@ -42,8 +48,9 @@ export interface FetchPhotosResult {
 const DEFAULT_METADATA_KEYS = ["mimeType", "dimensions"] as const;
 
 const buildFileUrl = (path: string, params: Record<string, string>): string => {
-  const url = new URL("/api/file", window.location.origin);
-  url.searchParams.set("path", path);
+  // Use /files/{path} for individual file access (no trailing slash)
+  const url = new URL(`/files/${path}`, window.location.origin);
+  // Add any transformation params (for future use)
   Object.entries(params).forEach(([key, value]) => {
     url.searchParams.set(key, value);
   });
@@ -56,38 +63,42 @@ const buildFallbackUrl = (path: string): string => {
 };
 
 const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
-  const name = item.metadata?.name ?? item.path.split("/").pop() ?? item.path;
+  const name = item.relativePath.split("/").pop() ?? item.relativePath;
   const mediaType = inferMediaType(item);
-  const thumbnailUrl = buildFileUrl(item.path, {
+  const thumbnailUrl = buildFileUrl(item.relativePath, {
     representation: "resize",
     maxWidth: "480",
     maxHeight: "480",
   });
-  const previewUrl = buildFileUrl(item.path, {
+  const previewUrl = buildFileUrl(item.relativePath, {
     representation: "webSafe",
   });
   const fullUrl =
     mediaType === "video"
-      ? buildFileUrl(item.path, { representation: "original" })
+      ? buildFileUrl(item.relativePath, { representation: "original" })
       : previewUrl;
 
   return {
-    path: item.path,
+    path: item.relativePath,
     name,
     mediaType,
     thumbnailUrl,
     previewUrl,
     fullUrl,
-    metadata: item.metadata,
+    metadata: {
+      mimeType: item.mimeType,
+      dateTaken: item.dateTaken,
+      dimensions: item.dimensions,
+    },
   };
 };
 
 const inferMediaType = (item: ApiPhotoItem): "photo" | "video" => {
-  const mime = item.metadata?.mimeType ?? null;
+  const mime = item.mimeType ?? null;
   if (typeof mime === "string" && mime.toLowerCase().startsWith("video/")) {
     return "video";
   }
-  const lowerPath = item.path.toLowerCase();
+  const lowerPath = item.relativePath.toLowerCase();
   if (VIDEO_EXTENSIONS.some((ext) => lowerPath.endsWith(ext))) {
     return "video";
   }
@@ -107,7 +118,8 @@ export const fetchPhotos = async ({
   params.set("page", page.toString());
   params.set("pageSize", pageSize.toString());
 
-  const response = await fetch(`/api/files?${params.toString()}`, { signal });
+  // Use /files/ with trailing slash to query for multiple files
+  const response = await fetch(`/files/?${params.toString()}`, { signal });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch photos (status ${response.status})`);
@@ -118,7 +130,7 @@ export const fetchPhotos = async ({
     items: payload.items.map(createPhotoItem),
     total: payload.total,
     page: payload.page,
-    pageSize,
+    pageSize: payload.pageSize,
   };
 };
 

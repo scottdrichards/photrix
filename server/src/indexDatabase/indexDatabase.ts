@@ -99,7 +99,7 @@ export class IndexDatabase {
           return false;
         });
         if (!metadataGroupKey) {
-          throw new Error(`Requested metadata key "${String(m)}" is not recognized.`);
+          throw new Error(`Requested metadata key "${m}" is not recognized.`);
         }
 
         const groupName = metadataGroupKey[0] as keyof typeof MetadataGroupKeys;
@@ -130,10 +130,6 @@ export class IndexDatabase {
       });
     await Promise.all(promises);
     return this.entries.get(relativePath);
-  }
-
-  getFileCount(): number {
-    return this.entries.size;
   }
 
   files() {
