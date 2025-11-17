@@ -116,9 +116,17 @@ export class IndexDatabase {
           case "info":
             extraData = { info: await getFileInfo(fullPath) };
             break;
-          case "exifMetadata":
-            extraData = { exifMetadata: await getExifMetadataFromFile(fullPath) };
+          case "exifMetadata": {
+            // Only attempt EXIF parsing for media files
+            const mimeType = originalDBEntry?.mimeType || mimeTypeForFilename(relativePath);
+            if (mimeType?.startsWith("image/") || mimeType?.startsWith("video/")) {
+                extraData = { exifMetadata: await getExifMetadataFromFile(fullPath) };
+            } else {
+              // Non-media file, skip EXIF parsing
+              extraData = { exifMetadata: {} };
+            }
             break;
+          }
           case "aiMetadata":
           case "faceMetadata":
             // Not implemented yet
