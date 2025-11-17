@@ -26,8 +26,10 @@ export const filesRequestHandler = async (
 
       if (isQuery) {
         // QUERY MODE: Return list of files
+        console.log(`[filesRequest] Query mode: path="${relativePath}", params=${JSON.stringify(Object.fromEntries(searchParams))}`);
         await queryHandler(searchParams, relativePath, database, res);
       } else {
+        console.log(`[filesRequest] File mode: serving "${relativePath}"`);
         await fileHandler(relativePath, storageRoot, res);
       }
     } catch (error) {
@@ -92,6 +94,7 @@ const fileHandler = async (
   const mimeType = mimeTypeForFilename(relativePath) || "application/octet-stream";
 
   // Stream the file
+  console.log(`[filesRequest] Streaming file: ${relativePath} (${mimeType}, ${fileStats.size} bytes)`);
   res.writeHead(200, {
     "Content-Type": mimeType,
     "Content-Length": fileStats.size,
@@ -168,6 +171,7 @@ const queryHandler = async (
   };
 
   const result = await database.queryFiles(queryOptions);
+  console.log(`[filesRequest] Query completed: ${result.total} total files, returned ${countOnly ? 'count only' : `${result.items.length} items`}`);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify(countOnly ? { count: result.total } : result));
 };

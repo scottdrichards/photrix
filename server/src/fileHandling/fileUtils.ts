@@ -44,6 +44,7 @@ export const getExifMetadataFromFile = async (
     [key: string]: keyof ExifMetadata | `${keyof ExifMetadata}.${string}`;
   };
 
+  // Only read the specific fields we need - exifr will only parse those sections
   const rawData = await exifr.parse(fullPath, Object.keys(exifRMetadataToFileField));
 
   return Object.entries(exifRMetadataToFileField).reduce((acc, [key, value]) => {

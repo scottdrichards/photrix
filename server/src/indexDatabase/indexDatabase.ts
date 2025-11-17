@@ -120,9 +120,19 @@ export class IndexDatabase {
             // Only attempt EXIF parsing for media files
             const mimeType = originalDBEntry?.mimeType || mimeTypeForFilename(relativePath);
             if (mimeType?.startsWith("image/") || mimeType?.startsWith("video/")) {
+              try {
+                console.log(`[metadata] Reading EXIF for ${relativePath} (${mimeType})`);
+                const exifStart = Date.now();
                 extraData = { exifMetadata: await getExifMetadataFromFile(fullPath) };
+                console.log(`[metadata] EXIF read for ${relativePath} took ${Date.now() - exifStart}ms`);
+              } catch (error) {
+                // File format doesn't support EXIF or parsing failed
+                console.warn(`[metadata] Could not read EXIF metadata for ${relativePath}:`, error instanceof Error ? error.message : String(error));
+                extraData = { exifMetadata: {} };
+              }
             } else {
               // Non-media file, skip EXIF parsing
+              console.log(`[metadata] Skipping EXIF for non-media file ${relativePath} (${mimeType})`);;
               extraData = { exifMetadata: {} };
             }
             break;
@@ -166,16 +176,21 @@ export class IndexDatabase {
     options: QueryOptions,
   ): Promise<QueryResult<TMetadata>> {
     const { filter, metadata, pageSize = 1_000, page = 1 } = options;
+    console.log(`[query] Starting query: filter=${JSON.stringify(filter)}, metadata=${JSON.stringify(metadata)}, page=${page}, pageSize=${pageSize}`);
+    const startTime = Date.now();
 
     const allRecords = Array.from(
       this.files().filter((record) => matchesFilter(record, filter)),
     );
+    console.log(`[query] Filter matched ${allRecords.length} files`);
     const records = allRecords.filter(
       (r, index) => index >= (page - 1) * pageSize && index < page * pageSize,
     );
+    console.log(`[query] Returning page ${page}: ${records.length} items`);
 
     // Ensure required metadata is loaded for paginated items
     if (metadata.length) {
+      console.log(`[query] Hydrating metadata for ${records.length} files: ${metadata.join(', ')}`);
       await Promise.all(
         records.map((record) => this.hydrateMetadata(record.relativePath, metadata)),
       );
@@ -192,11 +207,14 @@ export class IndexDatabase {
       return item as { relativePath: string } & Pick<FileRecord, TMetadata[number]>;
     });
 
-    return {
+    const result = {
       items,
       page,
       pageSize,
       total: allRecords.length,
     } as QueryResult<TMetadata>;
+    const elapsed = Date.now() - startTime;
+    console.log(`[query] Completed in ${elapsed}ms: ${items.length} items with metadata`);
+    return result;
   }
 }

@@ -13,6 +13,7 @@ const PORT = process.env.PORT || 3000;
 
 export const createServer = (database: IndexDatabase, storagePath: string) => {
   const server = http.createServer((req, res) => {
+    console.log(`[server] ${req.method} ${req.url}`);
     // Enable CORS for client
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -44,7 +45,9 @@ export const createServer = (database: IndexDatabase, storagePath: string) => {
         // Remove trailing slash if present
         const cleanPath = subPath.endsWith("/") ? subPath.slice(0, -1) : subPath;
 
+        console.log(`[folders] Getting folders for path: "${cleanPath}"`);
         const folders = database.getFolders(cleanPath);
+        console.log(`[folders] Found ${folders.length} folders`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ folders }));
       } catch (error) {
