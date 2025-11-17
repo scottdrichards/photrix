@@ -238,7 +238,39 @@ describe("main.ts HTTP Server", () => {
       const response = await makeRequest(TEST_PORT, `/files/?filter=${encodeURIComponent(filter)}&count=true`);
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
-      expect(data.count).toBe(2); // Both .heic files
+      expect(data).toHaveProperty("count");
+      expect(data.count).toBe(2); // Should match 2 .heic files
+    });
+
+    it("should match files only in specified folder when includeSubfolders=false", async () => {
+      const response = await makeRequest(TEST_PORT, "/files/subFolder/");
+      expect(response.status).toBe(200);
+      const data = JSON.parse(response.body);
+      // Should only match files directly in subFolder, not in nested folders
+      const paths = data.items.map((item: { relativePath: string }) => item.relativePath);
+      expect(paths.every((p: string) => p.split("/").length === 2)).toBe(true);
+    });
+
+    it("should match files in folder and all subfolders when includeSubfolders=true", async () => {
+      const response = await makeRequest(TEST_PORT, "/files/subFolder/?includeSubfolders=true");
+      expect(response.status).toBe(200);
+      const data = JSON.parse(response.body);
+      // Should match files in subFolder and any nested folders
+      const paths = data.items.map((item: { relativePath: string }) => item.relativePath);
+      expect(paths.some((p: string) => p.split("/").length === 2)).toBe(true); // Has files directly in subFolder
+      // If there are nested folders with files, they should be included
+      expect(paths.every((p: string) => p.startsWith("subFolder/"))).toBe(true);
+    });
+
+    it("should return correct count with includeSubfolders=true", async () => {
+      const withoutSubfolders = await makeRequest(TEST_PORT, "/files/subFolder/?count=true");
+      const withSubfolders = await makeRequest(TEST_PORT, "/files/subFolder/?count=true&includeSubfolders=true");
+      expect(withoutSubfolders.status).toBe(200);
+      expect(withSubfolders.status).toBe(200);
+      const dataWithout = JSON.parse(withoutSubfolders.body);
+      const dataWith = JSON.parse(withSubfolders.body);
+      // Count with subfolders should be >= count without subfolders
+      expect(dataWith.count).toBeGreaterThanOrEqual(dataWithout.count);
     });
   });
 

@@ -124,6 +124,7 @@ const queryHandler = async (
   const pageSize = searchParams.get("pageSize");
   const page = searchParams.get("page");
   const countOnly = searchParams.get("count") === "true";
+  const includeSubfolders = searchParams.get("includeSubfolders") === "true";
 
   // Build filter
   let filter;
@@ -131,14 +132,24 @@ const queryHandler = async (
     // Use explicit filter from query string
     filter = JSON.parse(filterParam);
   } else if (relativePath) {
-    // Convert path to filter that matches files directly in this path only (no subfolders)
+    // Convert path to filter
     // Remove trailing slash if present
     const cleanPath = relativePath.endsWith("/") ? relativePath.slice(0, -1) : relativePath;
-    filter = {
-      relativePath: {
-        regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^/]+$`,
-      },
-    };
+    if (includeSubfolders) {
+      // Match files in this folder and all subfolders
+      filter = {
+        relativePath: {
+          regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`,
+        },
+      };
+    } else {
+      // Match files directly in this path only (no subfolders)
+      filter = {
+        relativePath: {
+          regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^/]+$`,
+        },
+      };
+    }
   } else {
     // Default: match files at root level only (no subfolders)
     filter = {

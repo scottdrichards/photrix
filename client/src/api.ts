@@ -35,6 +35,8 @@ export interface FetchPhotosOptions {
   page?: number;
   pageSize?: number;
   metadata?: ReadonlyArray<string>;
+  includeSubfolders?: boolean;
+  path?: string;
   signal?: AbortSignal;
 }
 
@@ -46,6 +48,18 @@ export interface FetchPhotosResult {
 }
 
 const DEFAULT_METADATA_KEYS = ["mimeType", "dimensions"] as const;
+
+export const fetchFolders = async (path: string = ""): Promise<string[]> => {
+  const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
+  const response = await fetch(`/folders/${normalizedPath}`);
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch folders (status ${response.status})`);
+  }
+  
+  const data = await response.json() as { folders: string[] };
+  return data.folders;
+};
 
 const buildFileUrl = (path: string, params: Record<string, string>): string => {
   // Use /files/{path} for individual file access (no trailing slash)
@@ -111,15 +125,21 @@ export const fetchPhotos = async ({
   page = 1,
   pageSize = 200,
   metadata = DEFAULT_METADATA_KEYS,
+  includeSubfolders = false,
+  path = "",
   signal,
 }: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
   const params = new URLSearchParams();
   params.set("metadata", Array.from(metadata).join(","));
   params.set("page", page.toString());
   params.set("pageSize", pageSize.toString());
+  if (includeSubfolders) {
+    params.set("includeSubfolders", "true");
+  }
 
   // Use /files/ with trailing slash to query for multiple files
-  const response = await fetch(`/files/?${params.toString()}`, { signal });
+  const url = path ? `/files/${path}?${params.toString()}` : `/files/?${params.toString()}`;
+  const response = await fetch(url, { signal });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch photos (status ${response.status})`);
