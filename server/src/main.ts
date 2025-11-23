@@ -13,7 +13,19 @@ const PORT = process.env.PORT || 3000;
 
 export const createServer = (database: IndexDatabase, storagePath: string) => {
   const server = http.createServer((req, res) => {
+    const requestStart = Date.now();
     console.log(`[server] ${req.method} ${req.url}`);
+    
+    // Intercept res.end to log timing
+    const originalEnd = res.end.bind(res);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    res.end = function(...args: any[]) {
+      const elapsed = Date.now() - requestStart;
+      console.log(`[server] ${req.method} ${req.url} completed in ${elapsed}ms (status: ${res.statusCode})`);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+      return originalEnd(...args);
+    } as typeof res.end;
+    
     // Enable CORS for client
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
