@@ -195,7 +195,9 @@ export class IndexDatabase {
     }
 
     // Build result items - get fresh data after hydration
-    const items = records.map((record) => {
+    const items: Array<{ relativePath: string } & Pick<FileRecord, TMetadata[number]>> = [];
+    for (let i = 0; i < records.length; i++) {
+      const record = records[i];
       const freshRecord = this.entries.get(record.relativePath)!;
       const item: Record<string, unknown> = { relativePath: freshRecord.relativePath };
       if (metadata) {
@@ -203,8 +205,11 @@ export class IndexDatabase {
           item[key as string] = freshRecord[key as keyof DatabaseFileEntry];
         }
       }
-      return item as { relativePath: string } & Pick<FileRecord, TMetadata[number]>;
-    });
+      if (i % 10_000 === 0 && i > 0) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      items.push(item as { relativePath: string } & Pick<FileRecord, TMetadata[number]>);
+    }
 
     const result = {
       items,
