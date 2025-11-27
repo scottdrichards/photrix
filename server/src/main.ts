@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { realpath, stat } from "node:fs/promises";
+import { realpath, stat, readFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { FileScanner } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "./indexDatabase/indexDatabase.type.ts";
 import { mimeTypeForFilename } from "./fileHandling/mimeTypes.ts";
+import convert from "heic-convert";
 
 const PORT = process.env.PORT || 3000;
 
@@ -199,6 +200,33 @@ export const createServer = (database: IndexDatabase, storagePath: string) => {
 
             // Determine content type
             const mimeType = mimeTypeForFilename(subPath) || "application/octet-stream";
+            const representation = url.searchParams.get("representation");
+
+            // Convert HEIC/HEIF to JPEG if webSafe representation is requested
+            if (representation === "webSafe" && (mimeType === "image/heic" || mimeType === "image/heif")) {
+              try {
+                console.log(`[filesRequest] Converting HEIC/HEIF to JPEG: ${subPath}`);
+                const inputBuffer = await readFile(normalizedPath);
+                const outputBuffer = await convert({
+                  buffer: inputBuffer as unknown as ArrayBufferLike,
+                  format: "JPEG",
+                  quality: 0.9,
+                });
+
+                const outputBufferNode = Buffer.from(outputBuffer);
+                res.writeHead(200, {
+                  "Content-Type": "image/jpeg",
+                  "Content-Length": outputBufferNode.length,
+                  "Cache-Control": "public, max-age=31536000",
+                });
+                res.end(outputBufferNode);
+                console.log(`[filesRequest] HEIC converted successfully: ${subPath} (${outputBufferNode.length} bytes)`);
+                return;
+              } catch (error) {
+                console.error(`Error converting HEIC/HEIF file: ${subPath}`, error);
+                // Fall through to stream the original file if conversion fails
+              }
+            }
 
             // Stream the file
             res.writeHead(200, {
