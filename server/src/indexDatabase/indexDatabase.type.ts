@@ -45,6 +45,7 @@ export type QueryOptions = {
     filter: FilterElement;
     metadata: Array<keyof FileRecord>;
     pageSize?: number;
+    /** 1-indexed */
     page?: number;
 };
 

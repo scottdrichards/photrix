@@ -146,7 +146,7 @@ export class IndexDatabase {
     });
     
     await Promise.all(promises);
-    return structuredClone(this.entries.get(relativePath)) as FileRecord;
+    return this.entries.get(relativePath) as FileRecord;
   }
 
   files(): IterableIterator<FileRecord> {
@@ -179,46 +179,37 @@ export class IndexDatabase {
     console.log(`[query] Starting query: filter=${JSON.stringify(filter)}, metadata=${JSON.stringify(metadata)}, page=${page}, pageSize=${pageSize}`);
     const startTime = Date.now();
 
-    const allRecords = Array.from(this.files()).filter((record) => matchesFilter(record, filter));
-    console.log(`[query] Filter matched ${allRecords.length} files`);
-    const records = allRecords.filter(
-      (r, index) => index >= (page - 1) * pageSize && index < page * pageSize,
-    );
-    console.log(`[query] Returning page ${page}: ${records.length} items`);
-
-    // Ensure required metadata is loaded for paginated items
-    if (metadata.length) {
-      console.log(`[query] Hydrating metadata for ${records.length} files: ${metadata.join(', ')}`);
-      await Promise.all(
-        records.map((record) => this.hydrateMetadata(record.relativePath, metadata)),
-      );
-    }
-
-    // Build result items - get fresh data after hydration
-    const items: Array<{ relativePath: string } & Pick<FileRecord, TMetadata[number]>> = [];
-    for (let i = 0; i < records.length; i++) {
-      const record = records[i];
-      const freshRecord = this.entries.get(record.relativePath)!;
-      const item: Record<string, unknown> = { relativePath: freshRecord.relativePath };
-      if (metadata) {
-        for (const key of metadata) {
-          item[key as string] = freshRecord[key as keyof DatabaseFileEntry];
-        }
-      }
-      if (i % 10_000 === 0 && i > 0) {
+    let lastYield = startTime;
+    let matches = 0;
+    const hydrationPromises = [];
+    for (const file of this.files()){
+      if (Date.now() - lastYield > 100) {
         await new Promise((resolve) => setImmediate(resolve));
+        lastYield = Date.now();
       }
-      items.push(item as { relativePath: string } & Pick<FileRecord, TMetadata[number]>);
+      if (!matchesFilter(file, filter)) {
+        continue;
+      }
+      matches ++;
+      const isEarlierPage = matches < (page-1) * pageSize;
+      if (isEarlierPage){
+        continue;
+      }
+      hydrationPromises.push(this.hydrateMetadata(file.relativePath, metadata));
+      const lastOfPage = matches === (page * pageSize) - 1;
+      if (lastOfPage){
+        // break;
+      }
     }
 
     const result = {
-      items,
+      items: await Promise.all(hydrationPromises) as Array<{ relativePath: string } & Pick<FileRecord, TMetadata[number]>>,
       page,
       pageSize,
-      total: allRecords.length,
+      total: matches,
     } as QueryResult<TMetadata>;
     const elapsed = Date.now() - startTime;
-    console.log(`[query] Completed in ${elapsed}ms: ${items.length} items with metadata`);
+    console.log(`[query] Completed in ${elapsed}ms: ${result.total} items with metadata`);
     return result;
   }
 }
