@@ -1,7 +1,6 @@
 import {
   Spinner,
   makeStyles,
-  shorthands,
   tokens,
 } from "@fluentui/react-components";
 import { PlayCircle24Regular } from "@fluentui/react-icons";
@@ -22,11 +21,11 @@ const useStyles = makeStyles({
     alignItems: "stretch",
     gap: tokens.spacingHorizontalM,
     paddingBlockEnd: tokens.spacingHorizontalXXL,
-    "--thumbnail-size": "clamp(50px, 10vw, 260px)",
+    "--thumbnail-size": "clamp(150px, 20vw, 260px)",
   },
   tile: {
-    ...shorthands.borderRadius(tokens.borderRadiusMedium),
-    ...shorthands.overflow("hidden"),
+    borderRadius:tokens.borderRadiusMedium,
+    overflow:"hidden",
     display: "flex",
     flexDirection: "column",
     justifyContent: "flex-start",
