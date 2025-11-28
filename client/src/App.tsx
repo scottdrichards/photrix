@@ -18,8 +18,6 @@ import { FullscreenViewer } from "./components/FullscreenViewer";
 
 const useStyles = makeStyles({
   app: {
-    maxWidth: "1200px",
-    margin: "0 auto",
     padding: tokens.spacingHorizontalXL,
     display: "flex",
     flexDirection: "column",

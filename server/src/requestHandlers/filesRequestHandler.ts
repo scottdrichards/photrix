@@ -180,7 +180,9 @@ const fileHandler = async (
     representation === "webSafe" &&
     (mimeType === "image/heic" || mimeType === "image/heif");
 
-  if (needsFormatChange || needsResize) {
+  const isImage = mimeType.startsWith("image/");
+
+  if ((needsFormatChange || needsResize) && isImage) {
     try {
       console.log(`[filesRequest] Requesting ${height} image for: ${subPath}`);
 
