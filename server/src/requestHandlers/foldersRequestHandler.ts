@@ -13,8 +13,8 @@ export const foldersRequestHandler = async (
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
-    // Extract path after /folders/ and decode URL escape characters
-    const pathMatch = url.pathname.match(/^\/folders\/(.+)/);
+    // Extract path after /api/folders/ and decode URL escape characters
+    const pathMatch = url.pathname.match(/^\/api\/folders\/(.+)/);
     const subPath = pathMatch ? decodeURIComponent(pathMatch[1]) : "";
 
     // Remove trailing slash if present

@@ -20,12 +20,12 @@ export const filesRequestHandler = async (
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
-    // Extract path after /files/ and decode URL escape characters
-    const pathMatch = url.pathname.match(/^\/files\/(.+)/);
+    // Extract path after /api/files/ and decode URL escape characters
+    const pathMatch = url.pathname.match(/^\/api\/files\/(.+)/);
     const subPath = pathMatch ? decodeURIComponent(pathMatch[1]) : null;
 
     // Determine if this is a query (ends with /) or file request (no trailing slash)
-    // Query mode REQUIRES trailing slash (e.g., /files/ or /files/subfolder/)
+    // Query mode REQUIRES trailing slash (e.g., /api/files/ or /api/files/subfolder/)
     const isQuery = !subPath || subPath.endsWith("/");
 
     if (isQuery) {

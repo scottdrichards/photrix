@@ -51,7 +51,7 @@ const DEFAULT_METADATA_KEYS = ["mimeType", "dimensions"] as const;
 
 export const fetchFolders = async (path: string = ""): Promise<string[]> => {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
-  const response = await fetch(`/folders/${normalizedPath}`);
+  const response = await fetch(`/api/folders/${normalizedPath}`);
   
   if (!response.ok) {
     throw new Error(`Failed to fetch folders (status ${response.status})`);
@@ -62,8 +62,8 @@ export const fetchFolders = async (path: string = ""): Promise<string[]> => {
 };
 
 const buildFileUrl = (path: string, params: Record<string, string>): string => {
-  // Use /files/{path} for individual file access (no trailing slash)
-  const url = new URL(`/files/${path}`, window.location.origin);
+  // Use /api/files/{path} for individual file access (no trailing slash)
+  const url = new URL(`/api/files/${path}`, window.location.origin);
   // Add any transformation params (for future use)
   Object.entries(params).forEach(([key, value]) => {
     url.searchParams.set(key, value);
@@ -72,7 +72,7 @@ const buildFileUrl = (path: string, params: Record<string, string>): string => {
 };
 
 const buildFallbackUrl = (path: string): string => {
-  const url = new URL(`/uploads/${path}`, window.location.origin);
+  const url = new URL(`/api/uploads/${path}`, window.location.origin);
   return url.toString();
 };
 
@@ -137,8 +137,8 @@ export const fetchPhotos = async ({
     params.set("includeSubfolders", "true");
   }
 
-  // Use /files/ with trailing slash to query for multiple files
-  const url = path ? `/files/${path}?${params.toString()}` : `/files/?${params.toString()}`;
+  // Use /api/files/ with trailing slash to query for multiple files
+  const url = path ? `/api/files/${path}?${params.toString()}` : `/api/files/?${params.toString()}`;
   const response = await fetch(url, { signal });
 
   if (!response.ok) {

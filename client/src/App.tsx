@@ -85,14 +85,15 @@ export default function App() {
     return params.get("includeSubfolders") === "true";
   });
   const [currentPath, setCurrentPath] = useState<string>(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get("path") || "";
+    const path = window.location.pathname.slice(1); // Remove leading slash
+    return decodeURIComponent(path);
   });
   const [folders, setFolders] = useState<string[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
 
-  const loadInitial = useCallback(async (signal: AbortSignal) => {
+  const loadPhotos = useCallback(async (signal: AbortSignal) => {
     setInitialLoading(true);
+    setPhotos([]);
     setError(null);
     try {
       const path = currentPath ? `${currentPath}/` : "";
@@ -120,21 +121,28 @@ export default function App() {
   // Sync URL with state
   useEffect(() => {
     const params = new URLSearchParams();
-    if (currentPath) {
-      params.set("path", currentPath);
-    }
     if (includeSubfolders) {
       params.set("includeSubfolders", "true");
     }
-    const newUrl = params.toString() ? `?${params.toString()}` : window.location.pathname;
-    window.history.replaceState(null, "", newUrl);
+
+    const currentPathname = window.location.pathname.slice(1); // Remove leading slash
+    const currentInclude = new URLSearchParams(window.location.search).get("includeSubfolders") === "true";
+
+    // Decode currentPathname to compare with currentPath (which is likely unencoded in state)
+    if (decodeURIComponent(currentPathname) !== currentPath || currentInclude !== includeSubfolders) {
+      const queryString = params.toString() ? `?${params.toString()}` : "";
+      // Encode the path segments
+      const encodedPath = currentPath.split('/').map(encodeURIComponent).join('/');
+      const newUrl = `/${encodedPath}${queryString}`;
+      window.history.pushState(null, "", newUrl);
+    }
   }, [currentPath, includeSubfolders]);
 
   useEffect(() => {
     const controller = new AbortController();
-    loadInitial(controller.signal);
+    loadPhotos(controller.signal);
     return () => controller.abort();
-  }, [loadInitial, refreshToken]);
+  }, [loadPhotos, refreshToken]);
 
   useEffect(() => {
     const loadFolders = async () => {
@@ -155,7 +163,7 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       const params = new URLSearchParams(window.location.search);
-      setCurrentPath(params.get("path") || "");
+      setCurrentPath(decodeURIComponent(window.location.pathname.slice(1)));
       setIncludeSubfolders(params.get("includeSubfolders") === "true");
     };
     window.addEventListener("popstate", handlePopState);

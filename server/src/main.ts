@@ -39,21 +39,21 @@ export const createServer = (database: IndexDatabase, storagePath: string) => {
     }
 
     // Basic health check endpoint
-    if (req.url === "/health" && req.method === "GET") {
+    if (req.url === "/api/health" && req.method === "GET") {
       healthRequestHandler(req, res);
       return;
     }
 
     // Get folders endpoint - list subfolders at a given path
-    if (req.url?.startsWith("/folders") && req.method === "GET") {
+    if (req.url?.startsWith("/api/folders") && req.method === "GET") {
       foldersRequestHandler(req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>, res, { database });
       return;
     }
 
     // Files endpoint - serves individual files or queries for multiple files
-    // Query mode REQUIRES trailing slash: /files/ or /files/subfolder/
-    // File serving has NO trailing slash: /files/image.jpg
-    if (req.url?.startsWith("/files/") && req.method === "GET") {
+    // Query mode REQUIRES trailing slash: /api/files/ or /api/files/subfolder/
+    // File serving has NO trailing slash: /api/files/image.jpg
+    if (req.url?.startsWith("/api/files/") && req.method === "GET") {
       filesRequestHandler(req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>, res, {
         database,
         storageRoot: storagePath,
