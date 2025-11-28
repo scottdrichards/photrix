@@ -4,15 +4,18 @@ import { existsSync, mkdirSync } from "fs";
 import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
-export const standardDimensions = [
-  300, //thumbnail
-  2048, //large
-  'original', //original
+export const standardHeights = [
+  160,
+  320,
+  640,
+  1080,
+  2160,
+  'original',
  ] as const;
 
-export type ImageSize = typeof standardDimensions[number];
+export type StandardHeights = typeof standardHeights[number];
 
-const cacheDir = join(process.cwd(), ".cache", "photrix");
+const cacheDir = join(process.cwd(), ".cache");
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 const pythonPath = "python";
 
@@ -25,13 +28,13 @@ console.log(`[ImageCache] Initialized at ${cacheDir}`);
 const getHash = (filePath: string): string =>
   createHash("md5").update(filePath).digest("hex");
 
-const getCachedFilePath = (hash: string, size: ImageSize) =>
-  join(cacheDir, `${hash}.${size}.jpeg`);
+const getCachedFilePath = (hash: string, height: StandardHeights) =>
+  join(cacheDir, `${hash}.${height}.jpeg`);
 
 const generateImage = async (
   inputPath: string,
   outputPath: string,
-  size: ImageSize,
+  height: StandardHeights,
 ): Promise<void> =>
   new Promise((resolve, reject) => {
     const args = [
@@ -40,8 +43,8 @@ const generateImage = async (
       outputPath,
     ];
 
-    if (size !== 'original') {
-      args.push(`--max_dimension`, `${size}`);
+    if (height !== 'original') {
+      args.push(`--max_dimension`, `${height}`);
     }
 
     const process = spawn(pythonPath, args);
@@ -67,19 +70,19 @@ const generateImage = async (
     });
   });
 
-/** Converts an image to the specified size and caches the result. Returning the cached file path. */
+/** Converts an image to the specified height and caches the result. Returning the cached file path. */
 export const convertImage = async (
   filePath: string,
-  size: ImageSize,
+  height: StandardHeights = 2160,
 ): Promise<string> => {
   const hash = getHash(filePath);
-  const cachedPath = getCachedFilePath(hash, size);
+  const cachedPath = getCachedFilePath(hash, height);
 
   if (existsSync(cachedPath)) {
     return cachedPath;
   }
 
-  console.log(`[ImageCache] Generating ${size} for ${filePath}`);
-  await generateImage(filePath, cachedPath, size);
+  console.log(`[ImageCache] Generating ${height} for ${filePath}`);
+  await generateImage(filePath, cachedPath, height);
   return cachedPath;
 };

@@ -5,7 +5,7 @@ import { stat } from "fs/promises";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { createReadStream } from "fs";
 import path from "path/win32";
-import { convertImage, ImageSize } from "../imageProcessing/convertImage.ts";
+import { convertImage, StandardHeights, standardHeights } from "../imageProcessing/convertImage.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -168,30 +168,23 @@ const fileHandler = async (
   // Determine content type
   const mimeType = mimeTypeForFilename(subPath) || "application/octet-stream";
   const representation = url.searchParams.get("representation");
+  const heightParam = url.searchParams.get("height");
 
-  const apiSizeMappings = {
-    thumb: 300,
-    full: 2048,
-    original: "original",
-  } as const satisfies Record<string, ImageSize>;
-
-  const sizeKey = url.searchParams.get("size") ?? "full";
-  if (!Object.keys(apiSizeMappings).includes(sizeKey)) {
-    throw new Error(`Invalid size parameter: ${sizeKey}`);
+  const height = heightParam ? parseInt(heightParam, 10) as StandardHeights : "original";
+  if (!standardHeights.includes(height)) {
+    throw new Error(`Invalid height parameter: ${heightParam}. Allowed: ${standardHeights.join(", ")}`);
   }
 
-  const size = apiSizeMappings[sizeKey as keyof typeof apiSizeMappings];
-
-  const needsResize = size !== "original";
+  const needsResize = height !== "original";
   const needsFormatChange =
     representation === "webSafe" &&
     (mimeType === "image/heic" || mimeType === "image/heif");
 
   if (needsFormatChange || needsResize) {
     try {
-      console.log(`[filesRequest] Requesting ${size} image for: ${subPath}`);
+      console.log(`[filesRequest] Requesting ${height} image for: ${subPath}`);
 
-      const cachedPath = await convertImage(normalizedPath, size);
+      const cachedPath = await convertImage(normalizedPath, height);
       const cachedStats = await stat(cachedPath);
 
       res.writeHead(200, {

@@ -80,12 +80,12 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
   const name = item.relativePath.split("/").pop() ?? item.relativePath;
   const mediaType = inferMediaType(item);
   const thumbnailUrl = buildFileUrl(item.relativePath, {
-    representation: "resize",
-    maxWidth: "480",
-    maxHeight: "480",
+    representation: "webSafe",
+    height: "320",
   });
   const previewUrl = buildFileUrl(item.relativePath, {
     representation: "webSafe",
+    height: "2160",
   });
   const fullUrl =
     mediaType === "video"
