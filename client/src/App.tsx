@@ -219,6 +219,22 @@ export default function App() {
     return `${total} ${label}`;
   }, [initialLoading, error, total]);
 
+  const handleNext = useCallback(() => {
+    if (!selected) return;
+    const index = photos.findIndex((p) => p.path === selected.path);
+    if (index !== -1 && index < photos.length - 1) {
+      setSelected(photos[index + 1]);
+    }
+  }, [selected, photos]);
+
+  const handlePrevious = useCallback(() => {
+    if (!selected) return;
+    const index = photos.findIndex((p) => p.path === selected.path);
+    if (index > 0) {
+      setSelected(photos[index - 1]);
+    }
+  }, [selected, photos]);
+
   return (
     <div className={styles.app}>
       <header className={styles.header}>
@@ -307,7 +323,12 @@ export default function App() {
         loadingMore={loadingMore}
       />
 
-      <FullscreenViewer photo={selected} onDismiss={() => setSelected(null)} />
+      <FullscreenViewer
+        photo={selected}
+        onDismiss={() => setSelected(null)}
+        onNext={handleNext}
+        onPrevious={handlePrevious}
+      />
     </div>
   );
 }
