@@ -193,10 +193,10 @@ export class IndexDatabase {
       matches ++;
       
       // Calculate pagination bounds (1-based matches index)
-      const startMatch = (page - 1) * pageSize + 1;
+      const startMatch = (page - 1) * pageSize;
       const endMatch = page * pageSize;
 
-      if (matches >= startMatch && matches <= endMatch) {
+      if (matches >= startMatch && matches < endMatch) {
         hydrationPromises.push(this.hydrateMetadata(file.relativePath, metadata));
       }
     }

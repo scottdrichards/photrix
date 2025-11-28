@@ -25,6 +25,8 @@ export const getExifMetadataFromFile = async (
     DateTimeOriginal: "dateTaken",
     ImageWidth: "dimensions.width",
     ImageHeight: "dimensions.height",
+    ExifImageWidth: "dimensions.width",
+    ExifImageHeight: "dimensions.height",
     GPSLatitude: "location.latitude",
     GPSLongitude: "location.longitude",
     Make: "cameraMake",
@@ -46,8 +48,7 @@ export const getExifMetadataFromFile = async (
   };
 
   // Only read the specific fields we need - exifr will only parse those sections
-  // We also need Orientation to correctly determine dimensions
-  const fieldsToRequest = [...Object.keys(exifRMetadataToFileField), "Orientation"];
+  const fieldsToRequest = Object.keys(exifRMetadataToFileField);
   const rawData = await exifr.parse(fullPath, {
     pick: fieldsToRequest,
     translateValues: false,
@@ -57,6 +58,10 @@ export const getExifMetadataFromFile = async (
     const [mainKey, subkey] = value.split(".") as [keyof ExifMetadata, string?];
 
     const rawValue = rawData?.[key as keyof typeof rawData];
+
+    if (rawValue === undefined) {
+      return acc;
+    }
 
     if (subkey) {
       // Handle nested properties like 'dimensions.width'
