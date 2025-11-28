@@ -1,6 +1,6 @@
 import sys
 import argparse
-from PIL import Image
+from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 import os
 
@@ -14,6 +14,9 @@ def process_image(input_path, output_path, max_dimension=None):
             sys.exit(1)
 
         with Image.open(input_path) as img:
+            # Apply EXIF rotation
+            img = ImageOps.exif_transpose(img)
+
             # Convert to RGB (remove alpha channel if present, needed for JPEG)
             if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
                 img = img.convert('RGB')
