@@ -70,35 +70,27 @@ export function FullscreenViewer({
     const dialog = dialogRef.current;
     if (!dialog) return;
 
-    if (photo) {
-      if (!dialog.open) {
-        dialog.showModal();
-      }
-    } else {
-      if (dialog.open) {
-        dialog.close();
-      }
+    if (photo && !dialog.open) {
+      dialog.showModal();
+    } else if (!photo && dialog.open) {
+      dialog.close();
     }
+    
   }, [photo]);
 
   useEffect(() => {
     if (!photo) return;
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case "ArrowRight":
-          onNext?.();
-          break;
-        case "ArrowLeft":
-          onPrevious?.();
-          break;
-        case "Escape":
-          onDismiss();
-          break;
-      }
-    };
+    const operations = {
+      ArrowRight: onNext,
+      ArrowLeft: onPrevious,
+      Escape: onDismiss,
+    } as const satisfies Record<KeyboardEvent["key"], (() => void) | undefined>;
+
+    const handleKeyDown = (e: KeyboardEvent) => operations[e.key as keyof typeof operations]?.();
 
     window.addEventListener("keydown", handleKeyDown);
+    
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [photo, onNext, onPrevious, onDismiss]);
 
