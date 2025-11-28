@@ -118,21 +118,15 @@ export function FullscreenViewer({
     }
   };
 
-  const handleDialogCancel = (e: React.SyntheticEvent<HTMLDialogElement>) => {
-    e.preventDefault();
-    onDismiss();
-  };
-
   return (
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
     <dialog
       ref={dialogRef}
       className={styles.dialog}
       onClose={handleClose}
       onClick={handleBackdropClick}
-      onCancel={handleDialogCancel}
-      aria-modal="true"
-      aria-labelledby="fullscreen-viewer-title"
     >
+      {photo && (
         // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
         <div className={styles.container} onClick={handleContainerClick}>
           <Button
