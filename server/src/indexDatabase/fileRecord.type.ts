@@ -27,6 +27,7 @@ export type ExifMetadata = {
   audioCodec?: string;
   rating?: number;
   tags?: string[];
+  orientation?: number;
 };
 
 export type AIMetadata = {
@@ -81,6 +82,7 @@ export const MetadataGroupKeys = {
     "audioCodec",
     "rating",
     "tags",
+    "orientation"
   ],
   aiMetadata: ["aiDescription", "aiTags"],
   faceMetadata: ["faceTags"],

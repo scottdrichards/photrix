@@ -2,9 +2,9 @@ import { convertImage } from "./convertImage.ts";
 import { describe, expect, it } from '@jest/globals';
 import * as fs from "fs";
 import * as path from "path";
-import sizeOf from "image-size";
 import { fileURLToPath } from "url";
 import { createHash } from "crypto";
+import sharp from "sharp";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,10 +34,10 @@ describe("convertImage", () => {
     
     expect(fs.existsSync(outputPath)).toBe(true);
     
-    const dimensions = sizeOf(outputPath);
+    const metadata = await sharp(outputPath).metadata();
     
-    expect(dimensions.type).toBe('jpg');
+    expect(metadata.format).toBe('jpeg');
     // Verify max dimension is close to 320 (resizing might have slight rounding, but usually exact for max dim)
-    expect(Math.max(dimensions.width!, dimensions.height!)).toBe(320);
+    expect(Math.max(metadata.width!, metadata.height!)).toBe(320);
   }, 30000); // Increase timeout for image processing
 });

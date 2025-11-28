@@ -40,14 +40,20 @@ export const getExifMetadataFromFile = async (
     AudioCodec: "audioCodec",
     Rating: "rating",
     Keywords: "tags",
+    Orientation: "orientation",
   } as const satisfies {
     [key: string]: keyof ExifMetadata | `${keyof ExifMetadata}.${string}`;
   };
 
   // Only read the specific fields we need - exifr will only parse those sections
-  const rawData = await exifr.parse(fullPath, Object.keys(exifRMetadataToFileField));
+  // We also need Orientation to correctly determine dimensions
+  const fieldsToRequest = [...Object.keys(exifRMetadataToFileField), "Orientation"];
+  const rawData = await exifr.parse(fullPath, {
+    pick: fieldsToRequest,
+    translateValues: false,
+  });
 
-  return Object.entries(exifRMetadataToFileField).reduce((acc, [key, value]) => {
+  const metadata = Object.entries(exifRMetadataToFileField).reduce((acc, [key, value]) => {
     const [mainKey, subkey] = value.split(".") as [keyof ExifMetadata, string?];
 
     const rawValue = rawData?.[key as keyof typeof rawData];
@@ -69,6 +75,14 @@ export const getExifMetadataFromFile = async (
       [mainKey]: rawValue,
     };
   }, {} as ExifMetadata);
+
+  // Orientation 5-8 means the image is rotated 90 or 270 degrees, so width and height are swapped
+  if (metadata.dimensions && [5, 6, 7, 8].includes(rawData?.Orientation)) {
+      const { width, height } = metadata.dimensions;
+      metadata.dimensions = { width: height, height: width };
+  }
+
+  return metadata;
 };
 
 export const getAIMetadataFromFile = async (_fullPath: string): Promise<AIMetadata> => {
