@@ -49,3 +49,8 @@ Thumbs.db
 
 # DB
 data-index.json
+
+# Cache
+.cache/
+**/.cache/
+

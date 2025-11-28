@@ -1,11 +1,11 @@
 import * as http from "http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { QueryOptions } from "../indexDatabase/indexDatabase.type.ts";
-import { stat, readFile } from "fs/promises";
+import { stat } from "fs/promises";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { createReadStream } from "fs";
 import path from "path/win32";
-import convert from "heic-convert";
+import { convertImage, ImageSize } from "../imageProcessing/convertImage.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -169,28 +169,42 @@ const fileHandler = async (
   const mimeType = mimeTypeForFilename(subPath) || "application/octet-stream";
   const representation = url.searchParams.get("representation");
 
-  // Convert HEIC/HEIF to JPEG if webSafe representation is requested
-  if (representation === "webSafe" && (mimeType === "image/heic" || mimeType === "image/heif")) {
-    try {
-      console.log(`[filesRequest] Converting HEIC/HEIF to JPEG: ${subPath}`);
-      const inputBuffer = await readFile(normalizedPath);
-      const outputBuffer = await convert({
-        buffer: inputBuffer as unknown as ArrayBufferLike,
-        format: "JPEG",
-        quality: 0.9,
-      });
+  const apiSizeMappings = {
+    thumb: 300,
+    full: 2048,
+    original: "original",
+  } as const satisfies Record<string, ImageSize>;
 
-      const outputBufferNode = Buffer.from(outputBuffer);
+  const sizeKey = url.searchParams.get("size") ?? "full";
+  if (!Object.keys(apiSizeMappings).includes(sizeKey)) {
+    throw new Error(`Invalid size parameter: ${sizeKey}`);
+  }
+
+  const size = apiSizeMappings[sizeKey as keyof typeof apiSizeMappings];
+
+  const needsResize = size !== "original";
+  const needsFormatChange =
+    representation === "webSafe" &&
+    (mimeType === "image/heic" || mimeType === "image/heif");
+
+  if (needsFormatChange || needsResize) {
+    try {
+      console.log(`[filesRequest] Requesting ${size} image for: ${subPath}`);
+
+      const cachedPath = await convertImage(normalizedPath, size);
+      const cachedStats = await stat(cachedPath);
+
       res.writeHead(200, {
         "Content-Type": "image/jpeg",
-        "Content-Length": outputBufferNode.length,
+        "Content-Length": cachedStats.size,
         "Cache-Control": "public, max-age=31536000",
       });
-      res.end(outputBufferNode);
-      console.log(`[filesRequest] HEIC converted successfully: ${subPath} (${outputBufferNode.length} bytes)`);
+
+      const fileStream = createReadStream(cachedPath);
+      fileStream.pipe(res);
       return;
     } catch (error) {
-      console.error(`Error converting HEIC/HEIF file: ${subPath}`, error);
+      console.error(`Error generating image for: ${subPath}`, error);
       // Fall through to stream the original file if conversion fails
     }
   }
