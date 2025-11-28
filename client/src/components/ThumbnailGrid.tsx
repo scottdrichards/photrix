@@ -35,7 +35,7 @@ const useStyles = makeStyles({
     flexBasis: "calc(var(--thumbnail-size) * var(--ratio))",
     flexGrow: "var(--ratio)",
     flexShrink: 1,
-    maxWidth: "100%",
+    maxWidth: "min(100%, calc(var(--thumbnail-size) * var(--ratio) * 1.5))",
     transitionProperty: "transform, box-shadow",
     transitionDuration: tokens.durationUltraFast,
     transitionTimingFunction: tokens.curveAccelerateMid,
