@@ -191,14 +191,13 @@ export class IndexDatabase {
         continue;
       }
       matches ++;
-      const isEarlierPage = matches < (page-1) * pageSize;
-      if (isEarlierPage){
-        continue;
-      }
-      hydrationPromises.push(this.hydrateMetadata(file.relativePath, metadata));
-      const lastOfPage = matches === (page * pageSize) - 1;
-      if (lastOfPage){
-        // break;
+      
+      // Calculate pagination bounds (1-based matches index)
+      const startMatch = (page - 1) * pageSize + 1;
+      const endMatch = page * pageSize;
+
+      if (matches >= startMatch && matches <= endMatch) {
+        hydrationPromises.push(this.hydrateMetadata(file.relativePath, metadata));
       }
     }
 
