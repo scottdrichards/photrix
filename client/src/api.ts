@@ -48,7 +48,32 @@ export interface FetchPhotosResult {
   pageSize: number;
 }
 
+export interface QueueStatus {
+  length: number;
+  active: number;
+  total: number;
+}
+
+export interface ServerStatus {
+  databaseSize: number;
+  queues: {
+    info: QueueStatus;
+    exifMetadata: QueueStatus;
+    aiMetadata: QueueStatus;
+    faceMetadata: QueueStatus;
+  };
+  scannedFilesCount: number;
+}
+
 const DEFAULT_METADATA_KEYS = ["mimeType", "dimensions"] as const;
+
+export const fetchStatus = async (): Promise<ServerStatus> => {
+  const response = await fetch("/api/status");
+  if (!response.ok) {
+    throw new Error(`Failed to fetch status (status ${response.status})`);
+  }
+  return await response.json();
+};
 
 export const fetchFolders = async (path: string = ""): Promise<string[]> => {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;

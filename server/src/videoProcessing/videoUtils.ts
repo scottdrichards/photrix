@@ -7,6 +7,7 @@ import {
   CACHE_DIR,
   getCachedFilePath,
 } from "../common/cacheUtils.ts";
+import { ExifMetadata } from "../indexDatabase/fileRecord.type.ts";
 
 ensureCacheDirExists();
 console.log(`[VideoCache] Initialized at ${CACHE_DIR}`);
@@ -33,6 +34,7 @@ export const generateVideoPreview = async (
       "-t", `${durationMS / 1000}`, // Duration
       "-vf", `scale=-2:${height === "original" ? -1 : height}`, // Resize
       "-c:v", "libx264", // Video codec
+      "-pix_fmt", "yuv420p", // Ensure compatibility
       "-preset", "fast",
       "-crf", "23",
       "-an", // Remove audio
@@ -110,4 +112,87 @@ export const generateVideoThumbnail = async (
     });
   });
   return cachedPath;
+};
+
+export const getVideoMetadata = async (filePath: string): Promise<Partial<ExifMetadata>> => {
+  return new Promise((resolve, reject) => {
+    const args = [
+      "-v", "quiet",
+      "-print_format", "json",
+      "-show_format",
+      "-show_streams",
+      filePath,
+    ];
+
+    const process = spawn("ffprobe", args);
+    let stdout = "";
+    let stderr = "";
+
+    process.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    process.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    process.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`ffprobe failed: ${stderr}`));
+        return;
+      }
+
+      try {
+        const data = JSON.parse(stdout);
+        const format = data.format;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const videoStream = data.streams.find((s: any) => s.codec_type === "video");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const audioStream = data.streams.find((s: any) => s.codec_type === "audio");
+
+        const metadata: Partial<ExifMetadata> = {};
+
+        if (format && format.tags) {
+          if (format.tags.creation_time) {
+            metadata.dateTaken = new Date(format.tags.creation_time);
+          }
+        }
+
+        if (format && format.duration) {
+          metadata.duration = parseFloat(format.duration);
+        }
+
+        if (videoStream) {
+          metadata.dimensions = {
+            width: videoStream.width,
+            height: videoStream.height,
+          };
+          metadata.videoCodec = videoStream.codec_name;
+          if (videoStream.r_frame_rate) {
+            const [num, den] = videoStream.r_frame_rate.split("/");
+            metadata.framerate = den ? parseInt(num) / parseInt(den) : parseInt(num);
+          }
+          
+          if (videoStream.tags && videoStream.tags.rotate) {
+             const rotate = parseInt(videoStream.tags.rotate);
+             if (rotate === 90) metadata.orientation = 6;
+             else if (rotate === 180) metadata.orientation = 3;
+             else if (rotate === 270) metadata.orientation = 8;
+          }
+        }
+
+        if (audioStream) {
+          metadata.audioCodec = audioStream.codec_name;
+        }
+
+        resolve(metadata);
+      } catch (e) {
+        reject(e);
+      }
+    });
+
+    process.on("error", (err) => {
+      reject(err);
+    });
+  });
 };

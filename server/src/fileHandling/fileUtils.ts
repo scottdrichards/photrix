@@ -3,6 +3,8 @@ import { stat } from "node:fs/promises";
 import { readdirSync } from "node:fs";
 import { AIMetadata, ExifMetadata, FaceMetadata, FileInfo } from "../indexDatabase/fileRecord.type.ts";
 import path from "node:path";
+import { getVideoMetadata } from "../videoProcessing/videoUtils.ts";
+import { mimeTypeForFilename } from "./mimeTypes.ts";
 
 export const getFileInfo = async (fullPath: string): Promise<FileInfo> => {
   const stats = await stat(fullPath);
@@ -21,6 +23,11 @@ export const getFileInfo = async (fullPath: string): Promise<FileInfo> => {
 export const getExifMetadataFromFile = async (
   fullPath: string,
 ): Promise<ExifMetadata> => {
+  const mimeType = mimeTypeForFilename(fullPath);
+  if (mimeType?.startsWith("video/")) {
+    return (await getVideoMetadata(fullPath)) as ExifMetadata;
+  }
+
   const exifRMetadataToFileField = {
     DateTimeOriginal: "dateTaken",
     ImageWidth: "dimensions.width",
