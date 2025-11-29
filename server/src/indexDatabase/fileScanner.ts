@@ -12,8 +12,9 @@ type Queue = {
 export class FileScanner {
   private readonly rootPath: string;
   private readonly fileIndexDatabase: IndexDatabase;
+  private initialScanComplete = false;
 
-  public jobQueue: Record<keyof MetadataGroups, Queue> = {
+  public jobQueues: Record<keyof MetadataGroups, Queue> = {
     info: { files: [], active: false, total: 0 },
     exifMetadata: { files: [], active: false, total: 0 },
     aiMetadata: { files: [], active: false, total: 0 },
@@ -49,20 +50,56 @@ export class FileScanner {
     }
 
     console.log(`[fileWatcher] Completed scanning ${this.scannedFilesCount} files`);
+    this.initialScanComplete = true;
+    void this.processExifQueue();
   }
 
 
   addFileToJobQueue(
     relativePath: string,
-    metadataGroups: Array<keyof MetadataGroups> = Object.keys(this.jobQueue) as Array<
+    metadataGroups: Array<keyof MetadataGroups> = Object.keys(this.jobQueues) as Array<
       keyof MetadataGroups
     >,
   ): void {
     for (const group of metadataGroups) {
-      this.jobQueue[group] ??= { files: [], active: false, total: 0 };
-      const queue = this.jobQueue[group];
-        queue.files.push(relativePath);
-        queue.total += 1;
+      this.jobQueues[group] ??= { files: [], active: false, total: 0 };
+      const queue = this.jobQueues[group];
+      queue.files.push(relativePath);
+      queue.total += 1;
+
+      if (this.initialScanComplete && group === "exifMetadata" && !queue.active) {
+        void this.processExifQueue();
+      }
     }
+  }
+
+  private async processExifQueue(): Promise<void> {
+    const queue = this.jobQueues.exifMetadata;
+    if (queue.active) return;
+    queue.active = true;
+
+    console.log("[FileScanner] Starting background EXIF processing...");
+
+    while (queue.files.length > 0) {
+      const relativePath = queue.files.shift();
+      if (!relativePath) continue;
+
+      try {
+        // Requesting 'dateTaken' triggers EXIF hydration if missing
+        await this.fileIndexDatabase.getFileRecord(relativePath, ["dateTaken"]);
+      } catch (error) {
+        console.error(
+          `[FileScanner] Error processing EXIF for ${relativePath}:`,
+          error,
+        );
+      }
+
+      // Yield to event loop
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    queue.total = 0;
+    queue.active = false;
+    console.log("[FileScanner] Background EXIF processing complete.");
   }
 }

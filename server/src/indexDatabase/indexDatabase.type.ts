@@ -3,7 +3,7 @@ import { BaseFileRecord, DatabaseFileEntry, MetadataGroups } from "./fileRecord.
 
 
 /**
- * How a file is represented when sent out
+ * How a file is represented when sent out - duplicate of DatabaseFileEntry I believe
  */
 export type FileRecord = BaseFileRecord & 
     Partial<UnionToIntersection<MetadataGroups[keyof MetadataGroups]>>;

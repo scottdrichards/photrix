@@ -59,19 +59,23 @@ export class IndexDatabase {
      */
     requiredMetadata?: Array<keyof FileRecord>,
   ): Promise<FileRecord | undefined> {
-    const dbEntry = this.entries.get(relativePath);
-    if (!dbEntry) {
+    const record = this.entries.get(relativePath);
+    if (!record) {
       return undefined;
     }
 
-    // Already flat, just return a clone
-    const record = structuredClone(dbEntry) as FileRecord;
-
-    if (!requiredMetadata?.length) {
+    if (!requiredMetadata?.length || !this.hydrationRequired(record, requiredMetadata)) {
       return record;
     }
 
     return await this.hydrateMetadata(relativePath, requiredMetadata);
+  }
+
+  private hydrationRequired(
+    record: FileRecord,
+    requiredMetadata: Array<keyof FileRecord>,
+  ): boolean {
+    return requiredMetadata.some((key) => !(key in record));
   }
 
   private async hydrateMetadata(
