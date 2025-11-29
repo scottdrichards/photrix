@@ -5,7 +5,9 @@ import { stat } from "fs/promises";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { createReadStream } from "fs";
 import path from "path/win32";
-import { convertImage, StandardHeights, standardHeights } from "../imageProcessing/convertImage.ts";
+import { convertImage } from "../imageProcessing/convertImage.ts";
+import { generateVideoPreview, generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
+import { StandardHeight, standardHeights } from "../common/standardHeights.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -170,10 +172,17 @@ const fileHandler = async (
   const representation = url.searchParams.get("representation");
   const heightParam = url.searchParams.get("height");
 
-  const height = heightParam ? parseInt(heightParam, 10) as StandardHeights : "original";
-  if (!standardHeights.includes(height)) {
-    throw new Error(`Invalid height parameter: ${heightParam}. Allowed: ${standardHeights.join(", ")}`);
+  const parseToStandardHeight = (value: string | null): StandardHeight | null => {
+    const parsed = value && parseInt(value, 10);
+    const nearest = standardHeights.find(h => typeof h === 'number' && typeof parsed === 'number' && h >= parsed) ?? 'original';
+
+    if (nearest !== parsed){
+      console.log(`Height (${value}) does not match standard height, using closest match`, nearest);
+    }
+    return nearest;
   }
+
+  const height = parseToStandardHeight(heightParam) ?? "original";
 
   const needsResize = height !== "original";
   const needsFormatChange =
@@ -181,6 +190,29 @@ const fileHandler = async (
     (mimeType === "image/heic" || mimeType === "image/heif");
 
   const isImage = mimeType.startsWith("image/");
+  const isVideo = mimeType.startsWith("video/");
+
+  if (representation === "preview" && isVideo) {
+    try {
+      console.log(`[filesRequest] Requesting video preview for: ${subPath}`);
+
+      const cachedPath = await generateVideoPreview(normalizedPath);
+      const cachedStats = await stat(cachedPath);
+
+      res.writeHead(200, {
+        "Content-Type": "video/mp4",
+        "Content-Length": cachedStats.size,
+        "Cache-Control": "public, max-age=31536000",
+      });
+
+      const fileStream = createReadStream(cachedPath);
+      fileStream.pipe(res);
+      return;
+    } catch (error) {
+      console.error(`Error generating video preview for: ${subPath}`, error);
+      // Fall through to stream the original file if conversion fails
+    }
+  }
 
   if ((needsFormatChange || needsResize) && isImage) {
     try {
@@ -200,6 +232,26 @@ const fileHandler = async (
       return;
     } catch (error) {
       console.error(`Error generating image for: ${subPath}`, error);
+      // Fall through to stream the original file if conversion fails
+    }
+  } else if (needsResize && isVideo) {
+    try {
+      console.log(`[filesRequest] Requesting ${height} thumbnail for video: ${subPath}`);
+
+      const cachedPath = await generateVideoThumbnail(normalizedPath, height);
+      const cachedStats = await stat(cachedPath);
+
+      res.writeHead(200, {
+        "Content-Type": "image/jpeg",
+        "Content-Length": cachedStats.size,
+        "Cache-Control": "public, max-age=31536000",
+      });
+
+      const fileStream = createReadStream(cachedPath);
+      fileStream.pipe(res);
+      return;
+    } catch (error) {
+      console.error(`Error generating video thumbnail for: ${subPath}`, error);
       // Fall through to stream the original file if conversion fails
     }
   }

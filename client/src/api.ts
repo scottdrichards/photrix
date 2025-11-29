@@ -16,6 +16,7 @@ export interface PhotoItem {
   thumbnailUrl: string;
   previewUrl: string;
   fullUrl: string;
+  videoPreviewUrl?: string;
   metadata?: {
     mimeType?: string | null;
     dateTaken?: string | null;
@@ -91,6 +92,10 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
     mediaType === "video"
       ? buildFileUrl(item.relativePath, { representation: "original" })
       : previewUrl;
+  const videoPreviewUrl =
+    mediaType === "video"
+      ? buildFileUrl(item.relativePath, { representation: "preview" })
+      : undefined;
 
   return {
     path: item.relativePath,
@@ -99,6 +104,7 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
     thumbnailUrl,
     previewUrl,
     fullUrl,
+    videoPreviewUrl,
     metadata: {
       mimeType: item.mimeType,
       dateTaken: item.dateTaken,

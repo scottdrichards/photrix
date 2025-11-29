@@ -5,7 +5,7 @@ import {
 } from "@fluentui/react-components";
 import { PlayCircle24Regular } from "@fluentui/react-icons";
 import type { CSSProperties } from "react";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 
 type TileStyle = CSSProperties & {
@@ -54,10 +54,10 @@ const useStyles = makeStyles({
   },
   image: {
     width: "100%",
-    height: "auto",
+    height: "100%",
     display: "block",
     flexGrow: 1,
-    objectFit: "contain",
+    objectFit: "cover",
   },
   caption: {
     display: "none",
@@ -75,6 +75,7 @@ const useStyles = makeStyles({
     padding: tokens.spacingHorizontalXS,
     boxShadow: tokens.shadow4,
     opacity: 0.86,
+    zIndex: 1,
   },
   sentinel: {
     flexBasis: "100%",
@@ -93,6 +94,68 @@ export interface ThumbnailGridProps {
   hasMore?: boolean;
   loadingMore?: boolean;
 }
+
+const ThumbnailTile = ({
+  photo,
+  onSelect,
+  styles,
+}: {
+  photo: PhotoItem;
+  onSelect: (photo: PhotoItem) => void;
+  styles: ReturnType<typeof useStyles>;
+}) => {
+  const [isHovered, setIsHovered] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (isHovered && videoRef.current) {
+      videoRef.current.play().catch(() => {
+        // Ignore play errors (e.g. if user interacted with document yet)
+      });
+    } else if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = 0;
+      videoRef.current.load();
+    }
+  }, [isHovered]);
+
+  return (
+    <button
+      type="button"
+      className={styles.tile}
+      style={createTileStyle(photo)}
+      onClick={() => onSelect(photo)}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      aria-label={photo.name}
+    >
+      {photo.mediaType === "video" ? (
+        <>
+          <span className={styles.videoBadge} aria-hidden="true">
+            <PlayCircle24Regular />
+          </span>
+          <video
+            ref={videoRef}
+            src={photo.videoPreviewUrl}
+            className={styles.image}
+            muted
+            loop
+            playsInline
+            preload="none"
+            poster={photo.thumbnailUrl}
+          />
+        </>
+      ) : (
+        <img
+          src={photo.thumbnailUrl}
+          alt={photo.name}
+          loading="lazy"
+          className={styles.image}
+        />
+      )}
+    </button>
+  );
+};
 
 const ThumbnailGridComponent = ({
   items,
@@ -135,26 +198,12 @@ const ThumbnailGridComponent = ({
   return (
     <div className={styles.grid}>
       {items.map((photo) => (
-        <button
+        <ThumbnailTile
           key={photo.path}
-          type="button"
-          className={styles.tile}
-          style={createTileStyle(photo)}
-          onClick={() => onSelect(photo)}
-          aria-label={photo.name}
-        >
-          {photo.mediaType === "video" ? (
-            <span className={styles.videoBadge} aria-hidden="true">
-              <PlayCircle24Regular />
-            </span>
-          ) : null}
-          <img
-            src={photo.thumbnailUrl}
-            alt={photo.name}
-            loading="lazy"
-            className={styles.image}
-          />
-        </button>
+          photo={photo}
+          onSelect={onSelect}
+          styles={styles}
+        />
       ))}
       {(hasMore || loadingMore) && (
         <div ref={sentinelRef} className={styles.sentinel}>
