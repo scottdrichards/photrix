@@ -8,10 +8,11 @@ import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { healthRequestHandler } from "./requestHandlers/healthRequestHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
 import { filesRequestHandler } from "./requestHandlers/filesRequestHandler.ts";
+import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts";
 
 const PORT = process.env.PORT || 3000;
 
-export const createServer = (database: IndexDatabase, storagePath: string) => {
+export const createServer = (database: IndexDatabase, storagePath: string, fileScanner: FileScanner) => {
   const server = http.createServer((req, res) => {
     const requestStart = Date.now();
     console.log(`[server] ${req.method} ${req.url}`);
@@ -41,6 +42,12 @@ export const createServer = (database: IndexDatabase, storagePath: string) => {
     // Basic health check endpoint
     if (req.url === "/api/health" && req.method === "GET") {
       healthRequestHandler(req, res);
+      return;
+    }
+
+    // Status endpoint
+    if (req.url === "/api/status" && req.method === "GET") {
+      statusRequestHandler(req, res, { database, fileScanner });
       return;
     }
 
@@ -79,9 +86,9 @@ const startServer = async () => {
 
   const database = new IndexDatabase(absolutePath);
 
-  new FileScanner(absolutePath, database);
+  const fileScanner = new FileScanner(absolutePath, database);
 
-  const server = createServer(database, absolutePath);
+  const server = createServer(database, absolutePath, fileScanner);
 
   server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);

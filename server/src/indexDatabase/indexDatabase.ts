@@ -123,10 +123,7 @@ export class IndexDatabase {
           const mimeType = originalDBEntry?.mimeType || mimeTypeForFilename(relativePath);
           if (mimeType?.startsWith("image/") || mimeType?.startsWith("video/")) {
             try {
-              console.log(`[metadata] Reading EXIF for ${relativePath} (${mimeType})`);
-              const exifStart = Date.now();
               extraData = await getExifMetadataFromFile(fullPath);
-              console.log(`[metadata] EXIF read for ${relativePath} took ${Date.now() - exifStart}ms`);
             } catch (error) {
               // File format doesn't support EXIF or parsing failed
               console.warn(`[metadata] Could not read EXIF metadata for ${relativePath}:`, error instanceof Error ? error.message : String(error));
@@ -134,7 +131,6 @@ export class IndexDatabase {
             }
           } else {
             // Non-media file, skip EXIF parsing
-            console.log(`[metadata] Skipping EXIF for non-media file ${relativePath} (${mimeType})`);
             extraData = {};
           }
           break;
@@ -197,10 +193,10 @@ export class IndexDatabase {
       matches ++;
       
       // Calculate pagination bounds (1-based matches index)
-      const startMatch = (page - 1) * pageSize;
+      const startMatch = (page - 1) * pageSize + 1;
       const endMatch = page * pageSize;
 
-      if (matches >= startMatch && matches < endMatch) {
+      if (matches >= startMatch && matches <= endMatch) {
         hydrationPromises.push(this.hydrateMetadata(file.relativePath, metadata));
       }
     }
@@ -214,5 +210,9 @@ export class IndexDatabase {
     const elapsed = Date.now() - startTime;
     console.log(`[query] Completed in ${elapsed}ms: ${result.total} items with metadata`);
     return result;
+  }
+
+  getSize(): number {
+    return this.entries.size;
   }
 }
