@@ -35,6 +35,11 @@ export const statusRequestHandler = (
         active: fileScanner.jobQueues.faceMetadata.active,
         total: fileScanner.jobQueues.faceMetadata.total,
       },
+      thumbnail: {
+        length: fileScanner.jobQueues.thumbnail.files.length,
+        active: fileScanner.jobQueues.thumbnail.active,
+        total: fileScanner.jobQueues.thumbnail.total,
+      },
     },
     scannedFilesCount: fileScanner.scannedFilesCount,
   };

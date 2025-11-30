@@ -112,6 +112,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                 
                 {renderQueue("Info Queue", status.queues.info)}
                 {renderQueue("EXIF Queue", status.queues.exifMetadata)}
+                {renderQueue("Thumbnail Queue", status.queues.thumbnail)}
                 {renderQueue("AI Queue", status.queues.aiMetadata)}
                 {renderQueue("Face Queue", status.queues.faceMetadata)}
               </div>

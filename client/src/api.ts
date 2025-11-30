@@ -61,6 +61,7 @@ export interface ServerStatus {
     exifMetadata: QueueStatus;
     aiMetadata: QueueStatus;
     faceMetadata: QueueStatus;
+    thumbnail: QueueStatus;
   };
   scannedFilesCount: number;
 }
