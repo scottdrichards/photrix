@@ -59,12 +59,11 @@ export class FileScanner {
     void this.processThumbnailQueue();
   }
 
-
   addFileToJobQueue(
     relativePath: string,
-    metadataGroups: Array<keyof MetadataGroups | "thumbnail"> = Object.keys(this.jobQueues) as Array<
-      keyof MetadataGroups | "thumbnail"
-    >,
+    metadataGroups: Array<keyof MetadataGroups | "thumbnail"> = Object.keys(
+      this.jobQueues,
+    ) as Array<keyof MetadataGroups | "thumbnail">,
   ): void {
     for (const group of metadataGroups) {
       this.jobQueues[group] ??= { files: [], active: false, total: 0 };
@@ -96,23 +95,25 @@ export class FileScanner {
         if (file) batch.push(file);
       }
 
-      await Promise.all(batch.map(async (relativePath) => {
-        const fullPath = path.join(this.rootPath, relativePath);
-        const mimeType = mimeTypeForFilename(relativePath);
+      await Promise.all(
+        batch.map(async (relativePath) => {
+          const fullPath = path.join(this.rootPath, relativePath);
+          const mimeType = mimeTypeForFilename(relativePath);
 
-        try {
-          if (mimeType?.startsWith("image/")) {
-            await convertImage(fullPath, 320);
-          } else if (mimeType?.startsWith("video/")) {
-            await generateVideoThumbnail(fullPath, 320);
+          try {
+            if (mimeType?.startsWith("image/")) {
+              await convertImage(fullPath, 320);
+            } else if (mimeType?.startsWith("video/")) {
+              await generateVideoThumbnail(fullPath, 320);
+            }
+          } catch (error) {
+            console.error(
+              `[FileScanner] Error generating thumbnail for ${relativePath}:`,
+              error,
+            );
           }
-        } catch (error) {
-          console.error(
-            `[FileScanner] Error generating thumbnail for ${relativePath}:`,
-            error,
-          );
-        }
-      }));
+        }),
+      );
 
       // Yield to event loop and wait a bit to avoid preempting live requests
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -130,6 +131,16 @@ export class FileScanner {
 
     console.log("[FileScanner] Starting background EXIF processing...");
 
+    // Filter out files that already have EXIF metadata
+    const filesToProcess: string[] = [];
+    for (const relativePath of queue.files) {
+      const record = await this.fileIndexDatabase.getFileRecord(relativePath);
+      if (!record?.dateTaken) {
+        filesToProcess.push(relativePath);
+      }
+    }
+    queue.files = filesToProcess;
+
     while (queue.files.length > 0) {
       const relativePath = queue.files.shift();
       if (!relativePath) continue;
@@ -138,10 +149,7 @@ export class FileScanner {
         // Requesting 'dateTaken' triggers EXIF hydration if missing
         await this.fileIndexDatabase.getFileRecord(relativePath, ["dateTaken"]);
       } catch (error) {
-        console.error(
-          `[FileScanner] Error processing EXIF for ${relativePath}:`,
-          error,
-        );
+        console.error(`[FileScanner] Error processing EXIF for ${relativePath}:`, error);
       }
 
       // Yield to event loop
