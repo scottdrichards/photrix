@@ -18,15 +18,17 @@ console.log(`[ImageCache] Initialized at ${CACHE_DIR}`);
 
 const generateImage = async (
   inputPath: string,
-  outputPath: string,
-  height: StandardHeight,
+  outputs: Array<{ path: string; height: StandardHeight }>,
 ): Promise<void> =>
   new Promise((resolve, reject) => {
     const args = [
       scriptPath,
       inputPath,
-      outputPath,
-      ...(height !== 'original' ? ['--max_dimension', `${height}`] : [])
+      "--outputs",
+      JSON.stringify(outputs.map(o => ({
+        path: o.path,
+        height: o.height === 'original' ? null : o.height
+      })))
     ];
 
     const process = spawn(pythonPath, args);
@@ -68,6 +70,27 @@ export const convertImage = async (
   }
 
   console.log(`[ImageCache] Generating ${height} for ${filePath}`);
-  await generateImage(filePath, cachedPath, height);
+  await generateImage(filePath, [{ path: cachedPath, height }]);
   return cachedPath;
+};
+
+export const convertImageToMultipleSizes = async (
+  filePath: string,
+  heights: StandardHeight[],
+): Promise<void> => {
+  const hash = getHash(filePath);
+  
+  const outputs = heights
+    .map(height => ({
+      height,
+      path: getSharedCachedFilePath(hash, height, "jpg")
+    }))
+    .filter(o => !existsSync(o.path));
+
+  if (outputs.length === 0) {
+    return;
+  }
+
+  console.log(`[ImageCache] Generating sizes ${outputs.map(o => o.height).join(", ")} for ${filePath}`);
+  await generateImage(filePath, outputs);
 };

@@ -3,8 +3,11 @@ import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { MetadataGroups } from "./fileRecord.type.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import path from "node:path";
-import { convertImage } from "../imageProcessing/convertImage.ts";
+import { convertImageToMultipleSizes } from "../imageProcessing/convertImage.ts";
 import { generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
+import { getCachedFilePath, getHash } from "../common/cacheUtils.ts";
+import { existsSync } from "node:fs";
+import { standardHeights } from "../common/standardHeights.ts";
 
 type Queue = {
   files: string[];
@@ -86,6 +89,41 @@ export class FileScanner {
     queue.active = true;
 
     console.log("[FileScanner] Starting background thumbnail generation...");
+
+    const desiredHeights = standardHeights.filter((h) => h !== "original");
+    // Filter out files that already have all standard height thumbnails
+    const filesToProcess: string[] = [];
+    for (const relativePath of queue.files) {
+      const fullPath = path.join(this.rootPath, relativePath);
+      const mimeType = mimeTypeForFilename(relativePath);
+      
+      let needsProcessing = false;
+      
+      if (mimeType?.startsWith("image/")) {
+        // Check if all standard height thumbnails exist
+        for (const height of desiredHeights) {
+          const hash = getHash(fullPath);
+          const cachedPath = getCachedFilePath(hash, height, "jpg");
+          if (!existsSync(cachedPath)) {
+            needsProcessing = true;
+            break;
+          }
+        }
+      } else if (mimeType?.startsWith("video/")) {
+        // Check if 320px thumbnail exists
+        const hash = getHash(fullPath);
+        const cachedPath = getCachedFilePath(hash, 320, "jpg");
+        if (!existsSync(cachedPath)) {
+          needsProcessing = true;
+        }
+      }
+      
+      if (needsProcessing) {
+        filesToProcess.push(relativePath);
+      }
+    }
+    queue.files = filesToProcess;
+
     const CONCURRENCY_LIMIT = 4;
 
     while (queue.files.length > 0) {
@@ -102,7 +140,8 @@ export class FileScanner {
 
           try {
             if (mimeType?.startsWith("image/")) {
-              await convertImage(fullPath, 320);
+              // Generate all standard sizes at once
+              await convertImageToMultipleSizes(fullPath, desiredHeights);
             } else if (mimeType?.startsWith("video/")) {
               await generateVideoThumbnail(fullPath, 320);
             }
