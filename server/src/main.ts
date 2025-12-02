@@ -85,6 +85,7 @@ const startServer = async () => {
   const absolutePath = path.resolve(mediaRoot);
 
   const database = new IndexDatabase(absolutePath);
+  await database.load();
 
   const fileScanner = new FileScanner(absolutePath, database);
 

@@ -2,14 +2,12 @@ import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { StandardHeight } from "../common/standardHeights.ts";
 import {
-  ensureCacheDirExists,
   getHash,
   CACHE_DIR,
   getCachedFilePath,
 } from "../common/cacheUtils.ts";
 import { ExifMetadata } from "../indexDatabase/fileRecord.type.ts";
 
-ensureCacheDirExists();
 console.log(`[VideoCache] Initialized at ${CACHE_DIR}`);
 
 /** Generates a video preview and caches the result. Returns the cached file path. */

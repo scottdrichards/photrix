@@ -4,17 +4,13 @@ import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
 import {
-  ensureCacheDirExists,
   getCachedFilePath as getSharedCachedFilePath,
   getHash,
-  CACHE_DIR,
 } from "../common/cacheUtils.ts";
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 const pythonPath = "python";
 
-ensureCacheDirExists();
-console.log(`[ImageCache] Initialized at ${CACHE_DIR}`);
 
 const generateImage = async (
   inputPath: string,

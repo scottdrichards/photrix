@@ -1,25 +1,68 @@
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { MetadataGroupKeys, type DatabaseFileEntry } from "./fileRecord.type.ts";
+import { CACHE_DIR } from "../common/cacheUtils.ts";
 import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.ts";
-import type { FileRecord, QueryOptions, QueryResult } from "./indexDatabase.type.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
+import { MetadataGroupKeys, type DatabaseFileEntry } from "./fileRecord.type.ts";
+import type { FileRecord, QueryOptions, QueryResult } from "./indexDatabase.type.ts";
 import { matchesFilter } from "./matchesFilter.ts";
 
 export class IndexDatabase {
   private readonly storagePath: string;
   private entries: Map<string, DatabaseFileEntry>;
+  private isDirty = false;
+  private readonly dbFilePath: string;
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;
     this.entries = new Map();
+    this.dbFilePath = path.join(CACHE_DIR, "index.json");
+    
+    // Auto-save every 10 seconds if dirty
+    setInterval(() => {
+      void this.save();
+    }, 10_000);
+  }
+
+  async load(): Promise<void> {
+    try {
+      console.log(`[IndexDatabase] Loading database from ${this.dbFilePath}`);
+      const data = await readFile(this.dbFilePath, "utf-8");
+      const entries = JSON.parse(data) as [string, DatabaseFileEntry][];
+      this.entries = new Map(entries);
+      console.log(`[IndexDatabase] Loaded ${this.entries.size} entries`);
+    } catch (error) {
+      // Ignore error if file doesn't exist (first run)
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error("[IndexDatabase] Failed to load database:", error);
+      } else {
+        console.log("[IndexDatabase] No existing database found, starting fresh.");
+      }
+    }
+  }
+
+  async save(): Promise<void> {
+    if (!this.isDirty) return;
+    
+    try {
+      console.log(`[IndexDatabase] Saving ${this.entries.size} entries to disk...`);
+      const data = JSON.stringify(Array.from(this.entries.entries()));
+      await writeFile(this.dbFilePath, data, "utf-8");
+      this.isDirty = false;
+      console.log("[IndexDatabase] Save complete.");
+    } catch (error) {
+      console.error("[IndexDatabase] Failed to save database:", error);
+    }
   }
 
   async addFile(fileData: DatabaseFileEntry): Promise<void> {
     this.entries.set(fileData.relativePath, structuredClone(fileData));
+    this.isDirty = true;
   }
 
   async removeFile(relativePath: string): Promise<void> {
     this.entries.delete(relativePath);
+    this.isDirty = true;
   }
 
   async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
@@ -37,6 +80,7 @@ export class IndexDatabase {
 
     this.entries.delete(oldRelativePath);
     this.entries.set(newRelativePath, updated);
+    this.isDirty = true;
   }
 
   async addOrUpdateFileData(
@@ -48,6 +92,7 @@ export class IndexDatabase {
       ...(existingEntry ?? { relativePath, mimeType: mimeTypeForFilename(relativePath) }),
       ...fileData,
     });
+    this.isDirty = true;
   }
 
   async getFileRecord(

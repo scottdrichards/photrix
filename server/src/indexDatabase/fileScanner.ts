@@ -6,7 +6,7 @@ import path from "node:path";
 import { convertImageToMultipleSizes } from "../imageProcessing/convertImage.ts";
 import { generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
 import { getCachedFilePath, getHash } from "../common/cacheUtils.ts";
-import { existsSync } from "node:fs";
+import { access, constants } from "node:fs/promises";
 import { standardHeights } from "../common/standardHeights.ts";
 
 type Queue = {
@@ -42,10 +42,7 @@ export class FileScanner {
 
     for (const absolutePath of walkFiles(this.rootPath)) {
       const relativePath = toRelative(this.rootPath, absolutePath);
-      await this.fileIndexDatabase.addFile({
-        relativePath,
-        mimeType: mimeTypeForFilename(relativePath),
-      });
+      await this.fileIndexDatabase.addOrUpdateFileData(relativePath, {});
 
       this.addFileToJobQueue(relativePath);
 
@@ -98,22 +95,25 @@ export class FileScanner {
       const mimeType = mimeTypeForFilename(relativePath);
       
       let needsProcessing = false;
+      const hash = getHash(fullPath);
       
       if (mimeType?.startsWith("image/")) {
         // Check if all standard height thumbnails exist
         for (const height of desiredHeights) {
-          const hash = getHash(fullPath);
           const cachedPath = getCachedFilePath(hash, height, "jpg");
-          if (!existsSync(cachedPath)) {
+          try{
+            await access(cachedPath, constants.F_OK);
+          } catch {
             needsProcessing = true;
             break;
           }
         }
       } else if (mimeType?.startsWith("video/")) {
         // Check if 320px thumbnail exists
-        const hash = getHash(fullPath);
         const cachedPath = getCachedFilePath(hash, 320, "jpg");
-        if (!existsSync(cachedPath)) {
+        try{
+          await access(cachedPath, constants.F_OK);
+        } catch {
           needsProcessing = true;
         }
       }
