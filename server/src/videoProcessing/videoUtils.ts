@@ -161,21 +161,44 @@ export const getVideoMetadata = async (filePath: string): Promise<Partial<ExifMe
         }
 
         if (videoStream) {
+          let width = videoStream.width;
+          let height = videoStream.height;
+          let rotate: number | undefined;
+
+          if (videoStream.tags && videoStream.tags.rotate) {
+             rotate = parseInt(videoStream.tags.rotate);
+          } else if (videoStream.side_data_list) {
+             // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             const sideData = videoStream.side_data_list.find((sd: any) => sd.rotation !== undefined);
+             if (sideData) {
+                rotate = parseInt(sideData.rotation);
+             }
+          }
+
+          if (rotate !== undefined) {
+             // Normalize rotation to 0-360 positive
+             rotate = rotate % 360;
+             if (rotate < 0) rotate += 360;
+
+             if (rotate === 90) metadata.orientation = 6;
+             else if (rotate === 180) metadata.orientation = 3;
+             else if (rotate === 270) metadata.orientation = 8;
+
+             if (rotate === 90 || rotate === 270) {
+               const temp = width;
+               width = height;
+               height = temp;
+             }
+          }
+
           metadata.dimensions = {
-            width: videoStream.width,
-            height: videoStream.height,
+            width,
+            height,
           };
           metadata.videoCodec = videoStream.codec_name;
           if (videoStream.r_frame_rate) {
             const [num, den] = videoStream.r_frame_rate.split("/");
             metadata.framerate = den ? parseInt(num) / parseInt(den) : parseInt(num);
-          }
-          
-          if (videoStream.tags && videoStream.tags.rotate) {
-             const rotate = parseInt(videoStream.tags.rotate);
-             if (rotate === 90) metadata.orientation = 6;
-             else if (rotate === 180) metadata.orientation = 3;
-             else if (rotate === 270) metadata.orientation = 8;
           }
         }
 
