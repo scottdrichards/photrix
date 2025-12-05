@@ -37,7 +37,7 @@ export class FileScanner {
   }
 
   private async scanExistingFiles(): Promise<void> {
-    console.log(`[fileWatcher] Scanning existing files in ${this.rootPath}`);
+    console.log(`[fileWatcher] Discovering existing files in ${this.rootPath}`);
     this.scannedFilesCount = 0;
 
     for (const absolutePath of walkFiles(this.rootPath)) {
@@ -49,11 +49,11 @@ export class FileScanner {
       this.scannedFilesCount++;
 
       if (this.scannedFilesCount % 10000 === 0) {
-        console.log(`[fileWatcher] Scanned ${this.scannedFilesCount} files...`);
+        console.log(`[fileWatcher] Discovered ${this.scannedFilesCount} files...`);
       }
     }
 
-    console.log(`[fileWatcher] Completed scanning ${this.scannedFilesCount} files`);
+    console.log(`[fileWatcher] Completed discovering ${this.scannedFilesCount} files`);
     this.initialScanComplete = true;
     void this.processExifQueue();
     void this.processThumbnailQueue();

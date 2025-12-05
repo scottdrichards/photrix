@@ -177,7 +177,7 @@ const fileHandler = async (
     const nearest = standardHeights.find(h => typeof h === 'number' && typeof parsed === 'number' && h >= parsed) ?? 'original';
 
     if (nearest !== parsed){
-      console.log(`Height (${value}) does not match standard height, using closest match`, nearest);
+      console.log(`Height (${value}) does not match standard height, using `, nearest);
     }
     return nearest;
   }
