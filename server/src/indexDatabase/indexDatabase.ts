@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import Database from "better-sqlite3";
 import path from "node:path";
 import { CACHE_DIR } from "../common/cacheUtils.ts";
 import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.ts";
@@ -9,105 +9,94 @@ import { matchesFilter } from "./matchesFilter.ts";
 
 export class IndexDatabase {
   private readonly storagePath: string;
-  private entries: Map<string, DatabaseFileEntry>;
-  private isDirty = false;
+  private db: Database.Database;
   private readonly dbFilePath: string;
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;
-    this.entries = new Map();
-    this.dbFilePath = path.join(CACHE_DIR, "index.json");
+    this.dbFilePath = path.join(CACHE_DIR, "index.db");
     
-    // Auto-save every 10 seconds if dirty
-    setInterval(() => {
-      void this.save();
-    }, 10_000);
+    this.db = new Database(this.dbFilePath);
+    this.db.pragma('journal_mode = WAL');
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS files (
+        relativePath TEXT PRIMARY KEY,
+        data JSON NOT NULL
+      )
+    `);
   }
 
   async load(): Promise<void> {
-    try {
-      console.log(`[IndexDatabase] Loading database from ${this.dbFilePath}`);
-      const data = await readFile(this.dbFilePath, "utf-8");
-      const entries = JSON.parse(data) as [string, DatabaseFileEntry][];
-      this.entries = new Map(entries);
-      console.log(`[IndexDatabase] Loaded ${this.entries.size} entries`);
-    } catch (error) {
-      // Ignore error if file doesn't exist (first run)
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.error("[IndexDatabase] Failed to load database:", error);
-      } else {
-        console.log("[IndexDatabase] No existing database found, starting fresh.");
-      }
-    }
+    console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
+    const count = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number };
+    console.log(`[IndexDatabase] Contains ${count.count} entries`);
   }
 
   async save(): Promise<void> {
-    if (!this.isDirty) return;
-    
-    try {
-      console.log(`[IndexDatabase] Saving ${this.entries.size} entries to disk...`);
-      const data = JSON.stringify(Array.from(this.entries.entries()));
-      await writeFile(this.dbFilePath, data, "utf-8");
-      this.isDirty = false;
-      console.log("[IndexDatabase] Save complete.");
-    } catch (error) {
-      console.error("[IndexDatabase] Failed to save database:", error);
-    }
+    // No-op for SQLite
   }
 
   async addFile(fileData: DatabaseFileEntry): Promise<void> {
-    this.entries.set(fileData.relativePath, structuredClone(fileData));
-    this.isDirty = true;
+    this.db.prepare('INSERT OR REPLACE INTO files (relativePath, data) VALUES (?, ?)').run(
+      fileData.relativePath,
+      JSON.stringify(fileData)
+    );
   }
 
   async removeFile(relativePath: string): Promise<void> {
-    this.entries.delete(relativePath);
-    this.isDirty = true;
+    this.db.prepare('DELETE FROM files WHERE relativePath = ?').run(relativePath);
   }
 
   async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
-    const originalEntry = this.entries.get(oldRelativePath);
-    if (!originalEntry) {
+    const row = this.db.prepare('SELECT data FROM files WHERE relativePath = ?').get(oldRelativePath) as { data: string } | undefined;
+    if (!row) {
       throw new Error(
         `moveFile: File at path "${oldRelativePath}" does not exist in the database.`,
       );
     }
 
+    const originalEntry = JSON.parse(row.data) as DatabaseFileEntry;
     const updated: DatabaseFileEntry = {
       ...originalEntry,
       relativePath: newRelativePath,
     };
 
-    this.entries.delete(oldRelativePath);
-    this.entries.set(newRelativePath, updated);
-    this.isDirty = true;
+    const transaction = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM files WHERE relativePath = ?').run(oldRelativePath);
+      this.db.prepare('INSERT INTO files (relativePath, data) VALUES (?, ?)').run(newRelativePath, JSON.stringify(updated));
+    });
+    transaction();
   }
 
   async addOrUpdateFileData(
     relativePath: string,
     fileData: Partial<DatabaseFileEntry>,
   ): Promise<void> {
-    const existingEntry = this.entries.get(relativePath);
-    this.entries.set(relativePath, {
+    const row = this.db.prepare('SELECT data FROM files WHERE relativePath = ?').get(relativePath) as { data: string } | undefined;
+    
+    const existingEntry = row ? JSON.parse(row.data) as DatabaseFileEntry : undefined;
+    
+    const updatedEntry = {
       ...(existingEntry ?? { relativePath, mimeType: mimeTypeForFilename(relativePath) }),
       ...fileData,
-    });
-    this.isDirty = true;
+    };
+
+    this.db.prepare('INSERT OR REPLACE INTO files (relativePath, data) VALUES (?, ?)').run(
+      relativePath,
+      JSON.stringify(updatedEntry)
+    );
   }
 
   async getFileRecord(
     relativePath: string,
-    /**
-     * Optional set of metadata keys to ensure are loaded in the returned FileRecord.
-     * This will fetch any missing metadata from storage if not already present in the database.
-     * so if you want it to only use available data in the database, leave this undefined.
-     */
     requiredMetadata?: Array<keyof FileRecord>,
   ): Promise<FileRecord | undefined> {
-    const record = this.entries.get(relativePath);
-    if (!record) {
+    const row = this.db.prepare('SELECT data FROM files WHERE relativePath = ?').get(relativePath) as { data: string } | undefined;
+    if (!row) {
       return undefined;
     }
+
+    const record = JSON.parse(row.data) as FileRecord;
 
     if (!requiredMetadata?.length || !this.hydrationRequired(record, requiredMetadata)) {
       return record;
@@ -127,12 +116,13 @@ export class IndexDatabase {
     relativePath: string,
     requiredMetadata: Array<keyof FileRecord>,
   ) {
-    const originalDBEntry = this.entries.get(relativePath);
-    if (!originalDBEntry) {
+    const row = this.db.prepare('SELECT data FROM files WHERE relativePath = ?').get(relativePath) as { data: string } | undefined;
+    if (!row) {
       throw new Error(
         `hydrateMetadata: File at path "${relativePath}" does not exist in the database.`,
       );
     }
+    const originalDBEntry = JSON.parse(row.data) as DatabaseFileEntry;
     
     // Determine which metadata groups need to be loaded
     const groupsToLoad = new Set<keyof typeof MetadataGroupKeys>();
@@ -158,61 +148,71 @@ export class IndexDatabase {
     // Load each required group
     const promises = Array.from(groupsToLoad).map(async (groupName) => {
       const fullPath = path.join(this.storagePath, relativePath);
-      let extraData = {};
-      switch (groupName) {
-        case "info":
-          extraData = await getFileInfo(fullPath);
-          break;
-        case "exifMetadata": {
-          // Only attempt EXIF parsing for media files
-          const mimeType = originalDBEntry?.mimeType || mimeTypeForFilename(relativePath);
-          if (mimeType?.startsWith("image/") || mimeType?.startsWith("video/")) {
-            try {
-              extraData = await getExifMetadataFromFile(fullPath);
-            } catch (error) {
-              // File format doesn't support EXIF or parsing failed
-              console.warn(`[metadata] Could not read EXIF metadata for ${relativePath}:`, error instanceof Error ? error.message : String(error));
+      try {
+        let extraData = {};
+        switch (groupName) {
+          case "info":
+            extraData = await getFileInfo(fullPath);
+            break;
+          case "exifMetadata": {
+            // Only attempt EXIF parsing for media files
+            const mimeType = originalDBEntry?.mimeType || mimeTypeForFilename(relativePath);
+            if (mimeType?.startsWith("image/") || mimeType?.startsWith("video/")) {
+              try {
+                extraData = await getExifMetadataFromFile(fullPath);
+              } catch (error) {
+                // File format doesn't support EXIF or parsing failed
+                console.warn(`[metadata] Could not read EXIF metadata for ${relativePath}:`, error instanceof Error ? error.message : String(error));
+                extraData = {};
+              }
+            } else {
+              // Non-media file, skip EXIF parsing
               extraData = {};
             }
-          } else {
-            // Non-media file, skip EXIF parsing
-            extraData = {};
+            break;
           }
-          break;
+          case "aiMetadata":
+          case "faceMetadata":
+            // Not implemented yet
+            return;
+          default:
+            throw new Error(`Unhandled metadata group "${groupName}"`);
         }
-        case "aiMetadata":
-        case "faceMetadata":
-          // Not implemented yet
-          return;
-        default:
-          throw new Error(`Unhandled metadata group "${groupName}"`);
+        await this.addOrUpdateFileData(relativePath, extraData);
+      } catch (error) {
+        console.warn(`[metadata] Skipping group ${groupName} for ${relativePath}:`, error instanceof Error ? error.message : String(error));
       }
-      await this.addOrUpdateFileData(relativePath, extraData);
     });
     
     await Promise.all(promises);
-    return this.entries.get(relativePath) as FileRecord;
+    
+    // Re-fetch to get updated data
+    const updatedRow = this.db.prepare('SELECT data FROM files WHERE relativePath = ?').get(relativePath) as { data: string };
+    return JSON.parse(updatedRow.data) as FileRecord;
   }
 
-  files(): IterableIterator<FileRecord> {
-    // Entries are already flat, just cast to FileRecord
-    return this.entries.values() as IterableIterator<FileRecord>;
+  *files(): IterableIterator<FileRecord> {
+    const stmt = this.db.prepare('SELECT data FROM files');
+    for (const row of stmt.iterate()) {
+      yield JSON.parse((row as { data: string }).data) as FileRecord;
+    }
   }
 
-  /**
-   * 
-   * @param relativePath Start without slash, end in "/" - root is ""
-   * @returns 
-   */
   getFolders(relativePath: string): Array<string> {
     const baseFolderPath = relativePath !== "" ? (relativePath.endsWith("/") ? relativePath : relativePath + "/") : "";
     
-    const folders = this.entries
-      .keys()
-      .filter((entryPath) => entryPath.startsWith(baseFolderPath))
-      .map((entryPath) => entryPath.substring(baseFolderPath.length).split("/"))
-      .filter((pathParts) => pathParts.length > 1) // Must have at least a folder and filename
-      .reduce((folderSet, pathParts) => folderSet.add(pathParts[0]), new Set<string>());
+    const folders = new Set<string>();
+    const allPathsStmt = this.db.prepare('SELECT relativePath FROM files');
+    
+    for (const row of allPathsStmt.iterate()) {
+      const entryPath = (row as { relativePath: string }).relativePath;
+      if (entryPath.startsWith(baseFolderPath)) {
+        const parts = entryPath.substring(baseFolderPath.length).split("/");
+        if (parts.length > 1) {
+          folders.add(parts[0]);
+        }
+      }
+    }
 
     return Array.from(folders).sort((a, b) => a.localeCompare(b));
   }
@@ -227,6 +227,7 @@ export class IndexDatabase {
     let lastYield = startTime;
     let matches = 0;
     const hydrationPromises = [];
+    
     for (const file of this.files()){
       if (Date.now() - lastYield > 100) {
         await new Promise((resolve) => setImmediate(resolve));
@@ -258,6 +259,7 @@ export class IndexDatabase {
   }
 
   getSize(): number {
-    return this.entries.size;
+    const result = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number };
+    return result.count;
   }
 }
