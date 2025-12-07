@@ -80,54 +80,9 @@ export class FileScanner {
     console.log(`[fileWatcher] Completed discovering ${this.scannedFilesCount} files`);
     this.initialScanComplete = true;
     await this.runAllExifMaintenance();
-    await this.reconcileExistingThumbnails();
     await this.runAllThumbnailMaintenance();
     this.startupComplete = true;
     console.log(`[fileWatcher] Startup complete`);
-  }
-
-  private async reconcileExistingThumbnails(): Promise<void> {
-    const desiredHeights = standardHeights.filter((h) => h !== "original");
-    // Materialize to avoid writing while iterating an open statement
-    const records = Array.from(this.fileIndexDatabase.files());
-    console.log(`[fileWatcher] Reconciling thumbnails for ${records.length} media entries...`);
-    
-    const readyPaths: string[] = [];
-    let processed = 0;
-
-    // Check filesystem in batches
-    const BATCH_SIZE = 100;
-    for (let i = 0; i < records.length; i += BATCH_SIZE) {
-      const batch = records.slice(i, i + BATCH_SIZE);
-      
-      await Promise.all(batch.map(async (record) => {
-        const mimeType = record.mimeType ?? mimeTypeForFilename(record.relativePath);
-        if (!mimeType?.startsWith("image/") && !mimeType?.startsWith("video/")) return;
-
-        const fullPath = path.join(this.rootPath, record.relativePath);
-        const hash = record.fileHash ?? await getHash({ filePath: fullPath });
-        const missing = await this.needsThumbnailGeneration(mimeType, hash, desiredHeights);
-        if (!missing) {
-          readyPaths.push(record.relativePath);
-        }
-      }));
-
-      processed += batch.length;
-      if (processed % 1000 === 0) {
-        console.log(`[fileWatcher] Reconcile progress: ${processed}/${records.length} (${readyPaths.length} found ready)`);
-      }
-    }
-
-    // Batch update DB
-    console.log(`[fileWatcher] Updating ${readyPaths.length} records in database...`);
-    for (const relativePath of readyPaths) {
-      await this.fileIndexDatabase.addOrUpdateFileData(relativePath, { thumbnailsReady: true, thumbnailsProcessedAt: new Date().toISOString() });
-      if (readyPaths.indexOf(relativePath) % 100 === 0) {
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-    }
-
-    console.log(`[fileWatcher] Reconcile complete: ${records.length} checked, ${readyPaths.length} marked ready`);
   }
 
   private async runAllThumbnailMaintenance(): Promise<void> {
@@ -149,22 +104,17 @@ export class FileScanner {
         // Process in concurrent sub-batches
         while (candidates.length > 0) {
           const batch = candidates.splice(0, CONCURRENCY);
-          await Promise.all(batch.map(async (record) => {
+          const results = await Promise.all(batch.map(async (record) => {
             const mimeType = record.mimeType ?? mimeTypeForFilename(record.relativePath);
-            if (!mimeType?.startsWith("image/") && !mimeType?.startsWith("video/")) return;
+            if (!mimeType?.startsWith("image/") && !mimeType?.startsWith("video/")) return null;
 
             const fullPath = path.join(this.rootPath, record.relativePath);
-            // Compute and store hash if not in database
+            // Compute hash if not in database
             const hash = record.fileHash ?? await getHash({ filePath: fullPath });
-            if (!record.fileHash) {
-              await this.fileIndexDatabase.addOrUpdateFileData(record.relativePath, { fileHash: hash });
-            }
 
             const needsProcessing = await this.needsThumbnailGeneration(mimeType, hash, desiredHeights);
             if (!needsProcessing) {
-              await this.fileIndexDatabase.addOrUpdateFileData(record.relativePath, { thumbnailsReady: true, thumbnailsProcessedAt: new Date().toISOString() });
-              this.lastThumbnailResult = { relativePath: record.relativePath, completedAt: new Date().toISOString() };
-              return;
+              return { relativePath: record.relativePath, hash, thumbnailsReady: true, error: null };
             }
 
             try {
@@ -173,13 +123,32 @@ export class FileScanner {
               } else {
                 await generateVideoThumbnail(fullPath, 320);
               }
-              await this.fileIndexDatabase.addOrUpdateFileData(record.relativePath, { thumbnailsReady: true, thumbnailsProcessedAt: new Date().toISOString() });
-              this.lastThumbnailResult = { relativePath: record.relativePath, completedAt: new Date().toISOString() };
+              return { relativePath: record.relativePath, hash, thumbnailsReady: true, error: null };
             } catch (error) {
               console.error(`[FileScanner] Error generating thumbnail for ${record.relativePath}:`, error);
-              await this.fileIndexDatabase.addOrUpdateFileData(record.relativePath, { thumbnailsProcessedAt: new Date().toISOString() });
+              return { relativePath: record.relativePath, hash, thumbnailsReady: false, error: error as Error };
             }
           }));
+          
+          // Serialize database writes to avoid "busy" errors
+          for (const result of results) {
+            if (!result) continue;
+            
+            try {
+              const updateData: any = { 
+                thumbnailsProcessedAt: new Date().toISOString(),
+                fileHash: result.hash
+              };
+              if (result.thumbnailsReady) {
+                updateData.thumbnailsReady = true;
+                this.lastThumbnailResult = { relativePath: result.relativePath, completedAt: new Date().toISOString() };
+              }
+              await this.fileIndexDatabase.addOrUpdateFileData(result.relativePath, updateData);
+            } catch (error) {
+              console.error(`[FileScanner] Error updating database for ${result.relativePath}:`, error);
+            }
+          }
+          
           totalProcessed += batch.length;
         }
 

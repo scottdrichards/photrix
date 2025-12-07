@@ -7,14 +7,15 @@ import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { MetadataGroupKeys, type DatabaseFileEntry } from "./fileRecord.type.ts";
 import type { FileRecord, QueryOptions, QueryResult } from "./indexDatabase.type.ts";
 import { matchesFilter } from "./matchesFilter.ts";
+import { getColumnNamesAndValues, rowToFileRecord } from "./rowFileRecordConversionFunctions.ts";
 
 export class IndexDatabase {
   private readonly storagePath: string;
   private db: Database.Database;
   private readonly dbFilePath: string;
-  private readonly insertOrReplaceStmt: Database.Statement;
-  private readonly insertIfMissingStmt: Database.Statement;
-  private readonly selectDataStmt: Database.Statement;
+  private insertOrReplaceStmt: Database.Statement;
+  private insertIfMissingStmt: Database.Statement;
+  private selectDataStmt: Database.Statement;
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;
@@ -27,7 +28,41 @@ export class IndexDatabase {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS files (
         relativePath TEXT PRIMARY KEY,
-        data JSON NOT NULL
+        mimeType TEXT,
+        -- File Info
+        sizeInBytes INTEGER,
+        created TEXT,
+        modified TEXT,
+        -- EXIF Metadata
+        dateTaken TEXT,
+        dimensionsWidth INTEGER,
+        dimensionsHeight INTEGER,
+        locationLatitude REAL,
+        locationLongitude REAL,
+        cameraMake TEXT,
+        cameraModel TEXT,
+        exposureTime TEXT,
+        aperture TEXT,
+        iso INTEGER,
+        focalLength TEXT,
+        lens TEXT,
+        duration REAL,
+        framerate REAL,
+        videoCodec TEXT,
+        audioCodec TEXT,
+        rating INTEGER,
+        tags TEXT,
+        orientation INTEGER,
+        -- AI Metadata
+        aiDescription TEXT,
+        aiTags TEXT,
+        -- Face Metadata
+        faceTags TEXT,
+        -- Processing status
+        thumbnailsReady INTEGER DEFAULT 0,
+        fileHash TEXT,
+        exifProcessedAt TEXT,
+        thumbnailsProcessedAt TEXT
       )
     `);
     this.db.exec(`
@@ -37,20 +72,26 @@ export class IndexDatabase {
       )
     `);
 
-    this.insertOrReplaceStmt = this.db.prepare(
-      "INSERT OR REPLACE INTO files (relativePath, data) VALUES (?, ?)",
-    );
-    this.insertIfMissingStmt = this.db.prepare(
-      "INSERT INTO files (relativePath, data) VALUES (?, ?) ON CONFLICT(relativePath) DO NOTHING",
-    );
-    this.selectDataStmt = this.db.prepare(
-      "SELECT data FROM files WHERE relativePath = ?",
-    );
+    // Note: Prepared statements are initialized in load() after migration
+    this.insertOrReplaceStmt = null as any;
+    this.insertIfMissingStmt = null as any;
+    this.selectDataStmt = null as any;
   }
 
   async load(): Promise<void> {
     console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
     this.ensureRootPath();
+    
+    // Initialize prepared statements
+    this.insertOrReplaceStmt = this.db.prepare(
+      "INSERT OR REPLACE INTO files (relativePath, mimeType) VALUES (?, ?)",
+    );
+    this.insertIfMissingStmt = this.db.prepare(
+      "INSERT INTO files (relativePath, mimeType) VALUES (?, ?) ON CONFLICT(relativePath) DO NOTHING",
+    );
+    this.selectDataStmt = this.db.prepare(
+      "SELECT * FROM files WHERE relativePath = ?",
+    );
     const count = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number };
     console.log(`[IndexDatabase] Contains ${count.count} entries`);
   }
@@ -60,7 +101,10 @@ export class IndexDatabase {
   }
 
   async addFile(fileData: DatabaseFileEntry): Promise<void> {
-    this.insertOrReplaceStmt.run(fileData.relativePath, JSON.stringify(fileData));
+    const columns = getColumnNamesAndValues(fileData);
+    const placeholders = columns.values.map(() => '?').join(', ');
+    const sql = `INSERT OR REPLACE INTO files (${columns.names.join(', ')}) VALUES (${placeholders})`;
+    this.db.prepare(sql).run(...columns.values);
   }
 
   async removeFile(relativePath: string): Promise<void> {
@@ -68,22 +112,24 @@ export class IndexDatabase {
   }
 
   async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
-    const row = this.db.prepare('SELECT data FROM files WHERE relativePath = ?').get(oldRelativePath) as { data: string } | undefined;
+    const row = this.db.prepare('SELECT * FROM files WHERE relativePath = ?').get(oldRelativePath) as DatabaseFileEntry | undefined;
     if (!row) {
       throw new Error(
         `moveFile: File at path "${oldRelativePath}" does not exist in the database.`,
       );
     }
 
-    const originalEntry = JSON.parse(row.data) as DatabaseFileEntry;
     const updated: DatabaseFileEntry = {
-      ...originalEntry,
+      ...row,
       relativePath: newRelativePath,
     };
 
     const transaction = this.db.transaction(() => {
       this.db.prepare('DELETE FROM files WHERE relativePath = ?').run(oldRelativePath);
-      this.db.prepare('INSERT INTO files (relativePath, data) VALUES (?, ?)').run(newRelativePath, JSON.stringify(updated));
+      const columns = getColumnNamesAndValues(updated);
+      const placeholders = columns.values.map(() => '?').join(', ');
+      const sql = `INSERT INTO files (${columns.names.join(', ')}) VALUES (${placeholders})`;
+      this.db.prepare(sql).run(...columns.values);
     });
     transaction();
   }
@@ -93,13 +139,16 @@ export class IndexDatabase {
     fileData: Partial<DatabaseFileEntry>,
   ): Promise<void> {
     const execute = () => {
-      const row = this.selectDataStmt.get(relativePath) as { data: string } | undefined;
-      const existingEntry = row ? JSON.parse(row.data) as DatabaseFileEntry : undefined;
+      const row = this.selectDataStmt.get(relativePath) as DatabaseFileEntry | undefined;
+      const existingEntry = row;
       const updatedEntry = {
         ...(existingEntry ?? { relativePath, mimeType: mimeTypeForFilename(relativePath) }),
         ...fileData,
       };
-      this.insertOrReplaceStmt.run(relativePath, JSON.stringify(updatedEntry));
+      const columns = getColumnNamesAndValues(updatedEntry);
+      const placeholders = columns.values.map(() => '?').join(', ');
+      const sql = `INSERT OR REPLACE INTO files (${columns.names.join(', ')}) VALUES (${placeholders})`;
+      this.db.prepare(sql).run(...columns.values);
     };
 
     await this.runWithRetry(execute);
@@ -109,12 +158,12 @@ export class IndexDatabase {
     relativePath: string,
     requiredMetadata?: Array<keyof FileRecord>,
   ): Promise<FileRecord | undefined> {
-    const row = this.selectDataStmt.get(relativePath) as { data: string } | undefined;
+    const row = this.selectDataStmt.get(relativePath) as Record<string, any> | undefined;
     if (!row) {
       return undefined;
     }
 
-    const record = JSON.parse(row.data) as FileRecord;
+    const record = rowToFileRecord(row);
 
     if (!requiredMetadata?.length || !this.hydrationRequired(record, requiredMetadata)) {
       return record;
@@ -125,21 +174,21 @@ export class IndexDatabase {
 
   getRecordsMissingDateTaken(limit = 50): FileRecord[] {
     const stmt = this.db.prepare(
-      `SELECT data FROM files
-       WHERE (json_extract(data, '$.mimeType') LIKE 'image/%' OR json_extract(data, '$.mimeType') LIKE 'video/%')
-         AND json_extract(data, '$.dateTaken') IS NULL
-         AND json_extract(data, '$.exifProcessedAt') IS NULL
+      `SELECT * FROM files
+       WHERE (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
+         AND dateTaken IS NULL
+         AND exifProcessedAt IS NULL
        LIMIT ?`);
-    const rows = stmt.all(limit) as Array<{ data: string }>;
-    return rows.map((row) => JSON.parse(row.data) as FileRecord);
+    const rows = stmt.all(limit) as Array<Record<string, any>>;
+    return rows.map((row) => rowToFileRecord(row));
   }
 
   countMissingInfo(): number {
     const stmt = this.db.prepare(
       `SELECT COUNT(*) as count FROM files
-       WHERE json_extract(data, '$.sizeInBytes') IS NULL
-          OR json_extract(data, '$.created') IS NULL
-          OR json_extract(data, '$.modified') IS NULL`);
+       WHERE sizeInBytes IS NULL
+          OR created IS NULL
+          OR modified IS NULL`);
     const row = stmt.get() as { count: number };
     return row.count;
   }
@@ -147,9 +196,9 @@ export class IndexDatabase {
   countMissingDateTaken(): number {
     const stmt = this.db.prepare(
       `SELECT COUNT(*) as count FROM files
-       WHERE (json_extract(data, '$.mimeType') LIKE 'image/%' OR json_extract(data, '$.mimeType') LIKE 'video/%')
-         AND json_extract(data, '$.dateTaken') IS NULL
-         AND json_extract(data, '$.exifProcessedAt') IS NULL`);
+       WHERE (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
+         AND dateTaken IS NULL
+         AND exifProcessedAt IS NULL`);
     const row = stmt.get() as { count: number };
     return row.count;
   }
@@ -157,9 +206,9 @@ export class IndexDatabase {
   countNeedingThumbnails(): number {
     const stmt = this.db.prepare(
       `SELECT COUNT(*) as count FROM files
-       WHERE (json_extract(data, '$.mimeType') LIKE 'image/%' OR json_extract(data, '$.mimeType') LIKE 'video/%')
-         AND COALESCE(json_extract(data, '$.thumbnailsReady'), 0) = 0
-         AND json_extract(data, '$.thumbnailsProcessedAt') IS NULL`);
+       WHERE (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
+         AND COALESCE(thumbnailsReady, 0) = 0
+         AND thumbnailsProcessedAt IS NULL`);
     const row = stmt.get() as { count: number };
     return row.count;
   }
@@ -167,8 +216,8 @@ export class IndexDatabase {
   countMediaEntries(): number {
     const stmt = this.db.prepare(
       `SELECT COUNT(*) as count FROM files
-       WHERE json_extract(data, '$.mimeType') LIKE 'image/%'
-          OR json_extract(data, '$.mimeType') LIKE 'video/%'`);
+       WHERE mimeType LIKE 'image/%'
+          OR mimeType LIKE 'video/%'`);
     const row = stmt.get() as { count: number };
     return row.count;
   }
@@ -195,24 +244,21 @@ export class IndexDatabase {
 
   getRecordsNeedingThumbnails(limit = 25): FileRecord[] {
     const rows = this.db.prepare(
-      `SELECT data FROM files
-       WHERE (json_extract(data, '$.mimeType') LIKE 'image/%' OR json_extract(data, '$.mimeType') LIKE 'video/%')
-         AND COALESCE(json_extract(data, '$.thumbnailsReady'), 0) = 0
-         AND json_extract(data, '$.thumbnailsProcessedAt') IS NULL
+      `SELECT * FROM files
+       WHERE (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
+         AND COALESCE(thumbnailsReady, 0) = 0
+         AND thumbnailsProcessedAt IS NULL
        LIMIT ?`)
-      .all(limit) as Array<{ data: string }>;
-    return rows.map((row) => JSON.parse(row.data) as FileRecord);
+      .all(limit) as Array<Record<string, any>>;
+    return rows.map((row) => rowToFileRecord(row));
   }
 
   insertMissingPaths(paths: string[]): void {
     if (!paths.length) return;
     const tx = this.db.transaction((list: string[]) => {
       for (const relativePath of list) {
-        const base: DatabaseFileEntry = {
-          relativePath,
-          mimeType: mimeTypeForFilename(relativePath),
-        };
-        this.insertIfMissingStmt.run(relativePath, JSON.stringify(base));
+        const mimeType = mimeTypeForFilename(relativePath);
+        this.insertIfMissingStmt.run(relativePath, mimeType);
       }
     });
     tx(paths);
@@ -229,13 +275,13 @@ export class IndexDatabase {
     relativePath: string,
     requiredMetadata: Array<keyof FileRecord>,
   ) {
-    const row = this.selectDataStmt.get(relativePath) as { data: string } | undefined;
+    const row = this.selectDataStmt.get(relativePath) as Record<string, any> | undefined;
     if (!row) {
       throw new Error(
         `hydrateMetadata: File at path "${relativePath}" does not exist in the database.`,
       );
     }
-    const originalDBEntry = JSON.parse(row.data) as DatabaseFileEntry;
+    const originalDBEntry = rowToFileRecord(row);
     
     // Determine which metadata groups need to be loaded
     const groupsToLoad = new Set<keyof typeof MetadataGroupKeys>();
@@ -301,14 +347,14 @@ export class IndexDatabase {
     await Promise.all(promises);
     
     // Re-fetch to get updated data
-    const updatedRow = this.selectDataStmt.get(relativePath) as { data: string };
-    return JSON.parse(updatedRow.data) as FileRecord;
+    const updatedRow = this.selectDataStmt.get(relativePath) as Record<string, any>;
+    return rowToFileRecord(updatedRow);
   }
 
   *files(): IterableIterator<FileRecord> {
-    const stmt = this.db.prepare('SELECT data FROM files');
+    const stmt = this.db.prepare('SELECT * FROM files');
     for (const row of stmt.iterate()) {
-      yield JSON.parse((row as { data: string }).data) as FileRecord;
+      yield rowToFileRecord(row as Record<string, any>);
     }
   }
 
