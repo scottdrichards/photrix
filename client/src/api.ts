@@ -39,6 +39,7 @@ export interface FetchPhotosOptions {
   includeSubfolders?: boolean;
   path?: string;
   signal?: AbortSignal;
+  ratingFilter?: { rating: number; atLeast: boolean } | null;
 }
 
 export interface FetchPhotosResult {
@@ -200,6 +201,7 @@ export const fetchPhotos = async ({
   includeSubfolders = false,
   path = "",
   signal,
+  ratingFilter,
 }: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
   const params = new URLSearchParams();
   params.set("metadata", Array.from(metadata).join(","));
@@ -207,6 +209,12 @@ export const fetchPhotos = async ({
   params.set("pageSize", pageSize.toString());
   if (includeSubfolders) {
     params.set("includeSubfolders", "true");
+  }
+  if (ratingFilter) {
+    const filterObj = ratingFilter.atLeast 
+      ? { rating: { min: ratingFilter.rating } }
+      : { rating: ratingFilter.rating };
+    params.set("filter", JSON.stringify(filterObj));
   }
 
   // Use /api/files/ with trailing slash to query for multiple files

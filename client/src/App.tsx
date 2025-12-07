@@ -11,7 +11,7 @@ import {
   makeStyles,
   tokens,
 } from "@fluentui/react-components";
-import { Info24Regular, Folder24Regular } from "@fluentui/react-icons";
+import { Info24Regular, Folder24Regular, Star24Regular, Star24Filled } from "@fluentui/react-icons";
 import { fetchFolders, fetchPhotos, PhotoItem } from "./api";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { FullscreenViewer } from "./components/FullscreenViewer";
@@ -65,6 +65,27 @@ const useStyles = makeStyles({
       backgroundColor: tokens.colorNeutralBackground1Hover,
     },
   },
+  ratingFilter: {
+    display: "flex",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalS,
+  },
+  starButton: {
+    cursor: "pointer",
+    border: "none",
+    background: "none",
+    padding: "2px",
+    display: "flex",
+    alignItems: "center",
+    color: tokens.colorBrandForeground1,
+    ":hover": {
+      transform: "scale(1.1)",
+    },
+  },
+  atLeastButton: {
+    minWidth: "32px",
+    height: "32px",
+  },
 });
 
 export default function App() {
@@ -86,6 +107,8 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     return params.get("includeSubfolders") === "true";
   });
+  const [ratingFilter, setRatingFilter] = useState<number | null>(null);
+  const [ratingAtLeast, setRatingAtLeast] = useState(true);
   const [currentPath, setCurrentPath] = useState<string>(() => {
     const path = window.location.pathname.slice(1); // Remove leading slash
     return decodeURIComponent(path);
@@ -99,7 +122,8 @@ export default function App() {
     setError(null);
     try {
       const path = currentPath ? `${currentPath}/` : "";
-      const result = await fetchPhotos({ page: 1, pageSize: PAGE_SIZE, includeSubfolders, signal, path });
+      const filter = ratingFilter ? { rating: ratingFilter, atLeast: ratingAtLeast } : null;
+      const result = await fetchPhotos({ page: 1, pageSize: PAGE_SIZE, includeSubfolders, signal, path, ratingFilter: filter });
       if (signal.aborted) {
         return;
       }
@@ -118,7 +142,7 @@ export default function App() {
         setInitialLoading(false);
       }
     }
-  }, [includeSubfolders, currentPath]);
+  }, [includeSubfolders, currentPath, ratingFilter, ratingAtLeast]);
 
   // Sync URL with state
   useEffect(() => {
@@ -181,7 +205,8 @@ export default function App() {
     try {
       const nextPage = page + 1;
       const path = currentPath ? `${currentPath}/` : "";
-      const result = await fetchPhotos({ page: nextPage, pageSize: PAGE_SIZE, includeSubfolders, path });
+      const filter = ratingFilter ? { rating: ratingFilter, atLeast: ratingAtLeast } : null;
+      const result = await fetchPhotos({ page: nextPage, pageSize: PAGE_SIZE, includeSubfolders, path, ratingFilter: filter });
       setPhotos((current) => {
         const next = [...current, ...result.items];
         const hasNext = result.items.length > 0 && next.length < result.total;
@@ -196,7 +221,7 @@ export default function App() {
     } finally {
       setLoadingMore(false);
     }
-  }, [hasMore, loadingMore, initialLoading, page, includeSubfolders, currentPath]);
+  }, [hasMore, loadingMore, initialLoading, page, includeSubfolders, currentPath, ratingFilter, ratingAtLeast]);
 
   const handleFolderClick = useCallback((folderName: string) => {
     const newPath = currentPath ? `${currentPath}/${folderName}` : folderName;
@@ -269,6 +294,48 @@ export default function App() {
           onChange={(_, data) => setIncludeSubfolders(data.checked)}
           label="Include subfolders"
         />
+        <Divider vertical />
+        <div className={styles.ratingFilter}>
+          <Caption1>Rating:</Caption1>
+          {[1, 2, 3, 4, 5].map((star) => (
+            <button
+              key={star}
+              className={styles.starButton}
+              onClick={() => setRatingFilter(ratingFilter === star ? null : star)}
+              title={`${star} star${star > 1 ? 's' : ''}`}
+            >
+              {ratingFilter !== null && star <= ratingFilter ? (
+                <Star24Filled />
+              ) : (
+                <Star24Regular />
+              )}
+            </button>
+          ))}
+          {ratingFilter !== null && (
+            <Tooltip content={ratingAtLeast ? "At least this rating" : "Exactly this rating"} relationship="label">
+              <Button
+                size="small"
+                appearance={ratingAtLeast ? "primary" : "subtle"}
+                onClick={() => setRatingAtLeast(!ratingAtLeast)}
+                className={styles.atLeastButton}
+              >
+                ≥
+              </Button>
+            </Tooltip>
+          )}
+          {ratingFilter !== null && (
+            <Button
+              size="small"
+              appearance="subtle"
+              onClick={() => {
+                setRatingFilter(null);
+                setRatingAtLeast(true);
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
       </div>
 
       {currentPath && (

@@ -65,24 +65,21 @@ const queryHandler = async (
   const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
 
   // Build filter
-  let filter;
-  if (filterParam) {
-    // Use explicit filter from query string
-    filter = JSON.parse(filterParam);
-  } else if (subPath) {
+  let pathFilter;
+  if (subPath) {
     // Convert path to filter
     // Remove trailing slash if present
     const cleanPath = subPath.endsWith("/") ? subPath.slice(0, -1) : subPath;
     if (includeSubfolders) {
       // Match files in this folder and all subfolders
-      filter = {
+      pathFilter = {
         relativePath: {
           regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`,
         },
       };
     } else {
       // Match files directly in this path only (no subfolders)
-      filter = {
+      pathFilter = {
         relativePath: {
           regex: `^${cleanPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^/]+$`,
         },
@@ -90,11 +87,24 @@ const queryHandler = async (
     }
   } else {
     // Default: match files at root level only (no subfolders)
-    filter = {
+    pathFilter = {
       relativePath: {
         regex: `^[^/]+$`,
       },
     };
+  }
+
+  // Combine path filter with any additional filters from query string
+  let filter;
+  if (filterParam) {
+    const additionalFilter = JSON.parse(filterParam);
+    // Combine both filters using AND operation
+    filter = {
+      operation: "and" as const,
+      conditions: [pathFilter, additionalFilter],
+    };
+  } else {
+    filter = pathFilter;
   }
 
   // Parse metadata (comma-separated list or JSON array)

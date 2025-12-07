@@ -134,19 +134,37 @@ export class FileScanner {
           for (const result of results) {
             if (!result) continue;
             
-            try {
-              const updateData: any = { 
-                thumbnailsProcessedAt: new Date().toISOString(),
-                fileHash: result.hash
-              };
-              if (result.thumbnailsReady) {
-                updateData.thumbnailsReady = true;
-                this.lastThumbnailResult = { relativePath: result.relativePath, completedAt: new Date().toISOString() };
+            // Retry logic for database writes
+            let attempts = 0;
+            const maxAttempts = 5;
+            while (attempts < maxAttempts) {
+              try {
+                const updateData: any = { 
+                  thumbnailsProcessedAt: new Date().toISOString(),
+                  fileHash: result.hash
+                };
+                if (result.thumbnailsReady) {
+                  updateData.thumbnailsReady = true;
+                  this.lastThumbnailResult = { relativePath: result.relativePath, completedAt: new Date().toISOString() };
+                }
+                await this.fileIndexDatabase.addOrUpdateFileData(result.relativePath, updateData);
+                break; // Success, exit retry loop
+              } catch (error) {
+                attempts++;
+                const message = error instanceof Error ? error.message : String(error);
+                if (message.includes("busy") && attempts < maxAttempts) {
+                  // Wait with exponential backoff before retrying
+                  await new Promise((resolve) => setTimeout(resolve, 50 * attempts));
+                  continue;
+                }
+                // Non-busy error or max attempts reached
+                console.error(`[FileScanner] Error updating database for ${result.relativePath} (attempt ${attempts}):`, error);
+                break;
               }
-              await this.fileIndexDatabase.addOrUpdateFileData(result.relativePath, updateData);
-            } catch (error) {
-              console.error(`[FileScanner] Error updating database for ${result.relativePath}:`, error);
             }
+            
+            // Small delay between writes to reduce contention
+            await new Promise((resolve) => setTimeout(resolve, 5));
           }
           
           totalProcessed += batch.length;
