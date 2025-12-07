@@ -1,9 +1,5 @@
 import { useEffect, useRef } from "react";
-import {
-  Button,
-  makeStyles,
-  tokens,
-} from "@fluentui/react-components";
+import { Button, makeStyles, tokens } from "@fluentui/react-components";
 import { Dismiss24Regular } from "@fluentui/react-icons";
 import type { PhotoItem } from "../api";
 
@@ -30,6 +26,7 @@ const useStyles = makeStyles({
     alignItems: "center",
     justifyContent: "center",
     position: "relative",
+    zIndex: 1,
   },
   media: {
     maxWidth: "100%",
@@ -42,7 +39,7 @@ const useStyles = makeStyles({
     top: tokens.spacingVerticalM,
     right: tokens.spacingHorizontalM,
     color: tokens.colorNeutralForegroundInverted,
-    zIndex: 10,
+    zIndex: 100,
     ":hover": {
       color: tokens.colorNeutralForegroundInvertedHover,
       backgroundColor: "rgba(255, 255, 255, 0.1)",
@@ -119,8 +116,7 @@ export function FullscreenViewer({
       onClick={handleBackdropClick}
     >
       {photo && (
-        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
-        <div className={styles.container} onClick={handleContainerClick}>
+        <>
           <Button
             appearance="subtle"
             icon={<Dismiss24Regular />}
@@ -129,27 +125,29 @@ export function FullscreenViewer({
             aria-label="Close"
             size="large"
           />
-
-          {photo.mediaType === "video" ? (
-            <video
-              key={photo.path}
-              controls
-              className={styles.media}
-              poster={photo.previewUrl}
-              preload="metadata"
-              autoPlay
-            >
-              <track kind="captions" src="data:," label="Captions not provided" />
-              <source
-                src={photo.fullUrl}
-                type={photo.metadata?.mimeType ?? "video/mp4"}
-              />
-              Your browser does not support HTML video playback.
-            </video>
-          ) : (
-            <img src={photo.fullUrl} alt={photo.name} className={styles.media} />
-          )}
-        </div>
+          {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+          <div className={styles.container} onClick={handleContainerClick}>
+            {photo.mediaType === "video" ? (
+              <video
+                key={photo.path}
+                controls
+                className={styles.media}
+                poster={photo.previewUrl}
+                preload="metadata"
+                autoPlay
+              >
+                <track kind="captions" src="data:," label="Captions not provided" />
+                <source
+                  src={photo.fullUrl}
+                  type={photo.metadata?.mimeType ?? "video/mp4"}
+                />
+                Your browser does not support HTML video playback.
+              </video>
+            ) : (
+              <img src={photo.fullUrl} alt={photo.name} className={styles.media} />
+            )}
+          </div>
+        </>
       )}
     </dialog>
   );

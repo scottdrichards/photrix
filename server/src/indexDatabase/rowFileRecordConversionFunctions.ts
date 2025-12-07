@@ -12,11 +12,11 @@ export const rowToFileRecord = (row: Record<string, any>): FileRecord => {
 
     // File Info
     if (row.sizeInBytes !== null && row.sizeInBytes !== undefined) record.sizeInBytes = row.sizeInBytes;
-    if (row.created) record.created = new Date(row.created);
-    if (row.modified) record.modified = new Date(row.modified);
+    if (row.created !== null && row.created !== undefined) record.created = new Date(row.created);
+    if (row.modified !== null && row.modified !== undefined) record.modified = new Date(row.modified);
 
     // EXIF Metadata
-    if (row.dateTaken) record.dateTaken = new Date(row.dateTaken);
+    if (row.dateTaken !== null && row.dateTaken !== undefined) record.dateTaken = new Date(row.dateTaken);
     if (row.dimensionsWidth !== null && row.dimensionsHeight !== null) {
         record.dimensions = { width: row.dimensionsWidth, height: row.dimensionsHeight };
     }
@@ -72,11 +72,11 @@ export const getColumnNamesAndValues = (entry: Partial<DatabaseFileEntry>): { na
 
     // File Info
     if (entry.sizeInBytes !== undefined) addColumn('sizeInBytes', entry.sizeInBytes);
-    if (entry.created !== undefined) addColumn('created', entry.created instanceof Date ? entry.created.toISOString() : entry.created);
-    if (entry.modified !== undefined) addColumn('modified', entry.modified instanceof Date ? entry.modified.toISOString() : entry.modified);
+    if (entry.created !== undefined) addColumn('created', entry.created instanceof Date ? entry.created.getTime() : entry.created);
+    if (entry.modified !== undefined) addColumn('modified', entry.modified instanceof Date ? entry.modified.getTime() : entry.modified);
 
     // EXIF Metadata
-    if (entry.dateTaken !== undefined) addColumn('dateTaken', entry.dateTaken instanceof Date ? entry.dateTaken.toISOString() : entry.dateTaken);
+    if (entry.dateTaken !== undefined) addColumn('dateTaken', entry.dateTaken instanceof Date ? entry.dateTaken.getTime() : entry.dateTaken);
     if (entry.dimensions) {
         addColumn('dimensionsWidth', entry.dimensions.width);
         addColumn('dimensionsHeight', entry.dimensions.height);
@@ -112,6 +112,14 @@ export const getColumnNamesAndValues = (entry: Partial<DatabaseFileEntry>): { na
     if (entry.fileHash !== undefined) addColumn('fileHash', entry.fileHash);
     if (entry.exifProcessedAt !== undefined) addColumn('exifProcessedAt', entry.exifProcessedAt);
     if (entry.thumbnailsProcessedAt !== undefined) addColumn('thumbnailsProcessedAt', entry.thumbnailsProcessedAt);
+
+    // Validate that names and values are in sync
+    if (names.length !== values.length) {
+        throw new Error(
+            `Internal error in getColumnNamesAndValues: ${names.length} names but ${values.length} values. ` +
+            `Names: ${names.join(', ')}`
+        );
+    }
 
     return { names, values };
 }

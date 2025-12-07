@@ -44,4 +44,22 @@ describe("getExifMetadataFromFile", () => {
 		expect(metadata.dateTaken).toBeInstanceOf(Date);
 			expect(metadata.dateTaken?.getTime()).toBeGreaterThan(0);
 	});
+
+	it("extracts metadata from problematic JPG file", async () => {
+		const filePath = resolveExamplePath("subFolder/20120803_160939.jpg");
+
+		const metadata = await getExifMetadataFromFile(filePath);
+
+		// Verify location is properly converted to decimal degrees (not an array)
+		expect(metadata.location).toBeDefined();
+		expect(typeof metadata.location?.latitude).toBe("number");
+		expect(typeof metadata.location?.longitude).toBe("number");
+		expect(metadata.location?.latitude).toBeCloseTo(40.706096, 4);
+		expect(metadata.location?.longitude).toBeCloseTo(110.932840, 4);
+		
+		// Verify other metadata
+		expect(metadata.dimensions?.width).toBe(3264);
+		expect(metadata.dimensions?.height).toBe(2448);
+		expect(metadata.cameraMake).toBe("SAMSUNG");
+	});
 });

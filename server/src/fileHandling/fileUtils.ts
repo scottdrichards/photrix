@@ -29,6 +29,7 @@ export const getExifMetadataFromFile = async (
   }
 
   const exifRMetadataToFileField = {
+    // Standard EXIF fields
     DateTimeOriginal: "dateTaken",
     ImageWidth: "dimensions.width",
     ImageHeight: "dimensions.height",
@@ -50,6 +51,14 @@ export const getExifMetadataFromFile = async (
     Rating: "rating",
     Keywords: "tags",
     Orientation: "orientation",
+    
+    // Lightroom XMP fields
+    "xmp:Rating": "rating",
+    "xmp:CreateDate": "dateTaken",
+    "photoshop:DateCreated": "dateTaken",
+    "dc:subject": "tags",
+    "lr:hierarchicalSubject": "tags",
+    "Iptc4xmpExt:LocationCreated": "location",
   } as const satisfies {
     [key: string]: keyof ExifMetadata | `${keyof ExifMetadata}.${string}`;
   };
@@ -59,6 +68,10 @@ export const getExifMetadataFromFile = async (
   const rawData = await exifr.parse(fullPath, {
     pick: fieldsToRequest,
     translateValues: false,
+    xmp: true,  // Enable XMP parsing for Lightroom ratings
+    ifd0: {},
+    exif: {},
+    gps: {},
   });
 
   const metadata = Object.entries(exifRMetadataToFileField).reduce((acc, [key, value]) => {
@@ -87,6 +100,82 @@ export const getExifMetadataFromFile = async (
       [mainKey]: rawValue,
     };
   }, {} as ExifMetadata);
+
+  // Convert GPS coordinates from DMS array to decimal degrees
+  if (metadata.location) {
+    const convertDMSToDecimal = (dms: unknown): number | undefined => {
+      if (typeof dms === 'number') {
+        return dms; // Already in decimal format
+      }
+      if (Array.isArray(dms) && dms.length >= 2) {
+        const [degrees, minutes, seconds = 0] = dms;
+        if (typeof degrees === 'number' && typeof minutes === 'number' && typeof seconds === 'number') {
+          return degrees + minutes / 60 + seconds / 3600;
+        }
+      }
+      return undefined;
+    };
+
+    const latitude = convertDMSToDecimal(metadata.location.latitude);
+    const longitude = convertDMSToDecimal(metadata.location.longitude);
+
+    if (latitude !== undefined && longitude !== undefined) {
+      metadata.location = { latitude, longitude };
+    } else {
+      // If conversion fails, remove location
+      delete (metadata as any).location;
+    }
+  }
+
+  // Additional Lightroom XMP field conversions
+  if (rawData) {
+    // Rating: Check for RatingPercent (0-100 scale)
+    if (!metadata.rating) {
+      const ratingPercent = rawData['RatingPercent'];
+      if (typeof ratingPercent === 'number') {
+        metadata.rating = Math.round(ratingPercent / 20);
+      }
+    }
+    
+    // Tags: Merge all tag sources
+    const allTags = new Set<string>(metadata.tags || []);
+    
+    // Lightroom hierarchical subjects (pipe-separated paths like "Nature|Landscapes")
+    const hierarchicalSubjects = rawData['lr:hierarchicalSubject'];
+    if (hierarchicalSubjects) {
+      const subjects = Array.isArray(hierarchicalSubjects) ? hierarchicalSubjects : [hierarchicalSubjects];
+      subjects.forEach((subject: string) => {
+        // Split hierarchical tags and add both full path and leaf
+        const parts = subject.split('|');
+        allTags.add(subject); // Full hierarchical path
+        allTags.add(parts[parts.length - 1]); // Leaf tag
+      });
+    }
+    
+    // IPTC keywords
+    const iptcKeywords = rawData['Iptc4xmpCore:Keywords'];
+    if (iptcKeywords) {
+      const keywords = Array.isArray(iptcKeywords) ? iptcKeywords : [iptcKeywords];
+      keywords.forEach((kw: string) => allTags.add(kw));
+    }
+    
+    if (allTags.size > 0) {
+      metadata.tags = Array.from(allTags);
+    }
+    
+    // Camera info: Check for Lightroom lens info
+    if (!metadata.lens) {
+      metadata.lens = rawData['aux:Lens'] || rawData['exifEX:LensModel'];
+    }
+    
+    // Date taken: Prefer XMP dates if EXIF missing
+    if (!metadata.dateTaken) {
+      const xmpDate = rawData['xmp:CreateDate'] || rawData['photoshop:DateCreated'];
+      if (xmpDate) {
+        metadata.dateTaken = new Date(xmpDate);
+      }
+    }
+  }
 
   // Orientation 5-8 means the image is rotated 90 or 270 degrees, so width and height are swapped
   if (metadata.dimensions && [5, 6, 7, 8].includes(rawData?.Orientation)) {

@@ -102,6 +102,14 @@ export class IndexDatabase {
 
   async addFile(fileData: DatabaseFileEntry): Promise<void> {
     const columns = getColumnNamesAndValues(fileData);
+    
+    if (columns.names.length !== columns.values.length) {
+      throw new Error(
+        `SQL parameter mismatch for ${fileData.relativePath}: ${columns.names.length} column names but ${columns.values.length} values. ` +
+        `Columns: ${columns.names.join(', ')}. Values: ${JSON.stringify(columns.values)}`
+      );
+    }
+    
     const placeholders = columns.values.map(() => '?').join(', ');
     const sql = `INSERT OR REPLACE INTO files (${columns.names.join(', ')}) VALUES (${placeholders})`;
     this.db.prepare(sql).run(...columns.values);
@@ -127,6 +135,14 @@ export class IndexDatabase {
     const transaction = this.db.transaction(() => {
       this.db.prepare('DELETE FROM files WHERE relativePath = ?').run(oldRelativePath);
       const columns = getColumnNamesAndValues(updated);
+      
+      if (columns.names.length !== columns.values.length) {
+        throw new Error(
+          `SQL parameter mismatch for ${updated.relativePath}: ${columns.names.length} column names but ${columns.values.length} values. ` +
+          `Columns: ${columns.names.join(', ')}. Values: ${JSON.stringify(columns.values)}`
+        );
+      }
+      
       const placeholders = columns.values.map(() => '?').join(', ');
       const sql = `INSERT INTO files (${columns.names.join(', ')}) VALUES (${placeholders})`;
       this.db.prepare(sql).run(...columns.values);
@@ -146,6 +162,14 @@ export class IndexDatabase {
         ...fileData,
       };
       const columns = getColumnNamesAndValues(updatedEntry);
+      
+      if (columns.names.length !== columns.values.length) {
+        throw new Error(
+          `SQL parameter mismatch for ${relativePath}: ${columns.names.length} column names but ${columns.values.length} values. ` +
+          `Columns: ${columns.names.join(', ')}. Values: ${JSON.stringify(columns.values)}`
+        );
+      }
+      
       const placeholders = columns.values.map(() => '?').join(', ');
       const sql = `INSERT OR REPLACE INTO files (${columns.names.join(', ')}) VALUES (${placeholders})`;
       this.db.prepare(sql).run(...columns.values);

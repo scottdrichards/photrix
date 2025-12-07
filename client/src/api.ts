@@ -107,7 +107,27 @@ export const subscribeStatusStream = (
   return () => source.close();
 };
 
-const DEFAULT_METADATA_KEYS = ["mimeType", "dimensions"] as const;
+const DEFAULT_METADATA_KEYS = [
+  "mimeType",
+  "dimensions",
+  "dateTaken",
+  "sizeInBytes",
+  "created",
+  "modified",
+  "cameraMake",
+  "cameraModel",
+  "exposureTime",
+  "aperture",
+  "iso",
+  "focalLength",
+  "lens",
+  "rating",
+  "tags",
+  "location",
+  "orientation",
+  "duration",
+  "framerate",
+] as const;
 
 export const fetchStatus = async (): Promise<ServerStatus> => {
   const response = await fetch("/api/status");
@@ -164,6 +184,9 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
       ? buildFileUrl(item.relativePath, { representation: "preview" })
       : undefined;
 
+  // Include all metadata from the API response
+  const { relativePath, ...metadata } = item;
+  
   return {
     path: item.relativePath,
     name,
@@ -172,11 +195,7 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
     previewUrl,
     fullUrl,
     videoPreviewUrl,
-    metadata: {
-      mimeType: item.mimeType,
-      dateTaken: item.dateTaken,
-      dimensions: item.dimensions,
-    },
+    metadata,
   };
 };
 
