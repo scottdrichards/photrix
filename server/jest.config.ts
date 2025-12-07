@@ -22,7 +22,7 @@ const config: JestConfigWithTsJest = {
     ],
   },
   testMatch: ["<rootDir>/src/**/*.spec.ts"],
-  setupFilesAfterEnv: [],
+  setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
   testPathIgnorePatterns: ["<rootDir>/dist/"],
   maxWorkers: 1, // Run tests serially to avoid port conflicts
 };

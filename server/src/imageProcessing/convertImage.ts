@@ -3,10 +3,7 @@ import { existsSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
-import {
-  getCachedFilePath as getSharedCachedFilePath,
-  getHash,
-} from "../common/cacheUtils.ts";
+import { getCachedFilePath as getSharedCachedFilePath, getHash } from "../common/cacheUtils.ts";
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 const pythonPath = "python";
@@ -58,7 +55,7 @@ export const convertImage = async (
   filePath: string,
   height: StandardHeight = 2160,
 ): Promise<string> => {
-  const hash = getHash(filePath);
+  const hash = await getHash({ filePath });
   const cachedPath = getSharedCachedFilePath(hash, height, "jpg");
 
   if (existsSync(cachedPath)) {
@@ -74,7 +71,7 @@ export const convertImageToMultipleSizes = async (
   filePath: string,
   heights: StandardHeight[],
 ): Promise<void> => {
-  const hash = getHash(filePath);
+  const hash = await getHash({ filePath });
   
   const outputs = heights
     .map(height => ({

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import http from "node:http";
 import path from "node:path";
+import { rmSync } from "node:fs";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { FileScanner } from "./indexDatabase/fileScanner.ts";
 import { createServer } from "./main.ts";
@@ -37,10 +38,22 @@ describe("main.ts HTTP Server", () => {
   let server: http.Server;
   let database: IndexDatabase;
   let storagePath: string;
+  const TEST_DB_PATH = path.resolve("./.cache/test-index.db");
   const TEST_PORT = 3001;
+
+  const cleanDb = () => {
+    try {
+      rmSync(TEST_DB_PATH, { force: true });
+    } catch {
+      /* no-op */
+    }
+  };
 
   beforeEach(async () => {
     await new Promise(resolve => setTimeout(resolve, 100));
+
+    process.env.INDEX_DB_PATH = TEST_DB_PATH;
+    cleanDb();
     
     storagePath = path.resolve("./exampleFolder");
     database = new IndexDatabase(storagePath);
@@ -67,6 +80,7 @@ describe("main.ts HTTP Server", () => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
     await new Promise(resolve => setTimeout(resolve, 100));
+    cleanDb();
   });
 
   describe("CORS headers", () => {

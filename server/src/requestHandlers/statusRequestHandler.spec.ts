@@ -6,50 +6,51 @@ import { FileScanner } from "../indexDatabase/fileScanner.ts";
 
 describe("statusRequestHandler", () => {
   it("returns the correct status structure", () => {
-    // Mock dependencies
     const mockDatabase = {
       getSize: jest.fn().mockReturnValue(42),
+      countMissingInfo: jest.fn().mockReturnValue(5),
+      countMissingDateTaken: jest.fn().mockReturnValue(3),
+      countNeedingThumbnails: jest.fn().mockReturnValue(7),
+      countMediaEntries: jest.fn().mockReturnValue(20),
     } as unknown as IndexDatabase;
 
     const mockFileScanner = {
-      jobQueues: {
-        info: { files: ["a"], active: true, total: 10 },
-        exifMetadata: { files: [], active: false, total: 5 },
-        aiMetadata: { files: ["b", "c"], active: true, total: 20 },
-        faceMetadata: { files: [], active: false, total: 0 },
-      },
-      scannedFilesCount: 123,
+      scannedFilesCount: 25,
+      thumbnailMaintenanceActive: true,
+      exifMaintenanceActive: false,
+      latestThumbnail: { relativePath: "thumb.jpg", completedAt: "2024-01-01T00:00:00Z" },
+      latestExif: { relativePath: "meta.jpg", completedAt: "2024-01-01T01:00:00Z" },
     } as unknown as FileScanner;
 
-    // Mock Request and Response
     const req = {} as http.IncomingMessage;
     const res = {
       writeHead: jest.fn(),
       end: jest.fn(),
     } as unknown as http.ServerResponse;
 
-    // Call the handler
     statusRequestHandler(req, res, {
       database: mockDatabase,
       fileScanner: mockFileScanner,
     });
 
-    // Assertions
     expect(res.writeHead).toHaveBeenCalledWith(200, {
       "Content-Type": "application/json",
     });
 
-    const expectedStatus = {
+    const payload = JSON.parse((res.end as jest.Mock).mock.calls[0][0]);
+    expect(payload).toMatchObject({
       databaseSize: 42,
-      queues: {
-        info: { length: 1, active: true, total: 10 },
-        exifMetadata: { length: 0, active: false, total: 5 },
-        aiMetadata: { length: 2, active: true, total: 20 },
-        faceMetadata: { length: 0, active: false, total: 0 },
+      scannedFilesCount: 25,
+      pending: { info: 5, exif: 3, thumbnails: 7 },
+      maintenance: { thumbnailActive: true, exifActive: false },
+      recent: {
+        thumbnail: { relativePath: "thumb.jpg" },
+        exif: { relativePath: "meta.jpg" },
       },
-      scannedFilesCount: 123,
-    };
+    });
 
-    expect(res.end).toHaveBeenCalledWith(JSON.stringify(expectedStatus));
+    expect(payload.progress.info.percent).toBeCloseTo((42 - 5) / 42, 5);
+    expect(payload.progress.exif.percent).toBeCloseTo((20 - 3) / 20, 5);
+    expect(payload.progress.thumbnails.percent).toBeCloseTo((20 - 7) / 20, 5);
   });
 });

@@ -1,8 +1,10 @@
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect, beforeAll } from "@jest/globals";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { IndexDatabase } from "./indexDatabase.ts";
+import { rmSync } from "node:fs";
 import type { DatabaseFileEntry } from "./fileRecord.type.ts";
+import { IndexDatabase } from "./indexDatabase.ts";
 
 const EXAMPLE_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -27,10 +29,24 @@ const createEntry = (overrides: Partial<DatabaseFileEntry> = {}): DatabaseFileEn
 	};
 };
 
-const createDb = (): IndexDatabase => new IndexDatabase(EXAMPLE_ROOT);
+const createDb = (): InstanceType<typeof IndexDatabase> => new IndexDatabase(EXAMPLE_ROOT);
+
+beforeAll(async () => {
+	process.env.ThumbnailCacheDirectory ??= path.join(os.tmpdir(), "photrix-test-thumbs");
+	process.env.INDEX_DB_PATH = path.join(os.tmpdir(), "photrix-test-index.db");
+});
+
+const cleanDb = () => {
+	try {
+		rmSync(process.env.INDEX_DB_PATH ?? "", { force: true });
+	} catch {
+		/* ignore */
+	}
+};
 
 describe("IndexDatabase", () => {
 	it("adds files without mutating original input", async () => {
+		cleanDb();
 		const db = createDb();
 		const entry = createEntry();
 
@@ -45,6 +61,7 @@ describe("IndexDatabase", () => {
 	});
 
 	it("removes files from the database", async () => {
+		cleanDb();
 		const db = createDb();
 		const entry = createEntry();
 
@@ -56,6 +73,7 @@ describe("IndexDatabase", () => {
 	});
 
 	it("moves a file to a new relative path", async () => {
+		cleanDb();
 		const db = createDb();
 		const entry = createEntry();
 
@@ -72,6 +90,7 @@ describe("IndexDatabase", () => {
 	});
 
 	it("merges updates when addOrUpdateFileData is called", async () => {
+		cleanDb();
 		const db = createDb();
 		const entry = createEntry();
 
@@ -90,6 +109,7 @@ describe("IndexDatabase", () => {
 	});
 
 	it("returns undefined for unknown files", async () => {
+		cleanDb();
 		const db = createDb();
 		const record = await db.getFileRecord("missing.file");
 		expect(record).toBeUndefined();

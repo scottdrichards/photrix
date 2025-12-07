@@ -3,10 +3,9 @@ import { BaseFileRecord, DatabaseFileEntry, MetadataGroups } from "./fileRecord.
 
 
 /**
- * How a file is represented when sent out - duplicate of DatabaseFileEntry I believe
+ * How a file is represented when sent out - same as DatabaseFileEntry
  */
-export type FileRecord = BaseFileRecord & 
-    Partial<UnionToIntersection<MetadataGroups[keyof MetadataGroups]>>;
+export type FileRecord = DatabaseFileEntry;
 
 /**
  * String [] matching to string means OR - string[] matching to string[] means AND

@@ -48,23 +48,63 @@ export interface FetchPhotosResult {
   pageSize: number;
 }
 
-export interface QueueStatus {
-  length: number;
-  active: number;
+export interface ProgressEntry {
+  completed: number;
   total: number;
+  percent: number;
+}
+
+export interface RecentMaintenance {
+  relativePath: string;
+  completedAt: string;
 }
 
 export interface ServerStatus {
   databaseSize: number;
-  queues: {
-    info: QueueStatus;
-    exifMetadata: QueueStatus;
-    aiMetadata: QueueStatus;
-    faceMetadata: QueueStatus;
-    thumbnail: QueueStatus;
-  };
   scannedFilesCount: number;
+  pending: {
+    info: number;
+    exif: number;
+    thumbnails: number;
+  };
+  maintenance: {
+    thumbnailActive: boolean;
+    exifActive: boolean;
+  };
+  progress: {
+    overall: ProgressEntry;
+    scanned: ProgressEntry;
+    info: ProgressEntry;
+    exif: ProgressEntry;
+    thumbnails: ProgressEntry;
+  };
+  recent: {
+    thumbnail: RecentMaintenance | null;
+    exif: RecentMaintenance | null;
+  };
 }
+
+export const subscribeStatusStream = (
+  onUpdate: (status: ServerStatus) => void,
+  onError?: (error: unknown) => void,
+) => {
+  const source = new EventSource("/api/status/stream");
+
+  source.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data) as ServerStatus;
+      onUpdate(data);
+    } catch (error) {
+      onError?.(error);
+    }
+  };
+
+  source.onerror = (error) => {
+    onError?.(error);
+  };
+
+  return () => source.close();
+};
 
 const DEFAULT_METADATA_KEYS = ["mimeType", "dimensions"] as const;
 

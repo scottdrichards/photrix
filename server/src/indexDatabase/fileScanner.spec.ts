@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "@jest/globals";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,9 +12,15 @@ describe("FileWatcher", () => {
   let db: IndexDatabase;
   let watcher: FileScanner;
 
+  beforeAll(async () => {
+    process.env.ThumbnailCacheDirectory ??= path.join(os.tmpdir(), "photrix-test-thumbs");
+    process.env.INDEX_DB_PATH = path.join(os.tmpdir(), "photrix-test-index.db");
+  });
+
   beforeEach(async () => {
     // Create a temporary directory for testing
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "photrix-watcher-"));
+    process.env.INDEX_DB_PATH = path.join(tempDir, "index.db");
     db = new IndexDatabase(tempDir);
   });
 

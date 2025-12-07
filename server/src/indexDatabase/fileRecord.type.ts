@@ -98,7 +98,16 @@ type _EnsureAllMetadataKeysListed = AssertTrue<
  * How a file is stored in the database - now a flat record for performance.
  * All metadata properties are at the top level instead of nested in groups.
  */
-export type DatabaseFileEntry = BaseFileRecord & Partial<FileInfo & ExifMetadata & AIMetadata & FaceMetadata>;
+export type DatabaseFileEntry = BaseFileRecord & Partial<FileInfo & ExifMetadata & AIMetadata & FaceMetadata> & {
+  /** True when standard thumbnails/previews have been generated */
+  thumbnailsReady?: boolean;
+  /** MD5 hash of the file contents */
+  fileHash?: string;
+  /** Timestamp when EXIF data was last attempted/retrieved */
+  exifProcessedAt?: string;
+  /** Timestamp when thumbnails were last attempted/generated */
+  thumbnailsProcessedAt?: string;
+};
 
 /////////////////////////
 // This section is just to ensure no metadata key collisions occur when creating FileRecord type.

@@ -16,7 +16,7 @@ export const generateVideoPreview = async (
   height: StandardHeight = 320,
   durationMS: number = 5_000,
 ): Promise<string> => {
-  const hash = getHash(filePath);
+  const hash = await getHash({ filePath });
   const cachedPath = getCachedFilePath(hash, height, "mp4");
 
   if (existsSync(cachedPath)) {
@@ -69,7 +69,7 @@ export const generateVideoThumbnail = async (
   filePath: string,
   height: StandardHeight = 320,
 ): Promise<string> => {
-  const hash = getHash(filePath);
+  const hash = await getHash({ filePath });
   const cachedPath = getCachedFilePath(hash, height, "jpg");
 
   if (existsSync(cachedPath)) {

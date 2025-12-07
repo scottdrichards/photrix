@@ -1,10 +1,11 @@
-import { convertImage } from "./convertImage.ts";
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, beforeAll } from '@jest/globals';
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { createHash } from "crypto";
 import sharp from "sharp";
+
+let convertImage: typeof import("./convertImage.ts").convertImage;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -15,6 +16,11 @@ describe("convertImage", () => {
   const getHash = (filePath: string): string =>
     createHash("md5").update(filePath).digest("hex");
   
+  beforeAll(async () => {
+    process.env.ThumbnailCacheDirectory ??= path.join(cacheDir, "thumbs");
+    ({ convertImage } = await import("./convertImage.ts"));
+  });
+
   it("should convert and rotate the image correctly", async () => {
     if (!fs.existsSync(testImagePath)) {
       console.warn("Skipping test: Test image not found at " + testImagePath);

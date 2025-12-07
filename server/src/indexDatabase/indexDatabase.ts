@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { CACHE_DIR } from "../common/cacheUtils.ts";
 import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.ts";
@@ -11,10 +12,15 @@ export class IndexDatabase {
   private readonly storagePath: string;
   private db: Database.Database;
   private readonly dbFilePath: string;
+  private readonly insertOrReplaceStmt: Database.Statement;
+  private readonly insertIfMissingStmt: Database.Statement;
+  private readonly selectDataStmt: Database.Statement;
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;
-    this.dbFilePath = path.join(CACHE_DIR, "index.db");
+    const envDbPath = process.env.INDEX_DB_PATH ?? process.env.INDEX_DB_LOCATION;
+    this.dbFilePath = envDbPath ? path.resolve(envDbPath) : path.join(CACHE_DIR, "index.db");
+    mkdirSync(path.dirname(this.dbFilePath), { recursive: true });
     
     this.db = new Database(this.dbFilePath);
     this.db.pragma('journal_mode = WAL');
@@ -24,10 +30,27 @@ export class IndexDatabase {
         data JSON NOT NULL
       )
     `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+
+    this.insertOrReplaceStmt = this.db.prepare(
+      "INSERT OR REPLACE INTO files (relativePath, data) VALUES (?, ?)",
+    );
+    this.insertIfMissingStmt = this.db.prepare(
+      "INSERT INTO files (relativePath, data) VALUES (?, ?) ON CONFLICT(relativePath) DO NOTHING",
+    );
+    this.selectDataStmt = this.db.prepare(
+      "SELECT data FROM files WHERE relativePath = ?",
+    );
   }
 
   async load(): Promise<void> {
     console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
+    this.ensureRootPath();
     const count = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number };
     console.log(`[IndexDatabase] Contains ${count.count} entries`);
   }
@@ -37,10 +60,7 @@ export class IndexDatabase {
   }
 
   async addFile(fileData: DatabaseFileEntry): Promise<void> {
-    this.db.prepare('INSERT OR REPLACE INTO files (relativePath, data) VALUES (?, ?)').run(
-      fileData.relativePath,
-      JSON.stringify(fileData)
-    );
+    this.insertOrReplaceStmt.run(fileData.relativePath, JSON.stringify(fileData));
   }
 
   async removeFile(relativePath: string): Promise<void> {
@@ -72,26 +92,24 @@ export class IndexDatabase {
     relativePath: string,
     fileData: Partial<DatabaseFileEntry>,
   ): Promise<void> {
-    const row = this.db.prepare('SELECT data FROM files WHERE relativePath = ?').get(relativePath) as { data: string } | undefined;
-    
-    const existingEntry = row ? JSON.parse(row.data) as DatabaseFileEntry : undefined;
-    
-    const updatedEntry = {
-      ...(existingEntry ?? { relativePath, mimeType: mimeTypeForFilename(relativePath) }),
-      ...fileData,
+    const execute = () => {
+      const row = this.selectDataStmt.get(relativePath) as { data: string } | undefined;
+      const existingEntry = row ? JSON.parse(row.data) as DatabaseFileEntry : undefined;
+      const updatedEntry = {
+        ...(existingEntry ?? { relativePath, mimeType: mimeTypeForFilename(relativePath) }),
+        ...fileData,
+      };
+      this.insertOrReplaceStmt.run(relativePath, JSON.stringify(updatedEntry));
     };
 
-    this.db.prepare('INSERT OR REPLACE INTO files (relativePath, data) VALUES (?, ?)').run(
-      relativePath,
-      JSON.stringify(updatedEntry)
-    );
+    await this.runWithRetry(execute);
   }
 
   async getFileRecord(
     relativePath: string,
     requiredMetadata?: Array<keyof FileRecord>,
   ): Promise<FileRecord | undefined> {
-    const row = this.db.prepare('SELECT data FROM files WHERE relativePath = ?').get(relativePath) as { data: string } | undefined;
+    const row = this.selectDataStmt.get(relativePath) as { data: string } | undefined;
     if (!row) {
       return undefined;
     }
@@ -105,6 +123,101 @@ export class IndexDatabase {
     return await this.hydrateMetadata(relativePath, requiredMetadata);
   }
 
+  getRecordsMissingDateTaken(limit = 50): FileRecord[] {
+    const stmt = this.db.prepare(
+      `SELECT data FROM files
+       WHERE (json_extract(data, '$.mimeType') LIKE 'image/%' OR json_extract(data, '$.mimeType') LIKE 'video/%')
+         AND json_extract(data, '$.dateTaken') IS NULL
+         AND json_extract(data, '$.exifProcessedAt') IS NULL
+       LIMIT ?`);
+    const rows = stmt.all(limit) as Array<{ data: string }>;
+    return rows.map((row) => JSON.parse(row.data) as FileRecord);
+  }
+
+  countMissingInfo(): number {
+    const stmt = this.db.prepare(
+      `SELECT COUNT(*) as count FROM files
+       WHERE json_extract(data, '$.sizeInBytes') IS NULL
+          OR json_extract(data, '$.created') IS NULL
+          OR json_extract(data, '$.modified') IS NULL`);
+    const row = stmt.get() as { count: number };
+    return row.count;
+  }
+
+  countMissingDateTaken(): number {
+    const stmt = this.db.prepare(
+      `SELECT COUNT(*) as count FROM files
+       WHERE (json_extract(data, '$.mimeType') LIKE 'image/%' OR json_extract(data, '$.mimeType') LIKE 'video/%')
+         AND json_extract(data, '$.dateTaken') IS NULL
+         AND json_extract(data, '$.exifProcessedAt') IS NULL`);
+    const row = stmt.get() as { count: number };
+    return row.count;
+  }
+
+  countNeedingThumbnails(): number {
+    const stmt = this.db.prepare(
+      `SELECT COUNT(*) as count FROM files
+       WHERE (json_extract(data, '$.mimeType') LIKE 'image/%' OR json_extract(data, '$.mimeType') LIKE 'video/%')
+         AND COALESCE(json_extract(data, '$.thumbnailsReady'), 0) = 0
+         AND json_extract(data, '$.thumbnailsProcessedAt') IS NULL`);
+    const row = stmt.get() as { count: number };
+    return row.count;
+  }
+
+  countMediaEntries(): number {
+    const stmt = this.db.prepare(
+      `SELECT COUNT(*) as count FROM files
+       WHERE json_extract(data, '$.mimeType') LIKE 'image/%'
+          OR json_extract(data, '$.mimeType') LIKE 'video/%'`);
+    const row = stmt.get() as { count: number };
+    return row.count;
+  }
+
+  private ensureRootPath(): void {
+    const existing = this.db
+      .prepare("SELECT value FROM meta WHERE key = 'rootPath'")
+      .get() as { value: string } | undefined;
+
+    if (!existing) {
+      this.db.prepare("INSERT INTO meta (key, value) VALUES ('rootPath', ?)").run(this.storagePath);
+      return;
+    }
+
+    if (existing.value !== this.storagePath) {
+      console.warn(`[IndexDatabase] Media root changed from ${existing.value} to ${this.storagePath}. Resetting index.`);
+      const reset = this.db.transaction(() => {
+        this.db.prepare("DELETE FROM files").run();
+        this.db.prepare("UPDATE meta SET value = ? WHERE key = 'rootPath'").run(this.storagePath);
+      });
+      reset();
+    }
+  }
+
+  getRecordsNeedingThumbnails(limit = 25): FileRecord[] {
+    const rows = this.db.prepare(
+      `SELECT data FROM files
+       WHERE (json_extract(data, '$.mimeType') LIKE 'image/%' OR json_extract(data, '$.mimeType') LIKE 'video/%')
+         AND COALESCE(json_extract(data, '$.thumbnailsReady'), 0) = 0
+         AND json_extract(data, '$.thumbnailsProcessedAt') IS NULL
+       LIMIT ?`)
+      .all(limit) as Array<{ data: string }>;
+    return rows.map((row) => JSON.parse(row.data) as FileRecord);
+  }
+
+  insertMissingPaths(paths: string[]): void {
+    if (!paths.length) return;
+    const tx = this.db.transaction((list: string[]) => {
+      for (const relativePath of list) {
+        const base: DatabaseFileEntry = {
+          relativePath,
+          mimeType: mimeTypeForFilename(relativePath),
+        };
+        this.insertIfMissingStmt.run(relativePath, JSON.stringify(base));
+      }
+    });
+    tx(paths);
+  }
+
   private hydrationRequired(
     record: FileRecord,
     requiredMetadata: Array<keyof FileRecord>,
@@ -116,7 +229,7 @@ export class IndexDatabase {
     relativePath: string,
     requiredMetadata: Array<keyof FileRecord>,
   ) {
-    const row = this.db.prepare('SELECT data FROM files WHERE relativePath = ?').get(relativePath) as { data: string } | undefined;
+    const row = this.selectDataStmt.get(relativePath) as { data: string } | undefined;
     if (!row) {
       throw new Error(
         `hydrateMetadata: File at path "${relativePath}" does not exist in the database.`,
@@ -169,6 +282,7 @@ export class IndexDatabase {
               // Non-media file, skip EXIF parsing
               extraData = {};
             }
+            (extraData as any).exifProcessedAt = new Date().toISOString();
             break;
           }
           case "aiMetadata":
@@ -187,7 +301,7 @@ export class IndexDatabase {
     await Promise.all(promises);
     
     // Re-fetch to get updated data
-    const updatedRow = this.db.prepare('SELECT data FROM files WHERE relativePath = ?').get(relativePath) as { data: string };
+    const updatedRow = this.selectDataStmt.get(relativePath) as { data: string };
     return JSON.parse(updatedRow.data) as FileRecord;
   }
 
@@ -261,5 +375,22 @@ export class IndexDatabase {
   getSize(): number {
     const result = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number };
     return result.count;
+  }
+
+  private async runWithRetry<T>(fn: () => T, attempts = 5): Promise<T> {
+    let lastError: unknown;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        return fn();
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.toLowerCase().includes("busy")) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10 * (i + 1)));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 }
