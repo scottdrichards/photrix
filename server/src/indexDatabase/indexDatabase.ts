@@ -6,7 +6,7 @@ import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { MetadataGroupKeys, type DatabaseFileEntry } from "./fileRecord.type.ts";
 import type { FileRecord, QueryOptions, QueryResult } from "./indexDatabase.type.ts";
-import { matchesFilter } from "./matchesFilter.ts";
+import { filterToSQL } from "./filterToSQL.ts";
 import { getColumnNamesAndValues, rowToFileRecord } from "./rowFileRecordConversionFunctions.ts";
 
 export class IndexDatabase {
@@ -25,6 +25,16 @@ export class IndexDatabase {
     
     this.db = new Database(this.dbFilePath);
     this.db.pragma('journal_mode = WAL');
+    
+    // Add custom REGEXP function for filtering
+    this.db.function('REGEXP', { deterministic: true }, (pattern: string, text: string) => {
+      try {
+        return new RegExp(pattern).test(text) ? 1 : 0;
+      } catch {
+        return 0;
+      }
+    });
+    
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS files (
         relativePath TEXT PRIMARY KEY,
@@ -204,7 +214,7 @@ export class IndexDatabase {
          AND exifProcessedAt IS NULL
        LIMIT ?`);
     const rows = stmt.all(limit) as Array<Record<string, any>>;
-    return rows.map((row) => rowToFileRecord(row));
+    return rows.map(rowToFileRecord);
   }
 
   countMissingInfo(): number {
@@ -408,37 +418,39 @@ export class IndexDatabase {
     console.log(`[query] Starting query: filter=${JSON.stringify(filter)}, metadata=${JSON.stringify(metadata)}, page=${page}, pageSize=${pageSize}`);
     const startTime = Date.now();
 
-    let lastYield = startTime;
-    let matches = 0;
-    const hydrationPromises = [];
+    // Convert filter to SQL
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
     
-    for (const file of this.files()){
-      if (Date.now() - lastYield > 100) {
-        await new Promise((resolve) => setImmediate(resolve));
-        lastYield = Date.now();
-      }
-      if (!matchesFilter(file, filter)) {
-        continue;
-      }
-      matches ++;
-      
-      // Calculate pagination bounds (1-based matches index)
-      const startMatch = (page - 1) * pageSize + 1;
-      const endMatch = page * pageSize;
+    // Build the count query
+    const countSQL = `SELECT COUNT(*) as count FROM files ${whereClause ? `WHERE ${whereClause}` : ''}`;
+    const countResult = this.db.prepare(countSQL).get(...whereParams) as { count: number };
+    const total = countResult.count;
+    
+    // Build the main query with sorting and pagination
+    const offset = (page - 1) * pageSize;
+    const mainSQL = `
+      SELECT * FROM files 
+      ${whereClause ? `WHERE ${whereClause}` : ''}
+      ORDER BY CASE WHEN dateTaken IS NULL THEN 0 ELSE 1 END DESC, dateTaken DESC, relativePath ASC
+      LIMIT ? OFFSET ?
+    `;
+    
+    const rows = this.db.prepare(mainSQL).all(...whereParams, pageSize, offset) as Array<Record<string, any>>;
+    const matchedFiles = rows.map(rowToFileRecord);
 
-      if (matches >= startMatch && matches <= endMatch) {
-        hydrationPromises.push(this.hydrateMetadata(file.relativePath, metadata));
-      }
-    }
+    // Hydrate metadata for the current page
+    const hydrationPromises = matchedFiles.map(file => 
+      this.hydrateMetadata(file.relativePath, metadata)
+    );
 
     const result = {
       items: await Promise.all(hydrationPromises) as Array<{ relativePath: string } & Pick<FileRecord, TMetadata[number]>>,
       page,
       pageSize,
-      total: matches,
+      total,
     } as QueryResult<TMetadata>;
     const elapsed = Date.now() - startTime;
-    console.log(`[query] Completed in ${elapsed}ms: ${result.total} items with metadata`);
+    console.log(`[query] Completed in ${elapsed}ms: ${result.total} total items, ${result.items.length} items on page`);
     return result;
   }
 

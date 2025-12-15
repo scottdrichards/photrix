@@ -109,6 +109,7 @@ export default function App() {
   });
   const [ratingFilter, setRatingFilter] = useState<number | null>(null);
   const [ratingAtLeast, setRatingAtLeast] = useState(true);
+  const [mediaTypeFilter, setMediaTypeFilter] = useState<"all" | "photo" | "video" | "other">("all");
   const [currentPath, setCurrentPath] = useState<string>(() => {
     const path = window.location.pathname.slice(1); // Remove leading slash
     return decodeURIComponent(path);
@@ -123,7 +124,7 @@ export default function App() {
     try {
       const path = currentPath ? `${currentPath}/` : "";
       const filter = ratingFilter ? { rating: ratingFilter, atLeast: ratingAtLeast } : null;
-      const result = await fetchPhotos({ page: 1, pageSize: PAGE_SIZE, includeSubfolders, signal, path, ratingFilter: filter });
+      const result = await fetchPhotos({ page: 1, pageSize: PAGE_SIZE, includeSubfolders, signal, path, ratingFilter: filter, mediaTypeFilter });
       if (signal.aborted) {
         return;
       }
@@ -142,7 +143,7 @@ export default function App() {
         setInitialLoading(false);
       }
     }
-  }, [includeSubfolders, currentPath, ratingFilter, ratingAtLeast]);
+  }, [includeSubfolders, currentPath, ratingFilter, ratingAtLeast, mediaTypeFilter]);
 
   // Sync URL with state
   useEffect(() => {
@@ -206,7 +207,7 @@ export default function App() {
       const nextPage = page + 1;
       const path = currentPath ? `${currentPath}/` : "";
       const filter = ratingFilter ? { rating: ratingFilter, atLeast: ratingAtLeast } : null;
-      const result = await fetchPhotos({ page: nextPage, pageSize: PAGE_SIZE, includeSubfolders, path, ratingFilter: filter });
+      const result = await fetchPhotos({ page: nextPage, pageSize: PAGE_SIZE, includeSubfolders, path, ratingFilter: filter, mediaTypeFilter });
       setPhotos((current) => {
         const next = [...current, ...result.items];
         const hasNext = result.items.length > 0 && next.length < result.total;
@@ -221,7 +222,7 @@ export default function App() {
     } finally {
       setLoadingMore(false);
     }
-  }, [hasMore, loadingMore, initialLoading, page, includeSubfolders, currentPath, ratingFilter, ratingAtLeast]);
+  }, [hasMore, loadingMore, initialLoading, page, includeSubfolders, currentPath, ratingFilter, ratingAtLeast, mediaTypeFilter]);
 
   const handleFolderClick = useCallback((folderName: string) => {
     const newPath = currentPath ? `${currentPath}/${folderName}` : folderName;
@@ -294,6 +295,38 @@ export default function App() {
           onChange={(_, data) => setIncludeSubfolders(data.checked)}
           label="Include subfolders"
         />
+        <Divider vertical />
+        <div className={styles.ratingFilter}>
+          <Caption1>Type:</Caption1>
+          <Button
+            size="small"
+            appearance={mediaTypeFilter === "all" ? "primary" : "subtle"}
+            onClick={() => setMediaTypeFilter("all")}
+          >
+            All
+          </Button>
+          <Button
+            size="small"
+            appearance={mediaTypeFilter === "photo" ? "primary" : "subtle"}
+            onClick={() => setMediaTypeFilter("photo")}
+          >
+            Photo
+          </Button>
+          <Button
+            size="small"
+            appearance={mediaTypeFilter === "video" ? "primary" : "subtle"}
+            onClick={() => setMediaTypeFilter("video")}
+          >
+            Video
+          </Button>
+          <Button
+            size="small"
+            appearance={mediaTypeFilter === "other" ? "primary" : "subtle"}
+            onClick={() => setMediaTypeFilter("other")}
+          >
+            Other
+          </Button>
+        </div>
         <Divider vertical />
         <div className={styles.ratingFilter}>
           <Caption1>Rating:</Caption1>

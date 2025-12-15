@@ -40,6 +40,7 @@ export interface FetchPhotosOptions {
   path?: string;
   signal?: AbortSignal;
   ratingFilter?: { rating: number; atLeast: boolean } | null;
+  mediaTypeFilter?: "all" | "photo" | "video" | "other";
 }
 
 export interface FetchPhotosResult {
@@ -221,6 +222,7 @@ export const fetchPhotos = async ({
   path = "",
   signal,
   ratingFilter,
+  mediaTypeFilter = "all",
 }: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
   const params = new URLSearchParams();
   params.set("metadata", Array.from(metadata).join(","));
@@ -229,10 +231,35 @@ export const fetchPhotos = async ({
   if (includeSubfolders) {
     params.set("includeSubfolders", "true");
   }
+  
+  // Build filter object
+  const filters: any[] = [];
+  
   if (ratingFilter) {
-    const filterObj = ratingFilter.atLeast 
+    const ratingFilterObj = ratingFilter.atLeast 
       ? { rating: { min: ratingFilter.rating } }
       : { rating: ratingFilter.rating };
+    filters.push(ratingFilterObj);
+  }
+  
+  if (mediaTypeFilter === "photo") {
+    filters.push({ mimeType: { glob: "image/*" } });
+  } else if (mediaTypeFilter === "video") {
+    filters.push({ mimeType: { glob: "video/*" } });
+  } else if (mediaTypeFilter === "other") {
+    // For "other", we need an OR of conditions that exclude image/* and video/*
+    // Using a logical filter to express: NOT (image/* OR video/*)
+    filters.push({
+      operation: "or",
+      conditions: [
+        { mimeType: null },  // Files without mimeType
+        { mimeType: { glob: "!(image|video)/*" } }  // Files that don't start with image/ or video/
+      ]
+    });
+  }
+  
+  if (filters.length > 0) {
+    const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
     params.set("filter", JSON.stringify(filterObj));
   }
 

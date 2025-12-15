@@ -109,8 +109,8 @@ export class FileScanner {
             if (!mimeType?.startsWith("image/") && !mimeType?.startsWith("video/")) return null;
 
             const fullPath = path.join(this.rootPath, record.relativePath);
-            // Compute hash if not in database
-            const hash = record.fileHash ?? await getHash({ filePath: fullPath });
+            // Compute hash if not in database (use streaming for large files)
+            const hash = record.fileHash ?? await getHash({ filePath: fullPath, useStream: true });
 
             const needsProcessing = await this.needsThumbnailGeneration(mimeType, hash, desiredHeights);
             if (!needsProcessing) {

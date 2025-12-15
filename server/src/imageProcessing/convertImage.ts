@@ -55,7 +55,7 @@ export const convertImage = async (
   filePath: string,
   height: StandardHeight = 2160,
 ): Promise<string> => {
-  const hash = await getHash({ filePath });
+  const hash = await getHash({ filePath, useStream: true });
   const cachedPath = getSharedCachedFilePath(hash, height, "jpg");
 
   if (existsSync(cachedPath)) {
@@ -71,7 +71,7 @@ export const convertImageToMultipleSizes = async (
   filePath: string,
   heights: StandardHeight[],
 ): Promise<void> => {
-  const hash = await getHash({ filePath });
+  const hash = await getHash({ filePath, useStream: true });
   
   const outputs = heights
     .map(height => ({

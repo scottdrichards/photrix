@@ -5,9 +5,10 @@ import { stat } from "fs/promises";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { createReadStream } from "fs";
 import path from "path/win32";
-import { convertImage } from "../imageProcessing/convertImage.ts";
+import { convertImage, convertImageToMultipleSizes } from "../imageProcessing/convertImage.ts";
 import { generateVideoPreview, generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
 import { StandardHeight, standardHeights } from "../common/standardHeights.ts";
+import { mediaProcessingQueue } from "../common/processingQueue.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -20,6 +21,9 @@ export const filesRequestHandler = async (
   { database, storageRoot }: Options,
 ) => {
   try {
+    // Pause background generation for 1 minute when a request comes in
+    mediaProcessingQueue.pause(60_000);
+    
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     // Extract path after /api/files/ and decode URL escape characters
@@ -204,9 +208,11 @@ const fileHandler = async (
 
   if (representation === "preview" && isVideo) {
     try {
-      console.log(`[filesRequest] Requesting video preview for: ${subPath}`);
+      const queueSize = mediaProcessingQueue.getQueueSize();
+      const processing = mediaProcessingQueue.getProcessing();
+      console.log(`[filesRequest] Requesting video preview for: ${subPath} (queue: ${queueSize}, processing: ${processing})`);
 
-      const cachedPath = await generateVideoPreview(normalizedPath);
+      const cachedPath = await mediaProcessingQueue.enqueue(() => generateVideoPreview(normalizedPath), true);
       const cachedStats = await stat(cachedPath);
 
       res.writeHead(200, {
@@ -226,9 +232,16 @@ const fileHandler = async (
 
   if ((needsFormatChange || needsResize) && isImage) {
     try {
-      console.log(`[filesRequest] Requesting ${height} image for: ${subPath}`);
+      const queueSize = mediaProcessingQueue.getQueueSize();
+      const processing = mediaProcessingQueue.getProcessing();
+      console.log(`[filesRequest] Requesting ${height} image for: ${subPath} (queue: ${queueSize}, processing: ${processing})`);
 
-      const cachedPath = await convertImage(normalizedPath, height);
+      // Generate all standard sizes in the background (except 'original') - low priority
+      const allSizes = standardHeights.filter((h): h is number => typeof h === 'number');
+      mediaProcessingQueue.enqueue(() => convertImageToMultipleSizes(normalizedPath, allSizes), false);
+      
+      // But wait for the requested size specifically - high priority
+      const cachedPath = await mediaProcessingQueue.enqueue(() => convertImage(normalizedPath, height), true);
       const cachedStats = await stat(cachedPath);
 
       res.writeHead(200, {
@@ -246,9 +259,11 @@ const fileHandler = async (
     }
   } else if (needsResize && isVideo) {
     try {
-      console.log(`[filesRequest] Requesting ${height} thumbnail for video: ${subPath}`);
+      const queueSize = mediaProcessingQueue.getQueueSize();
+      const processing = mediaProcessingQueue.getProcessing();
+      console.log(`[filesRequest] Requesting ${height} thumbnail for video: ${subPath} (queue: ${queueSize}, processing: ${processing})`);
 
-      const cachedPath = await generateVideoThumbnail(normalizedPath, height);
+      const cachedPath = await mediaProcessingQueue.enqueue(() => generateVideoThumbnail(normalizedPath, height), true);
       const cachedStats = await stat(cachedPath);
 
       res.writeHead(200, {
