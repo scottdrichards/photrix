@@ -5,17 +5,19 @@ import { join } from "path";
 
 export const CACHE_DIR = join(process.cwd(), ".cache");
 
-if (!process.env.ThumbnailCacheDirectory) {
-  throw new Error("ThumbnailCacheDirectory environment variable must be set");
-}
-
-export const thumbnailsDir = process.env.ThumbnailCacheDirectory;
+const getThumbnailsDir = (): string => {
+  const dir = process.env.ThumbnailCacheDirectory;
+  if (!dir) {
+    throw new Error("ThumbnailCacheDirectory environment variable must be set");
+  }
+  return dir;
+};
 
 let initialized = false;
 
 export const initializeCacheDirectories = async () => {
   if (initialized) return;
-  const folderPromises = [CACHE_DIR, thumbnailsDir].map(async (dir) =>
+  const folderPromises = [CACHE_DIR, getThumbnailsDir()].map(async (dir) =>
     mkdir(dir, { recursive: true }),
   );
   const timeOutPromise = new Promise((_, reject) =>
@@ -49,4 +51,4 @@ export const getCachedFilePath = (
   hash: string,
   suffix: string | number,
   extension: string,
-) => join(thumbnailsDir, `${hash}.${suffix}.${extension}`);
+) => join(getThumbnailsDir(), `${hash}.${suffix}.${extension}`);

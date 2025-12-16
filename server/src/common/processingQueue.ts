@@ -1,6 +1,9 @@
+const priorityList = ['userBlocked', 'userImplicit', 'background'] as const;
+export type QueuePriority = typeof priorityList[number];
+
 type QueueTask = {
   fn: () => Promise<void>;
-  priority: boolean; // High priority tasks bypass pause
+  priority: QueuePriority;
 };
 
 /**
@@ -28,23 +31,26 @@ export class ProcessingQueue {
     console.log(`[ProcessingQueue] Paused for ${durationMs}ms`);
   }
 
-  /**
-   * Add a task to the queue and return a promise that resolves when the task completes.
-   * @param task - The task to execute
-   * @param priority - If true, task will execute even when queue is paused
-   */
-  async enqueue<T>(task: () => Promise<T>, priority = false): Promise<T> {
+  async enqueue<T>(task: () => Promise<T>, priority: QueuePriority = 'background'): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      this.queue.push({
-        priority,
-        fn: async () => {
-          try {
-            const result = await task();
-            resolve(result);
-          } catch (error) {
-            reject(error);
-          }
+      const priorityIndex = priorityList.indexOf(priority);
+      const insertIndex = this.queue.findIndex(
+        // We want to put it at the back of the same priority level
+        t => priorityList.indexOf(t.priority) > priorityIndex
+      );
+
+      const fn = async () => {
+        try {
+          const result = await task();
+          resolve(result);
+        } catch (error) {
+          reject(error);
         }
+      }
+
+      this.queue.splice(insertIndex === -1 ? this.queue.length : insertIndex, 0, {
+        priority,
+        fn
       });
       this.processNext();
     });
@@ -52,40 +58,29 @@ export class ProcessingQueue {
 
   private async processNext(): Promise<void> {
     // Check if paused
-    if (this.paused) {
+    if (this.paused){
       if (Date.now() >= this.pauseUntil) {
         this.paused = false;
         console.log(`[ProcessingQueue] Resumed`);
-      } else {
-        // If paused, only process priority tasks
-        const priorityTaskIndex = this.queue.findIndex(t => t.priority);
-        if (priorityTaskIndex === -1) {
-          // No priority tasks, reschedule check
+      }  else{
           setTimeout(() => this.processNext(), 100);
-          return;
-        }
-        // Continue to process the priority task below
-      }
+      }      
     }
 
     if (this.processing >= this.concurrency || this.queue.length === 0) {
       return;
     }
 
-    // Get next task - prioritize high priority tasks when paused
-    let taskIndex = 0;
-    if (this.paused) {
-      taskIndex = this.queue.findIndex(t => t.priority);
-      if (taskIndex === -1) {
-        // No priority tasks available
-        setTimeout(() => this.processNext(), 100);
-        return;
-      }
-    }
-
     this.processing++;
-    const task = this.queue.splice(taskIndex, 1)[0];
-    
+    const task = this.queue.shift();
+
+    const queueStatus = this.queue.reduce((acc, task) => {
+      acc[task.priority] = (acc[task.priority] || 0) + 1;
+      return acc;
+    }, {} as Record<QueuePriority, number>);
+
+    console.log(`[ProcessingQueue] Processing next task. Queue status: ${JSON.stringify(queueStatus)}, Currently processing: ${this.processing}`);
+
     if (task) {
       try {
         await task.fn();
@@ -108,4 +103,4 @@ export class ProcessingQueue {
 }
 
 // Global queue for image/video processing
-export const mediaProcessingQueue = new ProcessingQueue(2);
+export const mediaProcessingQueue = new ProcessingQueue(4);

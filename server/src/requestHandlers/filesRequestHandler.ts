@@ -212,7 +212,7 @@ const fileHandler = async (
       const processing = mediaProcessingQueue.getProcessing();
       console.log(`[filesRequest] Requesting video preview for: ${subPath} (queue: ${queueSize}, processing: ${processing})`);
 
-      const cachedPath = await mediaProcessingQueue.enqueue(() => generateVideoPreview(normalizedPath), true);
+      const cachedPath = await generateVideoPreview(normalizedPath, 320, 5_000, { priority: 'userBlocked' });
       const cachedStats = await stat(cachedPath);
 
       res.writeHead(200, {
@@ -237,11 +237,11 @@ const fileHandler = async (
       console.log(`[filesRequest] Requesting ${height} image for: ${subPath} (queue: ${queueSize}, processing: ${processing})`);
 
       // Generate all standard sizes in the background (except 'original') - low priority
-      const allSizes = standardHeights.filter((h): h is number => typeof h === 'number');
-      mediaProcessingQueue.enqueue(() => convertImageToMultipleSizes(normalizedPath, allSizes), false);
+      const allSizes = standardHeights.filter((h): h is Exclude<StandardHeight, "original"> => typeof h !== 'string');
+      void convertImageToMultipleSizes(normalizedPath, allSizes, { priority: 'userImplicit' });
       
       // But wait for the requested size specifically - high priority
-      const cachedPath = await mediaProcessingQueue.enqueue(() => convertImage(normalizedPath, height), true);
+      const cachedPath = await convertImage(normalizedPath, height, { priority: 'userBlocked' });
       const cachedStats = await stat(cachedPath);
 
       res.writeHead(200, {
@@ -263,7 +263,7 @@ const fileHandler = async (
       const processing = mediaProcessingQueue.getProcessing();
       console.log(`[filesRequest] Requesting ${height} thumbnail for video: ${subPath} (queue: ${queueSize}, processing: ${processing})`);
 
-      const cachedPath = await mediaProcessingQueue.enqueue(() => generateVideoThumbnail(normalizedPath, height), true);
+      const cachedPath = await generateVideoThumbnail(normalizedPath, height, { priority: 'userBlocked' });
       const cachedStats = await stat(cachedPath);
 
       res.writeHead(200, {

@@ -4,6 +4,7 @@ import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
 import { getCachedFilePath as getSharedCachedFilePath, getHash } from "../common/cacheUtils.ts";
+import { mediaProcessingQueue, QueuePriority } from "../common/processingQueue.ts";
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 const pythonPath = "python";
@@ -14,6 +15,7 @@ const generateImage = async (
   outputs: Array<{ path: string; height: StandardHeight }>,
 ): Promise<void> =>
   new Promise((resolve, reject) => {
+    const start = performance.now();
     const args = [
       scriptPath,
       inputPath,
@@ -33,6 +35,8 @@ const generateImage = async (
     });
 
     process.on("close", (code) => {
+      const duration = performance.now() - start;
+      console.log(`[ImageCache] Image processing completed in ${duration.toFixed(2)}ms for ${inputPath} and outputs: ${outputs.map(o => o.height).join(", ")}`);
       if (code === 0) {
         resolve();
       } else {
@@ -54,6 +58,7 @@ const generateImage = async (
 export const convertImage = async (
   filePath: string,
   height: StandardHeight = 2160,
+  opts?: { priority?: QueuePriority },
 ): Promise<string> => {
   const hash = await getHash({ filePath, useStream: true });
   const cachedPath = getSharedCachedFilePath(hash, height, "jpg");
@@ -62,14 +67,20 @@ export const convertImage = async (
     return cachedPath;
   }
 
-  console.log(`[ImageCache] Generating ${height} for ${filePath}`);
-  await generateImage(filePath, [{ path: cachedPath, height }]);
+  await mediaProcessingQueue.enqueue(
+    async () => {
+      console.log(`[ImageCache] Generating ${height} for ${filePath}`);
+      await generateImage(filePath, [{ path: cachedPath, height }]);
+    },
+    opts?.priority,
+  );
   return cachedPath;
 };
 
 export const convertImageToMultipleSizes = async (
   filePath: string,
   heights: StandardHeight[],
+  opts?: { priority?: QueuePriority },
 ): Promise<void> => {
   const hash = await getHash({ filePath, useStream: true });
   
@@ -84,6 +95,13 @@ export const convertImageToMultipleSizes = async (
     return;
   }
 
-  console.log(`[ImageCache] Generating sizes ${outputs.map(o => o.height).join(", ")} for ${filePath}`);
-  await generateImage(filePath, outputs);
+  await mediaProcessingQueue.enqueue(
+    async () => {
+      console.log(
+        `[ImageCache] Generating sizes ${outputs.map(o => o.height).join(", ")} for ${filePath}`,
+      );
+      await generateImage(filePath, outputs);
+    },
+    opts?.priority,
+  );
 };

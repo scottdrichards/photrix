@@ -90,7 +90,7 @@ export class FileScanner {
     this.thumbnailMaintenanceActive = true;
     const desiredHeights = standardHeights.filter((h) => h !== "original");
     const BATCH_SIZE = 50;
-    const CONCURRENCY = 4;
+    const CONCURRENCY = 12;
     let totalProcessed = 0;
 
     try {
@@ -119,9 +119,9 @@ export class FileScanner {
 
             try {
               if (mimeType.startsWith("image/")) {
-                await convertImageToMultipleSizes(fullPath, desiredHeights);
+                await convertImageToMultipleSizes(fullPath, desiredHeights, { priority: 'background' });
               } else {
-                await generateVideoThumbnail(fullPath, 320);
+                await generateVideoThumbnail(fullPath, 320, { priority: 'background' });
               }
               return { relativePath: record.relativePath, hash, thumbnailsReady: true, error: null };
             } catch (error) {
