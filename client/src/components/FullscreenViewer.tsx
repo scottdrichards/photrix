@@ -139,7 +139,17 @@ export function FullscreenViewer({
                 <track kind="captions" src="data:," label="Captions not provided" />
                 <source
                   src={photo.fullUrl}
-                  type={photo.metadata?.mimeType ?? "video/mp4"}
+                  type={(() => {
+                    try {
+                      const url = new URL(photo.fullUrl);
+                      const representation = url.searchParams.get("representation");
+                      return representation === "webSafe"
+                        ? "video/mp4"
+                        : (photo.metadata?.mimeType ?? "video/mp4");
+                    } catch {
+                      return photo.metadata?.mimeType ?? "video/mp4";
+                    }
+                  })()}
                 />
                 Your browser does not support HTML video playback.
               </video>

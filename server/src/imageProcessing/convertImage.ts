@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { existsSync } from "fs";
+import { stat } from "fs/promises";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
@@ -60,7 +61,8 @@ export const convertImage = async (
   height: StandardHeight = 2160,
   opts?: { priority?: QueuePriority },
 ): Promise<string> => {
-  const hash = await getHash({ filePath, useStream: true });
+  const modifiedTimeMs = (await stat(filePath)).mtimeMs;
+  const hash = getHash(filePath, modifiedTimeMs);
   const cachedPath = getSharedCachedFilePath(hash, height, "jpg");
 
   if (existsSync(cachedPath)) {
@@ -82,7 +84,8 @@ export const convertImageToMultipleSizes = async (
   heights: StandardHeight[],
   opts?: { priority?: QueuePriority },
 ): Promise<void> => {
-  const hash = await getHash({ filePath, useStream: true });
+  const modifiedTimeMs = (await stat(filePath)).mtimeMs;
+  const hash = getHash(filePath, modifiedTimeMs);
   
   const outputs = heights
     .map(height => ({

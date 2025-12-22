@@ -1,6 +1,6 @@
 import http from "node:http";
 import { FileScanner } from "./indexDatabase/fileScanner.ts";
-import { IndexDatabase } from "./indexDatabase/rowFileRecordConversionFunctions.ts";
+import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { healthRequestHandler } from "./requestHandlers/healthRequestHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
 import { filesRequestHandler } from "./requestHandlers/filesRequestHandler.ts";

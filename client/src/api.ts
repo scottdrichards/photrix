@@ -84,6 +84,24 @@ export interface ServerStatus {
     thumbnail: RecentMaintenance | null;
     exif: RecentMaintenance | null;
   };
+
+  transcodes?: {
+    active: Array<{
+      id: string;
+      kind: "preview" | "webSafe" | "thumbnail";
+      filePath: string;
+      height: string | number;
+      startedAt: string;
+      updatedAt: string;
+      state: "running" | "done" | "error";
+      durationSeconds?: number;
+      outTimeSeconds?: number;
+      percent?: number;
+      speed?: string;
+      fps?: number;
+      message?: string;
+    }>;
+  };
 }
 
 export const subscribeStatusStream = (
@@ -172,13 +190,16 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
     representation: "webSafe",
     height: "320",
   });
-  const previewUrl = buildFileUrl(item.relativePath, {
-    representation: "webSafe",
-    height: "2160",
-  });
+  const previewUrl =
+    mediaType === "video"
+      ? thumbnailUrl
+      : buildFileUrl(item.relativePath, {
+          representation: "webSafe",
+          height: "2160",
+        });
   const fullUrl =
     mediaType === "video"
-      ? buildFileUrl(item.relativePath, { representation: "original" })
+      ? buildFileUrl(item.relativePath, { representation: "webSafe", height: "2160" })
       : previewUrl;
   const videoPreviewUrl =
     mediaType === "video"

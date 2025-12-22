@@ -46,8 +46,6 @@ export const rowToFileRecord = (row: Record<string, any>): FileRecord => {
     if (row.faceTags) record.faceTags = JSON.parse(row.faceTags);
 
     // Processing status
-    if (row.thumbnailsReady) record.thumbnailsReady = Boolean(row.thumbnailsReady);
-    if (row.fileHash) record.fileHash = row.fileHash;
     if (row.exifProcessedAt) record.exifProcessedAt = row.exifProcessedAt;
     if (row.thumbnailsProcessedAt) record.thumbnailsProcessedAt = row.thumbnailsProcessedAt;
 
@@ -108,8 +106,6 @@ export const getColumnNamesAndValues = (entry: Partial<DatabaseFileEntry>): { na
     if (entry.faceTags !== undefined) addColumn('faceTags', JSON.stringify(entry.faceTags));
 
     // Processing status
-    if (entry.thumbnailsReady !== undefined) addColumn('thumbnailsReady', entry.thumbnailsReady ? 1 : 0);
-    if (entry.fileHash !== undefined) addColumn('fileHash', entry.fileHash);
     if (entry.exifProcessedAt !== undefined) addColumn('exifProcessedAt', entry.exifProcessedAt);
     if (entry.thumbnailsProcessedAt !== undefined) addColumn('thumbnailsProcessedAt', entry.thumbnailsProcessedAt);
 

@@ -1,6 +1,7 @@
 import * as http from "http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { FileScanner } from "../indexDatabase/fileScanner.ts";
+import { getActiveTranscodes } from "../videoProcessing/videoUtils.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -58,6 +59,9 @@ const buildStatus = ({ database, fileScanner }: Options) => {
     recent: {
       thumbnail: fileScanner.latestThumbnail ?? null,
       exif: fileScanner.latestExif ?? null,
+    },
+    transcodes: {
+      active: getActiveTranscodes(),
     },
   };
 

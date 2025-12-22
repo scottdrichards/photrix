@@ -1,4 +1,3 @@
-import { minimatch } from "minimatch";
 import type { FilterCondition, FilterElement, Range } from "./indexDatabase.type.ts";
 
 type SQLPart = {
@@ -140,8 +139,15 @@ const constraintToSQL = (
       return rangeToSQL(field, constraint as Range<any>);
     }
     
-    // Check for StringSearch (has includes, glob, regex)
-    if ("includes" in constraint || "glob" in constraint || "regex" in constraint) {
+    // Check for StringSearch (has includes, glob, regex, startsWith, directChildOf, rootOnly)
+    if (
+      "includes" in constraint ||
+      "glob" in constraint ||
+      "regex" in constraint ||
+      "startsWith" in constraint ||
+      "directChildOf" in constraint ||
+      "rootOnly" in constraint
+    ) {
       return stringSearchToSQL(field, constraint as any);
     }
     
@@ -175,8 +181,34 @@ const rangeToSQL = (field: string, range: Range<any>): SQLPart => {
 
 const stringSearchToSQL = (
   field: string,
-  search: { includes?: string; glob?: string; regex?: string }
+  search: { includes?: string; glob?: string; regex?: string; startsWith?: string; directChildOf?: string; rootOnly?: boolean }
 ): SQLPart => {
+  if (search.rootOnly) {
+    return {
+      where: `${field} NOT LIKE ?`,
+      params: ["%/%"],
+    };
+  }
+
+  if (search.directChildOf) {
+    const prefixWithSlash = `${search.directChildOf}/`;
+    const likePrefix = `${escapeLikeLiteral(prefixWithSlash)}%`;
+    // SQLite substr() is 1-indexed.
+    const startAfterPrefix = prefixWithSlash.length + 1;
+    return {
+      where: `(${field} LIKE ? ESCAPE '\\' AND instr(substr(${field}, ?), '/') = 0)`,
+      params: [likePrefix, startAfterPrefix],
+    };
+  }
+
+  if (search.startsWith) {
+    const likePrefix = `${escapeLikeLiteral(search.startsWith)}%`;
+    return {
+      where: `${field} LIKE ? ESCAPE '\\'`,
+      params: [likePrefix],
+    };
+  }
+
   if (search.includes) {
     // LIKE search
     return {
@@ -207,6 +239,11 @@ const stringSearchToSQL = (
     where: "1=1",
     params: [],
   };
+};
+
+const escapeLikeLiteral = (value: string): string => {
+  // Escape LIKE wildcards and the escape character itself.
+  return value.replace(/[\\%_]/g, (m) => `\\${m}`);
 };
 
 const globToLike = (glob: string): string => {

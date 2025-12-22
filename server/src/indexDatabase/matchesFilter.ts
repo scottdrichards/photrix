@@ -135,6 +135,25 @@ const matchesCondition = (
     if (typeof v !== "string") {
       return false;
     }
+    if ("rootOnly" in constraint && constraint.rootOnly) {
+      if (v.includes("/")) {
+        return false;
+      }
+    }
+    if ("directChildOf" in constraint && constraint.directChildOf) {
+      const prefixWithSlash = `${constraint.directChildOf}/`;
+      if (!v.startsWith(prefixWithSlash)) {
+        return false;
+      }
+      if (v.slice(prefixWithSlash.length).includes("/")) {
+        return false;
+      }
+    }
+    if ("startsWith" in constraint && constraint.startsWith) {
+      if (!v.startsWith(constraint.startsWith)) {
+        return false;
+      }
+    }
     if ("includes" in constraint && constraint.includes) {
       if (!v.includes(constraint.includes)) {
         return false;

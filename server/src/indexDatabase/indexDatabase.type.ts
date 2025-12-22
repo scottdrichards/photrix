@@ -10,7 +10,20 @@ export type FileRecord = DatabaseFileEntry;
 /**
  * String [] matching to string means OR - string[] matching to string[] means AND
  */
-export type StringSearch = string | string[] | { includes?: string; glob?: string; regex?: string };
+export type StringSearch =
+    | string
+    | string[]
+    | {
+        includes?: string;
+        glob?: string;
+        regex?: string;
+        /** Index-friendly prefix match. For folder paths, include the trailing '/'. */
+        startsWith?: string;
+        /** Matches direct children of a folder (e.g. "2024" matches "2024/a.jpg" but not "2024/vacation/a.jpg"). */
+        directChildOf?: string;
+        /** Matches only root-level paths (no '/'). */
+        rootOnly?: boolean;
+    };
 
 /**
  * Inclusive of min/max

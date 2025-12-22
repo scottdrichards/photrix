@@ -16,6 +16,7 @@ export class ProcessingQueue {
   private readonly concurrency: number;
   private paused = false;
   private pauseUntil = 0;
+  private pauseTimer: NodeJS.Timeout | null = null;
 
   constructor(concurrency = 2) {
     this.concurrency = concurrency;
@@ -28,7 +29,40 @@ export class ProcessingQueue {
   pause(durationMs: number): void {
     this.paused = true;
     this.pauseUntil = Date.now() + durationMs;
+    if (this.pauseTimer) {
+      clearTimeout(this.pauseTimer);
+      this.pauseTimer = null;
+    }
     console.log(`[ProcessingQueue] Paused for ${durationMs}ms`);
+  }
+
+  private isPausedForPriority(priority: QueuePriority): boolean {
+    if (!this.paused) {
+      return false;
+    }
+
+    if (Date.now() >= this.pauseUntil) {
+      this.paused = false;
+      if (this.pauseTimer) {
+        clearTimeout(this.pauseTimer);
+        this.pauseTimer = null;
+      }
+      console.log(`[ProcessingQueue] Resumed`);
+      return false;
+    }
+
+    // During pause, allow higher priority work to keep the UI responsive.
+    return priority === "background";
+  }
+
+  private schedulePauseWake(): void {
+    if (this.pauseTimer) {
+      return;
+    }
+    this.pauseTimer = setTimeout(() => {
+      this.pauseTimer = null;
+      void this.processNext();
+    }, 100);
   }
 
   async enqueue<T>(task: () => Promise<T>, priority: QueuePriority = 'background'): Promise<T> {
@@ -57,17 +91,13 @@ export class ProcessingQueue {
   }
 
   private async processNext(): Promise<void> {
-    // Check if paused
-    if (this.paused){
-      if (Date.now() >= this.pauseUntil) {
-        this.paused = false;
-        console.log(`[ProcessingQueue] Resumed`);
-      }  else{
-          setTimeout(() => this.processNext(), 100);
-      }      
+    if (this.processing >= this.concurrency || this.queue.length === 0) {
+      return;
     }
 
-    if (this.processing >= this.concurrency || this.queue.length === 0) {
+    const nextTask = this.queue[0];
+    if (nextTask && this.isPausedForPriority(nextTask.priority)) {
+      this.schedulePauseWake();
       return;
     }
 

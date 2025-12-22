@@ -13,8 +13,10 @@ describe("convertImage", () => {
   const testImagePath = path.resolve(__dirname, "../../exampleFolder/subFolder/grandchildFolder/1V7A4755.JPG");
   const cacheDir = path.resolve(__dirname, "../../.cache");
 
-  const getHash = (filePath: string): string =>
-    createHash("md5").update(filePath).digest("hex");
+  const getHash = (filePath: string): string => {
+    const modifiedTimeMs = fs.statSync(filePath).mtimeMs;
+    return createHash("md5").update(`${filePath}:${modifiedTimeMs}`).digest("hex");
+  };
   
   beforeAll(async () => {
     process.env.ThumbnailCacheDirectory ??= path.join(cacheDir, "thumbs");
@@ -29,7 +31,7 @@ describe("convertImage", () => {
 
     // Clean up cache for this file
     const hash = getHash(testImagePath);
-    const cachedFile = path.join(cacheDir, `${hash}.320.jpeg`);
+    const cachedFile = path.join(cacheDir, "thumbs", `${hash}.320.jpg`);
     
     if (fs.existsSync(cachedFile)) {
       fs.unlinkSync(cachedFile);

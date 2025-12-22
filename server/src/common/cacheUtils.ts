@@ -1,6 +1,5 @@
 import { createHash } from "crypto";
-import { mkdir, readFile, stat } from "fs/promises";
-import { createReadStream } from "fs";
+import { mkdir } from "fs/promises";
 import { join } from "path";
 
 export const CACHE_DIR = join(process.cwd(), ".cache");
@@ -26,25 +25,9 @@ export const initializeCacheDirectories = async () => {
   initialized = true;
 };
 
-export const getHash = async (opts: { filePath: string, fileBuffer?: Buffer, useStream?: boolean }): Promise<string> => {
-  const { filePath, fileBuffer: fileBufferIn, useStream = false } = opts;
-  
-  // If buffer is provided, use it directly
-  if (fileBufferIn) {
-    return createHash("md5").update(fileBufferIn).digest("hex");
-  }
-
-  // For large files (or when requested), use streaming to avoid memory issues
-  if (useStream) {
-    const stats = await stat(filePath);
-    // Hash based on file path, size, and modification time (fast and deterministic)
-    const hashInput = `${filePath}:${stats.size}:${stats.mtimeMs}`;
-    return createHash("md5").update(hashInput).digest("hex");
-  }
-
-  // For small files, read into memory
-  const fileBuffer = await readFile(filePath);
-  return createHash("md5").update(fileBuffer).digest("hex");
+export const getHash = (filePath: string, modifiedTimeMs: number): string => {
+  const hashInput = `${filePath}:${modifiedTimeMs}`;
+  return createHash("md5").update(hashInput).digest("hex");
 };
 
 export const getCachedFilePath = (
