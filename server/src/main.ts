@@ -18,7 +18,6 @@ const startServer = async () => {
 
   console.log("[bootstrap] IndexDatabase starting...");
   const database = new IndexDatabase(absolutePath);
-  await database.load();
   console.log("[bootstrap] IndexDatabase done");
 
   console.log("[bootstrap] FileScanner starting...");

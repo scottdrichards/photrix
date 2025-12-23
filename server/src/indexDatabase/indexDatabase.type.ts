@@ -1,5 +1,4 @@
-import { UnionToIntersection } from "../utils.ts";
-import { BaseFileRecord, DatabaseFileEntry, MetadataGroups } from "./fileRecord.type.ts";
+import { DatabaseFileEntry } from "./fileRecord.type.ts";
 
 
 /**
@@ -17,13 +16,9 @@ export type StringSearch =
         includes?: string;
         glob?: string;
         regex?: string;
-        /** Index-friendly prefix match. For folder paths, include the trailing '/'. */
+        /** Index-friendly prefix match. Use `folder` for folder matches */
         startsWith?: string;
-        /** Matches direct children of a folder (e.g. "2024" matches "2024/a.jpg" but not "2024/vacation/a.jpg"). */
-        directChildOf?: string;
-        /** Matches only root-level paths (no '/'). */
-        rootOnly?: boolean;
-    };
+    }
 
 /**
  * Inclusive of min/max
@@ -44,6 +39,11 @@ export type FilterCondition = {
             NonNullable<FileRecord[K]> extends boolean ? NonNullable<FileRecord[K]> :
             FileRecord[K]
         );
+} | {   
+    /** Must end in `/` */
+    folder: string;
+    /** `true` to grab grandchildren as well */
+    recursive?: boolean;
 }
 
 export type LogicalFilter = {

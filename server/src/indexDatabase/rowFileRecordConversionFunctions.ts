@@ -4,77 +4,105 @@ import { FileRecord } from "./indexDatabase.type.ts";
 /**
  * Converts a database row to a FileRecord by parsing JSON fields and reconstructing nested objects
  */
-export const rowToFileRecord = (row: Record<string, any>): FileRecord => {
-    const record: any = {
-        relativePath: row.relativePath,
-        mimeType: row.mimeType,
-    };
+export const rowToFileRecord = (row: Record<string, string|number>, wantedFields: Array<keyof FileRecord>|'all'='all'): FileRecord => {
+    const date = (v:string|number)=>new Date(v);
+    const json = (v:string)=>JSON.parse(v);
 
-    // File Info
-    if (row.sizeInBytes !== null && row.sizeInBytes !== undefined) record.sizeInBytes = row.sizeInBytes;
-    if (row.created !== null && row.created !== undefined) record.created = new Date(row.created);
-    if (row.modified !== null && row.modified !== undefined) record.modified = new Date(row.modified);
+    const fieldConversions = ["sizeInBytes",
+        ["created", date],
+        ["modified", date],
+        ["dateTaken", date],
+        "cameraMake",
+        "cameraModel",
+        "exposureTime",
+        "aperture",
+        "iso",
+        "focalLength",
+        "lens",
+        "duration",
+        "framerate",
+        "videoCodec",
+        "audioCodec",
+        "rating",
+        ["tags",json],
+        "orientation",
+        "aiDescription",
+        ["aiTags", json],
+        ["faceTags", json],
+        ["exifProcessedAt", date],
+    ] as const;
 
-    // EXIF Metadata
-    if (row.dateTaken !== null && row.dateTaken !== undefined) record.dateTaken = new Date(row.dateTaken);
-    if (row.dimensionsWidth !== null && row.dimensionsHeight !== null) {
-        record.dimensions = { width: row.dimensionsWidth, height: row.dimensionsHeight };
-    }
-    if (row.locationLatitude !== null && row.locationLongitude !== null) {
-        record.location = { latitude: row.locationLatitude, longitude: row.locationLongitude };
-    }
-    if (row.cameraMake) record.cameraMake = row.cameraMake;
-    if (row.cameraModel) record.cameraModel = row.cameraModel;
-    if (row.exposureTime) record.exposureTime = row.exposureTime;
-    if (row.aperture) record.aperture = row.aperture;
-    if (row.iso !== null && row.iso !== undefined) record.iso = row.iso;
-    if (row.focalLength) record.focalLength = row.focalLength;
-    if (row.lens) record.lens = row.lens;
-    if (row.duration !== null && row.duration !== undefined) record.duration = row.duration;
-    if (row.framerate !== null && row.framerate !== undefined) record.framerate = row.framerate;
-    if (row.videoCodec) record.videoCodec = row.videoCodec;
-    if (row.audioCodec) record.audioCodec = row.audioCodec;
-    if (row.rating !== null && row.rating !== undefined) record.rating = row.rating;
-    if (row.tags) record.tags = JSON.parse(row.tags);
-    if (row.orientation !== null && row.orientation !== undefined) record.orientation = row.orientation;
+    const basicObject = fieldConversions.map(entry=>{
+        const [field, conversionFn] = typeof entry === 'string'? [entry]: entry;
+        const rowValue = row[field];
+        return {field, rowValue, conversionFn}
+    }).filter(({field, rowValue})=>{
+        if (wantedFields === 'all'){
+            return true;
+        }
+        if (!wantedFields.includes(field)){
+            return false;
+        }
+        // 🤖 I want this to represent the state of the DB - Let's say undefined means "no entry"
+        // and "NULL" means "we know there is no data". So if we haven't checked for a file's
+        // location, locationLatitude would be `undefined` whereas if we checked and the file has
+        // no location data, locationLatitude would be `null` 
+        if (rowValue=== undefined){
+            return false;
+        }
+        return true;
+    }).reduce((acc,{field, rowValue, conversionFn})=>{
+        if (!conversionFn){
+            return {...acc, [field]: rowValue}
+        }
+        return {...acc, [field]:conversionFn(rowValue as string)}
+    },{} as Partial<FileRecord>);
 
-    // AI Metadata
-    if (row.aiDescription) record.aiDescription = row.aiDescription;
-    if (row.aiTags) record.aiTags = JSON.parse(row.aiTags);
+    /////////////////
+    // Now add row values that have different keys than DB entries.
+    const {dimensionsWidth, dimensionsHeight, locationLatitude, locationLongitude} = row;
 
-    // Face Metadata
-    if (row.faceTags) record.faceTags = JSON.parse(row.faceTags);
+    const dimensions = (()=>{
+        if (dimensionsWidth !== null && dimensionsHeight !== null) {
+            return { width: dimensionsWidth, height: dimensionsHeight };
+        }
+    })()
 
-    // Processing status
-    if (row.exifProcessedAt) record.exifProcessedAt = row.exifProcessedAt;
-    if (row.thumbnailsProcessedAt) record.thumbnailsProcessedAt = row.thumbnailsProcessedAt;
+    const location = (()=>{
+        if (locationLatitude && locationLongitude){
+            return {latitude:locationLatitude, longitude: locationLongitude};
+        }
+    })()
 
-    return record as FileRecord;
+    return {...basicObject, ...dimensions, ...location} as FileRecord;
 }
 
 /**
  * Converts a FileRecord to column names and values for SQL insertion
  */
-export const getColumnNamesAndValues = (entry: Partial<DatabaseFileEntry>): { names: string[]; values: any[] } => {
+export const fileRecordToColumnNamesAndValues = (entry: Partial<DatabaseFileEntry>): { names: string[]; values: (string|number)[] } => {
     const names: string[] = [];
-    const values: any[] = [];
+    const values: (string|number)[] = [];
 
-    const addColumn = (name: string, value: any) => {
+    const addColumn = (name: string, value: string|number|undefined|null) => {
+        if (value === undefined || value === null){
+            return;
+        }
         names.push(name);
         values.push(value);
     };
 
     // Always include relativePath and mimeType
     if (entry.relativePath) addColumn('relativePath', entry.relativePath);
-    if (entry.mimeType !== undefined) addColumn('mimeType', entry.mimeType);
+    if (entry.mimeType) addColumn('mimeType', entry.mimeType);
 
     // File Info
-    if (entry.sizeInBytes !== undefined) addColumn('sizeInBytes', entry.sizeInBytes);
-    if (entry.created !== undefined) addColumn('created', entry.created instanceof Date ? entry.created.getTime() : entry.created);
-    if (entry.modified !== undefined) addColumn('modified', entry.modified instanceof Date ? entry.modified.getTime() : entry.modified);
+    if (entry.sizeInBytes) addColumn('sizeInBytes', entry.sizeInBytes);
+    if (entry.created) addColumn('created', entry.created instanceof Date ? entry.created.getTime() : entry.created);
+    if (entry.modified) addColumn('modified', entry.modified instanceof Date ? entry.modified.getTime() : entry.modified);
 
     // EXIF Metadata
-    if (entry.dateTaken !== undefined) addColumn('dateTaken', entry.dateTaken instanceof Date ? entry.dateTaken.getTime() : entry.dateTaken);
+    if (entry.dateTaken) addColumn('dateTaken', entry.dateTaken instanceof Date ? entry.dateTaken.getTime() : entry.dateTaken);
     if (entry.dimensions) {
         addColumn('dimensionsWidth', entry.dimensions.width);
         addColumn('dimensionsHeight', entry.dimensions.height);
@@ -83,31 +111,31 @@ export const getColumnNamesAndValues = (entry: Partial<DatabaseFileEntry>): { na
         addColumn('locationLatitude', entry.location.latitude);
         addColumn('locationLongitude', entry.location.longitude);
     }
-    if (entry.cameraMake !== undefined) addColumn('cameraMake', entry.cameraMake);
-    if (entry.cameraModel !== undefined) addColumn('cameraModel', entry.cameraModel);
-    if (entry.exposureTime !== undefined) addColumn('exposureTime', entry.exposureTime);
-    if (entry.aperture !== undefined) addColumn('aperture', entry.aperture);
-    if (entry.iso !== undefined) addColumn('iso', entry.iso);
-    if (entry.focalLength !== undefined) addColumn('focalLength', entry.focalLength);
-    if (entry.lens !== undefined) addColumn('lens', entry.lens);
-    if (entry.duration !== undefined) addColumn('duration', entry.duration);
-    if (entry.framerate !== undefined) addColumn('framerate', entry.framerate);
-    if (entry.videoCodec !== undefined) addColumn('videoCodec', entry.videoCodec);
-    if (entry.audioCodec !== undefined) addColumn('audioCodec', entry.audioCodec);
-    if (entry.rating !== undefined) addColumn('rating', entry.rating);
-    if (entry.tags !== undefined) addColumn('tags', JSON.stringify(entry.tags));
-    if (entry.orientation !== undefined) addColumn('orientation', entry.orientation);
+    if (entry.cameraMake) addColumn('cameraMake', entry.cameraMake);
+    if (entry.cameraModel) addColumn('cameraModel', entry.cameraModel);
+    if (entry.exposureTime) addColumn('exposureTime', entry.exposureTime);
+    if (entry.aperture) addColumn('aperture', entry.aperture);
+    if (entry.iso) addColumn('iso', entry.iso);
+    if (entry.focalLength) addColumn('focalLength', entry.focalLength);
+    if (entry.lens) addColumn('lens', entry.lens);
+    if (entry.duration) addColumn('duration', entry.duration);
+    if (entry.framerate) addColumn('framerate', entry.framerate);
+    if (entry.videoCodec) addColumn('videoCodec', entry.videoCodec);
+    if (entry.audioCodec) addColumn('audioCodec', entry.audioCodec);
+    if (entry.rating) addColumn('rating', entry.rating);
+    if (entry.tags) addColumn('tags', JSON.stringify(entry.tags));
+    if (entry.orientation) addColumn('orientation', entry.orientation);
 
     // AI Metadata
-    if (entry.aiDescription !== undefined) addColumn('aiDescription', entry.aiDescription);
-    if (entry.aiTags !== undefined) addColumn('aiTags', JSON.stringify(entry.aiTags));
+    if (entry.aiDescription) addColumn('aiDescription', entry.aiDescription);
+    if (entry.aiTags) addColumn('aiTags', JSON.stringify(entry.aiTags));
 
     // Face Metadata
-    if (entry.faceTags !== undefined) addColumn('faceTags', JSON.stringify(entry.faceTags));
+    if (entry.faceTags) addColumn('faceTags', JSON.stringify(entry.faceTags));
 
     // Processing status
-    if (entry.exifProcessedAt !== undefined) addColumn('exifProcessedAt', entry.exifProcessedAt);
-    if (entry.thumbnailsProcessedAt !== undefined) addColumn('thumbnailsProcessedAt', entry.thumbnailsProcessedAt);
+    if (entry.exifProcessedAt) addColumn('exifProcessedAt', entry.exifProcessedAt);
+    if (entry.thumbnailsProcessedAt) addColumn('thumbnailsProcessedAt', entry.thumbnailsProcessedAt);
 
     // Validate that names and values are in sync
     if (names.length !== values.length) {

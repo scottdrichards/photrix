@@ -7,13 +7,12 @@ import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { MetadataGroupKeys, type DatabaseFileEntry } from "./fileRecord.type.ts";
 import type { FileRecord, QueryOptions, QueryResult } from "./indexDatabase.type.ts";
 import { filterToSQL } from "./filterToSQL.ts";
-import { getColumnNamesAndValues, rowToFileRecord } from "./rowFileRecordConversionFunctions.ts";
+import { fileRecordToColumnNamesAndValues, rowToFileRecord } from "./rowFileRecordConversionFunctions.ts";
 
 export class IndexDatabase {
   private readonly storagePath: string;
   private db: Database.Database;
   private readonly dbFilePath: string;
-  private insertOrReplaceStmt: Database.Statement;
   private insertIfMissingStmt: Database.Statement;
   private selectDataStmt: Database.Statement;
 
@@ -82,20 +81,9 @@ export class IndexDatabase {
       )
     `);
 
-    // Note: Prepared statements are initialized in load() after migration
-    this.insertOrReplaceStmt = null as any;
-    this.insertIfMissingStmt = null as any;
-    this.selectDataStmt = null as any;
-  }
-
-  async load(): Promise<void> {
     console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
     this.ensureRootPath();
     
-    // Initialize prepared statements
-    this.insertOrReplaceStmt = this.db.prepare(
-      "INSERT OR REPLACE INTO files (relativePath, mimeType) VALUES (?, ?)",
-    );
     this.insertIfMissingStmt = this.db.prepare(
       "INSERT INTO files (relativePath, mimeType) VALUES (?, ?) ON CONFLICT(relativePath) DO NOTHING",
     );
@@ -106,12 +94,8 @@ export class IndexDatabase {
     console.log(`[IndexDatabase] Contains ${count.count} entries`);
   }
 
-  async save(): Promise<void> {
-    // No-op for SQLite
-  }
-
   async addFile(fileData: DatabaseFileEntry): Promise<void> {
-    const columns = getColumnNamesAndValues(fileData);
+    const columns = fileRecordToColumnNamesAndValues(fileData);
     
     if (columns.names.length !== columns.values.length) {
       throw new Error(
@@ -123,10 +107,6 @@ export class IndexDatabase {
     const placeholders = columns.values.map(() => '?').join(', ');
     const sql = `INSERT OR REPLACE INTO files (${columns.names.join(', ')}) VALUES (${placeholders})`;
     this.db.prepare(sql).run(...columns.values);
-  }
-
-  async removeFile(relativePath: string): Promise<void> {
-    this.db.prepare('DELETE FROM files WHERE relativePath = ?').run(relativePath);
   }
 
   async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
@@ -144,7 +124,7 @@ export class IndexDatabase {
 
     const transaction = this.db.transaction(() => {
       this.db.prepare('DELETE FROM files WHERE relativePath = ?').run(oldRelativePath);
-      const columns = getColumnNamesAndValues(updated);
+      const columns = fileRecordToColumnNamesAndValues(updated);
       
       if (columns.names.length !== columns.values.length) {
         throw new Error(
@@ -171,7 +151,7 @@ export class IndexDatabase {
         ...(existingEntry ?? { relativePath, mimeType: mimeTypeForFilename(relativePath) }),
         ...fileData,
       };
-      const columns = getColumnNamesAndValues(updatedEntry);
+      const columns = fileRecordToColumnNamesAndValues(updatedEntry);
       
       if (columns.names.length !== columns.values.length) {
         throw new Error(
@@ -188,6 +168,12 @@ export class IndexDatabase {
     await this.runWithRetry(execute);
   }
 
+  /**
+   * 
+   * @param relativePath 
+   * @param requiredMetadata This is metadata that it will fetch if needed (i.e., with a filesystem write) 
+   * @returns 
+   */
   async getFileRecord(
     relativePath: string,
     requiredMetadata?: Array<keyof FileRecord>,
@@ -199,7 +185,8 @@ export class IndexDatabase {
 
     const record = rowToFileRecord(row);
 
-    if (!requiredMetadata?.length || !this.hydrationRequired(record, requiredMetadata)) {
+    const hasAllMetadata = !requiredMetadata || requiredMetadata.every(key => key in record);
+    if (hasAllMetadata) {
       return record;
     }
 
@@ -296,13 +283,6 @@ export class IndexDatabase {
       }
     });
     tx(paths);
-  }
-
-  private hydrationRequired(
-    record: FileRecord,
-    requiredMetadata: Array<keyof FileRecord>,
-  ): boolean {
-    return requiredMetadata.some((key) => !(key in record));
   }
 
   private async hydrateMetadata(
@@ -436,7 +416,7 @@ export class IndexDatabase {
     `;
     
     const rows = this.db.prepare(mainSQL).all(...whereParams, pageSize, offset) as Array<Record<string, any>>;
-    const matchedFiles = rows.map(rowToFileRecord);
+    const matchedFiles = rows.map(v=>rowToFileRecord(v, metadata));
 
     // Hydrate metadata for the current page
     const hydrationPromises = matchedFiles.map(file => 

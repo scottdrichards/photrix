@@ -1,6 +1,6 @@
 import * as http from "http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import { QueryOptions } from "../indexDatabase/indexDatabase.type.ts";
+import { FilterCondition, QueryOptions } from "../indexDatabase/indexDatabase.type.ts";
 import { rename, stat, unlink } from "fs/promises";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { createReadStream, createWriteStream } from "fs";
@@ -120,6 +120,14 @@ const streamFile = (
   fileStream.pipe(res);
 };
 
+/**
+ * If no "metadata" provided in query params, default will just be a list of paths
+ * @param url 
+ * @param subPath MUST start and end with slash ("/" for root)
+ * @param database 
+ * @param res 
+ * @returns 
+ */
 const queryHandler = async (
   url: URL,
   subPath: string | null,
@@ -133,64 +141,26 @@ const queryHandler = async (
   const countOnly = url.searchParams.get("count") === "true";
   const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
 
-  // Build filter
-  let pathFilter: QueryOptions["filter"];
-  if (subPath) {
-    // Convert path to filter
-    // Remove trailing slash if present
-    const cleanPath = subPath.endsWith("/") ? subPath.slice(0, -1) : subPath;
+  const folder:FilterCondition|null = subPath === null ?null: {
+    folder: subPath ?? "/",
+    recursive: includeSubfolders
+  }
 
-    if (includeSubfolders) {
-      // Match files in this folder and all subfolders
-        pathFilter = {
-          relativePath: {
-            startsWith: `${cleanPath}/`,
-          },
-        };
-    } else {
-      // Match files directly in this path only (no subfolders)
-        pathFilter = {
-          relativePath: {
-            directChildOf: cleanPath,
-          },
-        };
+  const filter = {
+    ...folder,
+    ...(filterParam && JSON.parse(filterParam)),
+  }
+
+  const metadata = (()=>{
+    if (!metadataParam){
+      return [];
     }
-  } else {
-    // Default: match files at root level only (no subfolders)
-      pathFilter = {
-        relativePath: {
-          rootOnly: true,
-        },
-      };
-  }
-
-  // Combine path filter with any additional filters from query string
-  let filter:QueryOptions["filter"];
-  if (filterParam) {
-    const additionalFilter = JSON.parse(filterParam);
-    // Combine both filters using AND operation
-    filter = {
-      operation: "and" as const,
-      conditions: [pathFilter, additionalFilter],
-    };
-  } else {
-    filter = pathFilter;
-  }
-
-  // Parse metadata (comma-separated list or JSON array)
-  let metadata: Array<string> = [];
-  if (metadataParam) {
-    try {
-      // Try parsing as JSON array first
-      metadata = JSON.parse(metadataParam);
-    } catch {
-      // Fall back to comma-separated string
-      metadata = metadataParam
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+    try{
+      return JSON.parse(metadataParam);
+    }catch{
+      return metadataParam.split(',').map(s=>s.trim()).filter(Boolean)
     }
-  }
+  })();
 
   const queryOptions = {
     filter,
