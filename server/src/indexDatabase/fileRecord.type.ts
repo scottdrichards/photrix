@@ -103,10 +103,6 @@ type EntryProperties = {
   thumbnailsProcessedAt?: string;
 }
 
-type OptionalToNullable<T extends object> = {
-  [K in T]: undefined in T[K]
-}
-
 /** Flat representation of a DB row. Undefined means "I don't know", null means "I know there is no value*/
 export type DatabaseFileEntry = BaseFileRecord & MetadataGroups[keyof MetadataGroups] & EntryProperties;
 

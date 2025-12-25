@@ -62,7 +62,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
 
   const status = statusHistory?.at(-1)?.status;
 
-  const calculateETA = (progress: ProgressEntry, completedKey: 'thumbnails' | 'exif'): string | null => {
+  const calculateETA = (progress: ProgressEntry, completedKey: 'exif'): string | null => {
     if (!statusHistory || statusHistory.length < 2 || progress.percent >= 1) {
       return null;
     }
@@ -127,10 +127,6 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                     <span className={styles.value}>{status.scannedFilesCount.toLocaleString()} files</span>
                   </Text>
                   <Text>
-                    <span className={styles.label}>Thumbnail worker:</span>
-                    <span className={styles.value}>{status.maintenance.thumbnailActive ? "active" : "idle"}</span>
-                  </Text>
-                  <Text>
                     <span className={styles.label}>EXIF worker:</span>
                     <span className={styles.value}>{status.maintenance.exifActive ? "active" : "idle"}</span>
                   </Text>
@@ -138,7 +134,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                 <ProgressItem
                   label="Overall progress"
                   progress={status.progress.overall}
-                  detail="Includes file info, EXIF, and thumbnails"
+                  detail="Includes file info and EXIF"
                 />
 
                 <div className={styles.progressGrid}>
@@ -158,17 +154,10 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                     detail={`${status.pending.exif.toLocaleString()} remaining`}
                     eta={calculateETA(status.progress.exif, 'exif')}
                   />
-                  <ProgressItem
-                    label="Thumbnails"
-                    progress={status.progress.thumbnails}
-                    detail={`${status.pending.thumbnails.toLocaleString()} remaining`}
-                    eta={calculateETA(status.progress.thumbnails, 'thumbnails')}
-                  />
                 </div>
 
                 <Text size={400} weight="semibold">Recent activity</Text>
                 <div className={styles.recentRow}>
-                  <RecentActivity label="Last thumbnail" entry={status.recent.thumbnail} />
                   <RecentActivity label="Last EXIF" entry={status.recent.exif} />
                 </div>
               </div>

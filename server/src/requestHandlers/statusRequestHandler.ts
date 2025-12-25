@@ -1,7 +1,6 @@
 import * as http from "http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { FileScanner } from "../indexDatabase/fileScanner.ts";
-import { getActiveTranscodes } from "../videoProcessing/videoUtils.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -25,14 +24,12 @@ const buildStatus = ({ database, fileScanner }: Options) => {
 
   const pendingInfo = database.countMissingInfo();
   const pendingExif = database.countMissingDateTaken();
-  const pendingThumbnails = database.countNeedingThumbnails();
 
   const infoProgress = createProgress(databaseSize - pendingInfo, databaseSize);
   const exifProgress = createProgress(mediaCount - pendingExif, mediaCount);
-  const thumbnailProgress = createProgress(mediaCount - pendingThumbnails, mediaCount);
   const scannedProgress = createProgress(fileScanner.scannedFilesCount, Math.max(databaseSize, fileScanner.scannedFilesCount));
 
-  const progressValues = [infoProgress, exifProgress, thumbnailProgress].filter((entry) => entry.total > 0);
+  const progressValues = [infoProgress, exifProgress].filter((entry) => entry.total > 0);
   const overallPercent = progressValues.length
     ? progressValues.reduce((sum, entry) => sum + entry.percent, 0) / progressValues.length
     : 1;
@@ -43,10 +40,8 @@ const buildStatus = ({ database, fileScanner }: Options) => {
     pending: {
       info: pendingInfo,
       exif: pendingExif,
-      thumbnails: pendingThumbnails,
     },
     maintenance: {
-      thumbnailActive: (fileScanner as unknown as { thumbnailMaintenanceActive?: boolean }).thumbnailMaintenanceActive ?? false,
       exifActive: (fileScanner as unknown as { exifMaintenanceActive?: boolean }).exifMaintenanceActive ?? false,
     },
     progress: {
@@ -54,14 +49,9 @@ const buildStatus = ({ database, fileScanner }: Options) => {
       scanned: scannedProgress,
       info: infoProgress,
       exif: exifProgress,
-      thumbnails: thumbnailProgress,
     },
     recent: {
-      thumbnail: fileScanner.latestThumbnail ?? null,
       exif: fileScanner.latestExif ?? null,
-    },
-    transcodes: {
-      active: getActiveTranscodes(),
     },
   };
 

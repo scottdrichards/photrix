@@ -8,6 +8,10 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
     const date = (v:string|number)=>new Date(v);
     const json = (v:string)=>JSON.parse(v);
 
+    if (!row.relativePath) {
+        throw new Error("rowToFileRecord: row is missing relativePath");
+    }
+
     const fieldConversions = ["sizeInBytes",
         ["created", date],
         ["modified", date],
@@ -74,7 +78,13 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
         }
     })()
 
-    return {...basicObject, ...dimensions, ...location} as FileRecord;
+    return {
+        relativePath: row.relativePath as string,
+        mimeType: row.mimeType as string | undefined,
+        ...basicObject,
+        ...dimensions,
+        ...location,
+    } as FileRecord;
 }
 
 /**

@@ -67,10 +67,8 @@ export interface ServerStatus {
   pending: {
     info: number;
     exif: number;
-    thumbnails: number;
   };
   maintenance: {
-    thumbnailActive: boolean;
     exifActive: boolean;
   };
   progress: {
@@ -78,29 +76,9 @@ export interface ServerStatus {
     scanned: ProgressEntry;
     info: ProgressEntry;
     exif: ProgressEntry;
-    thumbnails: ProgressEntry;
   };
   recent: {
-    thumbnail: RecentMaintenance | null;
     exif: RecentMaintenance | null;
-  };
-
-  transcodes?: {
-    active: Array<{
-      id: string;
-      kind: "preview" | "webSafe" | "thumbnail";
-      filePath: string;
-      height: string | number;
-      startedAt: string;
-      updatedAt: string;
-      state: "running" | "done" | "error";
-      durationSeconds?: number;
-      outTimeSeconds?: number;
-      percent?: number;
-      speed?: string;
-      fps?: number;
-      message?: string;
-    }>;
   };
 }
 
