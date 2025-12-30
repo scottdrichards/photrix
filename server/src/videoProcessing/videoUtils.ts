@@ -344,10 +344,8 @@ export const getVideoMetadata = async (filePath: string): Promise<Partial<ExifMe
              }
           }
 
-          metadata.dimensions = {
-            width,
-            height,
-          };
+          metadata.dimensionWidth = width;
+          metadata.dimensionHeight = height;
           metadata.videoCodec = videoStream.codec_name;
           if (videoStream.r_frame_rate) {
             const [num, den] = videoStream.r_frame_rate.split("/");

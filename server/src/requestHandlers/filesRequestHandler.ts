@@ -27,12 +27,17 @@ export const filesRequestHandler = async (
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     // Extract path after /api/files/ and decode URL escape characters
-    const pathMatch = url.pathname.match(/^\/api\/files\/(.+)/);
-    const subPath = pathMatch ? decodeURIComponent(pathMatch[1]) : null;
+    const pathMatch = url.pathname.match(/^\/api\/files\/(.*)/);
+    if (!pathMatch){
+      console.error("Invalid /api/files/ request path:", url.pathname);
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Bad request" }));
+      return;
+    }
+    const subPath = decodeURIComponent(pathMatch[1]) || "/";
 
-    // Determine if this is a query (ends with /) or file request (no trailing slash)
-    // Query mode REQUIRES trailing slash (e.g., /api/files/ or /api/files/subfolder/)
-    const isQuery = !subPath || subPath.endsWith("/");
+    // Determine if this is a query (as opposed to file request)
+    const isQuery = subPath.endsWith("/");
 
     if (isQuery) {
       // QUERY MODE: Return list of files
@@ -119,7 +124,7 @@ const streamFile = (
 
 const queryHandler = async (
   url: URL,
-  subPath: string | null,
+  directoryPath: string,
   database: IndexDatabase,
   res: http.ServerResponse,
 ) => {
@@ -130,49 +135,20 @@ const queryHandler = async (
   const countOnly = url.searchParams.get("count") === "true";
   const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
 
-  // Build filter
-  let pathFilter: QueryOptions["filter"];
-  if (subPath) {
-    // Convert path to filter
-    // Remove trailing slash if present
-    const cleanPath = subPath.endsWith("/") ? subPath.slice(0, -1) : subPath;
-
-    if (includeSubfolders) {
-      // Match files in this folder and all subfolders
-        pathFilter = {
-          relativePath: {
-            startsWith: `${cleanPath}/`,
-          },
-        };
-    } else {
-      // Match files directly in this path only (no subfolders)
-        pathFilter = {
-          relativePath: {
-            directChildOf: cleanPath,
-          },
-        };
+  const pathFilter = directoryPath? {
+    relativePath: {
+      startsWith: directoryPath,
+      recursive: includeSubfolders,
     }
-  } else {
-    // Default: match files at root level only (no subfolders)
-      pathFilter = {
-        relativePath: {
-          rootOnly: true,
-        },
-      };
-  }
+  } :{};
 
-  // Combine path filter with any additional filters from query string
-  let filter:QueryOptions["filter"];
-  if (filterParam) {
-    const additionalFilter = JSON.parse(filterParam);
-    // Combine both filters using AND operation
-    filter = {
-      operation: "and" as const,
-      conditions: [pathFilter, additionalFilter],
-    };
-  } else {
-    filter = pathFilter;
-  }
+  const filter = filterParam ? {
+    operation: "and" as const,
+    conditions: [
+      pathFilter,
+      JSON.parse(filterParam) as QueryOptions["filter"],
+    ],
+  }: pathFilter;
 
   // Parse metadata (comma-separated list or JSON array)
   let metadata: Array<string> = [];
@@ -232,11 +208,9 @@ const fileHandler = async (
     return;
   }
 
-  // Construct absolute path and check if it's within the storage path
-  const normalizedPath = path.resolve(storageRoot, subPath);
+  const normalizedPath = path.join(storageRoot, subPath);
 
   // Security check: ensure the path is within the storage directory
-  // Use path.relative to check - if it starts with "..", it's outside
   const relativeToStorage = path.relative(storageRoot, normalizedPath);
   if (relativeToStorage.startsWith("..") || path.isAbsolute(relativeToStorage)) {
     res.writeHead(403, { "Content-Type": "application/json" });

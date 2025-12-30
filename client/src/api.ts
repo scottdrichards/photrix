@@ -2,7 +2,8 @@ export interface ApiPhotoItem {
   relativePath: string;
   mimeType?: string | null;
   dateTaken?: string | null;
-  dimensions?: { width: number; height: number };
+  dimensionWidth?: number;
+  dimensionHeight?: number;
   sizeInBytes?: number;
   created?: string;
   modified?: string;
@@ -20,7 +21,8 @@ export interface PhotoItem {
   metadata?: {
     mimeType?: string | null;
     dateTaken?: string | null;
-    dimensions?: { width: number; height: number };
+    dimensionWidth?: number;
+    dimensionHeight?: number;
     [key: string]: unknown;
   };
 }
@@ -106,7 +108,8 @@ export const subscribeStatusStream = (
 
 const DEFAULT_METADATA_KEYS = [
   "mimeType",
-  "dimensions",
+  "dimensionWidth",
+  "dimensionHeight",
   "dateTaken",
   "sizeInBytes",
   "created",
@@ -120,7 +123,8 @@ const DEFAULT_METADATA_KEYS = [
   "lens",
   "rating",
   "tags",
-  "location",
+  "locationLatitude",
+  "locationLongitude",
   "orientation",
   "duration",
   "framerate",

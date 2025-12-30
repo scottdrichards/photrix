@@ -1,4 +1,4 @@
-import { DatabaseFileEntry } from "./fileRecord.type.ts";
+import { DatabaseEntry } from "./fileRecord.type.ts";
 import { FileRecord } from "./indexDatabase.type.ts";
 
 /**
@@ -33,7 +33,6 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
         "aiDescription",
         ["aiTags", json],
         ["faceTags", json],
-        ["exifProcessedAt", date],
     ] as const;
 
     const basicObject = fieldConversions.map(entry=>{
@@ -90,7 +89,7 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
 /**
  * Converts a FileRecord to column names and values for SQL insertion
  */
-export const fileRecordToColumnNamesAndValues = (entry: Partial<DatabaseFileEntry>): { names: string[]; values: (string|number)[] } => {
+export const fileRecordToColumnNamesAndValues = (entry: Partial<DatabaseEntry>): { names: string[]; values: (string|number)[] } => {
     const names: string[] = [];
     const values: (string|number)[] = [];
 
@@ -113,14 +112,10 @@ export const fileRecordToColumnNamesAndValues = (entry: Partial<DatabaseFileEntr
 
     // EXIF Metadata
     if (entry.dateTaken) addColumn('dateTaken', entry.dateTaken instanceof Date ? entry.dateTaken.getTime() : entry.dateTaken);
-    if (entry.dimensions) {
-        addColumn('dimensionsWidth', entry.dimensions.width);
-        addColumn('dimensionsHeight', entry.dimensions.height);
-    }
-    if (entry.location) {
-        addColumn('locationLatitude', entry.location.latitude);
-        addColumn('locationLongitude', entry.location.longitude);
-    }
+    if (entry.dimensionWidth) addColumn('dimensionsWidth', entry.dimensionWidth);
+    if (entry.dimensionHeight) addColumn('dimensionsHeight', entry.dimensionHeight);
+    if (entry.locationLatitude) addColumn('locationLatitude', entry.locationLatitude);
+    if (entry.locationLongitude) addColumn('locationLongitude', entry.locationLongitude);
     if (entry.cameraMake) addColumn('cameraMake', entry.cameraMake);
     if (entry.cameraModel) addColumn('cameraModel', entry.cameraModel);
     if (entry.exposureTime) addColumn('exposureTime', entry.exposureTime);
@@ -142,10 +137,6 @@ export const fileRecordToColumnNamesAndValues = (entry: Partial<DatabaseFileEntr
 
     // Face Metadata
     if (entry.faceTags) addColumn('faceTags', JSON.stringify(entry.faceTags));
-
-    // Processing status
-    if (entry.exifProcessedAt) addColumn('exifProcessedAt', entry.exifProcessedAt);
-    if (entry.thumbnailsProcessedAt) addColumn('thumbnailsProcessedAt', entry.thumbnailsProcessedAt);
 
     // Validate that names and values are in sync
     if (names.length !== values.length) {

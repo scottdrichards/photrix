@@ -1,3 +1,6 @@
+import { AssertNever, UnionXOR } from "../utils.ts";
+import { FileRecord } from "./indexDatabase.type.ts";
+
 export type BaseFileRecord = {
   /** Includes filename and extension. Uses '/' as a separator and does not start with slash */
   relativePath: string;
@@ -54,23 +57,14 @@ export type FaceMetadata = {
   faceTags?: FaceTag[];
 };
 
-/**
- * This is separate because each of these might be a touch expensive to determine
- * so we have a determinedOn timestamp to know its freshness.
- */
-export type MetadataGroups = {
-  info: FileInfo;
-  exifMetadata: ExifMetadata;
-  aiMetadata: AIMetadata;
-  faceMetadata: FaceMetadata;
-};
-
-export const MetadataGroupKeys = {
+export const MetadataGroups = {
   info: ["sizeInBytes", "created", "modified"],
   exifMetadata: [
     "dateTaken",
-    "dimensions",
-    "location",
+    "dimensionWidth",
+    "dimensionHeight",
+    "locationLatitude",
+    "locationLongitude",
     "cameraMake",
     "cameraModel",
     "exposureTime",
@@ -88,51 +82,33 @@ export const MetadataGroupKeys = {
   ],
   aiMetadata: ["aiDescription", "aiTags"],
   faceMetadata: ["faceTags"],
-} as const;
+} as const satisfies Record<string, readonly (keyof FileRecord)[]>;
+
 /**
- * This will verify that all metadata keys are included in the respective key lists.
+ * Determines which metadata group a given field belongs to.
  */
-type _EnsureAllMetadataKeysListed = AssertTrue<
-  AreUnionsEqual<MetadataPropertyUnion, MetadataGroupKeyUnion>
->;
+export const whichMetadataGroup = (field: keyof FileRecord) => 
+  Object.keys(MetadataGroups).find(groupKey => 
+    (MetadataGroups as Record<string, readonly string[]>)[groupKey].includes(field)
+  ) as keyof typeof MetadataGroups;
 
-type EntryProperties = {
-  /** Timestamp when EXIF data was last attempted/retrieved */
-  exifProcessedAt?: string;
-  /** Timestamp when thumbnails were last attempted/generated */
-  thumbnailsProcessedAt?: string;
-}
 
-/** Flat representation of a DB row. Undefined means "I don't know", null means "I know there is no value*/
-export type DatabaseFileEntry = BaseFileRecord & MetadataGroups[keyof MetadataGroups] & EntryProperties;
+/** DB row. Undefined means "I don't know", null means "I know there is no value*/
+export type DatabaseEntry = BaseFileRecord & FileInfo & ExifMetadata & AIMetadata & FaceMetadata;
 
 /////////////////////////
-// This section is just to ensure no metadata key collisions occur when creating FileRecord type.
+// This section is just to do some extra static type checking.
 /////////////////////////
 
-type MetadataCollisionKeys<T extends Record<PropertyKey, object>> = {
-  [K1 in keyof T]: {
-    [K2 in Exclude<keyof T, K1>]: keyof T[K1] & keyof T[K2];
-  }[Exclude<keyof T, K1>];
-}[keyof T];
+/**
+ * This will verify that all metadata keys are assigned a group if necessary.
+ */
+type MissingKeys = UnionXOR<MetadataKeysThatRequireWork, AllMetadataKeysInGroups>;
+type _EnsureAllMetadataKeysListed = AssertNever<MissingKeys>;
 
-type IsNever<T> = [T] extends [never] ? true : false;
-type AssertTrue<T extends true> = T;
+type MetadataKeysThatRequireWork = Exclude<keyof FileRecord, keyof BaseFileRecord>;
 
-type _EnsureNoMetadataKeyCollisions = AssertTrue<
-  // IF THIS ERRORS, that means you have two keys with the same name in different metadata sections.
-  IsNever<MetadataCollisionKeys<MetadataGroups>>
->;
-
-type AreUnionsEqual<A, B> =
-  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-
-
-type MetadataPropertyUnion = {
-  [K in keyof MetadataGroups]: keyof MetadataGroups[K];
-}[keyof MetadataGroups];
-
-type MetadataGroupKeyUnion = {
-  [K in keyof typeof MetadataGroupKeys]: (typeof MetadataGroupKeys)[K][number];
-}[keyof typeof MetadataGroupKeys];
+type AllMetadataKeysInGroups = {
+  [K in keyof typeof MetadataGroups]: (typeof MetadataGroups)[K][number];
+}[keyof typeof MetadataGroups];
 

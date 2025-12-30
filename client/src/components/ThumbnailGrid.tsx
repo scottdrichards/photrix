@@ -223,8 +223,8 @@ const createTileStyle = (photo: PhotoItem): TileStyle => {
 };
 
 const getAspectRatio = (photo: PhotoItem): number => {
-  const width = photo.metadata?.dimensions?.width;
-  const height = photo.metadata?.dimensions?.height;
+  const width = photo.metadata?.dimensionWidth;
+  const height = photo.metadata?.dimensionHeight;
   if (
     typeof width === "number" &&
     width > 0 &&

@@ -1,14 +1,11 @@
 import http from "node:http";
-import { FileScanner } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
-import { healthRequestHandler } from "./requestHandlers/healthRequestHandler.ts";
-import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
 import { filesRequestHandler } from "./requestHandlers/filesRequestHandler.ts";
-import { statusRequestHandler, statusStreamHandler } from "./requestHandlers/statusRequestHandler.ts";
+import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
 
 const PORT = process.env.PORT || 3000;
 
-export const createServer = (database: IndexDatabase, storagePath: string, fileScanner: FileScanner) => {
+export const createServer = (database: IndexDatabase, storagePath: string) => {
     const server = http.createServer((req, res) => {
         const requestStart = Date.now();
         console.log(`[server] ${req.method} ${req.url}`);
@@ -37,23 +34,13 @@ export const createServer = (database: IndexDatabase, storagePath: string, fileS
 
         // Basic health check endpoint
         if (req.url === "/api/health" && req.method === "GET") {
-            healthRequestHandler(req, res);
-            return;
-        }
-
-        // Status endpoint
-        if (req.url === "/api/status" && req.method === "GET") {
-            statusRequestHandler(req, res, { database, fileScanner });
-            return;
-        }
-
-        if (req.url === "/api/status/stream" && req.method === "GET") {
-            statusStreamHandler(req, res, { database, fileScanner });
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ status: "ok", message: "Server is running" }));
             return;
         }
 
         // Get folders endpoint - list subfolders at a given path
-        if (req.url?.startsWith("/api/folders") && req.method === "GET") {
+        if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
             foldersRequestHandler(req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>, res, { database });
             return;
         }

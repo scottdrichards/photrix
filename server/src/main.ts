@@ -1,6 +1,6 @@
 import "dotenv/config";
 import path from "node:path";
-import { FileScanner } from "./indexDatabase/fileScanner.ts";
+import { discoverFiles } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { initializeCacheDirectories } from "./common/cacheUtils.ts";
 import { createServer } from "./createServer.ts";
@@ -20,11 +20,11 @@ const startServer = async () => {
   const database = new IndexDatabase(absolutePath);
   console.log("[bootstrap] IndexDatabase done");
 
-  console.log("[bootstrap] FileScanner starting...");
-  const fileScanner = new FileScanner(absolutePath, database);
-  console.log("[bootstrap] FileScanner done");
+  console.log("[bootstrap] Doing file discovery ...");
+  await discoverFiles({ root: absolutePath, db: database });
+  console.log("[bootstrap] file discovery done");
 
-  createServer(database, absolutePath, fileScanner);
+  createServer(database, absolutePath);
 };
 
 // For testing etc,  you may wish to prevent it from starting

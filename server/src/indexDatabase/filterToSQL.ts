@@ -185,16 +185,15 @@ const stringSearchToSQL = (
 ): SQLPart => {
   if (search.rootOnly) {
     return {
-      where: `${field} NOT LIKE ?`,
-      params: ["%/%"],
+      where: `instr(substr(${field}, 2), '/') = 0`,
+      params: [],
     };
   }
 
   if (search.directChildOf) {
-    const prefixWithSlash = `${search.directChildOf}/`;
-    const likePrefix = `${escapeLikeLiteral(prefixWithSlash)}%`;
-    // SQLite substr() is 1-indexed.
-    const startAfterPrefix = prefixWithSlash.length + 1;
+    const folder = normalizeFolderSearch(search.directChildOf);
+    const likePrefix = `${escapeLikeLiteral(folder)}%`;
+    const startAfterPrefix = folder === "/" ? 2 : folder.length + 1;
     return {
       where: `(${field} LIKE ? ESCAPE '\\' AND instr(substr(${field}, ?), '/') = 0)`,
       params: [likePrefix, startAfterPrefix],
@@ -202,7 +201,8 @@ const stringSearchToSQL = (
   }
 
   if (search.startsWith) {
-    const likePrefix = `${escapeLikeLiteral(search.startsWith)}%`;
+    const prefix = search.startsWith.startsWith("/") ? search.startsWith : `/${search.startsWith}`;
+    const likePrefix = `${escapeLikeLiteral(prefix)}%`;
     return {
       where: `${field} LIKE ? ESCAPE '\\'`,
       params: [likePrefix],
@@ -244,6 +244,14 @@ const stringSearchToSQL = (
 const escapeLikeLiteral = (value: string): string => {
   // Escape LIKE wildcards and the escape character itself.
   return value.replace(/[\\%_]/g, (m) => `\\${m}`);
+};
+
+const normalizeFolderSearch = (value: string): string => {
+  const withLeading = value.startsWith("/") ? value : `/${value}`;
+  if (withLeading === "/") {
+    return "/";
+  }
+  return withLeading.endsWith("/") ? withLeading : `${withLeading}/`;
 };
 
 const globToLike = (glob: string): string => {

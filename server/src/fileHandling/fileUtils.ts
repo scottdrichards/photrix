@@ -31,12 +31,12 @@ export const getExifMetadataFromFile = async (
   const exifRMetadataToFileField = {
     // Standard EXIF fields
     DateTimeOriginal: "dateTaken",
-    ImageWidth: "dimensions.width",
-    ImageHeight: "dimensions.height",
-    ExifImageWidth: "dimensions.width",
-    ExifImageHeight: "dimensions.height",
-    GPSLatitude: "location.latitude",
-    GPSLongitude: "location.longitude",
+    ImageWidth: "dimensionWidth",
+    ImageHeight: "dimensionHeight",
+    ExifImageWidth: "dimensionWidth",
+    ExifImageHeight: "dimensionHeight",
+    GPSLatitude: "locationLatitude",
+    GPSLongitude: "locationLongitude",
     Make: "cameraMake",
     Model: "cameraModel",
     ExposureTime: "exposureTime",
@@ -58,9 +58,8 @@ export const getExifMetadataFromFile = async (
     "photoshop:DateCreated": "dateTaken",
     "dc:subject": "tags",
     "lr:hierarchicalSubject": "tags",
-    "Iptc4xmpExt:LocationCreated": "location",
   } as const satisfies {
-    [key: string]: keyof ExifMetadata | `${keyof ExifMetadata}.${string}`;
+    [key: string]: keyof ExifMetadata;
   };
 
   // Only read the specific fields we need - exifr will only parse those sections
@@ -75,55 +74,47 @@ export const getExifMetadataFromFile = async (
   });
 
   const metadata = Object.entries(exifRMetadataToFileField).reduce((acc, [key, value]) => {
-    const [mainKey, subkey] = value.split(".") as [keyof ExifMetadata, string?];
-
     const rawValue = rawData?.[key as keyof typeof rawData];
 
     if (rawValue === undefined) {
       return acc;
     }
 
-    if (subkey) {
-      // Handle nested properties like 'dimensions.width'
-      return {
-        ...acc,
-        [mainKey]: {
-          ...(acc[mainKey] as Record<string, unknown> | undefined),
-          [subkey]: rawValue,
-        },
-      };
-    }
-
-    // Handle direct properties
     return {
       ...acc,
-      [mainKey]: rawValue,
+      [value]: rawValue,
     };
   }, {} as ExifMetadata);
 
   // Convert GPS coordinates from DMS array to decimal degrees
-  if (metadata.location) {
-    const convertDMSToDecimal = (dms: unknown): number | undefined => {
-      if (typeof dms === 'number') {
-        return dms; // Already in decimal format
+  const convertDMSToDecimal = (dms: unknown): number | undefined => {
+    if (typeof dms === 'number') {
+      return dms; // Already in decimal format
+    }
+    if (Array.isArray(dms) && dms.length >= 2) {
+      const [degrees, minutes, seconds = 0] = dms;
+      if (typeof degrees === 'number' && typeof minutes === 'number' && typeof seconds === 'number') {
+        return degrees + minutes / 60 + seconds / 3600;
       }
-      if (Array.isArray(dms) && dms.length >= 2) {
-        const [degrees, minutes, seconds = 0] = dms;
-        if (typeof degrees === 'number' && typeof minutes === 'number' && typeof seconds === 'number') {
-          return degrees + minutes / 60 + seconds / 3600;
-        }
-      }
-      return undefined;
-    };
+    }
+    return undefined;
+  };
 
-    const latitude = convertDMSToDecimal(metadata.location.latitude);
-    const longitude = convertDMSToDecimal(metadata.location.longitude);
-
-    if (latitude !== undefined && longitude !== undefined) {
-      metadata.location = { latitude, longitude };
+  if (metadata.locationLatitude !== undefined) {
+    const latitude = convertDMSToDecimal(metadata.locationLatitude);
+    if (latitude !== undefined) {
+      metadata.locationLatitude = latitude;
     } else {
-      // If conversion fails, remove location
-      delete (metadata as any).location;
+      delete metadata.locationLatitude;
+    }
+  }
+
+  if (metadata.locationLongitude !== undefined) {
+    const longitude = convertDMSToDecimal(metadata.locationLongitude);
+    if (longitude !== undefined) {
+      metadata.locationLongitude = longitude;
+    } else {
+      delete metadata.locationLongitude;
     }
   }
 
@@ -178,9 +169,8 @@ export const getExifMetadataFromFile = async (
   }
 
   // Orientation 5-8 means the image is rotated 90 or 270 degrees, so width and height are swapped
-  if (metadata.dimensions && [5, 6, 7, 8].includes(rawData?.Orientation)) {
-      const { width, height } = metadata.dimensions;
-      metadata.dimensions = { width: height, height: width };
+  if (metadata.dimensionWidth && metadata.dimensionHeight && [5, 6, 7, 8].includes(rawData?.Orientation)) {
+      [metadata.dimensionHeight, metadata.dimensionWidth] = [metadata.dimensionWidth, metadata.dimensionHeight];
   }
 
   return metadata;
@@ -206,7 +196,8 @@ export const toRelative = (root: string, absolute: string): string => {
   if (relative.startsWith("..")) {
     throw new Error(`Path ${absolute} is outside of root ${root}`);
   }
-  return relative.split(path.sep).join("/");
+  const normalized = relative.split(path.sep).join("/");
+  return normalized.startsWith("/") ? normalized : `/${normalized}`;
 };
 
 export function* walkFiles(dir: string): Generator<string> {

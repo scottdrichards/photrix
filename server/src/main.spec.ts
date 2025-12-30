@@ -3,8 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { rmSync } from "node:fs";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
-import { FileScanner } from "./indexDatabase/fileScanner.ts";
-import { createServer } from "./main.ts";
+import { createServer } from "./createServer.ts";
 import { walkFiles, toRelative } from "./fileHandling/fileUtils.ts";
 import { mimeTypeForFilename } from "./fileHandling/mimeTypes.ts";
 
@@ -67,8 +66,7 @@ describe("main.ts HTTP Server", () => {
       });
     }
 
-    const fileScanner = new FileScanner(storagePath, database);
-    server = createServer(database, storagePath, fileScanner);
+    server = createServer(database, storagePath);
 
     await new Promise<void>((resolve) => {
       server.listen(TEST_PORT, resolve);
