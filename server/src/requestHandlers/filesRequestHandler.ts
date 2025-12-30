@@ -135,9 +135,9 @@ const queryHandler = async (
   const countOnly = url.searchParams.get("count") === "true";
   const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
 
-  const pathFilter = directoryPath? {
+  const pathFilter:QueryOptions["filter"] = directoryPath? {
     relativePath: {
-      startsWith: directoryPath,
+      folder: directoryPath,
       recursive: includeSubfolders,
     }
   } :{};

@@ -364,7 +364,6 @@ export class IndexDatabase {
     return rows
       .map((row) => row.folder)
       .filter((folder): folder is string => Boolean(folder))
-      .map((folder) => `${baseFolderPath}${folder}/`)
       .sort((a, b) => a.localeCompare(b));
   }
 

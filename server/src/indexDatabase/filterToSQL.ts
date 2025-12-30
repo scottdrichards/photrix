@@ -1,9 +1,11 @@
-import type { FilterCondition, FilterElement, Range } from "./indexDatabase.type.ts";
+import type { FileRecord, FilterCondition, FilterElement, Range, StringSearch } from "./indexDatabase.type.ts";
 
 type SQLPart = {
   where: string;
   params: unknown[];
 };
+
+type RelativePathConstraint = StringSearch & { recursive?: boolean };
 
 /**
  * Converts a FilterElement to SQL WHERE clause and parameters.
@@ -53,17 +55,18 @@ const buildFilterSQL = (filter: FilterElement, results: SQLPart[]): void => {
       continue;
     }
     
-    const sql = constraintToSQL(key, constraint);
+    const sql = constraintToSQL(key as keyof FileRecord, constraint);
     if (sql) {
       results.push(sql);
     }
   }
 };
 
-const constraintToSQL = (
-  field: string,
-  constraint: unknown
+const constraintToSQL = <K extends keyof FileRecord>(
+  field: K,
+  constraint: FilterCondition[K]
 ): SQLPart | null => {
+
   // null means field must be NULL
   if (constraint === null) {
     return {
@@ -112,14 +115,14 @@ const constraintToSQL = (
     
     // Check if array contains strings (for glob/regex matching) or primitives
     if (typeof constraint[0] === "string") {
-      // Multiple string constraints - check if they're glob patterns
-      const conditions = constraint.map((value: string) => {
+      // Multiple string constraints
+      const conditions = constraint.map(() => {
         // For now, treat as exact matches. Could be enhanced for glob/regex
         return `${field} = ?`;
       });
       return {
         where: `(${conditions.join(" OR ")})`,
-        params: constraint,
+        params: constraint, // NOTE: Should this be string[] if multiple conditions??
       };
     }
     
@@ -136,23 +139,41 @@ const constraintToSQL = (
     
     // Check for Range (has min/max)
     if ("min" in constraint || "max" in constraint) {
-      return rangeToSQL(field, constraint as Range<any>);
+      return rangeToSQL(field, constraint);
     }
     
-    // Check for StringSearch (has includes, glob, regex, startsWith, directChildOf, rootOnly)
+    // Check for StringSearch (has includes, glob, regex, startsWith)
     if (
       "includes" in constraint ||
       "glob" in constraint ||
       "regex" in constraint ||
-      "startsWith" in constraint ||
-      "directChildOf" in constraint ||
-      "rootOnly" in constraint
+      "startsWith" in constraint
     ) {
-      return stringSearchToSQL(field, constraint as any);
+      return stringSearchToSQL(field, constraint);
+    }
+
+    if (field === "relativePath" && ('folder' in constraint)) {
+      const escapedFolder = escapeLikeLiteral(constraint.folder);
+      if ('recursive' in constraint && constraint.recursive) {
+        // Match all files under this folder (any depth)
+        return {
+          where: `relativePath LIKE ? ESCAPE '\\'`,
+          params: [`${escapedFolder}%`],
+        };
+      }
+      
+      // Non-recursive: only direct children (no additional slashes after prefix)
+      // Uses: LIKE 'folder/%' AND no '/' after the prefix
+      return {
+        where: `(relativePath LIKE ? ESCAPE '\\' AND instr(substr(relativePath, ?), '/') = 0)`,
+        params: [
+          `${escapedFolder}%`,
+          constraint.folder.length + 1, // Start checking after the prefix
+        ],
+      };
     }
     
-    // Complex nested object (like dimensions.width) - not directly supported in this simple version
-    // Would need more sophisticated handling
+    // Complex nested object - not directly supported
     return null;
   }
 
@@ -181,28 +202,10 @@ const rangeToSQL = (field: string, range: Range<any>): SQLPart => {
 
 const stringSearchToSQL = (
   field: string,
-  search: { includes?: string; glob?: string; regex?: string; startsWith?: string; directChildOf?: string; rootOnly?: boolean }
+  search: { includes?: string; glob?: string; regex?: string; startsWith?: string }
 ): SQLPart => {
-  if (search.rootOnly) {
-    return {
-      where: `instr(substr(${field}, 2), '/') = 0`,
-      params: [],
-    };
-  }
-
-  if (search.directChildOf) {
-    const folder = normalizeFolderSearch(search.directChildOf);
-    const likePrefix = `${escapeLikeLiteral(folder)}%`;
-    const startAfterPrefix = folder === "/" ? 2 : folder.length + 1;
-    return {
-      where: `(${field} LIKE ? ESCAPE '\\' AND instr(substr(${field}, ?), '/') = 0)`,
-      params: [likePrefix, startAfterPrefix],
-    };
-  }
-
   if (search.startsWith) {
-    const prefix = search.startsWith.startsWith("/") ? search.startsWith : `/${search.startsWith}`;
-    const likePrefix = `${escapeLikeLiteral(prefix)}%`;
+    const likePrefix = `${escapeLikeLiteral(search.startsWith)}%`;
     return {
       where: `${field} LIKE ? ESCAPE '\\'`,
       params: [likePrefix],
@@ -210,16 +213,13 @@ const stringSearchToSQL = (
   }
 
   if (search.includes) {
-    // LIKE search
     return {
-      where: `${field} LIKE ?`,
-      params: [`%${search.includes}%`],
+      where: `${field} LIKE ? ESCAPE '\\'`,
+      params: [`%${escapeLikeLiteral(search.includes)}%`],
     };
   }
 
   if (search.glob) {
-    // For glob patterns, we'd need a custom function or do it in memory
-    // For now, approximate with LIKE
     const likePattern = globToLike(search.glob);
     return {
       where: `${field} LIKE ?`,
@@ -228,7 +228,6 @@ const stringSearchToSQL = (
   }
 
   if (search.regex) {
-    // Use custom REGEXP function (registered in IndexDatabase constructor)
     return {
       where: `${field} REGEXP ?`,
       params: [search.regex],
@@ -241,18 +240,10 @@ const stringSearchToSQL = (
   };
 };
 
-const escapeLikeLiteral = (value: string): string => {
-  // Escape LIKE wildcards and the escape character itself.
-  return value.replace(/[\\%_]/g, (m) => `\\${m}`);
-};
-
-const normalizeFolderSearch = (value: string): string => {
-  const withLeading = value.startsWith("/") ? value : `/${value}`;
-  if (withLeading === "/") {
-    return "/";
-  }
-  return withLeading.endsWith("/") ? withLeading : `${withLeading}/`;
-};
+/**
+ * Escape special characters for SQL LIKE literal (%, _, \)
+ */
+const escapeLikeLiteral = (value: string) =>  value.replace(/[\\%_]/g, (m) => `\\${m}`);
 
 const globToLike = (glob: string): string => {
   // Convert glob pattern to SQL LIKE pattern

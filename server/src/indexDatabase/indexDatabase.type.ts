@@ -25,10 +25,11 @@ export type Range<T extends Date | number> = { min?: T; max?: T };
 export type FilterCondition = {
     [K in keyof FileRecord]?:
         null | (
-            K extends 'relativePath' ? StringSearch & {
+            K extends 'relativePath' ? (StringSearch | {
                 /** `true` to grab grandchildren as well */
                 recursive?: boolean;
-            } :
+                folder: string;
+            }) :
             NonNullable<FileRecord[K]> extends number ? number[] | Range<number> :
             NonNullable<FileRecord[K]> extends Record<string, number> ? 
                 { [P in keyof NonNullable<FileRecord[K]>]?: number[] |Range<number> } :
