@@ -129,6 +129,7 @@ export const generateVideoPreview = async (
       });
     },
     opts?.priority,
+    'video',
   );
   return cachedPath;
 };
@@ -190,6 +191,7 @@ export const generateVideoThumbnail = async (
       });
     },
     opts?.priority,
+    'video',
   );
   return cachedPath;
 };
@@ -261,6 +263,7 @@ export const generateWebSafeVideo = async (
       });
     },
     opts?.priority,
+    'video',
   );
   return cachedPath;
 };

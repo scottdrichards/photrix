@@ -105,19 +105,6 @@ const ThumbnailTile = ({
   styles: ReturnType<typeof useStyles>;
 }) => {
   const [isHovered, setIsHovered] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    if (isHovered && videoRef.current) {
-      videoRef.current.play().catch(() => {
-        // Ignore play errors (e.g. if user interacted with document yet)
-      });
-    } else if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = 0;
-      videoRef.current.load();
-    }
-  }, [isHovered]);
 
   return (
     <button
@@ -134,16 +121,23 @@ const ThumbnailTile = ({
           <span className={styles.videoBadge} aria-hidden="true">
             <PlayCircle24Regular />
           </span>
-          <video
-            ref={videoRef}
-            src={photo.videoPreviewUrl}
+          <img
+            src={photo.thumbnailUrl}
+            alt={photo.name}
+            loading="lazy"
             className={styles.image}
-            muted
-            loop
-            playsInline
-            preload="none"
-            poster={photo.thumbnailUrl}
           />
+          {isHovered && (
+            <video
+              src={photo.videoPreviewUrl}
+              className={styles.image}
+              style={{ position: "absolute", top: 0, left: 0 }}
+              muted
+              loop
+              playsInline
+              autoPlay
+            />
+          )}
         </>
       ) : (
         <img

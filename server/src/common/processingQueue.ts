@@ -1,9 +1,13 @@
 const priorityList = ['userBlocked', 'userImplicit', 'background'] as const;
 export type QueuePriority = typeof priorityList[number];
 
+const mediaTypeList = ['image', 'video'] as const;
+export type MediaType = typeof mediaTypeList[number];
+
 type QueueTask = {
   fn: () => Promise<void>;
   priority: QueuePriority;
+  mediaType: MediaType;
 };
 
 /**
@@ -65,12 +69,19 @@ export class ProcessingQueue {
     }, 100);
   }
 
-  async enqueue<T>(task: () => Promise<T>, priority: QueuePriority = 'background'): Promise<T> {
+  async enqueue<T>(task: () => Promise<T>, priority: QueuePriority = 'background', mediaType: MediaType = 'image'): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const priorityIndex = priorityList.indexOf(priority);
+      const mediaTypeIndex = mediaTypeList.indexOf(mediaType);
       const insertIndex = this.queue.findIndex(
-        // We want to put it at the back of the same priority level
-        t => priorityList.indexOf(t.priority) > priorityIndex
+        // We want to put it at the back of the same priority level and media type
+        t => {
+          const tPriorityIndex = priorityList.indexOf(t.priority);
+          const tMediaTypeIndex = mediaTypeList.indexOf(t.mediaType);
+          // First compare by priority, then by media type (images before videos)
+          return tPriorityIndex > priorityIndex || 
+                 (tPriorityIndex === priorityIndex && tMediaTypeIndex > mediaTypeIndex);
+        }
       );
 
       const fn = async () => {
@@ -84,6 +95,7 @@ export class ProcessingQueue {
 
       this.queue.splice(insertIndex === -1 ? this.queue.length : insertIndex, 0, {
         priority,
+        mediaType,
         fn
       });
       this.processNext();

@@ -6,7 +6,7 @@ import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { createReadStream } from "fs";
 import path from "path/win32";
 import { convertImage, convertImageToMultipleSizes } from "../imageProcessing/convertImage.ts";
-import { generateVideoPreview, generateVideoThumbnail, generateWebSafeVideo } from "../videoProcessing/videoUtils.ts";
+import { generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
 import { StandardHeight, standardHeights } from "../common/standardHeights.ts";
 import { mediaProcessingQueue } from "../common/processingQueue.ts";
 
@@ -262,51 +262,33 @@ const fileHandler = async (
   const isImage = mimeType.startsWith("image/");
   const isVideo = mimeType.startsWith("video/");
 
+  // Video preview generation disabled - just use thumbnail
   if (representation === "preview" && isVideo) {
     try {
       const queueSize = mediaProcessingQueue.getQueueSize();
       const processing = mediaProcessingQueue.getProcessing();
-      console.log(`[filesRequest] Requesting video preview for: ${subPath} (queue: ${queueSize}, processing: ${processing})`);
+      console.log(`[filesRequest] Requesting thumbnail for video preview: ${subPath} (queue: ${queueSize}, processing: ${processing})`);
 
-      const cachedPath = await generateVideoPreview(normalizedPath, 320, 5_000, { priority: 'userBlocked' });
+      const cachedPath = await generateVideoThumbnail(normalizedPath, 320, { priority: "userBlocked" });
       const cachedStats = await stat(cachedPath);
 
-      streamFile(req, res, cachedPath, {
-        contentType: "video/mp4",
-        size: cachedStats.size,
-        cacheControl: "public, max-age=31536000",
-        acceptRanges: true,
+      res.writeHead(200, {
+        "Content-Type": "image/jpeg",
+        "Content-Length": cachedStats.size,
+        "Cache-Control": "public, max-age=31536000",
       });
+
+      const fileStream = createReadStream(cachedPath);
+      fileStream.pipe(res);
       return;
     } catch (error) {
-      console.error(`Error generating video preview for: ${subPath}`, error);
+      console.error(`Error generating video thumbnail for preview: ${subPath}`, error);
       // Fall through to stream the original file if conversion fails
     }
   }
 
+  // Video conversion disabled - just generate thumbnail
   if (representation === "webSafe" && isVideo) {
-    try {
-      const queueSize = mediaProcessingQueue.getQueueSize();
-      const processing = mediaProcessingQueue.getProcessing();
-      console.log(
-        `[filesRequest] Requesting ${height} web-safe video for: ${subPath} (queue: ${queueSize}, processing: ${processing})`,
-      );
-
-      const cachedPath = await generateWebSafeVideo(normalizedPath, height, { priority: "userBlocked" });
-      const cachedStats = await stat(cachedPath);
-
-      streamFile(req, res, cachedPath, {
-        contentType: "video/mp4",
-        size: cachedStats.size,
-        cacheControl: "public, max-age=31536000",
-        acceptRanges: true,
-      });
-      return;
-    } catch (error) {
-      console.error(`Error generating web-safe video for: ${subPath}`, error);
-      // Fall through to thumbnail or original file if conversion fails
-    }
-
     try {
       const queueSize = mediaProcessingQueue.getQueueSize();
       const processing = mediaProcessingQueue.getProcessing();
