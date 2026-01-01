@@ -217,8 +217,15 @@ const createTileStyle = (photo: PhotoItem): TileStyle => {
 };
 
 const getAspectRatio = (photo: PhotoItem): number => {
-  const width = photo.metadata?.dimensionWidth;
-  const height = photo.metadata?.dimensionHeight;
+  let width = photo.metadata?.dimensionWidth;
+  let height = photo.metadata?.dimensionHeight;
+  const orientation = photo.metadata?.orientation;
+  
+  // Orientation 5-8 means the image is rotated 90 or 270 degrees, so swap width and height
+  if (typeof orientation === 'number' && [5, 6, 7, 8].includes(orientation)) {
+    [width, height] = [height, width];
+  }
+  
   if (
     typeof width === "number" &&
     width > 0 &&

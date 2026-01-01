@@ -22,7 +22,7 @@ interface RecentActivityProps {
 export const RecentActivity = ({ label, entry }: RecentActivityProps) => {
   const styles = useStyles();
   const description = entry
-    ? `${entry.relativePath} (${new Date(entry.completedAt).toLocaleTimeString()})`
+    ? `${entry.folder}${entry.fileName} (${new Date(entry.completedAt).toLocaleTimeString()})`
     : "No activity yet";
 
   return (

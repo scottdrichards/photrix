@@ -1,5 +1,6 @@
 export interface ApiPhotoItem {
-  relativePath: string;
+  folder: string;
+  fileName: string;
   mimeType?: string | null;
   dateTaken?: string | null;
   dimensionWidth?: number;
@@ -59,7 +60,8 @@ export interface ProgressEntry {
 }
 
 export interface RecentMaintenance {
-  relativePath: string;
+  folder: string;
+  fileName: string;
   completedAt: string;
 }
 
@@ -166,33 +168,34 @@ const buildFallbackUrl = (path: string): string => {
 };
 
 const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
-  const name = item.relativePath.split("/").pop() ?? item.relativePath;
+  const relativePath = item.folder + item.fileName;
+  const name = item.fileName;
   const mediaType = inferMediaType(item);
-  const thumbnailUrl = buildFileUrl(item.relativePath, {
+  const thumbnailUrl = buildFileUrl(relativePath, {
     representation: "webSafe",
     height: "320",
   });
   const previewUrl =
     mediaType === "video"
       ? thumbnailUrl
-      : buildFileUrl(item.relativePath, {
+      : buildFileUrl(relativePath, {
           representation: "webSafe",
           height: "2160",
         });
   const fullUrl =
     mediaType === "video"
-      ? buildFileUrl(item.relativePath, { representation: "webSafe", height: "2160" })
+      ? buildFileUrl(relativePath, { representation: "webSafe", height: "2160" })
       : previewUrl;
   const videoPreviewUrl =
     mediaType === "video"
-      ? buildFileUrl(item.relativePath, { representation: "preview" })
+      ? buildFileUrl(relativePath, { representation: "preview" })
       : undefined;
 
   // Include all metadata from the API response
-  const { relativePath, ...metadata } = item;
+  const { folder, fileName, ...metadata } = item;
   
   return {
-    path: item.relativePath,
+    path: relativePath,
     name,
     mediaType,
     thumbnailUrl,
@@ -208,8 +211,8 @@ const inferMediaType = (item: ApiPhotoItem): "photo" | "video" => {
   if (typeof mime === "string" && mime.toLowerCase().startsWith("video/")) {
     return "video";
   }
-  const lowerPath = item.relativePath.toLowerCase();
-  if (VIDEO_EXTENSIONS.some((ext) => lowerPath.endsWith(ext))) {
+  const lowerName = item.fileName.toLowerCase();
+  if (VIDEO_EXTENSIONS.some((ext) => lowerName.endsWith(ext))) {
     return "video";
   }
   return "photo";

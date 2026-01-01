@@ -136,7 +136,7 @@ const queryHandler = async (
   const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
 
   const pathFilter:QueryOptions["filter"] = directoryPath? {
-    relativePath: {
+    folder: {
       folder: directoryPath,
       recursive: includeSubfolders,
     }

@@ -9,7 +9,7 @@ import type { FileRecord, QueryOptions, QueryResult } from "./indexDatabase.type
 import { filterToSQL } from "./filterToSQL.ts";
 import { fileRecordToColumnNamesAndValues, rowToFileRecord } from "./rowFileRecordConversionFunctions.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
-import { normalizeFolderPath } from "./utils/pathUtils.ts";
+import { normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 
 export class IndexDatabase {
   private readonly storagePath: string;
@@ -37,7 +37,8 @@ export class IndexDatabase {
     
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS files (
-        relativePath TEXT PRIMARY KEY,
+        folder TEXT NOT NULL,
+        fileName TEXT NOT NULL,
         mimeType TEXT,
         -- File Info
         sizeInBytes INTEGER,
@@ -71,8 +72,10 @@ export class IndexDatabase {
         -- Processing status
         thumbnailsReady INTEGER DEFAULT 0,
         fileHash TEXT,
+        infoProcessedAt TEXT,
         exifProcessedAt TEXT,
-        thumbnailsProcessedAt TEXT
+        thumbnailsProcessedAt TEXT,
+        PRIMARY KEY (folder, fileName)
       )
     `);
     this.db.exec(`
@@ -82,11 +85,16 @@ export class IndexDatabase {
       )
     `);
 
+    // Create indexes for common query patterns
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_files_dateTaken ON files(dateTaken DESC)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_files_mimeType ON files(mimeType)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_files_rating ON files(rating)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder)`);
     console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
     this.ensureRootPath();
     
     this.selectDataStmt = this.db.prepare(
-      "SELECT * FROM files WHERE relativePath = ?",
+      "SELECT * FROM files WHERE folder = ? AND fileName = ?",
     );
     const count = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number };
     console.log(`[IndexDatabase] Contains ${count.count} entries`);
@@ -98,7 +106,7 @@ export class IndexDatabase {
     
     if (columns.names.length !== columns.values.length) {
       throw new Error(
-        `SQL parameter mismatch for ${fileData.relativePath}: ${columns.names.length} column names but ${columns.values.length} values. ` +
+        `SQL parameter mismatch for ${fileData.folder}${fileData.fileName}: ${columns.names.length} column names but ${columns.values.length} values. ` +
         `Columns: ${columns.names.join(', ')}. Values: ${JSON.stringify(columns.values)}`
       );
     }
@@ -109,25 +117,28 @@ export class IndexDatabase {
   }
 
   async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
-    const row = this.db.prepare('SELECT * FROM files WHERE relativePath = ?').get(oldRelativePath) as DatabaseEntry | undefined;
+    const { folder: oldFolder, fileName: oldFile } = splitPath(oldRelativePath);
+    const row = this.db.prepare('SELECT * FROM files WHERE folder = ? AND fileName = ?').get(oldFolder, oldFile) as DatabaseEntry | undefined;
     if (!row) {
       throw new Error(
         `moveFile: File at path "${oldRelativePath}" does not exist in the database.`,
       );
     }
 
+    const { folder: newFolder, fileName: newFile } = splitPath(newRelativePath);
     const updated: DatabaseEntry = {
       ...row,
-      relativePath: newRelativePath,
+      folder: newFolder,
+      fileName: newFile,
     };
 
     const transaction = this.db.transaction(() => {
-      this.db.prepare('DELETE FROM files WHERE relativePath = ?').run(oldRelativePath);
+      this.db.prepare('DELETE FROM files WHERE folder = ? AND fileName = ?').run(oldFolder, oldFile);
       const columns = fileRecordToColumnNamesAndValues(updated);
       
       if (columns.names.length !== columns.values.length) {
         throw new Error(
-          `SQL parameter mismatch for ${updated.relativePath}: ${columns.names.length} column names but ${columns.values.length} values. ` +
+          `SQL parameter mismatch for ${newRelativePath}: ${columns.names.length} column names but ${columns.values.length} values. ` +
           `Columns: ${columns.names.join(', ')}. Values: ${JSON.stringify(columns.values)}`
         );
       }
@@ -143,11 +154,12 @@ export class IndexDatabase {
     relativePath: string,
     fileData: Partial<DatabaseEntry>,
   ): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
     const execute = () => {
-      const row = this.selectDataStmt.get(relativePath) as DatabaseEntry | undefined;
+      const row = this.selectDataStmt.get(folder, fileName) as DatabaseEntry | undefined;
       const existingEntry = row;
       const updatedEntry = {
-        ...(existingEntry ?? { relativePath: relativePath, mimeType: mimeTypeForFilename(relativePath) }),
+        ...(existingEntry ?? { folder, fileName, mimeType: mimeTypeForFilename(relativePath) }),
         ...fileData,
       };
       const columns = fileRecordToColumnNamesAndValues(updatedEntry);
@@ -177,7 +189,8 @@ export class IndexDatabase {
     relativePath: string,
     requiredMetadata?: Array<keyof FileRecord>,
   ): Promise<FileRecord | undefined> {
-    const row = this.selectDataStmt.get(relativePath) as Record<string, any> | undefined;
+    const { folder, fileName } = splitPath(relativePath);
+    const row = this.selectDataStmt.get(folder, fileName) as Record<string, any> | undefined;
     if (!row) {
       return undefined;
     }
@@ -188,8 +201,8 @@ export class IndexDatabase {
     if (hasAllMetadata) {
       return record;
     }
-
-    return await this.hydrateMetadata(relativePath, requiredMetadata);
+    return record;
+    // return await this.hydrateMetadata(relativePath, requiredMetadata);
   }
 
   countMissingInfo(): number {
@@ -265,11 +278,12 @@ export class IndexDatabase {
   addPaths(paths: string[]): void {
     if (!paths.length) return;
     const addPath = this.db.prepare(
-      "INSERT OR IGNORE INTO files (relativePath) VALUES (?)",
+      "INSERT OR IGNORE INTO files (folder, fileName) VALUES (?, ?)",
     );
     const tx = this.db.transaction((list: string[]) => {
       for (const relativePath of list) {
-        addPath.run(relativePath);
+        const { folder, fileName } = splitPath(relativePath);
+        addPath.run(folder, fileName);
       }
     });
     tx(paths);
@@ -279,27 +293,48 @@ export class IndexDatabase {
     relativePath: string,
     requiredMetadata: Array<keyof FileRecord>,
   ) {
-    const row = this.selectDataStmt.get(relativePath) as Record<string, any> | undefined;
+    const { folder, fileName } = splitPath(relativePath);
+    const row = this.selectDataStmt.get(folder, fileName) as Record<string, any> | undefined;
     if (!row) {
       throw new Error(
         `hydrateMetadata: File at path "${relativePath}" does not exist in the database.`,
       );
     }
     const originalDBEntry = rowToFileRecord(row);
+    return originalDBEntry;
     
-    // Determine which metadata groups need to be loaded
-    const promises =  requiredMetadata
-      .filter(key => !(key in originalDBEntry)) // We already have this metadata
+    // Map metadata group names to their "processed at" column names
+    const groupProcessedAtColumn: Record<keyof typeof MetadataGroups, string> = {
+      info: 'infoProcessedAt',
+      exifMetadata: 'exifProcessedAt',
+      aiMetadata: 'aiProcessedAt',
+      faceMetadata: 'faceProcessedAt',
+    };
+    
+    // Determine which metadata groups need to be loaded (skip if already processed)
+    const groupsToLoad = requiredMetadata
       .map(whichMetadataGroup)
+      .filter((group): group is keyof typeof MetadataGroups => group !== undefined)
       .reduce((acc, group) => acc.includes(group) ? acc : [...acc, group], [] as Array<keyof typeof MetadataGroups>)
-      .map(async (groupName) => {
+      .filter(groupName => {
+        if (!row) return true; // If no row, we need to load
+        const processedAtColumn = groupProcessedAtColumn[groupName];
+        return !row[processedAtColumn]; // Skip if already processed
+      });
+    
+    if (groupsToLoad.length === 0) {
+      return originalDBEntry;
+    }
+    
+    const promises = groupsToLoad.map(async (groupName) => {
       const relativeNoLeadingSlash = relativePath.replace(/^\/+/, "");
       const fullPath = path.join(this.storagePath, relativeNoLeadingSlash);
       try {
-        let extraData = {};
+        let extraData: Record<string, unknown> = {};
         switch (groupName) {
           case "info":
             extraData = await getFileInfo(fullPath);
+            extraData.infoProcessedAt = new Date().toISOString();
             break;
           case "exifMetadata": {
             // Only attempt EXIF parsing for media files
@@ -316,7 +351,7 @@ export class IndexDatabase {
               // Non-media file, skip EXIF parsing
               extraData = {};
             }
-            (extraData as any).exifProcessedAt = new Date().toISOString();
+            extraData.exifProcessedAt = new Date().toISOString();
             break;
           }
           case "aiMetadata":
@@ -347,23 +382,43 @@ export class IndexDatabase {
   }
 
   getFolders(relativePath: string): Array<string> {
-    const baseFolderPath = normalizeFolderPath(relativePath);
+    const base = normalizeFolderPath(relativePath);
 
-    const startIndex = baseFolderPath.length + 1; // SQLite substr() is 1-indexed
-    const likePrefix = `${escapeLikeLiteral(baseFolderPath)}%`;
+    if (base === '/') {
+      const stmt = this.db.prepare(
+        `SELECT DISTINCT 
+           CASE 
+             WHEN instr(substr(folder, 2), '/') > 0 
+             THEN substr(folder, 2, instr(substr(folder, 2), '/') - 1)
+             ELSE substr(folder, 2)
+           END AS folderName
+         FROM files
+         WHERE folder LIKE '/%' AND length(folder) > 1
+         ORDER BY folderName`
+      );
+      const rows = stmt.all() as Array<{ folderName: string | null }>;
+      return rows
+        .map(row => row.folderName)
+        .filter((v): v is string => Boolean(v))
+        .sort((a, b) => a.localeCompare(b));
+    }
 
+    const escapedPrefix = escapeLikeLiteral(base);
+    const prefixLen = base.length;
     const stmt = this.db.prepare(
-      `SELECT DISTINCT substr(relativePath, ?, instr(substr(relativePath, ?), '/') - 1) AS folder
+      `SELECT DISTINCT 
+         substr(folder, ?, instr(substr(folder, ?), '/') - 1) AS folderName
        FROM files
-       WHERE relativePath LIKE ? ESCAPE '\\'
-         AND instr(substr(relativePath, ?), '/') > 0
-       ORDER BY folder`,
+       WHERE folder LIKE ? ESCAPE '\\'
+         AND length(folder) > ?
+         AND instr(substr(folder, ?), '/') > 0
+       ORDER BY folderName`
     );
 
-    const rows = stmt.all(startIndex, startIndex, likePrefix, startIndex) as Array<{ folder: string | null }>;
+    const rows = stmt.all(prefixLen + 1, prefixLen + 1, `${escapedPrefix}%`, prefixLen, prefixLen + 1) as Array<{ folderName: string | null }>;
     return rows
-      .map((row) => row.folder)
-      .filter((folder): folder is string => Boolean(folder))
+      .map(row => row.folderName)
+      .filter((v): v is string => Boolean(v))
       .sort((a, b) => a.localeCompare(b));
   }
 
@@ -387,20 +442,15 @@ export class IndexDatabase {
     const mainSQL = `
       SELECT * FROM files 
       ${whereClause ? `WHERE ${whereClause}` : ''}
-      ORDER BY CASE WHEN dateTaken IS NULL THEN 0 ELSE 1 END DESC, dateTaken DESC, relativePath ASC
+      ORDER BY CASE WHEN dateTaken IS NULL THEN 0 ELSE 1 END DESC, dateTaken DESC, folder ASC, fileName ASC
       LIMIT ? OFFSET ?
     `;
     
     const rows = this.db.prepare(mainSQL).all(...whereParams, pageSize, offset) as Array<Record<string, any>>;
-    const matchedFiles = rows.map(v=>rowToFileRecord(v, metadata));
-
-    // Hydrate metadata for the current page
-    const hydrationPromises = matchedFiles.map(file => 
-      this.hydrateMetadata(file.relativePath, metadata)
-    );
+    const matchedFiles = rows.map(v => rowToFileRecord(v, metadata));
 
     const result = {
-      items: await Promise.all(hydrationPromises) as Array<{ relativePath: string } & Pick<FileRecord, TMetadata[number]>>,
+      items: matchedFiles as Array<{ folder: string; fileName: string } & Pick<FileRecord, TMetadata[number]>>,
       page,
       pageSize,
       total,

@@ -25,7 +25,7 @@ export type Range<T extends Date | number> = { min?: T; max?: T };
 export type FilterCondition = {
     [K in keyof FileRecord]?:
         null | (
-            K extends 'relativePath' ? (StringSearch | {
+            K extends 'folder' ? (StringSearch | {
                 /** `true` to grab grandchildren as well */
                 recursive?: boolean;
                 folder: string;
@@ -56,7 +56,7 @@ export type QueryOptions = {
 };
 
 export type QueryResultItem<TRequestedMetadata extends Array<keyof FileRecord> | undefined> =
-    Pick<FileRecord, 'relativePath'> & // Always include relativePath
+    Pick<FileRecord, 'folder' | 'fileName'> & // Always include folder and fileName
     (
         // Include requested metadata fields if specified
         TRequestedMetadata extends Array<keyof FileRecord> ?

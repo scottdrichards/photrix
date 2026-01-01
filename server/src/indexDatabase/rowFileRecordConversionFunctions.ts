@@ -1,5 +1,6 @@
 import { DatabaseEntry } from "./fileRecord.type.ts";
 import { FileRecord } from "./indexDatabase.type.ts";
+import { normalizeFolderPath } from "./utils/pathUtils.ts";
 
 /**
  * Converts a database row to a FileRecord by parsing JSON fields and reconstructing nested objects
@@ -8,8 +9,11 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
     const date = (v:string|number)=>new Date(v);
     const json = (v:string)=>JSON.parse(v);
 
-    if (!row.relativePath) {
-        throw new Error("rowToFileRecord: row is missing relativePath");
+    // folder and fileName come from the row
+    const folder = normalizeFolderPath(row.folder as string);
+    const fileName = row.fileName as string;
+    if (!folder || !fileName) {
+        throw new Error("rowToFileRecord: row is missing folder or fileName");
     }
 
     const fieldConversions = ["sizeInBytes",
@@ -35,25 +39,15 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
         ["faceTags", json],
     ] as const;
 
-    const basicObject = fieldConversions.map(entry=>{
+    const wantedConversions = wantedFields === 'all' ? fieldConversions : fieldConversions.filter(entry => {
+        const field = typeof entry === 'string' ? entry : entry[0];
+        return wantedFields.includes(field);
+    });
+
+    const basicObject = wantedConversions.map(entry=>{
         const [field, conversionFn] = typeof entry === 'string'? [entry]: entry;
         const rowValue = row[field];
         return {field, rowValue, conversionFn}
-    }).filter(({field, rowValue})=>{
-        if (wantedFields === 'all'){
-            return true;
-        }
-        if (!wantedFields.includes(field)){
-            return false;
-        }
-        // 🤖 I want this to represent the state of the DB - Let's say undefined means "no entry"
-        // and "NULL" means "we know there is no data". So if we haven't checked for a file's
-        // location, locationLatitude would be `undefined` whereas if we checked and the file has
-        // no location data, locationLatitude would be `null` 
-        if (rowValue=== undefined){
-            return false;
-        }
-        return true;
     }).reduce((acc,{field, rowValue, conversionFn})=>{
         if (!conversionFn){
             return {...acc, [field]: rowValue}
@@ -65,12 +59,6 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
     // Now add row values that have different keys than DB entries.
     const {dimensionsWidth, dimensionsHeight, locationLatitude, locationLongitude} = row;
 
-    const dimensions = (()=>{
-        if (dimensionsWidth !== null && dimensionsHeight !== null) {
-            return { width: dimensionsWidth, height: dimensionsHeight };
-        }
-    })()
-
     const location = (()=>{
         if (locationLatitude && locationLongitude){
             return {latitude:locationLatitude, longitude: locationLongitude};
@@ -78,10 +66,12 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
     })()
 
     return {
-        relativePath: row.relativePath as string,
-        mimeType: row.mimeType as string | undefined,
+        folder,
+        fileName,
+        mimeType: (row.mimeType as string | null) ?? null,
         ...basicObject,
-        ...dimensions,
+        ...(dimensionsWidth !== null && dimensionsWidth !== undefined && { dimensionWidth: dimensionsWidth }),
+        ...(dimensionsHeight !== null && dimensionsHeight !== undefined && { dimensionHeight: dimensionsHeight }),
         ...location,
     } as FileRecord;
 }
@@ -101,8 +91,9 @@ export const fileRecordToColumnNamesAndValues = (entry: Partial<DatabaseEntry>):
         values.push(value);
     };
 
-    // Always include relativePath and mimeType
-    if (entry.relativePath) addColumn('relativePath', entry.relativePath);
+    // Use normalized folder and fileName
+    if (entry.folder) addColumn('folder', normalizeFolderPath(entry.folder));
+    if (entry.fileName) addColumn('fileName', entry.fileName);
     if (entry.mimeType) addColumn('mimeType', entry.mimeType);
 
     // File Info
@@ -137,6 +128,11 @@ export const fileRecordToColumnNamesAndValues = (entry: Partial<DatabaseEntry>):
 
     // Face Metadata
     if (entry.faceTags) addColumn('faceTags', JSON.stringify(entry.faceTags));
+
+    // Processing timestamps (not part of FileRecord type, but stored in DB)
+    const entryAny = entry as Record<string, unknown>;
+    if (entryAny.infoProcessedAt) addColumn('infoProcessedAt', entryAny.infoProcessedAt as string);
+    if (entryAny.exifProcessedAt) addColumn('exifProcessedAt', entryAny.exifProcessedAt as string);
 
     // Validate that names and values are in sync
     if (names.length !== values.length) {

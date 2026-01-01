@@ -2,8 +2,10 @@ import { AssertNever, UnionXOR } from "../utils.ts";
 import { FileRecord } from "./indexDatabase.type.ts";
 
 export type BaseFileRecord = {
-  /** Includes filename and extension. Uses '/' as a separator and does not start with slash */
-  relativePath: string;
+  /** Uses '/' as separator, starts and ends with slash */
+  folder: string;
+  /** Includes extension */
+  fileName: string;
   mimeType: string | null;
 };
 

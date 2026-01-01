@@ -1,4 +1,5 @@
 import type { FileRecord, FilterCondition, FilterElement, Range, StringSearch } from "./indexDatabase.type.ts";
+import { normalizeFolderPath } from "./utils/pathUtils.ts";
 
 type SQLPart = {
   where: string;
@@ -152,24 +153,21 @@ const constraintToSQL = <K extends keyof FileRecord>(
       return stringSearchToSQL(field, constraint);
     }
 
-    if (field === "relativePath" && ('folder' in constraint)) {
-      const escapedFolder = escapeLikeLiteral(constraint.folder);
-      if ('recursive' in constraint && constraint.recursive) {
-        // Match all files under this folder (any depth)
+    if (field === "folder" && typeof constraint === 'object' && constraint !== null && 'folder' in constraint) {
+      const folderConstraint = constraint as { folder: string; recursive?: boolean };
+      const normalizedFolder = normalizeFolderPath(folderConstraint.folder);
+      const escapedFolder = escapeLikeLiteral(normalizedFolder);
+
+      if (folderConstraint.recursive) {
         return {
-          where: `relativePath LIKE ? ESCAPE '\\'`,
+          where: `folder LIKE ? ESCAPE '\\'`,
           params: [`${escapedFolder}%`],
         };
       }
       
-      // Non-recursive: only direct children (no additional slashes after prefix)
-      // Uses: LIKE 'folder/%' AND no '/' after the prefix
       return {
-        where: `(relativePath LIKE ? ESCAPE '\\' AND instr(substr(relativePath, ?), '/') = 0)`,
-        params: [
-          `${escapedFolder}%`,
-          constraint.folder.length + 1, // Start checking after the prefix
-        ],
+        where: `folder = ?`,
+        params: [normalizedFolder],
       };
     }
     

@@ -168,10 +168,8 @@ export const getExifMetadataFromFile = async (
     }
   }
 
-  // Orientation 5-8 means the image is rotated 90 or 270 degrees, so width and height are swapped
-  if (metadata.dimensionWidth && metadata.dimensionHeight && [5, 6, 7, 8].includes(rawData?.Orientation)) {
-      [metadata.dimensionHeight, metadata.dimensionWidth] = [metadata.dimensionWidth, metadata.dimensionHeight];
-  }
+  // Note: Orientation-based dimension swapping is handled in rowToFileRecord when reading from DB
+  // This keeps the raw EXIF dimensions in the database for accuracy
 
   return metadata;
 };
