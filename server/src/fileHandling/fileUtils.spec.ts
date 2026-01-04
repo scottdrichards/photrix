@@ -38,10 +38,10 @@ describe("getExifMetadataFromFile", () => {
 
 		const metadata = await getExifMetadataFromFile(filePath);
 
-			expect(metadata.cameraMake?.toLowerCase()).toBe("samsung");
-		expect(metadata.dimensions?.width).toBeGreaterThan(0);
-		expect(metadata.dimensions?.height).toBeGreaterThan(0);
+		expect(metadata.cameraMake?.toLowerCase()).toBe("samsung");
+		expect(metadata.dimensionWidth).toBe(4000);
+		expect(metadata.dimensionHeight).toBe(3000);
 		expect(metadata.dateTaken).toBeInstanceOf(Date);
-			expect(metadata.dateTaken?.getTime()).toBeGreaterThan(0);
+		expect(metadata.dateTaken?.getTime()).toBeGreaterThan(0);
 	});
 });

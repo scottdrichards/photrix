@@ -1,8 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import exifr from "exifr";
-import { stat } from "node:fs/promises";
 import { readdirSync } from "node:fs";
-import { AIMetadata, ExifMetadata, FaceMetadata, FileInfo } from "../indexDatabase/fileRecord.type.ts";
+import { stat } from "node:fs/promises";
 import path from "node:path";
+import { ExifMetadata, FileInfo } from "../indexDatabase/fileRecord.type.ts";
 import { getVideoMetadata } from "../videoProcessing/videoUtils.ts";
 import { mimeTypeForFilename } from "./mimeTypes.ts";
 
@@ -20,6 +21,22 @@ export const getFileInfo = async (fullPath: string): Promise<FileInfo> => {
   };
 };
 
+/**
+ * Convert GPS coordinates from DMS array to decimal degrees
+ */
+const convertMetadataLocationToDecimalDegrees = (input: unknown): number|undefined => {
+  if (typeof input === 'number') {
+    return input;
+  }
+  if (Array.isArray(input) && input.length >= 2) {
+    const [degrees, minutes, seconds = 0] = input;
+    if (typeof degrees === 'number' && typeof minutes === 'number' && typeof seconds === 'number') {
+      return degrees + minutes / 60 + seconds / 3600;
+    }
+  }
+  return undefined;
+};
+
 export const getExifMetadataFromFile = async (
   fullPath: string,
 ): Promise<ExifMetadata> => {
@@ -28,38 +45,44 @@ export const getExifMetadataFromFile = async (
     return (await getVideoMetadata(fullPath)) as ExifMetadata;
   }
 
+  /** If multiple exifR metadata points to the same file field,
+   * it takes the last field that has a value
+   */
   const exifRMetadataToFileField = {
     // Standard EXIF fields
-    DateTimeOriginal: "dateTaken",
+    DateTimeOriginal: "dateTaken", // Prefer file-based date taken
     ImageWidth: "dimensionWidth",
     ImageHeight: "dimensionHeight",
     ExifImageWidth: "dimensionWidth",
     ExifImageHeight: "dimensionHeight",
-    GPSLatitude: "locationLatitude",
-    GPSLongitude: "locationLongitude",
+    GPSLatitude: {fileField:"locationLatitude", conversionFn: convertMetadataLocationToDecimalDegrees},
+    GPSLongitude: {fileField:"locationLongitude", conversionFn: convertMetadataLocationToDecimalDegrees},
     Make: "cameraMake",
     Model: "cameraModel",
     ExposureTime: "exposureTime",
     Aperture: "aperture",
     ISO: "iso",
     FocalLength: "focalLength",
+    'aux:Lens': 'lens',
+    'exifEX:LensModel': 'lens',
     Lens: "lens",
     Duration: "duration",
     FrameRate: "framerate",
     VideoCodec: "videoCodec",
     AudioCodec: "audioCodec",
+    RatingPercent: {fileField: 'rating', conversionFn: (v)=>Math.round(v / 20)},
     Rating: "rating",
     Keywords: "tags",
     Orientation: "orientation",
     
-    // Lightroom XMP fields
+    // Lightroom and other fields
+    'photoshop:DateCreated':  {fileField:"dateTaken", conversionFn: d=>new Date(d)},
+    'xmp:CreateDate': {fileField:"dateTaken", conversionFn: d=>new Date(d)},
     "xmp:Rating": "rating",
-    "xmp:CreateDate": "dateTaken",
-    "photoshop:DateCreated": "dateTaken",
     "dc:subject": "tags",
     "lr:hierarchicalSubject": "tags",
   } as const satisfies {
-    [key: string]: keyof ExifMetadata;
+    [key: string]: (keyof ExifMetadata | {fileField: keyof ExifMetadata, conversionFn: (val: any)=>ExifMetadata[keyof ExifMetadata]});
   };
 
   // Only read the specific fields we need - exifr will only parse those sections
@@ -73,118 +96,18 @@ export const getExifMetadataFromFile = async (
     gps: {},
   });
 
-  const metadata = Object.entries(exifRMetadataToFileField).reduce((acc, [key, value]) => {
-    const rawValue = rawData?.[key as keyof typeof rawData];
-
-    if (rawValue === undefined) {
-      return acc;
-    }
-
-    return {
-      ...acc,
-      [value]: rawValue,
-    };
-  }, {} as ExifMetadata);
-
-  // Convert GPS coordinates from DMS array to decimal degrees
-  const convertDMSToDecimal = (dms: unknown): number | undefined => {
-    if (typeof dms === 'number') {
-      return dms; // Already in decimal format
-    }
-    if (Array.isArray(dms) && dms.length >= 2) {
-      const [degrees, minutes, seconds = 0] = dms;
-      if (typeof degrees === 'number' && typeof minutes === 'number' && typeof seconds === 'number') {
-        return degrees + minutes / 60 + seconds / 3600;
-      }
-    }
-    return undefined;
-  };
-
-  if (metadata.locationLatitude !== undefined) {
-    const latitude = convertDMSToDecimal(metadata.locationLatitude);
-    if (latitude !== undefined) {
-      metadata.locationLatitude = latitude;
-    } else {
-      delete metadata.locationLatitude;
-    }
-  }
-
-  if (metadata.locationLongitude !== undefined) {
-    const longitude = convertDMSToDecimal(metadata.locationLongitude);
-    if (longitude !== undefined) {
-      metadata.locationLongitude = longitude;
-    } else {
-      delete metadata.locationLongitude;
-    }
-  }
-
-  // Additional Lightroom XMP field conversions
-  if (rawData) {
-    // Rating: Check for RatingPercent (0-100 scale)
-    if (!metadata.rating) {
-      const ratingPercent = rawData['RatingPercent'];
-      if (typeof ratingPercent === 'number') {
-        metadata.rating = Math.round(ratingPercent / 20);
-      }
-    }
-    
-    // Tags: Merge all tag sources
-    const allTags = new Set<string>(metadata.tags || []);
-    
-    // Lightroom hierarchical subjects (pipe-separated paths like "Nature|Landscapes")
-    const hierarchicalSubjects = rawData['lr:hierarchicalSubject'];
-    if (hierarchicalSubjects) {
-      const subjects = Array.isArray(hierarchicalSubjects) ? hierarchicalSubjects : [hierarchicalSubjects];
-      subjects.forEach((subject: string) => {
-        // Split hierarchical tags and add both full path and leaf
-        const parts = subject.split('|');
-        allTags.add(subject); // Full hierarchical path
-        allTags.add(parts[parts.length - 1]); // Leaf tag
-      });
-    }
-    
-    // IPTC keywords
-    const iptcKeywords = rawData['Iptc4xmpCore:Keywords'];
-    if (iptcKeywords) {
-      const keywords = Array.isArray(iptcKeywords) ? iptcKeywords : [iptcKeywords];
-      keywords.forEach((kw: string) => allTags.add(kw));
-    }
-    
-    if (allTags.size > 0) {
-      metadata.tags = Array.from(allTags);
-    }
-    
-    // Camera info: Check for Lightroom lens info
-    if (!metadata.lens) {
-      metadata.lens = rawData['aux:Lens'] || rawData['exifEX:LensModel'];
-    }
-    
-    // Date taken: Prefer XMP dates if EXIF missing
-    if (!metadata.dateTaken) {
-      const xmpDate = rawData['xmp:CreateDate'] || rawData['photoshop:DateCreated'];
-      if (xmpDate) {
-        metadata.dateTaken = new Date(xmpDate);
-      }
-    }
-  }
-
-  // Note: Orientation-based dimension swapping is handled in rowToFileRecord when reading from DB
-  // This keeps the raw EXIF dimensions in the database for accuracy
+  const metadata = Object.fromEntries(Object.entries(exifRMetadataToFileField)
+    .map(([exifField, opts])=>({exifField, exifValue: rawData?.[exifField as keyof typeof rawData], opts}))
+    .filter(p=>p.exifValue !== undefined)
+    .map(({exifField, exifValue, opts})=>{
+      const {fileField, conversionFn} = typeof opts === 'object'?opts:{fileField:opts};
+      return [fileField,conversionFn && exifField !== undefined ? conversionFn(exifValue):exifValue];
+    })
+  );
 
   return metadata;
 };
 
-export const getAIMetadataFromFile = async (_fullPath: string): Promise<AIMetadata> => {
-  // not implemented yet
-  return {};
-};
-
-export const getFaceMetadataFromFile = async (
-  _fullPath: string,
-): Promise<FaceMetadata> => {
-  // not implemented yet
-  return {};
-};
 
 /**
  * Throws if absolute is outside of root.
@@ -198,6 +121,9 @@ export const toRelative = (root: string, absolute: string): string => {
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 };
 
+/**
+ * Returns a generator of absolute paths of files
+ */
 export function* walkFiles(dir: string): Generator<string> {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const absolutePath = path.join(dir, entry.name);
