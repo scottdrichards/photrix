@@ -1,10 +1,4 @@
-import { DatabaseEntry } from "./fileRecord.type.ts";
-
-
-/**
- * How a file is represented when sent out - same as DatabaseFileEntry
- */
-export type FileRecord = DatabaseEntry;
+import { FileRecord } from "./fileRecord.type.ts";
 
 export type StringSearch =
     | string
@@ -74,4 +68,4 @@ export type QueryResult<TRequestedMetadata extends Array<keyof FileRecord> | und
 export type GetFiles = <TQueryOptions extends QueryOptions>(query: TQueryOptions) => 
     Promise<QueryResult<TQueryOptions['metadata']>>;
 
-export type UpsertFileData = (fileData: DatabaseEntry) => Promise<void>;
+export type UpsertFileData = (fileData: FileRecord) => Promise<void>;

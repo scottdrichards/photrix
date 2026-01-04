@@ -1,5 +1,4 @@
-import { DatabaseEntry } from "./fileRecord.type.ts";
-import { FileRecord } from "./indexDatabase.type.ts";
+import { FileRecord } from "./fileRecord.type.ts";
 import { normalizeFolderPath } from "./utils/pathUtils.ts";
 
 /**
@@ -37,6 +36,8 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
         "aiDescription",
         ["aiTags", json],
         ["faceTags", json],
+        "locationLatitude",
+        "locationLongitude",
     ] as const;
 
     const wantedConversions = wantedFields === 'all' ? fieldConversions : fieldConversions.filter(entry => {
@@ -57,13 +58,7 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
 
     /////////////////
     // Now add row values that have different keys than DB entries.
-    const {dimensionsWidth, dimensionsHeight, locationLatitude, locationLongitude} = row;
-
-    const location = (()=>{
-        if (locationLatitude && locationLongitude){
-            return {latitude:locationLatitude, longitude: locationLongitude};
-        }
-    })()
+    const {dimensionsWidth, dimensionsHeight} = row;
 
     return {
         folder,
@@ -72,14 +67,13 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
         ...basicObject,
         ...(dimensionsWidth !== null && dimensionsWidth !== undefined && { dimensionWidth: dimensionsWidth }),
         ...(dimensionsHeight !== null && dimensionsHeight !== undefined && { dimensionHeight: dimensionsHeight }),
-        ...location,
     } as FileRecord;
 }
 
 /**
  * Converts a FileRecord to column names and values for SQL insertion
  */
-export const fileRecordToColumnNamesAndValues = (entry: Partial<DatabaseEntry>): { names: string[]; values: (string|number)[] } => {
+export const fileRecordToColumnNamesAndValues = (entry: FileRecord): { names: string[]; values: (string|number)[] } => {
     const names: string[] = [];
     const values: (string|number)[] = [];
 
@@ -91,48 +85,54 @@ export const fileRecordToColumnNamesAndValues = (entry: Partial<DatabaseEntry>):
         values.push(value);
     };
 
-    // Use normalized folder and fileName
-    if (entry.folder) addColumn('folder', normalizeFolderPath(entry.folder));
-    if (entry.fileName) addColumn('fileName', entry.fileName);
-    if (entry.mimeType) addColumn('mimeType', entry.mimeType);
+    addColumn('folder', normalizeFolderPath(entry.folder));
+    addColumn('fileName', entry.fileName);
+    addColumn('mimeType', entry.mimeType);
 
     // File Info
-    if (entry.sizeInBytes) addColumn('sizeInBytes', entry.sizeInBytes);
-    if (entry.created) addColumn('created', entry.created instanceof Date ? entry.created.getTime() : entry.created);
-    if (entry.modified) addColumn('modified', entry.modified instanceof Date ? entry.modified.getTime() : entry.modified);
+    if (entry.infoProcessedAt){
+        addColumn('infoProcessedAt', entry.infoProcessedAt);
+        addColumn('sizeInBytes', entry.sizeInBytes);
+        addColumn('created', entry.created instanceof Date ? entry.created.getTime() : entry.created);
+        addColumn('modified', entry.modified instanceof Date ? entry.modified.getTime() : entry.modified);
+    }
 
     // EXIF Metadata
-    if (entry.dateTaken) addColumn('dateTaken', entry.dateTaken instanceof Date ? entry.dateTaken.getTime() : entry.dateTaken);
-    if (entry.dimensionWidth) addColumn('dimensionsWidth', entry.dimensionWidth);
-    if (entry.dimensionHeight) addColumn('dimensionsHeight', entry.dimensionHeight);
-    if (entry.locationLatitude) addColumn('locationLatitude', entry.locationLatitude);
-    if (entry.locationLongitude) addColumn('locationLongitude', entry.locationLongitude);
-    if (entry.cameraMake) addColumn('cameraMake', entry.cameraMake);
-    if (entry.cameraModel) addColumn('cameraModel', entry.cameraModel);
-    if (entry.exposureTime) addColumn('exposureTime', entry.exposureTime);
-    if (entry.aperture) addColumn('aperture', entry.aperture);
-    if (entry.iso) addColumn('iso', entry.iso);
-    if (entry.focalLength) addColumn('focalLength', entry.focalLength);
-    if (entry.lens) addColumn('lens', entry.lens);
-    if (entry.duration) addColumn('duration', entry.duration);
-    if (entry.framerate) addColumn('framerate', entry.framerate);
-    if (entry.videoCodec) addColumn('videoCodec', entry.videoCodec);
-    if (entry.audioCodec) addColumn('audioCodec', entry.audioCodec);
-    if (entry.rating) addColumn('rating', entry.rating);
-    if (entry.tags) addColumn('tags', JSON.stringify(entry.tags));
-    if (entry.orientation) addColumn('orientation', entry.orientation);
+    if (entry.exifProcessedAt){
+        addColumn('exifProcessedAt', entry.exifProcessedAt);
+        addColumn('dateTaken', entry.dateTaken instanceof Date ? entry.dateTaken.getTime() : entry.dateTaken);
+        addColumn('dimensionsWidth', entry.dimensionWidth);
+        addColumn('dimensionsHeight', entry.dimensionHeight);
+        addColumn('locationLatitude', entry.locationLatitude);
+        addColumn('locationLongitude', entry.locationLongitude);
+        addColumn('cameraMake', entry.cameraMake);
+        addColumn('cameraModel', entry.cameraModel);
+        addColumn('exposureTime', entry.exposureTime);
+        addColumn('aperture', entry.aperture);
+        addColumn('iso', entry.iso);
+        addColumn('focalLength', entry.focalLength);
+        addColumn('lens', entry.lens);
+        addColumn('duration', entry.duration);
+        addColumn('framerate', entry.framerate);
+        addColumn('videoCodec', entry.videoCodec);
+        addColumn('audioCodec', entry.audioCodec);
+        addColumn('rating', entry.rating);
+        addColumn('tags', JSON.stringify(entry.tags));
+        addColumn('orientation', entry.orientation);
+    }
 
     // AI Metadata
-    if (entry.aiDescription) addColumn('aiDescription', entry.aiDescription);
-    if (entry.aiTags) addColumn('aiTags', JSON.stringify(entry.aiTags));
+    if (entry.aiMetadataProcessedAt){
+        addColumn('aiMetadataProcessedAt', entry.aiMetadataProcessedAt);
+        addColumn('aiDescription', entry.aiDescription);
+        addColumn('aiTags', JSON.stringify(entry.aiTags));
+    }
 
     // Face Metadata
-    if (entry.faceTags) addColumn('faceTags', JSON.stringify(entry.faceTags));
-
-    // Processing timestamps (not part of FileRecord type, but stored in DB)
-    const entryAny = entry as Record<string, unknown>;
-    if (entryAny.infoProcessedAt) addColumn('infoProcessedAt', entryAny.infoProcessedAt as string);
-    if (entryAny.exifProcessedAt) addColumn('exifProcessedAt', entryAny.exifProcessedAt as string);
+    if (entry.faceMetadataProcessedAt){
+        addColumn('faceMetadataProcessedAt', entry.faceMetadataProcessedAt);
+        addColumn('faceTags', JSON.stringify(entry.faceTags));
+    }
 
     // Validate that names and values are in sync
     if (names.length !== values.length) {

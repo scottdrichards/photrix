@@ -24,9 +24,25 @@ export interface PhotoItem {
     dateTaken?: string | null;
     dimensionWidth?: number;
     dimensionHeight?: number;
+    locationLatitude?: number;
+    locationLongitude?: number;
     [key: string]: unknown;
   };
 }
+
+export type GeoBounds = {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+};
+
+export type GeoPoint = {
+  path: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+};
 
 export interface ApiPhotoResponse {
   items: ApiPhotoItem[];
@@ -44,6 +60,7 @@ export interface FetchPhotosOptions {
   signal?: AbortSignal;
   ratingFilter?: { rating: number; atLeast: boolean } | null;
   mediaTypeFilter?: "all" | "photo" | "video" | "other";
+  locationBounds?: GeoBounds | null;
 }
 
 export interface FetchPhotosResult {
@@ -51,6 +68,11 @@ export interface FetchPhotosResult {
   total: number;
   page: number;
   pageSize: number;
+}
+
+export interface FetchGeotaggedPhotosOptions extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata" | "locationBounds"> {
+  pageSize?: number;
+  maxItems?: number;
 }
 
 export interface ProgressEntry {
@@ -131,6 +153,46 @@ const DEFAULT_METADATA_KEYS = [
   "duration",
   "framerate",
 ] as const;
+
+const clampNumber = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const normalizeBounds = (bounds: GeoBounds): GeoBounds => ({
+  west: clampNumber(bounds.west, -180, 180),
+  east: clampNumber(bounds.east, -180, 180),
+  north: clampNumber(bounds.north, -90, 90),
+  south: clampNumber(bounds.south, -90, 90),
+});
+
+const locationBoundsToFilter = (bounds: GeoBounds) => {
+  const normalized = normalizeBounds(bounds);
+  const north = Math.max(normalized.north, normalized.south);
+  const south = Math.min(normalized.north, normalized.south);
+  const east = normalized.east;
+  const west = normalized.west;
+
+  const latitudeRange = { locationLatitude: { min: south, max: north } };
+  if (west <= east) {
+    return {
+      ...latitudeRange,
+      locationLongitude: { min: west, max: east },
+    };
+  }
+
+  // View crosses the international date line. Split into two longitude ranges.
+  return {
+    operation: "and",
+    conditions: [
+      latitudeRange,
+      {
+        operation: "or",
+        conditions: [
+          { locationLongitude: { min: west, max: 180 } },
+          { locationLongitude: { min: -180, max: east } },
+        ],
+      },
+    ],
+  };
+};
 
 export const fetchStatus = async (): Promise<ServerStatus> => {
   const response = await fetch("/api/status");
@@ -229,6 +291,7 @@ export const fetchPhotos = async ({
   signal,
   ratingFilter,
   mediaTypeFilter = "all",
+  locationBounds,
 }: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
   const params = new URLSearchParams();
   params.set("metadata", Array.from(metadata).join(","));
@@ -263,6 +326,10 @@ export const fetchPhotos = async ({
       ]
     });
   }
+
+  if (locationBounds) {
+    filters.push(locationBoundsToFilter(locationBounds));
+  }
   
   if (filters.length > 0) {
     const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
@@ -284,6 +351,54 @@ export const fetchPhotos = async ({
     page: payload.page,
     pageSize: payload.pageSize,
   };
+};
+
+export const fetchGeotaggedPhotos = async ({
+  maxItems = 5_000,
+  pageSize = 500,
+  ...options
+}: FetchGeotaggedPhotosOptions = {}): Promise<{ points: GeoPoint[]; total: number; truncated: boolean }> => {
+  const points: GeoPoint[] = [];
+  let page = 1;
+  let total = 0;
+
+  while (points.length < maxItems) {
+    const result = await fetchPhotos({
+      ...options,
+      page,
+      pageSize,
+      metadata: ["locationLatitude", "locationLongitude"],
+      locationBounds: { west: -180, east: 180, north: 90, south: -90 },
+    });
+
+    total = result.total;
+    const newPoints = result.items
+      .map((item) => {
+        const latitude = item.metadata?.locationLatitude;
+        const longitude = item.metadata?.locationLongitude;
+
+        if (typeof latitude !== "number" || typeof longitude !== "number") {
+          return null;
+        }
+
+        return { path: item.path, name: item.name, latitude, longitude } as GeoPoint;
+      })
+      .filter(Boolean) as GeoPoint[];
+
+    points.push(...newPoints);
+
+    const receivedAll = points.length >= total || result.items.length < pageSize;
+    if (receivedAll) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  const trimmedPoints = points.slice(0, maxItems);
+  const truncated = trimmedPoints.length < total;
+
+  return { points: trimmedPoints, total, truncated };
 };
 
 export const createFallbackPhoto = (path: string): PhotoItem => {

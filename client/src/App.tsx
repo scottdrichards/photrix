@@ -12,9 +12,10 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { Info24Regular, Folder24Regular, Star24Regular, Star24Filled } from "@fluentui/react-icons";
-import { fetchFolders, fetchPhotos, PhotoItem } from "./api";
+import { fetchFolders, fetchGeotaggedPhotos, fetchPhotos, GeoBounds, GeoPoint, PhotoItem } from "./api";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { FullscreenViewer } from "./components/FullscreenViewer";
+import { MapFilter } from "./components/MapFilter";
 import { StatusModal } from "./components/StatusModal";
 
 const useStyles = makeStyles({
@@ -70,6 +71,11 @@ const useStyles = makeStyles({
     alignItems: "center",
     gap: tokens.spacingHorizontalS,
   },
+  mapSection: {
+    display: "flex",
+    flexDirection: "column",
+    gap: tokens.spacingHorizontalS,
+  },
   starButton: {
     cursor: "pointer",
     border: "none",
@@ -110,6 +116,11 @@ export default function App() {
   const [ratingFilter, setRatingFilter] = useState<number | null>(null);
   const [ratingAtLeast, setRatingAtLeast] = useState(true);
   const [mediaTypeFilter, setMediaTypeFilter] = useState<"all" | "photo" | "video" | "other">("all");
+  const [mapBounds, setMapBounds] = useState<GeoBounds | undefined>(undefined);
+  const [geoPins, setGeoPins] = useState<GeoPoint[]>([]);
+  const [mapLoading, setMapLoading] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [mapTotals, setMapTotals] = useState<{ total: number; truncated: boolean }>({ total: 0, truncated: false });
   const [currentPath, setCurrentPath] = useState<string>(() => {
     const path = window.location.pathname.slice(1); // Remove leading slash
     return decodeURIComponent(path);
@@ -117,14 +128,32 @@ export default function App() {
   const [folders, setFolders] = useState<string[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
 
+  const ratingFilterValue = useMemo(
+    () => (ratingFilter ? { rating: ratingFilter, atLeast: ratingAtLeast } : null),
+    [ratingFilter, ratingAtLeast],
+  );
+
+  const currentPathWithSlash = useMemo(
+    () => (currentPath ? `${currentPath}/` : ""),
+    [currentPath],
+  );
+
   const loadPhotos = useCallback(async (signal: AbortSignal) => {
     setInitialLoading(true);
     setPhotos([]);
     setError(null);
     try {
-      const path = currentPath ? `${currentPath}/` : "";
-      const filter = ratingFilter ? { rating: ratingFilter, atLeast: ratingAtLeast } : null;
-      const result = await fetchPhotos({ page: 1, pageSize: PAGE_SIZE, includeSubfolders, signal, path, ratingFilter: filter, mediaTypeFilter });
+      const path = currentPathWithSlash;
+      const result = await fetchPhotos({
+        page: 1,
+        pageSize: PAGE_SIZE,
+        includeSubfolders,
+        signal,
+        path,
+        ratingFilter: ratingFilterValue,
+        mediaTypeFilter,
+        locationBounds: mapBounds,
+      });
       if (signal.aborted) {
         return;
       }
@@ -143,7 +172,7 @@ export default function App() {
         setInitialLoading(false);
       }
     }
-  }, [includeSubfolders, currentPath, ratingFilter, ratingAtLeast, mediaTypeFilter]);
+  }, [includeSubfolders, currentPathWithSlash, ratingFilterValue, mediaTypeFilter, mapBounds]);
 
   // Sync URL with state
   useEffect(() => {
@@ -170,6 +199,39 @@ export default function App() {
     loadPhotos(controller.signal);
     return () => controller.abort();
   }, [loadPhotos, refreshToken]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const loadMapPoints = async () => {
+      setMapLoading(true);
+      setMapError(null);
+      try {
+        const result = await fetchGeotaggedPhotos({
+          includeSubfolders,
+          path: currentPathWithSlash,
+          ratingFilter: ratingFilterValue,
+          mediaTypeFilter,
+          signal: controller.signal,
+        });
+        setGeoPins(result.points);
+        setMapTotals({ total: result.total, truncated: result.truncated });
+      } catch (err) {
+        if ((err as Error).name === "AbortError") {
+          return;
+        }
+        console.error(err);
+        setMapError((err as Error).message ?? "Failed to load map data");
+      } finally {
+        if (!controller.signal.aborted) {
+          setMapLoading(false);
+        }
+      }
+    };
+
+    loadMapPoints();
+
+    return () => controller.abort();
+  }, [includeSubfolders, currentPathWithSlash, ratingFilterValue, mediaTypeFilter, refreshToken]);
 
   useEffect(() => {
     const loadFolders = async () => {
@@ -205,9 +267,16 @@ export default function App() {
     setError(null);
     try {
       const nextPage = page + 1;
-      const path = currentPath ? `${currentPath}/` : "";
-      const filter = ratingFilter ? { rating: ratingFilter, atLeast: ratingAtLeast } : null;
-      const result = await fetchPhotos({ page: nextPage, pageSize: PAGE_SIZE, includeSubfolders, path, ratingFilter: filter, mediaTypeFilter });
+      const path = currentPathWithSlash;
+      const result = await fetchPhotos({
+        page: nextPage,
+        pageSize: PAGE_SIZE,
+        includeSubfolders,
+        path,
+        ratingFilter: ratingFilterValue,
+        mediaTypeFilter,
+        locationBounds: mapBounds,
+      });
       setPhotos((current) => {
         const next = [...current, ...result.items];
         const hasNext = result.items.length > 0 && next.length < result.total;
@@ -222,7 +291,7 @@ export default function App() {
     } finally {
       setLoadingMore(false);
     }
-  }, [hasMore, loadingMore, initialLoading, page, includeSubfolders, currentPath, ratingFilter, ratingAtLeast, mediaTypeFilter]);
+  }, [hasMore, loadingMore, initialLoading, page, includeSubfolders, currentPathWithSlash, ratingFilterValue, mediaTypeFilter, mapBounds]);
 
   const handleFolderClick = useCallback((folderName: string) => {
     const newPath = currentPath ? `${currentPath}/${folderName}` : folderName;
@@ -369,6 +438,18 @@ export default function App() {
             </Button>
           )}
         </div>
+      </div>
+
+      <div className={styles.mapSection}>
+        <MapFilter
+          points={geoPins}
+          bounds={mapBounds}
+          onBoundsChange={setMapBounds}
+          loading={mapLoading}
+          error={mapError}
+          totalPins={mapTotals.total}
+          truncated={mapTotals.truncated}
+        />
       </div>
 
       {currentPath && (

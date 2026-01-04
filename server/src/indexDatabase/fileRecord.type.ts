@@ -59,9 +59,14 @@ export type FaceMetadata = {
   faceTags?: FaceTag[];
 };
 
+export type AllMetaData = FileInfo & ExifMetadata & AIMetadata & FaceMetadata;
+
+/**
+ * Indicates how to acquire metadata for a file
+ */
 export const MetadataGroups = {
   info: ["sizeInBytes", "created", "modified"],
-  exifMetadata: [
+  exif: [
     "dateTaken",
     "dimensionWidth",
     "dimensionHeight",
@@ -84,33 +89,21 @@ export const MetadataGroups = {
   ],
   aiMetadata: ["aiDescription", "aiTags"],
   faceMetadata: ["faceTags"],
-} as const satisfies Record<string, readonly (keyof FileRecord)[]>;
-
+} as const satisfies Record<string, AllMetaData[keyof AllMetaData][]>;
 /**
- * Determines which metadata group a given field belongs to.
+ * This will verify that all metadata keys are assigned a group
  */
-export const whichMetadataGroup = (field: keyof FileRecord) => 
-  Object.keys(MetadataGroups).find(groupKey => 
-    (MetadataGroups as Record<string, readonly string[]>)[groupKey].includes(field)
-  ) as keyof typeof MetadataGroups;
+type AllMetadataKeysInGroups = UnionXOR<
+  {
+    [K in keyof typeof MetadataGroups]: (typeof MetadataGroups)[K][number];
+  }[keyof typeof MetadataGroups],
+  keyof ExifMetadata | keyof AIMetadata | keyof FaceMetadata | keyof FileInfo
+>;
+type _ErrorsIfUnassignedMetadataKeys = AssertNever<AllMetadataKeysInGroups>;
 
-
-/** DB row. Undefined means "I don't know", null means "I know there is no value*/
-export type DatabaseEntry = BaseFileRecord & FileInfo & ExifMetadata & AIMetadata & FaceMetadata;
-
-/////////////////////////
-// This section is just to do some extra static type checking.
-/////////////////////////
-
-/**
- * This will verify that all metadata keys are assigned a group if necessary.
- */
-type MissingKeys = UnionXOR<MetadataKeysThatRequireWork, AllMetadataKeysInGroups>;
-type _EnsureAllMetadataKeysListed = AssertNever<MissingKeys>;
-
-type MetadataKeysThatRequireWork = Exclude<keyof FileRecord, keyof BaseFileRecord>;
-
-type AllMetadataKeysInGroups = {
-  [K in keyof typeof MetadataGroups]: (typeof MetadataGroups)[K][number];
-}[keyof typeof MetadataGroups];
-
+/** Undefined means "I don't know", null means "I know there is no value
+ * Generally, it is best to look at the presence of the `${MetadataGroup}ProcessedAt` fields to see if metadata has been processed
+*/
+export type FileRecord = BaseFileRecord & Partial<AllMetaData> & {
+  [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null;
+};
