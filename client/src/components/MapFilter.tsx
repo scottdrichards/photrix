@@ -138,6 +138,8 @@ export const MapFilter = ({
     return `${displayed} pins`;
   }, [points.length, totalPins, truncated]);
 
+  const showOverlay = loading && vectorSourceRef.current.getFeatures().length === 0;
+
   activeRef.current = Boolean(bounds);
 
   useEffect(() => {
@@ -169,7 +171,7 @@ export const MapFilter = ({
     resizeObserver.observe(mapElementRef.current);
 
     const notifyBounds = () => {
-      if (!activeRef.current && !userInteractedRef.current) {
+      if (!userInteractedRef.current) {
         return;
       }
       const size = map.getSize();
@@ -188,6 +190,7 @@ export const MapFilter = ({
       if (!boundsEqual(lastBoundsRef.current, nextBounds)) {
         lastBoundsRef.current = nextBounds;
         onBoundsChange(nextBounds);
+        userInteractedRef.current = false;
       }
     };
 
@@ -280,6 +283,8 @@ export const MapFilter = ({
       return;
     }
 
+    userInteractedRef.current = true;
+
     if (!points.length) {
       mapRef.current.getView().setCenter(fromLonLat([0, 0]));
       mapRef.current.getView().setZoom(1.5);
@@ -335,7 +340,7 @@ export const MapFilter = ({
 
       <div className={styles.mapShell}>
         <div ref={mapElementRef} className={styles.map} />
-        {loading ? (
+        {showOverlay ? (
           <div className={styles.overlay}>
             <Spinner label="Loading map data" />
           </div>
