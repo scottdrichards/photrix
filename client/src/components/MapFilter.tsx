@@ -3,24 +3,22 @@ import {
   Caption1,
   Spinner,
   Switch,
-  Tooltip,
-  makeStyles,
-  tokens,
+  Tooltip
 } from "@fluentui/react-components";
-import { useEffect, useMemo, useRef } from "react";
+import Feature from "ol/Feature";
 import Map from "ol/Map";
 import View from "ol/View";
+import { boundingExtent } from "ol/extent";
+import Point from "ol/geom/Point";
 import TileLayer from "ol/layer/Tile";
 import VectorLayer from "ol/layer/Vector";
-import { fromLonLat, transformExtent } from "ol/proj";
-import VectorSource from "ol/source/Vector";
-import OSM from "ol/source/OSM";
-import Feature from "ol/Feature";
-import Point from "ol/geom/Point";
-import { boundingExtent } from "ol/extent";
-import { Circle as CircleStyle, Fill, Stroke, Style } from "ol/style";
-import type { GeoBounds, GeoPoint } from "../api";
 import "ol/ol.css";
+import { fromLonLat, transformExtent } from "ol/proj";
+import OSM from "ol/source/OSM";
+import VectorSource from "ol/source/Vector";
+import { useEffect, useMemo, useRef } from "react";
+import type { GeoBounds, GeoPoint } from "../api";
+import { markerStyle, useMapFilterStyles } from "./MapFilter.styles";
 
 type MapFilterProps = {
   points: GeoPoint[];
@@ -31,73 +29,6 @@ type MapFilterProps = {
   totalPins?: number;
   truncated?: boolean;
 };
-
-const useStyles = makeStyles({
-  card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingHorizontalM,
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingHorizontalS,
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  headerRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: tokens.spacingHorizontalS,
-    alignItems: "center",
-    flexWrap: "wrap",
-  },
-  description: {
-    color: tokens.colorNeutralForeground3,
-  },
-  actions: {
-    display: "flex",
-    gap: tokens.spacingHorizontalS,
-    alignItems: "center",
-    flexWrap: "wrap",
-  },
-  mapShell: {
-    position: "relative",
-    borderRadius: tokens.borderRadiusMedium,
-    overflow: "hidden",
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
-  },
-  map: {
-    width: "100%",
-    height: "340px",
-  },
-  overlay: {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: `${tokens.colorNeutralBackground1}CC`,
-  },
-  statusRow: {
-    display: "flex",
-    gap: tokens.spacingHorizontalS,
-    alignItems: "center",
-    flexWrap: "wrap",
-    color: tokens.colorNeutralForeground3,
-  },
-  error: {
-    color: tokens.colorPaletteRedForeground3,
-  },
-});
-
-const markerStyle = new Style({
-  image: new CircleStyle({
-    radius: 5,
-    fill: new Fill({ color: "#2b6cb0" }),
-    stroke: new Stroke({ color: "#f3f6fb", width: 1.25 }),
-  }),
-});
-
-const clampLat = (value: number) => Math.min(Math.max(value, -90), 90);
-const clampLon = (value: number) => Math.min(Math.max(value, -180), 180);
 
 const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
   if (!a || !b) {
@@ -121,7 +52,7 @@ export const MapFilter = ({
   totalPins,
   truncated,
 }: MapFilterProps) => {
-  const styles = useStyles();
+  const styles = useMapFilterStyles();
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
   const vectorSourceRef = useRef(new VectorSource());
@@ -180,12 +111,7 @@ export const MapFilter = ({
       }
       const extent = map.getView().calculateExtent(size);
       const [west, south, east, north] = transformExtent(extent, "EPSG:3857", "EPSG:4326");
-      const nextBounds = {
-        west: clampLon(west),
-        east: clampLon(east),
-        north: clampLat(north),
-        south: clampLat(south),
-      } satisfies GeoBounds;
+      const nextBounds: GeoBounds = { west, east, north, south };
 
       if (!boundsEqual(lastBoundsRef.current, nextBounds)) {
         lastBoundsRef.current = nextBounds;
@@ -266,12 +192,7 @@ export const MapFilter = ({
 
     const extent = mapRef.current.getView().calculateExtent(size);
     const [west, south, east, north] = transformExtent(extent, "EPSG:3857", "EPSG:4326");
-    const nextBounds = {
-      west: clampLon(west),
-      east: clampLon(east),
-      north: clampLat(north),
-      south: clampLat(south),
-    } satisfies GeoBounds;
+      const nextBounds: GeoBounds = { west, east, north, south };
     if (!boundsEqual(lastBoundsRef.current, nextBounds)) {
       lastBoundsRef.current = nextBounds;
       onBoundsChange(nextBounds);
@@ -320,12 +241,12 @@ export const MapFilter = ({
                 }
                 const extent = mapRef.current.getView().calculateExtent(size);
                 const [west, south, east, north] = transformExtent(extent, "EPSG:3857", "EPSG:4326");
-                const nextBounds = {
+                const nextBounds:GeoBounds = {
                   west: clampLon(west),
                   east: clampLon(east),
                   north: clampLat(north),
                   south: clampLat(south),
-                } satisfies GeoBounds;
+                };
                 lastBoundsRef.current = nextBounds;
                 onBoundsChange(nextBounds);
               }}
