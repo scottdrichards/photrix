@@ -1,5 +1,4 @@
 import { AssertNever, UnionXOR } from "../utils.ts";
-import { FileRecord } from "./indexDatabase.type.ts";
 
 export type BaseFileRecord = {
   /** Uses '/' as separator, starts and ends with slash */

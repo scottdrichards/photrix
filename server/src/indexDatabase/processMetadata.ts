@@ -5,12 +5,7 @@ import { IndexDatabase } from "./indexDatabase.ts";
 
 const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
 
-const durationFormatter = new (Intl as any).DurationFormat("en", {
-    style: "digital",
-    hours: "2-digit",
-    minutes: "2-digit",
-    seconds: "2-digit",
-});
+const durationFormatter = new (Intl as any).DurationFormat("en");
 
 
 export const processExifMetadata = async (
@@ -84,14 +79,18 @@ export const processExifMetadata = async (
 
             const now = Date.now();
             if (now - lastLogTime >= 1000) {
-                const elapsedSec = (now - startTime) / 1000;
-                const rate = elapsedSec > 0 ? processed / elapsedSec : 0;
+                const durationMS = now - startTime;
+                const ratePerSec = durationMS ? processed / (durationMS / 1000) : 0;
                 const remaining = Math.max((total || processed) - processed, 0);
-                const etaSec = rate > 0 ? remaining / rate : 0;
-                const remainingDuration = formatEta(etaSec);
+                const remainingMS = ratePerSec ? (remaining / ratePerSec) : 0;
+                const remainingDuration = durationFormatter.format({
+                    hours: Math.floor(remainingMS / (60*60)),
+                    minutes: Math.floor((remainingMS % 3600) / 60),
+                    seconds: Math.floor((remainingMS % 60)),
+                });
                 const deltaProcessed = processed - lastLogProcessed;
                 const deltaRate = deltaProcessed / ((now - lastLogTime) / 1000 || 1);
-                console.log(`[metadata] Progress: ${processed}/${total || "?"} processed | ~${rate.toFixed(1)} files/s (recent ${deltaRate.toFixed(1)} files/s) | ${remainingDuration} remaining | current ${relativePath}`);
+                console.log(`[metadata] Progress: ${processed}/${total || "?"} (${(remaining/total * 100).toFixed(2)}% )processed | ~${ratePerSec.toFixed(1)} files/s (recent ${deltaRate.toFixed(1)} files/s) | ${remainingDuration} remaining | current ${relativePath}`);
                 lastLogTime = now;
                 lastLogProcessed = processed;
             }
@@ -99,20 +98,4 @@ export const processExifMetadata = async (
     }
 
     console.log(`[metadata] Completed metadata processing. Total updated: ${processed}`);
-};
-
-const formatEta = (seconds: number): string => {
-    const safeSeconds = Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
-    if (durationFormatter) {
-        try {
-            return durationFormatter.format({ seconds: safeSeconds });
-        } catch {
-            // Fall through to string-based formatting
-        }
-    }
-    const hrs = Math.floor(safeSeconds / 3600);
-    const mins = Math.floor((safeSeconds % 3600) / 60);
-    const secs = Math.floor(safeSeconds % 60);
-    const pad = (v: number) => v.toString().padStart(2, "0");
-    return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
 };
