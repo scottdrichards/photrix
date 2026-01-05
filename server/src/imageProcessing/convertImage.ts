@@ -10,6 +10,18 @@ import { mediaProcessingQueue, QueuePriority } from "../common/processingQueue.t
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 const pythonPath = "python";
 
+export class ImageConversionError extends Error {
+  constructor(
+    message: string,
+    readonly inputPath: string,
+    readonly stderr: string,
+    readonly exitCode?: number,
+  ) {
+    super(message);
+    this.name = "ImageConversionError";
+  }
+}
+
 
 const generateImage = async (
   inputPath: string,
@@ -41,8 +53,14 @@ const generateImage = async (
       if (code === 0) {
         resolve();
       } else {
-        console.error(`[ImageCache] Python script failed: ${stderr}`);
-        reject(new Error(`Image conversion failed: ${stderr}`));
+        const normalizedError = stderr.trim() || `Python exited with code ${code ?? "unknown"}`;
+        const isCorrupt = /unexpected end of file/i.test(normalizedError) || /invalid input/i.test(normalizedError);
+        const message = isCorrupt
+          ? `Corrupt or unreadable image ${inputPath}: ${normalizedError}`
+          : `Image conversion failed for ${inputPath}: ${normalizedError}`;
+
+        console.error(`[ImageCache] Python script failed (${code ?? "unknown"}): ${message}`);
+        reject(new ImageConversionError(message, inputPath, normalizedError, code ?? undefined));
       }
     });
 

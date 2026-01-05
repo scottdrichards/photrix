@@ -6,7 +6,13 @@ import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { MetadataGroups, type FileRecord } from "./fileRecord.type.ts";
 import { filterToSQL } from "./filterToSQL.ts";
-import type { GeoClusterResult, QueryOptions, QueryResult } from "./indexDatabase.type.ts";
+import type {
+  DateHistogramResult,
+  FilterElement,
+  GeoClusterResult,
+  QueryOptions,
+  QueryResult,
+} from "./indexDatabase.type.ts";
 import { fileRecordToColumnNamesAndValues, rowToFileRecord } from "./rowFileRecordConversionFunctions.ts";
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
@@ -574,6 +580,78 @@ export class IndexDatabase {
     const elapsed = Date.now() - startTime;
     console.log(`[query] Completed in ${elapsed}ms: ${result.total} total items, ${result.items.length} items on page`);
     return result;
+  }
+
+  getDateRange(filter: FilterElement): { minDate: Date | null; maxDate: Date | null } {
+    const { where: whereClause, params } = filterToSQL(filter);
+    const sql = `
+      SELECT
+        MIN(dateTaken) AS minDate,
+        MAX(dateTaken) AS maxDate
+      FROM files
+      WHERE dateTaken IS NOT NULL
+      ${whereClause ? `AND ${whereClause}` : ""}
+    `;
+
+    const result = this.db.prepare(sql).get(...params) as { minDate: number | null; maxDate: number | null };
+
+    return {
+      minDate: result?.minDate !== null && result?.minDate !== undefined ? new Date(result.minDate) : null,
+      maxDate: result?.maxDate !== null && result?.maxDate !== undefined ? new Date(result.maxDate) : null,
+    };
+  }
+
+  getDateHistogram(filter: FilterElement): DateHistogramResult {
+    const range = this.getDateRange(filter);
+    const minDate = range.minDate?.getTime() ?? null;
+    const maxDate = range.maxDate?.getTime() ?? null;
+
+    if (minDate === null || maxDate === null || minDate === maxDate) {
+      return { buckets: [], bucketSizeMs: 0, minDate, maxDate, grouping: "day" };
+    }
+
+    const spanMs = maxDate - minDate;
+    const dayMs = 24 * 60 * 60 * 1000;
+    const spanDays = spanMs / dayMs;
+    const monthDiff = (dateA: number, dateB: number) => {
+      const a = new Date(dateA);
+      const b = new Date(dateB);
+      return (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+    };
+
+    // If the range is tight (within ~2 months) keep daily granularity; otherwise month buckets.
+    const grouping: "day" | "month" = monthDiff(minDate, maxDate) <= 2 || spanDays <= 120 ? "day" : "month";
+    const bucketFormat = grouping === "day" ? "%Y-%m-%d" : "%Y-%m-01";
+
+    const { where: whereClause, params } = filterToSQL(filter);
+    const rows = this.db
+      .prepare(
+        `SELECT
+            strftime('${bucketFormat}', datetime(dateTaken / 1000, 'unixepoch')) AS bucket,
+            COUNT(*) AS count
+          FROM files
+          WHERE dateTaken IS NOT NULL
+          ${whereClause ? `AND ${whereClause}` : ""}
+          GROUP BY bucket
+          ORDER BY bucket`
+      )
+      .all(...params) as Array<{ bucket: string; count: number }>;
+
+    const buckets = rows.map(({ bucket, count }) => {
+      const start = grouping === "day"
+        ? Date.UTC(Number(bucket.slice(0, 4)), Number(bucket.slice(5, 7)) - 1, Number(bucket.slice(8, 10)))
+        : Date.UTC(Number(bucket.slice(0, 4)), Number(bucket.slice(5, 7)) - 1, 1);
+
+      const end = grouping === "day"
+        ? start + dayMs
+        : Date.UTC(Number(bucket.slice(0, 4)), Number(bucket.slice(5, 7)), 1);
+
+      return { start, end, count };
+    });
+
+    const bucketSizeMs = grouping === "day" ? dayMs : buckets[0] ? buckets[0].end - buckets[0].start : 0;
+
+    return { buckets, bucketSizeMs, minDate, maxDate, grouping };
   }
 
   getSize(): number {

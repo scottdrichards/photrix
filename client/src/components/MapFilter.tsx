@@ -18,7 +18,7 @@ import OSM from "ol/source/OSM";
 import VectorSource from "ol/source/Vector";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchGeotaggedPhotos } from "../api";
-import type { GeoBounds, GeoPoint } from "../api";
+import type { DateRangeFilter, GeoBounds, GeoPoint } from "../api";
 import { markerStyle, useMapFilterStyles } from "./MapFilter.styles";
 
 type MapFilterProps = {
@@ -28,6 +28,7 @@ type MapFilterProps = {
   path: string;
   ratingFilter: { rating: number; atLeast: boolean } | null;
   mediaTypeFilter: "all" | "photo" | "video" | "other";
+  dateRange?: DateRangeFilter | null;
 };
 
 const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
@@ -50,6 +51,7 @@ export const MapFilter = ({
   path,
   ratingFilter,
   mediaTypeFilter,
+  dateRange,
 }: MapFilterProps) => {
   const styles = useMapFilterStyles();
   const mapElementRef = useRef<HTMLDivElement | null>(null);
@@ -90,6 +92,7 @@ export const MapFilter = ({
           mediaTypeFilter,
           locationBounds: bounds,
           clusterSize,
+          dateRange,
           signal: controller.signal,
         });
         setPoints(result.points);
@@ -111,7 +114,7 @@ export const MapFilter = ({
     loadPoints();
 
     return () => controller.abort();
-  }, [includeSubfolders, path, ratingFilter, mediaTypeFilter, bounds, clusterSize]);
+  }, [includeSubfolders, path, ratingFilter, mediaTypeFilter, bounds, clusterSize, dateRange]);
 
   const pinSummary = useMemo(() => {
     const displayed = points.length;

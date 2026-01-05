@@ -78,6 +78,20 @@ export type GeoClusterResult = {
     total: number;
 };
 
+export type DateHistogramBucket = {
+    start: number;
+    end: number;
+    count: number;
+};
+
+export type DateHistogramResult = {
+    buckets: DateHistogramBucket[];
+    bucketSizeMs: number;
+    minDate: number | null;
+    maxDate: number | null;
+    grouping: "day" | "month";
+};
+
 export type GetFiles = <TQueryOptions extends QueryOptions>(query: TQueryOptions) => 
     Promise<QueryResult<TQueryOptions['metadata']>>;
 

@@ -45,6 +45,25 @@ export type GeoPoint = {
   count?: number;
 };
 
+export type DateRangeFilter = {
+  start?: number;
+  end?: number;
+};
+
+export type DateHistogramBucket = {
+  start: number;
+  end: number;
+  count: number;
+};
+
+export type DateHistogramResult = {
+  buckets: DateHistogramBucket[];
+  bucketSizeMs: number;
+  minDate: number | null;
+  maxDate: number | null;
+  grouping: "day" | "month";
+};
+
 export interface ApiPhotoResponse {
   items: ApiPhotoItem[];
   total: number;
@@ -62,6 +81,7 @@ export interface FetchPhotosOptions {
   ratingFilter?: { rating: number; atLeast: boolean } | null;
   mediaTypeFilter?: "all" | "photo" | "video" | "other";
   locationBounds?: GeoBounds | null;
+  dateRange?: DateRangeFilter | null;
 }
 
 export interface FetchPhotosResult {
@@ -76,6 +96,10 @@ export interface FetchGeotaggedPhotosOptions extends Omit<FetchPhotosOptions, "p
   locationBounds?: GeoBounds | null;
   clusterSize?: number;
 }
+
+export interface FetchDateRangeOptions extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata" | "dateRange"> {}
+
+export interface FetchDateHistogramOptions extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata"> {}
 
 export interface ProgressEntry {
   completed: number;
@@ -196,6 +220,70 @@ const locationBoundsToFilter = (bounds: GeoBounds) => {
   };
 };
 
+const dateRangeToFilter = (dateRange?: DateRangeFilter | null) => {
+  if (!dateRange) {
+    return null;
+  }
+
+  const { start, end } = dateRange;
+  const hasStart = typeof start === "number" && Number.isFinite(start);
+  const hasEnd = typeof end === "number" && Number.isFinite(end);
+
+  if (!hasStart && !hasEnd) {
+    return null;
+  }
+
+  return {
+    dateTaken: {
+      ...(hasStart ? { min: start } : {}),
+      ...(hasEnd ? { max: end } : {}),
+    },
+  };
+};
+
+type BuildFiltersInput = {
+  ratingFilter?: { rating: number; atLeast: boolean } | null;
+  mediaTypeFilter?: "all" | "photo" | "video" | "other";
+  locationBounds?: GeoBounds | null;
+  dateRange?: DateRangeFilter | null;
+};
+
+const buildFilters = ({ ratingFilter, mediaTypeFilter, locationBounds, dateRange }: BuildFiltersInput) => {
+  const filters: any[] = [];
+
+  if (ratingFilter) {
+    const ratingFilterObj = ratingFilter.atLeast
+      ? { rating: { min: ratingFilter.rating } }
+      : { rating: ratingFilter.rating };
+    filters.push(ratingFilterObj);
+  }
+
+  if (mediaTypeFilter === "photo") {
+    filters.push({ mimeType: { glob: "image/*" } });
+  } else if (mediaTypeFilter === "video") {
+    filters.push({ mimeType: { glob: "video/*" } });
+  } else if (mediaTypeFilter === "other") {
+    filters.push({
+      operation: "or",
+      conditions: [
+        { mimeType: null },
+        { mimeType: { glob: "!(image|video)/*" } },
+      ],
+    });
+  }
+
+  if (locationBounds) {
+    filters.push(locationBoundsToFilter(locationBounds));
+  }
+
+  const dateFilter = dateRangeToFilter(dateRange);
+  if (dateFilter) {
+    filters.push(dateFilter);
+  }
+
+  return filters;
+};
+
 export const fetchStatus = async (): Promise<ServerStatus> => {
   const response = await fetch("/api/status");
   if (!response.ok) {
@@ -294,6 +382,7 @@ export const fetchPhotos = async ({
   ratingFilter,
   mediaTypeFilter = "all",
   locationBounds,
+  dateRange,
 }: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
   const params = new URLSearchParams();
   params.set("metadata", Array.from(metadata).join(","));
@@ -303,35 +392,7 @@ export const fetchPhotos = async ({
     params.set("includeSubfolders", "true");
   }
   
-  // Build filter object
-  const filters: any[] = [];
-  
-  if (ratingFilter) {
-    const ratingFilterObj = ratingFilter.atLeast 
-      ? { rating: { min: ratingFilter.rating } }
-      : { rating: ratingFilter.rating };
-    filters.push(ratingFilterObj);
-  }
-  
-  if (mediaTypeFilter === "photo") {
-    filters.push({ mimeType: { glob: "image/*" } });
-  } else if (mediaTypeFilter === "video") {
-    filters.push({ mimeType: { glob: "video/*" } });
-  } else if (mediaTypeFilter === "other") {
-    // For "other", we need an OR of conditions that exclude image/* and video/*
-    // Using a logical filter to express: NOT (image/* OR video/*)
-    filters.push({
-      operation: "or",
-      conditions: [
-        { mimeType: null },  // Files without mimeType
-        { mimeType: { glob: "!(image|video)/*" } }  // Files that don't start with image/ or video/
-      ]
-    });
-  }
-
-  if (locationBounds) {
-    filters.push(locationBoundsToFilter(locationBounds));
-  }
+  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange });
   
   if (filters.length > 0) {
     const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
@@ -363,6 +424,7 @@ export const fetchGeotaggedPhotos = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
+  dateRange,
   signal,
 }: FetchGeotaggedPhotosOptions = {}): Promise<{ points: GeoPoint[]; total: number; truncated: boolean }> => {
   const params = new URLSearchParams();
@@ -375,32 +437,7 @@ export const fetchGeotaggedPhotos = async ({
     params.set("clusterSize", clusterSize.toString());
   }
 
-  const filters: any[] = [];
-
-  if (ratingFilter) {
-    const ratingFilterObj = ratingFilter.atLeast
-      ? { rating: { min: ratingFilter.rating } }
-      : { rating: ratingFilter.rating };
-    filters.push(ratingFilterObj);
-  }
-
-  if (mediaTypeFilter === "photo") {
-    filters.push({ mimeType: { glob: "image/*" } });
-  } else if (mediaTypeFilter === "video") {
-    filters.push({ mimeType: { glob: "video/*" } });
-  } else if (mediaTypeFilter === "other") {
-    filters.push({
-      operation: "or",
-      conditions: [
-        { mimeType: null },
-        { mimeType: { glob: "!(image|video)/*" } },
-      ],
-    });
-  }
-
-  if (locationBounds) {
-    filters.push(locationBoundsToFilter(locationBounds));
-  }
+  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange });
 
   if (filters.length > 0) {
     const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
@@ -438,6 +475,69 @@ export const fetchGeotaggedPhotos = async ({
   const truncated = payload.total > coveredCount;
 
   return { points, total: payload.total, truncated };
+};
+
+export const fetchDateRange = async ({
+  includeSubfolders = false,
+  path = "",
+  ratingFilter,
+  mediaTypeFilter = "all",
+  locationBounds,
+  signal,
+}: FetchDateRangeOptions = {}): Promise<{ minDate: number | null; maxDate: number | null }> => {
+  const params = new URLSearchParams();
+  params.set("aggregate", "dateRange");
+  if (includeSubfolders) {
+    params.set("includeSubfolders", "true");
+  }
+
+  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange: null });
+
+  if (filters.length > 0) {
+    const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    params.set("filter", JSON.stringify(filterObj));
+  }
+
+  const url = path ? `/api/files/${path}?${params.toString()}` : `/api/files/?${params.toString()}`;
+  const response = await fetch(url, { signal });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch date range (status ${response.status})`);
+  }
+
+  return await response.json() as { minDate: number | null; maxDate: number | null };
+};
+
+export const fetchDateHistogram = async ({
+  includeSubfolders = false,
+  path = "",
+  ratingFilter,
+  mediaTypeFilter = "all",
+  locationBounds,
+  dateRange,
+  signal,
+}: FetchDateHistogramOptions = {}): Promise<DateHistogramResult> => {
+  const params = new URLSearchParams();
+  params.set("aggregate", "dateHistogram");
+  if (includeSubfolders) {
+    params.set("includeSubfolders", "true");
+  }
+
+  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange });
+
+  if (filters.length > 0) {
+    const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    params.set("filter", JSON.stringify(filterObj));
+  }
+
+  const url = path ? `/api/files/${path}?${params.toString()}` : `/api/files/?${params.toString()}`;
+  const response = await fetch(url, { signal });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch date histogram (status ${response.status})`);
+  }
+
+  return await response.json() as DateHistogramResult;
 };
 
 export const createFallbackPhoto = (path: string): PhotoItem => {

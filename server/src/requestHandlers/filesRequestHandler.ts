@@ -5,7 +5,7 @@ import { stat } from "fs/promises";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { createReadStream } from "fs";
 import path from "path/win32";
-import { convertImage, convertImageToMultipleSizes } from "../imageProcessing/convertImage.ts";
+import { convertImage, convertImageToMultipleSizes, ImageConversionError } from "../imageProcessing/convertImage.ts";
 import { generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
 import { StandardHeight, standardHeights } from "../common/standardHeights.ts";
 import { mediaProcessingQueue } from "../common/processingQueue.ts";
@@ -140,6 +140,7 @@ const queryHandler = async (
   const eastParam = url.searchParams.get("east");
   const northParam = url.searchParams.get("north");
   const southParam = url.searchParams.get("south");
+  const aggregate = url.searchParams.get("aggregate");
 
   const pathFilter:QueryOptions["filter"] = directoryPath? {
     folder: {
@@ -177,6 +178,25 @@ const queryHandler = async (
     ...(pageSize && { pageSize: parseInt(pageSize, 10) }),
     ...(page && { page: parseInt(page, 10) }),
   };
+
+  if (aggregate === "dateRange") {
+    const { minDate, maxDate } = database.getDateRange(filter);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        minDate: minDate ? minDate.getTime() : null,
+        maxDate: maxDate ? maxDate.getTime() : null,
+      }),
+    );
+    return;
+  }
+
+  if (aggregate === "dateHistogram") {
+    const result = database.getDateHistogram(filter);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(result));
+    return;
+  }
 
   if (cluster) {
     const parsedClusterSize = clusterSizeParam ? Number.parseFloat(clusterSizeParam) : NaN;
@@ -345,7 +365,10 @@ const fileHandler = async (
 
       // Generate all standard sizes in the background (except 'original') - low priority
       const allSizes = standardHeights.filter((h): h is Exclude<StandardHeight, "original"> => typeof h !== 'string');
-      void convertImageToMultipleSizes(normalizedPath, allSizes, { priority: 'userImplicit' });
+      void convertImageToMultipleSizes(normalizedPath, allSizes, { priority: 'userImplicit' })
+        .catch((error) => {
+          console.error(`[filesRequest] Background size generation failed for ${subPath}:`, error);
+        });
       
       // But wait for the requested size specifically - high priority
       const cachedPath = await convertImage(normalizedPath, height, { priority: 'userBlocked' });
@@ -362,7 +385,19 @@ const fileHandler = async (
       return;
     } catch (error) {
       console.error(`Error generating image for: ${subPath}`, error);
-      // Fall through to stream the original file if conversion fails
+
+      if (error instanceof ImageConversionError) {
+        res.writeHead(422, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "Invalid image",
+            message: error.message,
+          }),
+        );
+        return;
+      }
+
+      // Fall through to stream the original file if conversion fails for other reasons
     }
   } else if (needsResize && isVideo) {
     // Legacy behavior: if a client asks for a sized video without specifying a representation,

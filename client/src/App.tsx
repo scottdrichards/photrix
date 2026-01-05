@@ -16,6 +16,7 @@ import { fetchFolders, fetchPhotos, GeoBounds, PhotoItem } from "./api";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { FullscreenViewer } from "./components/FullscreenViewer";
 import { MapFilter } from "./components/MapFilter";
+import { DateHistogram } from "./components/DateHistogram";
 import { StatusModal } from "./components/StatusModal";
 
 const useStyles = makeStyles({
@@ -42,6 +43,7 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     gap: tokens.spacingHorizontalM,
+    flexWrap: "wrap",
   },
   breadcrumbRow: {
     display: "flex",
@@ -117,6 +119,7 @@ export default function App() {
   const [ratingAtLeast, setRatingAtLeast] = useState(true);
   const [mediaTypeFilter, setMediaTypeFilter] = useState<"all" | "photo" | "video" | "other">("all");
   const [mapBounds, setMapBounds] = useState<GeoBounds | undefined>(undefined);
+  const [dateRange, setDateRange] = useState<{ start: number; end: number } | null>(null);
   const [currentPath, setCurrentPath] = useState<string>(() => {
     const path = window.location.pathname.slice(1); // Remove leading slash
     return decodeURIComponent(path);
@@ -148,6 +151,7 @@ export default function App() {
         ratingFilter: ratingFilterValue,
         mediaTypeFilter,
         locationBounds: mapBounds,
+        dateRange,
       });
       if (signal.aborted) {
         return;
@@ -167,7 +171,7 @@ export default function App() {
         setInitialLoading(false);
       }
     }
-  }, [includeSubfolders, currentPathWithSlash, ratingFilterValue, mediaTypeFilter, mapBounds]);
+  }, [includeSubfolders, currentPathWithSlash, ratingFilterValue, mediaTypeFilter, mapBounds, dateRange]);
 
   // Sync URL with state
   useEffect(() => {
@@ -238,6 +242,7 @@ export default function App() {
         ratingFilter: ratingFilterValue,
         mediaTypeFilter,
         locationBounds: mapBounds,
+        dateRange,
       });
       setPhotos((current) => {
         const next = [...current, ...result.items];
@@ -253,7 +258,7 @@ export default function App() {
     } finally {
       setLoadingMore(false);
     }
-  }, [hasMore, loadingMore, initialLoading, page, includeSubfolders, currentPathWithSlash, ratingFilterValue, mediaTypeFilter, mapBounds]);
+  }, [hasMore, loadingMore, initialLoading, page, includeSubfolders, currentPathWithSlash, ratingFilterValue, mediaTypeFilter, mapBounds, dateRange]);
 
   const handleFolderClick = useCallback((folderName: string) => {
     const newPath = currentPath ? `${currentPath}/${folderName}` : folderName;
@@ -400,6 +405,20 @@ export default function App() {
             </Button>
           )}
         </div>
+
+        <Divider vertical />
+
+        <DateHistogram
+          label="Date taken"
+          value={dateRange}
+          onChange={setDateRange}
+          includeSubfolders={includeSubfolders}
+          path={currentPathWithSlash}
+          ratingFilter={ratingFilterValue}
+          mediaTypeFilter={mediaTypeFilter}
+          locationBounds={mapBounds}
+          refreshToken={refreshToken}
+        />
       </div>
 
       <div className={styles.mapSection}>
@@ -408,6 +427,7 @@ export default function App() {
           path={currentPathWithSlash}
           ratingFilter={ratingFilterValue}
           mediaTypeFilter={mediaTypeFilter}
+          dateRange={dateRange}
           bounds={mapBounds}
           onBoundsChange={setMapBounds}
         />
