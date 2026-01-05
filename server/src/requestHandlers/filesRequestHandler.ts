@@ -134,6 +134,12 @@ const queryHandler = async (
   const page = url.searchParams.get("page");
   const countOnly = url.searchParams.get("count") === "true";
   const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
+  const cluster = url.searchParams.get("cluster") === "true";
+  const clusterSizeParam = url.searchParams.get("clusterSize");
+  const westParam = url.searchParams.get("west");
+  const eastParam = url.searchParams.get("east");
+  const northParam = url.searchParams.get("north");
+  const southParam = url.searchParams.get("south");
 
   const pathFilter:QueryOptions["filter"] = directoryPath? {
     folder: {
@@ -171,6 +177,23 @@ const queryHandler = async (
     ...(pageSize && { pageSize: parseInt(pageSize, 10) }),
     ...(page && { page: parseInt(page, 10) }),
   };
+
+  if (cluster) {
+    const parsedClusterSize = clusterSizeParam ? Number.parseFloat(clusterSizeParam) : NaN;
+    const clusterSize = Number.isFinite(parsedClusterSize) && parsedClusterSize > 0 ? parsedClusterSize : 0.00002;
+    const bounds = [westParam, eastParam, northParam, southParam].every((v) => v !== null)
+      ? {
+          west: Number.parseFloat(westParam ?? ""),
+          east: Number.parseFloat(eastParam ?? ""),
+          north: Number.parseFloat(northParam ?? ""),
+          south: Number.parseFloat(southParam ?? ""),
+        }
+      : null;
+    const { clusters, total } = database.queryGeoClusters({ filter, clusterSize, bounds });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ clusters, total }));
+    return;
+  }
 
   const result = await database.queryFiles(queryOptions);
   const responseBody = countOnly ? { count: result.total } : result;

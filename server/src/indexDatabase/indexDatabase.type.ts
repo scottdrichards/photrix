@@ -65,6 +65,19 @@ export type QueryResult<TRequestedMetadata extends Array<keyof FileRecord> | und
     pageSize: number;
 };
 
+export type GeoCluster = {
+    latitude: number;
+    longitude: number;
+    count: number;
+    samplePath: string | null;
+    sampleName: string | null;
+};
+
+export type GeoClusterResult = {
+    clusters: GeoCluster[];
+    total: number;
+};
+
 export type GetFiles = <TQueryOptions extends QueryOptions>(query: TQueryOptions) => 
     Promise<QueryResult<TQueryOptions['metadata']>>;
 

@@ -16,18 +16,18 @@ import "ol/ol.css";
 import { fromLonLat, transformExtent } from "ol/proj";
 import OSM from "ol/source/OSM";
 import VectorSource from "ol/source/Vector";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchGeotaggedPhotos } from "../api";
 import type { GeoBounds, GeoPoint } from "../api";
 import { markerStyle, useMapFilterStyles } from "./MapFilter.styles";
 
 type MapFilterProps = {
-  points: GeoPoint[];
   bounds?: GeoBounds;
   onBoundsChange: (bounds: GeoBounds | undefined) => void;
-  loading?: boolean;
-  error?: string | null;
-  totalPins?: number;
-  truncated?: boolean;
+  includeSubfolders: boolean;
+  path: string;
+  ratingFilter: { rating: number; atLeast: boolean } | null;
+  mediaTypeFilter: "all" | "photo" | "video" | "other";
 };
 
 const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
@@ -44,13 +44,12 @@ const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
 };
 
 export const MapFilter = ({
-  points,
   bounds,
   onBoundsChange,
-  loading = false,
-  error,
-  totalPins,
-  truncated,
+  includeSubfolders,
+  path,
+  ratingFilter,
+  mediaTypeFilter,
 }: MapFilterProps) => {
   const styles = useMapFilterStyles();
   const mapElementRef = useRef<HTMLDivElement | null>(null);
@@ -60,6 +59,59 @@ export const MapFilter = ({
   const hasFittedRef = useRef(false);
   const activeRef = useRef(Boolean(bounds));
   const userInteractedRef = useRef(false);
+  const [points, setPoints] = useState<GeoPoint[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [totalPins, setTotalPins] = useState(0);
+  const [truncated, setTruncated] = useState(false);
+
+  const clusterSize = useMemo(() => {
+    if (!bounds) {
+      return undefined;
+    }
+    const latSpan = Math.max(Math.abs(bounds.north - bounds.south), 1e-9);
+    const lonSpan = Math.max(Math.abs(bounds.east - bounds.west), 1e-9);
+    const targetCells = 400_000;
+    const cellSize = Math.max(latSpan, lonSpan) / Math.sqrt(targetCells);
+    return Math.max(cellSize, 0.00000001);
+  }, [bounds]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const loadPoints = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await fetchGeotaggedPhotos({
+          includeSubfolders,
+          path,
+          ratingFilter,
+          mediaTypeFilter,
+          locationBounds: bounds,
+          clusterSize,
+          signal: controller.signal,
+        });
+        setPoints(result.points);
+        setTotalPins(result.total);
+        setTruncated(result.truncated);
+      } catch (err) {
+        if ((err as Error).name === "AbortError") {
+          return;
+        }
+        console.error(err);
+        setError((err as Error).message ?? "Failed to load map data");
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadPoints();
+
+    return () => controller.abort();
+  }, [includeSubfolders, path, ratingFilter, mediaTypeFilter, bounds, clusterSize]);
 
   const pinSummary = useMemo(() => {
     const displayed = points.length;
@@ -241,12 +293,7 @@ export const MapFilter = ({
                 }
                 const extent = mapRef.current.getView().calculateExtent(size);
                 const [west, south, east, north] = transformExtent(extent, "EPSG:3857", "EPSG:4326");
-                const nextBounds:GeoBounds = {
-                  west: clampLon(west),
-                  east: clampLon(east),
-                  north: clampLat(north),
-                  south: clampLat(south),
-                };
+                const nextBounds:GeoBounds = { west, east, north, south };
                 lastBoundsRef.current = nextBounds;
                 onBoundsChange(nextBounds);
               }}

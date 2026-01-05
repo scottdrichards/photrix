@@ -6,7 +6,7 @@ import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { MetadataGroups, type FileRecord } from "./fileRecord.type.ts";
 import { filterToSQL } from "./filterToSQL.ts";
-import type { QueryOptions, QueryResult } from "./indexDatabase.type.ts";
+import type { GeoClusterResult, QueryOptions, QueryResult } from "./indexDatabase.type.ts";
 import { fileRecordToColumnNamesAndValues, rowToFileRecord } from "./rowFileRecordConversionFunctions.ts";
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
@@ -464,6 +464,78 @@ export class IndexDatabase {
       .map(row => row.folderName)
       .filter((v): v is string => Boolean(v))
       .sort((a, b) => a.localeCompare(b));
+  }
+
+  queryGeoClusters(options: { filter: QueryOptions["filter"]; clusterSize: number; bounds?: { west: number; east: number; north: number; south: number } | null }): GeoClusterResult {
+    const { filter, clusterSize, bounds } = options;
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    const bucket = Math.max(clusterSize, 0.00000001);
+    const latOrigin = Math.floor((bounds?.south ?? 0) / bucket) * bucket;
+    const lonOrigin = Math.floor((bounds?.west ?? 0) / bucket) * bucket;
+
+    const rows = this.db.prepare(
+      `WITH buckets AS (
+         SELECT
+           CAST(FLOOR((locationLatitude - ?) / ?) AS INTEGER) AS latBucket,
+           CAST(FLOOR((locationLongitude - ?) / ?) AS INTEGER) AS lonBucket,
+           locationLatitude,
+           locationLongitude,
+           folder,
+           fileName
+         FROM files
+         WHERE locationLatitude IS NOT NULL
+           AND locationLongitude IS NOT NULL
+           ${whereClause ? `AND ${whereClause}` : ""}
+       ),
+       agg AS (
+         SELECT
+           latBucket,
+           lonBucket,
+           COUNT(*) AS count
+         FROM buckets
+         GROUP BY latBucket, lonBucket
+       ),
+       ranked AS (
+         SELECT
+           b.latBucket,
+           b.lonBucket,
+           b.locationLatitude,
+           b.locationLongitude,
+           b.folder,
+           b.fileName,
+           ROW_NUMBER() OVER (PARTITION BY b.latBucket, b.lonBucket ORDER BY b.folder, b.fileName) AS rn
+         FROM buckets b
+       )
+       SELECT
+         (a.latBucket + 0.5) * ? + ? AS latitude,
+         (a.lonBucket + 0.5) * ? + ? AS longitude,
+         a.count AS count,
+         MIN(CASE WHEN r.rn = 1 THEN r.folder || r.fileName END) AS samplePath,
+         MIN(CASE WHEN r.rn = 1 THEN r.fileName END) AS sampleName
+       FROM agg a
+       JOIN ranked r ON r.latBucket = a.latBucket AND r.lonBucket = a.lonBucket
+       GROUP BY a.latBucket, a.lonBucket
+       ORDER BY count DESC`
+    ).all(
+      latOrigin, bucket,
+      lonOrigin, bucket,
+      ...whereParams,
+      bucket, latOrigin,
+      bucket, lonOrigin,
+    ) as Array<{
+      latitude: number;
+      longitude: number;
+      count: number;
+      samplePath: string | null;
+      sampleName: string | null;
+    }>;
+
+    const total = rows.reduce((sum, row) => sum + (row.count ?? 0), 0);
+
+    return {
+      clusters: rows,
+      total,
+    };
   }
 
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(

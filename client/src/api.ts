@@ -42,6 +42,7 @@ export type GeoPoint = {
   name: string;
   latitude: number;
   longitude: number;
+  count?: number;
 };
 
 export interface ApiPhotoResponse {
@@ -70,9 +71,10 @@ export interface FetchPhotosResult {
   pageSize: number;
 }
 
-export interface FetchGeotaggedPhotosOptions extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata" | "locationBounds"> {
+export interface FetchGeotaggedPhotosOptions extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata"> {
   pageSize?: number;
-  maxItems?: number;
+  locationBounds?: GeoBounds | null;
+  clusterSize?: number;
 }
 
 export interface ProgressEntry {
@@ -354,51 +356,88 @@ export const fetchPhotos = async ({
 };
 
 export const fetchGeotaggedPhotos = async ({
-  maxItems = 5_000,
-  pageSize = 500,
-  ...options
+  pageSize = 1_000,
+  locationBounds,
+  clusterSize,
+  includeSubfolders = false,
+  path = "",
+  ratingFilter,
+  mediaTypeFilter = "all",
+  signal,
 }: FetchGeotaggedPhotosOptions = {}): Promise<{ points: GeoPoint[]; total: number; truncated: boolean }> => {
-  const points: GeoPoint[] = [];
-  let page = 1;
-  let total = 0;
-
-  while (points.length < maxItems) {
-    const result = await fetchPhotos({
-      ...options,
-      page,
-      pageSize,
-      metadata: ["locationLatitude", "locationLongitude"],
-      locationBounds: { west: -180, east: 180, north: 90, south: -90 },
-    });
-
-    total = result.total;
-    const newPoints = result.items
-      .map((item) => {
-        const latitude = item.metadata?.locationLatitude;
-        const longitude = item.metadata?.locationLongitude;
-
-        if (typeof latitude !== "number" || typeof longitude !== "number") {
-          return null;
-        }
-
-        return { path: item.path, name: item.name, latitude, longitude } as GeoPoint;
-      })
-      .filter(Boolean) as GeoPoint[];
-
-    points.push(...newPoints);
-
-    const receivedAll = points.length >= total || result.items.length < pageSize;
-    if (receivedAll) {
-      break;
-    }
-
-    page += 1;
+  const params = new URLSearchParams();
+  params.set("cluster", "true");
+  params.set("pageSize", pageSize.toString());
+  if (includeSubfolders) {
+    params.set("includeSubfolders", "true");
+  }
+  if (typeof clusterSize === "number" && Number.isFinite(clusterSize) && clusterSize > 0) {
+    params.set("clusterSize", clusterSize.toString());
   }
 
-  const trimmedPoints = points.slice(0, maxItems);
-  const truncated = trimmedPoints.length < total;
+  const filters: any[] = [];
 
-  return { points: trimmedPoints, total, truncated };
+  if (ratingFilter) {
+    const ratingFilterObj = ratingFilter.atLeast
+      ? { rating: { min: ratingFilter.rating } }
+      : { rating: ratingFilter.rating };
+    filters.push(ratingFilterObj);
+  }
+
+  if (mediaTypeFilter === "photo") {
+    filters.push({ mimeType: { glob: "image/*" } });
+  } else if (mediaTypeFilter === "video") {
+    filters.push({ mimeType: { glob: "video/*" } });
+  } else if (mediaTypeFilter === "other") {
+    filters.push({
+      operation: "or",
+      conditions: [
+        { mimeType: null },
+        { mimeType: { glob: "!(image|video)/*" } },
+      ],
+    });
+  }
+
+  if (locationBounds) {
+    filters.push(locationBoundsToFilter(locationBounds));
+  }
+
+  if (filters.length > 0) {
+    const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    params.set("filter", JSON.stringify(filterObj));
+  }
+
+  if (locationBounds) {
+    params.set("west", locationBounds.west.toString());
+    params.set("east", locationBounds.east.toString());
+    params.set("north", locationBounds.north.toString());
+    params.set("south", locationBounds.south.toString());
+  }
+
+  const url = path ? `/api/files/${path}?${params.toString()}` : `/api/files/?${params.toString()}`;
+  const response = await fetch(url, { signal });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch geotagged photos (status ${response.status})`);
+  }
+
+  const payload = await response.json() as {
+    clusters: Array<{ latitude: number; longitude: number; count: number; samplePath?: string; sampleName?: string }>;
+    total: number;
+  };
+
+  const coveredCount = payload.clusters.reduce((sum, cluster) => sum + (cluster.count ?? 0), 0);
+  const points: GeoPoint[] = payload.clusters.map((cluster) => ({
+    path: cluster.samplePath ?? "",
+    name: cluster.sampleName ?? `${cluster.count} items`,
+    latitude: cluster.latitude,
+    longitude: cluster.longitude,
+    count: cluster.count,
+  }));
+
+  const truncated = payload.total > coveredCount;
+
+  return { points, total: payload.total, truncated };
 };
 
 export const createFallbackPhoto = (path: string): PhotoItem => {

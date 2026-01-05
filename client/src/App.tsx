@@ -12,7 +12,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { Info24Regular, Folder24Regular, Star24Regular, Star24Filled } from "@fluentui/react-icons";
-import { fetchFolders, fetchGeotaggedPhotos, fetchPhotos, GeoBounds, GeoPoint, PhotoItem } from "./api";
+import { fetchFolders, fetchPhotos, GeoBounds, PhotoItem } from "./api";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { FullscreenViewer } from "./components/FullscreenViewer";
 import { MapFilter } from "./components/MapFilter";
@@ -117,10 +117,6 @@ export default function App() {
   const [ratingAtLeast, setRatingAtLeast] = useState(true);
   const [mediaTypeFilter, setMediaTypeFilter] = useState<"all" | "photo" | "video" | "other">("all");
   const [mapBounds, setMapBounds] = useState<GeoBounds | undefined>(undefined);
-  const [geoPins, setGeoPins] = useState<GeoPoint[]>([]);
-  const [mapLoading, setMapLoading] = useState(false);
-  const [mapError, setMapError] = useState<string | null>(null);
-  const [mapTotals, setMapTotals] = useState<{ total: number; truncated: boolean }>({ total: 0, truncated: false });
   const [currentPath, setCurrentPath] = useState<string>(() => {
     const path = window.location.pathname.slice(1); // Remove leading slash
     return decodeURIComponent(path);
@@ -198,39 +194,6 @@ export default function App() {
     loadPhotos(controller.signal);
     return () => controller.abort();
   }, [loadPhotos, refreshToken]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const loadMapPoints = async () => {
-      setMapLoading(true);
-      setMapError(null);
-      try {
-        const result = await fetchGeotaggedPhotos({
-          includeSubfolders,
-          path: currentPathWithSlash,
-          ratingFilter: ratingFilterValue,
-          mediaTypeFilter,
-          signal: controller.signal,
-        });
-        setGeoPins(result.points);
-        setMapTotals({ total: result.total, truncated: result.truncated });
-      } catch (err) {
-        if ((err as Error).name === "AbortError") {
-          return;
-        }
-        console.error(err);
-        setMapError((err as Error).message ?? "Failed to load map data");
-      } finally {
-        if (!controller.signal.aborted) {
-          setMapLoading(false);
-        }
-      }
-    };
-
-    loadMapPoints();
-
-    return () => controller.abort();
-  }, [includeSubfolders, currentPathWithSlash, ratingFilterValue, mediaTypeFilter, refreshToken]);
 
   useEffect(() => {
     const loadFolders = async () => {
@@ -441,13 +404,12 @@ export default function App() {
 
       <div className={styles.mapSection}>
         <MapFilter
-          points={geoPins}
+          includeSubfolders={includeSubfolders}
+          path={currentPathWithSlash}
+          ratingFilter={ratingFilterValue}
+          mediaTypeFilter={mediaTypeFilter}
           bounds={mapBounds}
           onBoundsChange={setMapBounds}
-          loading={mapLoading}
-          error={mapError}
-          totalPins={mapTotals.total}
-          truncated={mapTotals.truncated}
         />
       </div>
 
