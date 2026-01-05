@@ -73,16 +73,27 @@ export class ProcessingQueue {
     return new Promise<T>((resolve, reject) => {
       const priorityIndex = priorityList.indexOf(priority);
       const mediaTypeIndex = mediaTypeList.indexOf(mediaType);
-      const insertIndex = this.queue.findIndex(
-        // We want to put it at the back of the same priority level and media type
-        t => {
+
+      // LIFO within a given priority/mediaType bucket: insert just after the last
+      // task of the same priority/mediaType (or at the front of that bucket) so the
+      // most recently enqueued at that level is processed next.
+      const insertIndex = (() => {
+        for (let i = this.queue.length - 1; i >= 0; i--) {
+          const t = this.queue[i];
           const tPriorityIndex = priorityList.indexOf(t.priority);
           const tMediaTypeIndex = mediaTypeList.indexOf(t.mediaType);
-          // First compare by priority, then by media type (images before videos)
-          return tPriorityIndex > priorityIndex || 
-                 (tPriorityIndex === priorityIndex && tMediaTypeIndex > mediaTypeIndex);
+          if (tPriorityIndex === priorityIndex && tMediaTypeIndex === mediaTypeIndex) {
+            return i + 1;
+          }
+          if (tPriorityIndex > priorityIndex || (tPriorityIndex === priorityIndex && tMediaTypeIndex > mediaTypeIndex)) {
+            // Keep scanning upward until we find the bucket boundary
+            continue;
+          }
+          // We crossed into higher-priority bucket; insert here to keep ordering
+          return i + 1;
         }
-      );
+        return 0;
+      })();
 
       const fn = async () => {
         try {

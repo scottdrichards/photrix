@@ -303,12 +303,13 @@ export class IndexDatabase {
   getFilesNeedingMetadataUpdate(metadataGroupName: keyof typeof MetadataGroups, limit = 200):Array<{
       relativePath: string;
       mimeType: string | null;
+      sizeInBytes?: number;
     } & { [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null }>{
       
     const stmt = this.db.prepare(
-      `SELECT folder, fileName, mimeType, ${metadataGroupName}ProcessedAt FROM files
+      `SELECT folder, fileName, mimeType, sizeInBytes, ${metadataGroupName}ProcessedAt FROM files
        WHERE ${metadataGroupName}ProcessedAt IS NULL
-       ORDER BY folder, fileName
+       ORDER BY created DESC, folder DESC, fileName DESC
        LIMIT ?`
     );
 
@@ -320,6 +321,7 @@ export class IndexDatabase {
       return {
         relativePath,
         mimeType,
+        sizeInBytes: row.sizeInBytes,
         [metadataGroupName + "ProcessedAt"]: row[metadataGroupName + "ProcessedAt"],
       };
     });

@@ -50,6 +50,11 @@ export const getExifMetadataFromFile = async (
     return (await getVideoMetadata(fullPath)) as ExifMetadata;
   }
 
+  if (!mimeType.startsWith("image/")) {
+    // console.log(`[exif] Skipping non-image file for EXIF: ${fullPath} (${mimeType})`);
+    return {};
+  }
+
   /** If multiple exifR metadata points to the same file field,
    * it takes the last field that has a value
    */

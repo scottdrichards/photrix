@@ -33,24 +33,33 @@ export const startBackgroundProcessExifMetadata = (database: IndexDatabase, onCo
             for (const entry of items) {
                 const { relativePath } = entry;
                 const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
-                let metadata:Omit<FileRecord, keyof BaseFileRecord> = {};
-                const fileInfo = await getFileInfo(fullPath);
                 const now = new Date();
-                metadata = { ...fileInfo, infoProcessedAt: now.toISOString() };
-                if (fileInfo.sizeInBytes) {
+                try{
+                    if (!entry.sizeInBytes) {
+                        throw new Error("zero-byte file");
+                    }
                     const exif = await getExifMetadataFromFile(fullPath);
-                    metadata = { ...metadata, ...exif, exifProcessedAt: now.toISOString() };
-                }else{
+                    await database.addOrUpdateFileData(entry.relativePath, { ...exif, exifProcessedAt: now.toISOString() });
+                }catch(error){
                     const errorDate = new Date();
-                    metadata = { ...metadata, exifProcessedAt: errorDate.toISOString() };
-                    console.log(`[metadata] Skipping EXIF for zero-byte file: ${relativePath}`);
+                    await database.addOrUpdateFileData(entry.relativePath, { exifProcessedAt: errorDate.toISOString() });
+                    console.log(`[metadata] Skipping EXIF file: ${relativePath}, ${error}`);
                 };
                 processedCount++;
                 if (now.getTime() - lastReportTime > 1000) {
                     const percentComplete = ((processedCount / totalToProcess) * 100).toFixed(2);
                     const rate = (processedCount - lastReportCount) / ((now.getTime() - lastReportTime) / 1000);
                     lastReportCount = processedCount;
-                    console.log(`[metadata] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Last processed: ${relativePath}`);
+                    const totalSecondsRemaining = (totalToProcess - processedCount) / rate;
+                    const hoursRemaining = Math.floor(totalSecondsRemaining / 3600);
+                    const minutesRemaining = Math.floor((totalSecondsRemaining % 3600) / 60);
+                    const secondsRemaining = Math.floor(totalSecondsRemaining % 60);
+                    const durationString = durationFormatter.format({
+                        hours: hoursRemaining,
+                        minutes: minutesRemaining,
+                        seconds: secondsRemaining,
+                    });
+                    console.log(`[metadata] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Time remaining: ${durationString}. Last processed: ${relativePath}`);
                     lastReportTime = now.getTime();
                 }
                 while (restartAtMS && restartAtMS > Date.now()) {

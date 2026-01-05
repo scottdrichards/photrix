@@ -4,7 +4,8 @@ import { discoverFiles } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { initializeCacheDirectories } from "./common/cacheUtils.ts";
 import { createServer } from "./createServer.ts";
-import { startBackgroundProcessExifMetadata } from "./indexDatabase/processMetadata.ts";
+import { startBackgroundProcessExifMetadata } from "./indexDatabase/processExifMetadata.ts";
+import { startBackgroundProcessFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
 
 const startServer = async () => {
   console.log("Starting photrix server...");
@@ -24,22 +25,22 @@ const startServer = async () => {
   console.log("[bootstrap] Doing file discovery ...");
   await discoverFiles({ root: absolutePath, db: database });
   console.log("[bootstrap] file discovery done");
-  
 
-  let pauseBackgroundProcessExifMetadata: (() => void) | null = null;
-  const onCompleteExifAsync = new Promise<void>((resolve) => {
-    pauseBackgroundProcessExifMetadata = startBackgroundProcessExifMetadata(database, resolve);
-  });
 
-  if (!pauseBackgroundProcessExifMetadata) {
-    throw new Error("Failed to start EXIF processing");
-  }
+  let pauseBackgroundProcessMetadata = () => {
+    console.warn("[bootstrap] pauseBackgroundProcessMetadata called before being set");
+  };
+
   createServer(database, absolutePath, {
-    onRequest: pauseBackgroundProcessExifMetadata,
+    onRequest: pauseBackgroundProcessMetadata,
   });
 
-  await onCompleteExifAsync;
-  console.log("[bootstrap] Initial EXIF processing complete");
+  await new Promise<void>((resolve) => {
+    pauseBackgroundProcessMetadata = startBackgroundProcessFileInfoMetadata(database, resolve);
+  });
+  await new Promise<void>((resolve) => {
+    pauseBackgroundProcessMetadata = startBackgroundProcessExifMetadata(database, resolve);
+  });
 };
 
 // For testing etc,  you may wish to prevent it from starting
