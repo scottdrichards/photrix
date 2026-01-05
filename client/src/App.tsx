@@ -140,7 +140,6 @@ export default function App() {
 
   const loadPhotos = useCallback(async (signal: AbortSignal) => {
     setInitialLoading(true);
-    setPhotos([]);
     setError(null);
     try {
       const path = currentPathWithSlash;
