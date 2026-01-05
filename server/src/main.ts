@@ -2,9 +2,9 @@ import "dotenv/config";
 import path from "node:path";
 import { discoverFiles } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
-import { processExifMetadata } from "./indexDatabase/processMetadata.ts";
 import { initializeCacheDirectories } from "./common/cacheUtils.ts";
 import { createServer } from "./createServer.ts";
+import { startBackgroundProcessExifMetadata } from "./indexDatabase/processMetadata.ts";
 
 const startServer = async () => {
   console.log("Starting photrix server...");
@@ -24,12 +24,22 @@ const startServer = async () => {
   console.log("[bootstrap] Doing file discovery ...");
   await discoverFiles({ root: absolutePath, db: database });
   console.log("[bootstrap] file discovery done");
+  
 
-  console.log("[bootstrap] Processing metadata ...");
-  await processExifMetadata(database);
-  console.log("[bootstrap] metadata processing done");
+  let pauseBackgroundProcessExifMetadata: (() => void) | null = null;
+  const onCompleteExifAsync = new Promise<void>((resolve) => {
+    pauseBackgroundProcessExifMetadata = startBackgroundProcessExifMetadata(database, resolve);
+  });
 
-  createServer(database, absolutePath);
+  if (!pauseBackgroundProcessExifMetadata) {
+    throw new Error("Failed to start EXIF processing");
+  }
+  createServer(database, absolutePath, {
+    onRequest: pauseBackgroundProcessExifMetadata,
+  });
+
+  await onCompleteExifAsync;
+  console.log("[bootstrap] Initial EXIF processing complete");
 };
 
 // For testing etc,  you may wish to prevent it from starting

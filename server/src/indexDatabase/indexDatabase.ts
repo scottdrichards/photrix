@@ -292,18 +292,19 @@ export class IndexDatabase {
     tx(paths);
   }
 
-  getFilesNeedingMetadataUpdate(metadataGroupName: keyof typeof MetadataGroups, limit = 200): {
-    total: number;
-    items: Array<{
-      relativePath: string;
-      mimeType: string | null;
-    } & { [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null }>;
-  } {
-    const countStmt = this.db.prepare(
+  countFilesNeedingMetadataUpdate(metadataGroupName: keyof typeof MetadataGroups): number {
+    const stmt = this.db.prepare(
       `SELECT COUNT(*) as count FROM files WHERE ${metadataGroupName}ProcessedAt IS NULL`
     );
-    const { count: total } = countStmt.get() as { count: number };
+    const row = stmt.get() as { count: number };
+    return row.count;
+  }
 
+  getFilesNeedingMetadataUpdate(metadataGroupName: keyof typeof MetadataGroups, limit = 200):Array<{
+      relativePath: string;
+      mimeType: string | null;
+    } & { [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null }>{
+      
     const stmt = this.db.prepare(
       `SELECT folder, fileName, mimeType, ${metadataGroupName}ProcessedAt FROM files
        WHERE ${metadataGroupName}ProcessedAt IS NULL
@@ -312,7 +313,7 @@ export class IndexDatabase {
     );
 
     const rows = stmt.all(limit) as Array<Record<string, any>>;
-    const items = rows.map((row) => {
+    return rows.map((row) => {
       const relativePath = joinPath(row.folder as string, row.fileName as string);
       const mimeType = (row.mimeType as string | null) ?? mimeTypeForFilename(relativePath) ?? null;
 
@@ -322,8 +323,6 @@ export class IndexDatabase {
         [metadataGroupName + "ProcessedAt"]: row[metadataGroupName + "ProcessedAt"],
       };
     });
-
-    return { total, items };
   }
 
   private async hydrateMetadata(

@@ -5,8 +5,14 @@ import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.t
 
 const PORT = process.env.PORT || 3000;
 
-export const createServer = (database: IndexDatabase, storagePath: string) => {
+type ServerOptions = {
+    onRequest: () => void;
+};
+
+export const createServer = (database: IndexDatabase, storagePath: string, options: ServerOptions) => {
+    const { onRequest } = options;
     const server = http.createServer((req, res) => {
+        onRequest();
         const requestStart = Date.now();
         console.log(`[server] ${req.method} ${req.url}`);
 

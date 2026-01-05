@@ -2,100 +2,71 @@ import path from "node:path";
 import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
+import { BaseFileRecord, FileRecord } from "./fileRecord.type.ts";
 
 const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
 
 const durationFormatter = new (Intl as any).DurationFormat("en");
 
+let isProcessingExif = false;
+export const startBackgroundProcessExifMetadata = (database: IndexDatabase, onComplete?: () => void) => {
+    if (isProcessingExif) {
+        // Just for deugging - should never happen in practice
+        throw new Error("EXIF processing is already running");
+    }
+    isProcessingExif = true;
+    const totalToProcess = database.countFilesNeedingMetadataUpdate('exif');
+    let processedCount = 0;
+    let restartAtMS: number = 0;
+    let lastReportTime = Date.now();
+    let lastReportCount = 0;
 
-export const processExifMetadata = async (
-    database: IndexDatabase,
-    batchSize = 200,
-): Promise<void> => {
-    console.log("[metadata] Starting metadata processing");
-    let processed = 0;
-    let batchNumber = 0;
-    let total = 0;
-    const startTime = Date.now();
-    let lastLogTime = startTime;
-    let lastLogProcessed = 0;
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-        const { total: batchTotal, items: pending } = database.getFilesNeedingMetadataUpdate('exif', batchSize);
-        total = batchTotal;
-        if (!pending.length) {
-            break;
-        }
-
-        batchNumber++;
-        const remainingEstimate = total || processed + pending.length;
-        console.log(`[metadata] Batch ${batchNumber}: processing ${pending.length} files (total remaining: ${remainingEstimate}) starting with ${pending[0].relativePath}`);
-
-        for (const entry of pending) {
-            const relativePath = entry.relativePath;
-            const normalized = stripLeadingSlash(relativePath);
-            const fullPath = path.join(database.storagePath, normalized);
-            const mimeType = entry.mimeType ?? mimeTypeForFilename(relativePath) ?? null;
-            const processedAt = new Date().toISOString();
-
-            try {
-                const updates: Record<string, unknown> = {};
-                if (!entry.infoProcessedAt) {
-                    try {
-                        const info = await getFileInfo(fullPath);
-                        updates.sizeInBytes = info.sizeInBytes;
-                        updates.created = info.created;
-                        updates.modified = info.modified;
-                    } catch (error) {
-                        console.warn(`[metadata] File info failed for ${relativePath}:`, error instanceof Error ? error.message : String(error));
-                    }
-                    updates.infoProcessedAt = processedAt;
-                }
-
-                const isMedia = mimeType?.startsWith("image/") || mimeType?.startsWith("video/");
-                if (!entry.exifProcessedAt && isMedia) {
-                    try {
-                        const exif = await getExifMetadataFromFile(fullPath);
-                        Object.assign(updates, exif);
-                    } catch (error) {
-                        console.warn(`[metadata] EXIF extraction failed for ${relativePath}:`, error instanceof Error ? error.message : String(error));
-                    }
-                    updates.exifProcessedAt = processedAt;
-                }
-
-                if (!entry.exifProcessedAt && !isMedia) {
-                    // Not a media file; mark as processed so it doesn't loop forever
-                    updates.exifProcessedAt = processedAt;
-                }
-
-                if (Object.keys(updates).length) {
-                    await database.addOrUpdateFileData(relativePath, updates);
-                    processed++;
-                }
-            } catch (error) {
-                console.warn(`[metadata] Failed processing ${relativePath}:`, error instanceof Error ? error.message : String(error));
+    const processAll = async ()=>{
+        while (true) {
+            const batchSize = 200;
+            const items = database.getFilesNeedingMetadataUpdate('exif', batchSize);
+            if (items.length === 0) {
+                console.log("[metadata] EXIF processing complete");
+                onComplete?.();
+                return;
             }
-
-            const now = Date.now();
-            if (now - lastLogTime >= 1000) {
-                const durationMS = now - startTime;
-                const ratePerSec = durationMS ? processed / (durationMS / 1000) : 0;
-                const remaining = Math.max((total || processed) - processed, 0);
-                const remainingMS = ratePerSec ? (remaining / ratePerSec) : 0;
-                const remainingDuration = durationFormatter.format({
-                    hours: Math.floor(remainingMS / (60*60)),
-                    minutes: Math.floor((remainingMS % 3600) / 60),
-                    seconds: Math.floor((remainingMS % 60)),
-                });
-                const deltaProcessed = processed - lastLogProcessed;
-                const deltaRate = deltaProcessed / ((now - lastLogTime) / 1000 || 1);
-                console.log(`[metadata] Progress: ${processed}/${total || "?"} (${(remaining/total * 100).toFixed(2)}% )processed | ~${ratePerSec.toFixed(1)} files/s (recent ${deltaRate.toFixed(1)} files/s) | ${remainingDuration} remaining | current ${relativePath}`);
-                lastLogTime = now;
-                lastLogProcessed = processed;
+            for (const entry of items) {
+                const { relativePath } = entry;
+                const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
+                let metadata:Omit<FileRecord, keyof BaseFileRecord> = {};
+                const fileInfo = await getFileInfo(fullPath);
+                const now = new Date();
+                metadata = { ...fileInfo, infoProcessedAt: now.toISOString() };
+                if (fileInfo.sizeInBytes) {
+                    const exif = await getExifMetadataFromFile(fullPath);
+                    metadata = { ...metadata, ...exif, exifProcessedAt: now.toISOString() };
+                }else{
+                    const errorDate = new Date();
+                    metadata = { ...metadata, exifProcessedAt: errorDate.toISOString() };
+                    console.log(`[metadata] Skipping EXIF for zero-byte file: ${relativePath}`);
+                };
+                processedCount++;
+                if (now.getTime() - lastReportTime > 1000) {
+                    const percentComplete = ((processedCount / totalToProcess) * 100).toFixed(2);
+                    const rate = (processedCount - lastReportCount) / ((now.getTime() - lastReportTime) / 1000);
+                    lastReportCount = processedCount;
+                    console.log(`[metadata] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Last processed: ${relativePath}`);
+                    lastReportTime = now.getTime();
+                }
+                while (restartAtMS && restartAtMS > Date.now()) {
+                    console.log("[metadata] Paused EXIF processing...");
+                    const timeoutDuration = restartAtMS - Date.now();
+                    await new Promise((resolve) => setTimeout(resolve, timeoutDuration));
+                }
             }
         }
     }
 
-    console.log(`[metadata] Completed metadata processing. Total updated: ${processed}`);
-};
+    processAll();
+    
+    const pause = (durationMS: number =  10_000) => {
+        const localRestartMs = Date.now() + durationMS;
+        restartAtMS = Math.max(restartAtMS, localRestartMs);
+    }
+    return pause;
+}

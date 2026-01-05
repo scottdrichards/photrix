@@ -41,7 +41,12 @@ export const getExifMetadataFromFile = async (
   fullPath: string,
 ): Promise<ExifMetadata> => {
   const mimeType = mimeTypeForFilename(fullPath);
-  if (mimeType?.startsWith("video/")) {
+  if (!mimeType){
+    // console.log(`[exif] No mime type for file ${fullPath}`);
+    return {};
+  }
+
+  if (mimeType.startsWith("video/")) {
     return (await getVideoMetadata(fullPath)) as ExifMetadata;
   }
 
