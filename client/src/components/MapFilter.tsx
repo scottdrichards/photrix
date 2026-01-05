@@ -156,8 +156,8 @@ export const MapFilter = ({
       view: new View({
         center: fromLonLat([0, 30]),
         zoom: 2,
-        minZoom: 1,
-        maxZoom: 18,
+        minZoom: 0,
+        maxZoom: 22,
       }),
     });
 
@@ -249,7 +249,7 @@ export const MapFilter = ({
 
     if (!hasFittedRef.current) {
       const extent = boundingExtent(features.map((feature) => (feature.getGeometry() as Point).getCoordinates()));
-      mapRef.current.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 12, duration: 200 });
+      mapRef.current.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
       hasFittedRef.current = true;
     }
   }, [points]);
@@ -292,7 +292,7 @@ export const MapFilter = ({
     }
 
     const extent = vectorSourceRef.current.getExtent();
-    mapRef.current.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 12, duration: 200 });
+    mapRef.current.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
   };
 
   return (
