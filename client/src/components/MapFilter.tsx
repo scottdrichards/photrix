@@ -13,8 +13,8 @@ import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
 import VectorLayer from "ol/layer/Vector";
 import { fromLonLat, transformExtent } from "ol/proj";
-import OSM from "ol/source/OSM";
 import VectorSource from "ol/source/Vector";
+import OSM from "ol/source/OSM";
 import Feature from "ol/Feature";
 import Point from "ol/geom/Point";
 import { boundingExtent } from "ol/extent";
@@ -159,6 +159,15 @@ export const MapFilter = ({
       }),
     });
 
+    requestAnimationFrame(() => {
+      map.updateSize();
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      map.updateSize();
+    });
+    resizeObserver.observe(mapElementRef.current);
+
     const notifyBounds = () => {
       if (!activeRef.current && !userInteractedRef.current) {
         return;
@@ -197,11 +206,13 @@ export const MapFilter = ({
     mapRef.current = map;
 
     return () => {
+      resizeObserver.disconnect();
       viewport.removeEventListener("wheel", handleWheel);
       map.un("pointerdrag", markUserInteraction);
       map.un("dblclick", markUserInteraction);
       map.un("singleclick", markUserInteraction);
       map.setTarget(undefined);
+      mapRef.current = null;
     };
   }, [onBoundsChange]);
 

@@ -91,7 +91,7 @@ export const getExifMetadataFromFile = async (
   };
 
   // Only read the specific fields we need - exifr will only parse those sections
-  const fieldsToRequest = Object.keys(exifRMetadataToFileField);
+  const fieldsToRequest = [...Object.keys(exifRMetadataToFileField), "GPSLatitudeRef", "GPSLongitudeRef"];
   const rawData = await exifr.parse(fullPath, {
     pick: fieldsToRequest,
     translateValues: false,
@@ -110,7 +110,23 @@ export const getExifMetadataFromFile = async (
     })
   );
 
-  return metadata;
+  // GPS is stored as two fields, number and NS/EW reference. This is to convert to single signed number
+  const applyRef = (value: number|undefined, ref: unknown, negativeDirection: string) => {
+    if (typeof value !== "number" || typeof ref !== "string") {
+      return value;
+    }
+    const initial = ref.trim().toUpperCase()[0];
+    return negativeDirection === initial && value > 0 ? -value : value;
+  };
+
+  const latitudeRef = rawData?.GPSLatitudeRef;
+  const longitudeRef = rawData?.GPSLongitudeRef;
+  return {
+    ...metadata,
+    locationLatitude: applyRef(metadata.locationLatitude as number | undefined, latitudeRef, "S"),
+    locationLongitude: applyRef(metadata.locationLongitude as number | undefined, longitudeRef, "W"),
+  };
+
 };
 
 
