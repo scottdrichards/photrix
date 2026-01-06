@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Caption1, Spinner, makeStyles, tokens } from "@fluentui/react-components";
+import { Button, Caption1, Spinner, makeStyles, tokens } from "@fluentui/react-components";
 import { fetchDateHistogram } from "../api";
 import type { DateHistogramBucket, GeoBounds } from "../api";
 
@@ -25,6 +25,12 @@ const useStyles = makeStyles({
     minWidth: "320px",
     width: "100%",
     maxWidth: "680px",
+  },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: tokens.spacingHorizontalS,
   },
   chartShell: {
     position: "relative",
@@ -139,6 +145,13 @@ export const DateHistogram = ({
   const [maxDate, setMaxDate] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dragRange, setDragRange] = useState<Range>(null);
+  const isDragging = useRef(false);
+
+  const clearSelection = useCallback(() => {
+    setDragRange(null);
+    onChange(null);
+  }, [onChange]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -179,10 +192,12 @@ export const DateHistogram = ({
         setMaxDate(result.maxDate);
 
         if (result.minDate !== null && result.maxDate !== null) {
-          const clampedStart = Math.max(result.minDate, Math.min(value?.start ?? result.minDate, result.maxDate));
-          const clampedEnd = Math.max(clampedStart, Math.min(value?.end ?? result.maxDate, result.maxDate));
-          if (!value || value.start !== clampedStart || value.end !== clampedEnd) {
-            onChange({ start: clampedStart, end: clampedEnd });
+          if (value) {
+            const clampedStart = Math.max(result.minDate, Math.min(value.start, result.maxDate));
+            const clampedEnd = Math.max(clampedStart, Math.min(value.end, result.maxDate));
+            if (value.start !== clampedStart || value.end !== clampedEnd) {
+              onChange({ start: clampedStart, end: clampedEnd });
+            }
           }
         } else if (value) {
           onChange(null);
@@ -255,9 +270,6 @@ export const DateHistogram = ({
     },
     [domain, padding.left, padding.right, width],
   );
-
-  const [dragRange, setDragRange] = useState<Range>(null);
-  const isDragging = useRef(false);
 
   const beginDrag = useCallback(
     (event: React.PointerEvent<SVGRectElement>) => {
@@ -360,10 +372,18 @@ export const DateHistogram = ({
   }, [activeRange, domain, xFor]);
 
   const showEmpty = !loading && (buckets.length === 0 || !domain);
+  const canClear = Boolean(value);
 
   return (
     <div className={styles.root}>
-      <Caption1>{label}</Caption1>
+      <div className={styles.header}>
+        <Caption1>{label}</Caption1>
+        {canClear ? (
+          <Button size="small" appearance="subtle" onClick={clearSelection}>
+            Clear
+          </Button>
+        ) : null}
+      </div>
       <div ref={containerRef} className={styles.chartShell}>
         {showEmpty ? (
           <div className={styles.overlayText}>No date metadata available</div>

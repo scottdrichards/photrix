@@ -4,7 +4,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { PlayCircle24Regular } from "@fluentui/react-icons";
-import type { CSSProperties } from "react";
+import type { CSSProperties, SyntheticEvent } from "react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 
@@ -104,13 +104,28 @@ const ThumbnailTile = ({
   onSelect: (photo: PhotoItem) => void;
   styles: ReturnType<typeof useStyles>;
 }) => {
+  const [ratio, setRatio] = useState(() => getAspectRatio(photo));
   const [isHovered, setIsHovered] = useState(false);
+
+  useEffect(() => {
+    setRatio(getAspectRatio(photo));
+  }, [photo]);
+
+  const handleImageLoad = (event: SyntheticEvent<HTMLImageElement>) => {
+    const { naturalWidth, naturalHeight } = event.currentTarget;
+    if (naturalWidth <= 0 || naturalHeight <= 0) {
+      return;
+    }
+
+    const loadedRatio = clampRatio(naturalWidth / naturalHeight);
+    setRatio((current) => (Math.abs(current - loadedRatio) < 0.01 ? current : loadedRatio));
+  };
 
   return (
     <button
       type="button"
       className={styles.tile}
-      style={createTileStyle(photo)}
+      style={createTileStyle(ratio)}
       onClick={() => onSelect(photo)}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -126,6 +141,7 @@ const ThumbnailTile = ({
             alt={photo.name}
             loading="lazy"
             className={styles.image}
+            onLoad={handleImageLoad}
           />
           {isHovered && (
             <video
@@ -145,6 +161,7 @@ const ThumbnailTile = ({
           alt={photo.name}
           loading="lazy"
           className={styles.image}
+          onLoad={handleImageLoad}
         />
       )}
     </button>
@@ -209,33 +226,51 @@ const ThumbnailGridComponent = ({
 };
 
 export const ThumbnailGrid = memo(ThumbnailGridComponent);
-const createTileStyle = (photo: PhotoItem): TileStyle => {
-  const ratio = getAspectRatio(photo);
-  return {
-    "--ratio": ratio.toString(),
-  };
-};
+const createTileStyle = (ratio: number): TileStyle => ({
+  "--ratio": ratio.toString(),
+});
 
 const getAspectRatio = (photo: PhotoItem): number => {
-  let width = photo.metadata?.dimensionWidth;
-  let height = photo.metadata?.dimensionHeight;
-  const orientation = photo.metadata?.orientation;
-  
-  // Orientation 5-8 means the image is rotated 90 or 270 degrees, so swap width and height
-  if (typeof orientation === 'number' && [5, 6, 7, 8].includes(orientation)) {
+  let width = toFiniteNumber(photo.metadata?.dimensionWidth);
+  let height = toFiniteNumber(photo.metadata?.dimensionHeight);
+  const orientation = toOrientationNumber(photo.metadata?.orientation);
+
+  if (orientation && [5, 6, 7, 8].includes(orientation)) {
     [width, height] = [height, width];
   }
-  
-  if (
-    typeof width === "number" &&
-    width > 0 &&
-    typeof height === "number" &&
-    height > 0 &&
-    Number.isFinite(width / height)
-  ) {
-    const ratio = width / height;
-    return Math.min(Math.max(ratio, 0.25), 4);
+
+  if (width && height) {
+    return clampRatio(width / height);
   }
+
   return DEFAULT_RATIO;
 };
+
+const toFiniteNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+};
+
+const toOrientationNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+};
+
+const clampRatio = (value: number): number => Math.min(Math.max(value, 0.25), 4);
 
