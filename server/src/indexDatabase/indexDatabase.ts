@@ -253,6 +253,42 @@ export class IndexDatabase {
     return row.count;
   }
 
+  getRatingStats(): {
+    total: number;
+    rated: number;
+    unrated: number;
+    distribution: Record<string, number>;
+  } {
+    const rows = this.db
+      .prepare(
+        `SELECT rating, COUNT(*) as count
+         FROM files
+         WHERE mimeType LIKE 'image/%' OR mimeType LIKE 'video/%'
+         GROUP BY rating`
+      )
+      .all() as Array<{ rating: number | null; count: number }>;
+
+    const distribution: Record<string, number> = {};
+    let rated = 0;
+    let total = 0;
+
+    for (const row of rows) {
+      const key = row.rating === null ? "null" : String(row.rating);
+      distribution[key] = row.count;
+      total += row.count;
+      if (row.rating !== null) {
+        rated += row.count;
+      }
+    }
+
+    return {
+      total,
+      rated,
+      unrated: total - rated,
+      distribution,
+    };
+  }
+
   private ensureRootPath(): void {
     const existing = this.db
       .prepare("SELECT value FROM meta WHERE key = 'rootPath'")

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import exifr from "exifr";
 import { readdirSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { ExifMetadata, FileInfo } from "../indexDatabase/fileRecord.type.ts";
 import { getVideoMetadata } from "../videoProcessing/videoUtils.ts";
@@ -95,16 +95,34 @@ export const getExifMetadataFromFile = async (
     [key: string]: (keyof ExifMetadata | {fileField: keyof ExifMetadata, conversionFn: (val: any)=>ExifMetadata[keyof ExifMetadata]});
   };
 
-  // Only read the specific fields we need - exifr will only parse those sections
-  const fieldsToRequest = [...Object.keys(exifRMetadataToFileField), "GPSLatitudeRef", "GPSLongitudeRef"];
-  const rawData = await exifr.parse(fullPath, {
-    pick: fieldsToRequest,
-    translateValues: false,
-    xmp: true,  // Enable XMP parsing for Lightroom ratings
-    ifd0: {},
-    exif: {},
-    gps: {},
-  });
+  let rawData;
+  try {
+    rawData = await exifr.parse(fullPath, {
+      translateValues: false,
+      xmp: true,  // Enable XMP parsing for Lightroom ratings
+      ifd0: {},
+      exif: {},
+      gps: {},
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.toLowerCase().includes("unknown file format")) {
+      const fileBuffer = await readFile(fullPath);
+      const brand = fileBuffer.subarray(8, 12).toString("ascii").trim().toLowerCase();
+
+      if (brand === "qt" || brand === "moov") {
+        try {
+          return (await getVideoMetadata(fullPath)) as ExifMetadata;
+        } catch (videoError) {
+          const msg = videoError instanceof Error ? videoError.message : String(videoError);
+          console.warn(`[exif] QuickTime-branded file failed video metadata for ${fullPath}: ${msg}. Ensure ffprobe is installed and on PATH.`);
+          return {};
+        }
+      }
+    } else {
+      throw error;
+    }
+  }
 
   const metadata = Object.fromEntries(Object.entries(exifRMetadataToFileField)
     .map(([exifField, opts])=>({exifField, exifValue: rawData?.[exifField as keyof typeof rawData], opts}))

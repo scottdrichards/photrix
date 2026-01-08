@@ -1,8 +1,6 @@
 import path from "node:path";
-import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.ts";
-import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
+import { getExifMetadataFromFile } from "../fileHandling/fileUtils.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
-import { BaseFileRecord, FileRecord } from "./fileRecord.type.ts";
 
 const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
 
@@ -30,25 +28,30 @@ export const startBackgroundProcessExifMetadata = (database: IndexDatabase, onCo
                 onComplete?.();
                 return;
             }
-            for (const entry of items) {
-                const { relativePath } = entry;
-                const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
-                const now = new Date();
-                try{
-                    if (!entry.sizeInBytes) {
-                        throw new Error("zero-byte file");
+            for (let i = 0; i < items.length; i += 4) {
+                const chunk = items.slice(i, i + 4);
+                await Promise.all(chunk.map(async (entry) => {
+                    const { relativePath } = entry;
+                    const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
+                    const now = new Date();
+                    try {
+                        if (!entry.sizeInBytes) {
+                            throw new Error("zero-byte file");
+                        }
+                        const exif = await getExifMetadataFromFile(fullPath);
+                        await database.addOrUpdateFileData(entry.relativePath, { ...exif, exifProcessedAt: now.toISOString() });
+                    } catch (error) {
+                        const errorDate = new Date();
+                        await database.addOrUpdateFileData(entry.relativePath, { exifProcessedAt: errorDate.toISOString() });
+                        console.log(`[metadata] Skipping EXIF file: ${relativePath}, ${error}`);
                     }
-                    const exif = await getExifMetadataFromFile(fullPath);
-                    await database.addOrUpdateFileData(entry.relativePath, { ...exif, exifProcessedAt: now.toISOString() });
-                }catch(error){
-                    const errorDate = new Date();
-                    await database.addOrUpdateFileData(entry.relativePath, { exifProcessedAt: errorDate.toISOString() });
-                    console.log(`[metadata] Skipping EXIF file: ${relativePath}, ${error}`);
-                };
-                processedCount++;
-                if (now.getTime() - lastReportTime > 1000) {
+                    processedCount++;
+                }));
+
+                const now = Date.now();
+                if (now - lastReportTime > 1000) {
                     const percentComplete = ((processedCount / totalToProcess) * 100).toFixed(2);
-                    const rate = (processedCount - lastReportCount) / ((now.getTime() - lastReportTime) / 1000);
+                    const rate = (processedCount - lastReportCount) / ((now - lastReportTime) / 1000);
                     lastReportCount = processedCount;
                     const totalSecondsRemaining = (totalToProcess - processedCount) / rate;
                     const hoursRemaining = Math.floor(totalSecondsRemaining / 3600);
@@ -59,9 +62,10 @@ export const startBackgroundProcessExifMetadata = (database: IndexDatabase, onCo
                         minutes: minutesRemaining,
                         seconds: secondsRemaining,
                     });
-                    console.log(`[metadata] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Time remaining: ${durationString}. Last processed: ${relativePath}`);
-                    lastReportTime = now.getTime();
+                    console.log(`[metadata] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Time remaining: ${durationString}. Last processed batch ending with: ${chunk[chunk.length - 1]?.relativePath ?? "<none>"}`);
+                    lastReportTime = now;
                 }
+
                 while (restartAtMS && restartAtMS > Date.now()) {
                     console.log("[metadata] Paused EXIF processing...");
                     const timeoutDuration = restartAtMS - Date.now();
