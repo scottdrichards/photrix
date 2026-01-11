@@ -22,25 +22,31 @@ const startServer = async () => {
   const database = new IndexDatabase(absolutePath);
   console.log("[bootstrap] IndexDatabase done");
 
-  console.log("[bootstrap] Doing file discovery ...");
-  await discoverFiles({ root: absolutePath, db: database });
-  console.log("[bootstrap] file discovery done");
-
+  // Start file discovery in the background (non-blocking)
+  console.log("[bootstrap] Starting file discovery in background...");
+  discoverFiles({ root: absolutePath, db: database }).then(() => {
+    console.log("[bootstrap] File discovery complete, starting metadata processing...");
+    startBackgroundMetadataProcessing(database, pauseBackgroundProcessMetadata);
+  });
 
   let pauseBackgroundProcessMetadata = () => {
-    console.warn("[bootstrap] pauseBackgroundProcessMetadata called before being set");
+    // No-op until metadata processing starts
+  };
+
+  const startBackgroundMetadataProcessing = (db: IndexDatabase, currentPause: () => void) => {
+    // Chain the metadata processors: file info first, then EXIF
+    const pauseFileInfo = startBackgroundProcessFileInfoMetadata(db, () => {
+      // File info complete, start EXIF processing
+      pauseBackgroundProcessMetadata = startBackgroundProcessExifMetadata(db);
+    });
+    pauseBackgroundProcessMetadata = pauseFileInfo;
   };
 
   createServer(database, absolutePath, {
-    onRequest: pauseBackgroundProcessMetadata,
+    onRequest: () => pauseBackgroundProcessMetadata(),
   });
 
-  await new Promise<void>((resolve) => {
-    pauseBackgroundProcessMetadata = startBackgroundProcessFileInfoMetadata(database, resolve);
-  });
-  await new Promise<void>((resolve) => {
-    pauseBackgroundProcessMetadata = startBackgroundProcessExifMetadata(database, resolve);
-  });
+  console.log("[bootstrap] Server started - metadata processing will run in background");
 };
 
 // For testing etc,  you may wish to prevent it from starting

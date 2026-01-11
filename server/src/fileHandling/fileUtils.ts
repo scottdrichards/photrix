@@ -95,7 +95,7 @@ export const getExifMetadataFromFile = async (
     [key: string]: (keyof ExifMetadata | {fileField: keyof ExifMetadata, conversionFn: (val: any)=>ExifMetadata[keyof ExifMetadata]});
   };
 
-  let rawData;
+  let rawData:any;
   try {
     rawData = await exifr.parse(fullPath, {
       translateValues: false,
