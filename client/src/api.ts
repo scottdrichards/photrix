@@ -306,7 +306,9 @@ export const fetchFolders = async (path: string = ""): Promise<string[]> => {
 
 const buildFileUrl = (path: string, params: Record<string, string>): string => {
   // Use /api/files/{path} for individual file access (no trailing slash)
-  const url = new URL(`/api/files/${path}`, window.location.origin);
+  // Strip leading slash from path since folder paths start with /
+  const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
+  const url = new URL(`/api/files/${normalizedPath}`, window.location.origin);
   // Add any transformation params (for future use)
   Object.entries(params).forEach(([key, value]) => {
     url.searchParams.set(key, value);

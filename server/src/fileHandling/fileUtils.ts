@@ -144,8 +144,19 @@ export const getExifMetadataFromFile = async (
 
   const latitudeRef = rawData?.GPSLatitudeRef;
   const longitudeRef = rawData?.GPSLongitudeRef;
+
+  // Swap dimensions for rotated images (orientation 5-8 means 90/270 degree rotation)
+  // Since process_image.py applies exif_transpose, the output image IS rotated,
+  // so we store post-rotation dimensions to match the actual displayed image
+  const orientation = metadata.orientation as number | undefined;
+  const needsSwap = orientation && [5, 6, 7, 8].includes(orientation);
+  const dimensionWidth = needsSwap ? metadata.dimensionHeight : metadata.dimensionWidth;
+  const dimensionHeight = needsSwap ? metadata.dimensionWidth : metadata.dimensionHeight;
+
   return {
     ...metadata,
+    dimensionWidth,
+    dimensionHeight,
     locationLatitude: applyRef(metadata.locationLatitude as number | undefined, latitudeRef, "S"),
     locationLongitude: applyRef(metadata.locationLongitude as number | undefined, longitudeRef, "W"),
   };

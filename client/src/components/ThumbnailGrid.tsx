@@ -4,7 +4,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { PlayCircle24Regular } from "@fluentui/react-icons";
-import type { CSSProperties, SyntheticEvent } from "react";
+import type { CSSProperties } from "react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 
@@ -12,7 +12,7 @@ type TileStyle = CSSProperties & {
   "--ratio"?: string;
 };
 
-const DEFAULT_RATIO = 4 / 3;
+const DEFAULT_RATIO = 1;
 
 const useStyles = makeStyles({
   grid: {
@@ -44,7 +44,7 @@ const useStyles = makeStyles({
     padding: 0,
     position: "relative",
     ":hover": {
-      transform: "translateY(-2px)",
+      transform: "scale(1.02)",
       boxShadow: tokens.shadow16,
     },
     ":focus-visible": {
@@ -104,22 +104,8 @@ const ThumbnailTile = ({
   onSelect: (photo: PhotoItem) => void;
   styles: ReturnType<typeof useStyles>;
 }) => {
-  const [ratio, setRatio] = useState(() => getAspectRatio(photo));
   const [isHovered, setIsHovered] = useState(false);
-
-  useEffect(() => {
-    setRatio(getAspectRatio(photo));
-  }, [photo]);
-
-  const handleImageLoad = (event: SyntheticEvent<HTMLImageElement>) => {
-    const { naturalWidth, naturalHeight } = event.currentTarget;
-    if (naturalWidth <= 0 || naturalHeight <= 0) {
-      return;
-    }
-
-    const loadedRatio = clampRatio(naturalWidth / naturalHeight);
-    setRatio((current) => (Math.abs(current - loadedRatio) < 0.01 ? current : loadedRatio));
-  };
+  const ratio = getAspectRatio(photo);
 
   return (
     <button
@@ -141,7 +127,6 @@ const ThumbnailTile = ({
             alt={photo.name}
             loading="lazy"
             className={styles.image}
-            onLoad={handleImageLoad}
           />
           {isHovered && (
             <video
@@ -161,7 +146,6 @@ const ThumbnailTile = ({
           alt={photo.name}
           loading="lazy"
           className={styles.image}
-          onLoad={handleImageLoad}
         />
       )}
     </button>
@@ -231,13 +215,9 @@ const createTileStyle = (ratio: number): TileStyle => ({
 });
 
 const getAspectRatio = (photo: PhotoItem): number => {
-  let width = toFiniteNumber(photo.metadata?.dimensionWidth);
-  let height = toFiniteNumber(photo.metadata?.dimensionHeight);
-  const orientation = toOrientationNumber(photo.metadata?.orientation);
-
-  if (orientation && [5, 6, 7, 8].includes(orientation)) {
-    [width, height] = [height, width];
-  }
+  // Server now provides post-rotation dimensions, so no need to check orientation
+  const width = toFiniteNumber(photo.metadata?.dimensionWidth);
+  const height = toFiniteNumber(photo.metadata?.dimensionHeight);
 
   if (width && height) {
     return clampRatio(width / height);
@@ -259,18 +239,4 @@ const toFiniteNumber = (value: unknown): number | null => {
   return null;
 };
 
-const toOrientationNumber = (value: unknown): number | null => {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  return null;
-};
-
 const clampRatio = (value: number): number => Math.min(Math.max(value, 0.25), 4);
-
