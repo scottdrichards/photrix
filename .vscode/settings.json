@@ -1,0 +1,12 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd C:\\\\src\\\\photrix\\\\server; npx tsx src/main\\.ts$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^npx tsx src/main\\.ts$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

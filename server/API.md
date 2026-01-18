@@ -38,7 +38,42 @@ Get a list of subfolders at the specified path.
 }
 ```
 
-### GET `/files` or `/files/{path}`
+### GET `/files/{path}` - File Representations
+
+Access files with different representations (thumbnails, previews, HLS streaming).
+
+**Query Parameters:**
+- `representation` (optional): `webSafe`, `preview`, or `hls`
+- `height` (optional): Target height for resizing (`160`, `320`, `640`, `1080`, `2160`, or `original`)
+- `segment` (optional, for HLS only): Name of the HLS segment file to retrieve
+
+**Representations:**
+
+*webSafe* - Converted to a web-compatible format (JPEG for images, thumbnail for videos):
+```bash
+curl "http://localhost:3000/api/files/photo.heic?representation=webSafe&height=1080"
+curl "http://localhost:3000/api/files/video.mov?representation=webSafe&height=320"
+```
+
+*preview* - Video preview thumbnail:
+```bash
+curl "http://localhost:3000/api/files/video.mov?representation=preview"
+```
+
+*hls* - HTTP Live Streaming for videos (uses NVIDIA NVENC hardware acceleration):
+```bash
+# Get HLS playlist (m3u8)
+curl "http://localhost:3000/api/files/video.mov?representation=hls&height=1080"
+
+# Get specific segment
+curl "http://localhost:3000/api/files/video.mov?representation=hls&height=1080&segment=segment_001.ts"
+```
+
+**HLS Response:**
+- Playlist request returns `application/vnd.apple.mpegurl` with segment URLs
+- Segment request returns `video/mp2t` binary data
+
+### GET `/files` or `/files/{path}/` (with trailing slash)
 Query files with filtering, pagination, and metadata selection.
 
 **Path-based filtering:**

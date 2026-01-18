@@ -589,6 +589,7 @@ export class IndexDatabase {
 
     // Convert filter to SQL
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    console.log(`[query] Generated SQL WHERE: "${whereClause}" with params: ${JSON.stringify(whereParams)}`);
 
     // Build the count query
     const countSQL = `SELECT COUNT(*) as count FROM files ${whereClause ? `WHERE ${whereClause}` : ''}`;

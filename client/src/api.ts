@@ -19,6 +19,7 @@ export interface PhotoItem {
   previewUrl: string;
   fullUrl: string;
   videoPreviewUrl?: string;
+  hlsUrl?: string;
   metadata?: {
     mimeType?: string | null;
     dateTaken?: string | null;
@@ -344,6 +345,10 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
     mediaType === "video"
       ? buildFileUrl(relativePath, { representation: "preview" })
       : undefined;
+  const hlsUrl =
+    mediaType === "video"
+      ? buildFileUrl(relativePath, { representation: "hls", height: "original" })
+      : undefined;
 
   // Include all metadata from the API response
   const { folder, fileName, ...metadata } = item;
@@ -356,6 +361,7 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
     previewUrl,
     fullUrl,
     videoPreviewUrl,
+    hlsUrl,
     metadata,
   };
 };

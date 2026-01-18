@@ -137,6 +137,7 @@ const constraintToSQL = <K extends keyof FileRecord>(
 
   if (typeof constraint === "object" && constraint !== null) {
     // Could be Range, StringSearch, or complex object
+    console.log(`[filterToSQL] Object constraint for field "${String(field)}":`, JSON.stringify(constraint));
     
     // Check for Range (has min/max)
     if ("min" in constraint || "max" in constraint) {
@@ -157,6 +158,7 @@ const constraintToSQL = <K extends keyof FileRecord>(
       const folderConstraint = constraint as { folder: string; recursive?: boolean };
       const normalizedFolder = normalizeFolderPath(folderConstraint.folder);
       const escapedFolder = escapeLikeLiteral(normalizedFolder);
+      console.log(`[filterToSQL] Folder constraint: folder="${folderConstraint.folder}", normalized="${normalizedFolder}", recursive=${folderConstraint.recursive}`);
 
       if (folderConstraint.recursive) {
         return {

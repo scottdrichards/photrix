@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Button, makeStyles, tokens } from "@fluentui/react-components";
 import { Dismiss24Regular } from "@fluentui/react-icons";
+import Hls from "hls.js";
 import type { PhotoItem } from "../api";
 
 const useStyles = makeStyles({
@@ -62,6 +63,66 @@ export function FullscreenViewer({
 }: FullscreenViewerProps) {
   const styles = useStyles();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const hlsRef = useRef<Hls | null>(null);
+
+  // HLS setup effect
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !photo || photo.mediaType !== "video" || !photo.hlsUrl) return;
+
+    // Clean up previous HLS instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    // Check if HLS.js is supported
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+      });
+
+      hls.loadSource(photo.hlsUrl);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch((err) => {
+          console.log("[HLS] Autoplay prevented:", err);
+        });
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          console.error("[HLS] Fatal error:", data.type, data.details);
+          // Fall back to direct source
+          if (photo.fullUrl) {
+            video.src = photo.fullUrl;
+            video.play().catch(() => {});
+          }
+        }
+      });
+
+      hlsRef.current = hls;
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      // Native HLS support (Safari)
+      video.src = photo.hlsUrl;
+      video.play().catch((err) => {
+        console.log("[HLS] Autoplay prevented (native):", err);
+      });
+    } else {
+      // Fall back to direct MP4
+      video.src = photo.fullUrl;
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [photo]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -129,28 +190,14 @@ export function FullscreenViewer({
           <div className={styles.container} onClick={handleContainerClick}>
             {photo.mediaType === "video" ? (
               <video
+                ref={videoRef}
                 key={photo.path}
                 controls
                 className={styles.media}
                 poster={photo.previewUrl}
                 preload="metadata"
-                autoPlay
               >
                 <track kind="captions" src="data:," label="Captions not provided" />
-                <source
-                  src={photo.fullUrl}
-                  type={(() => {
-                    try {
-                      const url = new URL(photo.fullUrl);
-                      const representation = url.searchParams.get("representation");
-                      return representation === "webSafe"
-                        ? "video/mp4"
-                        : (photo.metadata?.mimeType ?? "video/mp4");
-                    } catch {
-                      return photo.metadata?.mimeType ?? "video/mp4";
-                    }
-                  })()}
-                />
                 Your browser does not support HTML video playback.
               </video>
             ) : (

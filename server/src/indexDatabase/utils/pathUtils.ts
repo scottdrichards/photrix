@@ -1,6 +1,12 @@
+/**
+ * Normalizes path separators to forward slashes.
+ * Windows paths use backslashes, but we want consistent forward slashes in the database.
+ */
+const normalizePathSeparators = (value: string): string => value.replace(/\\/g, "/");
+
 export const normalizeFolderPath = (value: string): string => {
-  const trimmed = value.trim();
-  const withLeading = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const normalized = normalizePathSeparators(value.trim());
+  const withLeading = normalized.startsWith("/") ? normalized : `/${normalized}`;
   if (withLeading === "/") {
     return "/";
   }
@@ -10,11 +16,13 @@ export const normalizeFolderPath = (value: string): string => {
 /**
  * Splits a relativePath into folder and fileName.
  * Ensures folder always has leading and trailing '/'.
+ * Normalizes backslashes to forward slashes for cross-platform compatibility.
  * e.g., "/photos/2024/image.jpg" -> { folder: "/photos/2024/", fileName: "image.jpg" }
+ * e.g., "photos\\2024\\image.jpg" -> { folder: "/photos/2024/", fileName: "image.jpg" }
  */
 export const splitPath = (relativePath: string): { folder: string; fileName: string } => {
-  const trimmed = relativePath.trim();
-  const withLeading = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const normalized = normalizePathSeparators(relativePath.trim());
+  const withLeading = normalized.startsWith("/") ? normalized : `/${normalized}`;
   const lastSlash = withLeading.lastIndexOf("/");
   if (lastSlash <= 0) {
     return { folder: "/", fileName: withLeading.slice(lastSlash + 1) || withLeading.slice(1) };

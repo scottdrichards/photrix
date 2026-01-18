@@ -1,11 +1,12 @@
 import * as http from "http";
 import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
-import { stat } from "fs/promises";
+import { stat, readFile } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
-import { createReadStream, type Stats } from "fs";
+import { createReadStream, existsSync, type Stats } from "fs";
 import path from "path/win32";
 import { convertImage, convertImageToMultipleSizes, ImageConversionError } from "../../imageProcessing/convertImage.ts";
 import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
+import { generateHLS, getHLSInfo, getHLSSegmentPath } from "../../videoProcessing/generateHLS.ts";
 import { StandardHeight, standardHeights, parseToStandardHeight } from "../../common/standardHeights.ts";
 import { mediaProcessingQueue } from "../../common/processingQueue.ts";
 import { queryHandler } from "./queryHandler.ts";
@@ -61,10 +62,16 @@ const streamFile = (
   const headers: http.OutgoingHttpHeaders = {
     "Content-Type": contentType,
     "Cache-Control": cacheControl,
-    acceptRanges: acceptRanges ? "bytes" : undefined,
     "content-length": range ? range.end - range.start + 1 : size,
-    "Content-Range": range ? `bytes ${range.start}-${range.end}/${size}` : undefined,
   };
+
+  if (acceptRanges) {
+    headers["Accept-Ranges"] = "bytes";
+  }
+
+  if (range) {
+    headers["Content-Range"] = `bytes ${range.start}-${range.end}/${size}`;
+  }
 
   res.writeHead(statusCode, headers);
   const fileStream = createReadStream(filePath, range ? { start: range.start, end: range.end } : undefined);
@@ -136,6 +143,60 @@ const tryVideoThumbnail = (ctx: FileHandlingContext) => {
   const height = isPreview ? 320 : ctx.height;
   const label = isPreview ? "Requesting preview thumbnail" : `Requesting ${ctx.height} thumbnail for video`;
   return serveVideoThumb(ctx, height, label);
+};
+
+const tryHLSStream = async (ctx: FileHandlingContext & { url: URL }): Promise<boolean> => {
+  const { isVideo, representation, normalizedPath, subPath, height, res, url } = ctx;
+  if (!isVideo || representation !== "hls") return false;
+
+  const segment = url.searchParams.get("segment");
+
+  try {
+    logQueueStatus(`Requesting HLS ${segment ? `segment ${segment}` : "playlist"}`, subPath);
+    const hlsInfo = await getHLSInfo(normalizedPath, height);
+
+    // If requesting a segment, serve it directly if it exists
+    if (segment) {
+      const segmentPath = getHLSSegmentPath(hlsInfo.hash, height, segment);
+      if (!existsSync(segmentPath)) {
+        writeJson(res, 404, { error: "HLS segment not found" });
+        return true;
+      }
+      const segmentStats = await stat(segmentPath);
+      res.writeHead(200, {
+        "Content-Type": "video/mp2t",
+        "Content-Length": segmentStats.size,
+        "Cache-Control": "public, max-age=31536000",
+      });
+      createReadStream(segmentPath).pipe(res);
+      return true;
+    }
+
+    // Generate HLS stream if it doesn't exist
+    await generateHLS(normalizedPath, height, { priority: "userBlocked" });
+
+    // Read and serve the playlist, modifying segment URLs to include proper path
+    const playlistContent = await readFile(hlsInfo.playlistPath, "utf-8");
+
+    // Rewrite segment paths in playlist to use API endpoint
+    const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&height=${height}&segment=`;
+    const modifiedPlaylist = playlistContent.replace(
+      /^(segment_\d+\.ts)$/gm,
+      (match) => `${baseUrl}${match}`
+    );
+
+    res.writeHead(200, {
+      "Content-Type": "application/vnd.apple.mpegurl",
+      "Cache-Control": "no-cache",
+      "Content-Length": Buffer.byteLength(modifiedPlaylist, "utf-8"),
+    });
+    res.end(modifiedPlaylist);
+    return true;
+  } catch (error) {
+    console.error(`Error generating HLS stream for: ${subPath}`, error);
+    writeJson(res, 500, { error: "HLS generation failed", message: error instanceof Error ? error.message : String(error) });
+    return true;
+  }
 };
 
 const tryImageVariant = async (ctx: FileHandlingContext) => {
@@ -219,6 +280,10 @@ const fileHandler = async (
     isImage,
     isVideo,
   };
+
+  // HLS handler needs URL for segment parameter
+  const hlsHandled = await tryHLSStream({ ...handlingContext, url });
+  if (hlsHandled) return;
 
   const handlers = [tryVideoThumbnail, tryImageVariant];
   for (const handler of handlers) {

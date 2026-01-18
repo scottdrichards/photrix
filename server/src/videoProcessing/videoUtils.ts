@@ -4,12 +4,12 @@ import { stat } from "fs/promises";
 import { StandardHeight } from "../common/standardHeights.ts";
 import {
   getHash,
-  dataDir,
+  CACHE_DIR,
   getCachedFilePath,
 } from "../common/cacheUtils.ts";
 import { mediaProcessingQueue, QueuePriority } from "../common/processingQueue.ts";
 
-console.log(`[VideoCache] Initialized at ${dataDir}`);
+console.log(`[VideoCache] Initialized at ${CACHE_DIR}`);
 
 const MAX_CAPTURED_LOG_CHARS = 64_000;
 

@@ -1,13 +1,28 @@
 import { spawn } from "child_process";
 import { existsSync } from "fs";
-import { stat } from "fs/promises";
-import { resolve, dirname } from "path";
+import { stat, mkdir } from "fs/promises";
+import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
-import { getMirroredCachePath, getHash, ensureCacheDir } from "../common/cacheUtils.ts";
+import { getHash, getCachedFilePath, CACHE_DIR } from "../common/cacheUtils.ts";
 import { mediaProcessingQueue, QueuePriority } from "../common/processingQueue.ts";
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
+
+// Helper function to create cache path that mirrors the source directory structure
+const getMirroredCachePath = (
+  filePath: string,
+  hash: string,
+  height: number,
+  extension: string
+): string => {
+  return getCachedFilePath(hash, height, extension);
+};
+
+// Helper function to ensure cache directory exists
+const ensureCacheDir = async (filePath: string): Promise<void> => {
+  await mkdir(dirname(filePath), { recursive: true });
+};
 
 type PythonInvocation = {
   command: string;
