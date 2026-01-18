@@ -2,21 +2,40 @@ import { createHash } from "crypto";
 import { mkdir } from "fs/promises";
 import { join } from "path";
 
-export const CACHE_DIR = join(process.cwd(), ".cache");
+const cacheDir = process.env.CACHE_DIR;
+const indexDbPath = process.env.INDEX_DB_PATH;
 
-const getThumbnailsDir = (): string => {
-  const dir = process.env.ThumbnailCacheDirectory;
-  if (!dir) {
-    throw new Error("ThumbnailCacheDirectory environment variable must be set");
+const dirs = {cacheDir, indexDbPath} as const;
+
+Object.entries(dirs).forEach(([key, value]) => {
+  if (!value) {
+    throw new Error(`${key} environment variable must be set`);
   }
-  return dir;
-};
+  mkdir(value, { recursive: true })
+});
+
+
+if (!cacheDir) {
+  throw new Error("CACHE_DIR environment variable must be set");
+}
+mkdir(cacheDir, { recursive: true });
+
+if (!indexDbPath) {
+  throw new Error("INDEX_DB_PATH environment variable must be set");
+}
+
+const folders = [cacheDir];
+
+mkdir(cacheDir, { recursive: true }).catch((error) => {
+  console.error(`Error creating cache directory at ${cacheDir}:`, error);
+  throw error;
+}
 
 let initialized = false;
 
 export const initializeCacheDirectories = async () => {
   if (initialized) return;
-  const folderPromises = [CACHE_DIR, getThumbnailsDir()].map(async (dir) =>
+  const folderPromises = [dataDir, getThumbnailsDir()].map(async (dir) =>
     mkdir(dir, { recursive: true }),
   );
   const timeOutPromise = new Promise((_, reject) =>

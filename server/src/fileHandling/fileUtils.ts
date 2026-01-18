@@ -4,7 +4,7 @@ import { readdirSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { ExifMetadata, FileInfo } from "../indexDatabase/fileRecord.type.ts";
-import { getVideoMetadata } from "../videoProcessing/videoUtils.ts";
+import { getVideoMetadata } from "../videoProcessing/getVideoMetadata.ts";
 import { mimeTypeForFilename } from "./mimeTypes.ts";
 
 export const getFileInfo = async (fullPath: string): Promise<FileInfo> => {
@@ -161,19 +161,6 @@ export const getExifMetadataFromFile = async (
     locationLongitude: applyRef(metadata.locationLongitude as number | undefined, longitudeRef, "W"),
   };
 
-};
-
-
-/**
- * Throws if absolute is outside of root.
- */
-export const toRelative = (root: string, absolute: string): string => {
-  const relative = path.relative(root, absolute);
-  if (relative.startsWith("..")) {
-    throw new Error(`Path ${absolute} is outside of root ${root}`);
-  }
-  const normalized = relative.split(path.sep).join("/");
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
 };
 
 /**

@@ -1,6 +1,6 @@
 import http from "node:http";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
-import { filesRequestHandler } from "./requestHandlers/filesRequestHandler.ts";
+import { filesEndpointRequestHandler } from "./requestHandlers/files/filesRequestHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
 
 const PORT = process.env.PORT || 3000;
@@ -55,7 +55,7 @@ export const createServer = (database: IndexDatabase, storagePath: string, optio
         // Query mode REQUIRES trailing slash: /api/files/ or /api/files/subfolder/
         // File serving has NO trailing slash: /api/files/image.jpg
         if (req.url?.startsWith("/api/files/") && req.method === "GET") {
-            filesRequestHandler(req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>, res, {
+            filesEndpointRequestHandler(req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>, res, {
                 database,
                 storageRoot: storagePath,
             });
