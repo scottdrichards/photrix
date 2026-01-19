@@ -7,6 +7,14 @@ import path from "path/win32";
 import { convertImage, convertImageToMultipleSizes, ImageConversionError } from "../../imageProcessing/convertImage.ts";
 import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
 import { generateHLS, getHLSInfo, getHLSSegmentPath } from "../../videoProcessing/generateHLS.ts";
+import {
+  generateMultibitrateHLS,
+  getMultibitrateHLSInfo,
+  getMasterPlaylistPath,
+  getVariantPlaylistPath,
+  getVariantSegmentPath,
+  multibitrateHLSExists,
+} from "../../videoProcessing/generateMultibitrateHLS.ts";
 import { StandardHeight, standardHeights, parseToStandardHeight } from "../../common/standardHeights.ts";
 import { mediaProcessingQueue } from "../../common/processingQueue.ts";
 import { queryHandler } from "./queryHandler.ts";
@@ -151,14 +159,92 @@ const tryHLSStream = async (ctx: FileHandlingContext & { url: URL }): Promise<bo
   if (!isVideo || representation !== "hls") return false;
 
   const segment = url.searchParams.get("segment");
+  const variant = url.searchParams.get("variant"); // e.g., "360" or "720"
 
   try {
-    logQueueStatus(`Requesting HLS ${segment ? `segment ${segment}` : "playlist"}`, subPath);
-    const hlsInfo = await getHLSInfo(normalizedPath, height);
+    logQueueStatus(`Requesting HLS ${segment ? `segment ${segment}` : variant ? `${variant}p variant` : "playlist"}`, subPath);
     
     // Get duration from database for accurate playlist duration
     const fileRecord = await database.getFileRecord(subPath, ["duration"]);
     const knownDuration = fileRecord?.duration;
+
+    // Check if multi-bitrate HLS is pre-encoded
+    const multibitrateInfo = await getMultibitrateHLSInfo(normalizedPath);
+    const hasMultibitrate = multibitrateInfo.exists;
+
+    // If we have multi-bitrate HLS, serve from that
+    if (hasMultibitrate) {
+      // Serve variant segment
+      if (segment && variant) {
+        const variantHeight = parseInt(variant, 10);
+        const segmentPath = getVariantSegmentPath(multibitrateInfo.hash, variantHeight, segment);
+        
+        if (!existsSync(segmentPath)) {
+          writeJson(res, 404, { error: "HLS segment not found" });
+          return true;
+        }
+        
+        const segmentStats = await stat(segmentPath);
+        res.writeHead(200, {
+          "Content-Type": "video/mp2t",
+          "Content-Length": segmentStats.size,
+          "Cache-Control": "public, max-age=31536000",
+        });
+        createReadStream(segmentPath).pipe(res);
+        return true;
+      }
+
+      // Serve variant playlist
+      if (variant) {
+        const variantHeight = parseInt(variant, 10);
+        const variantPlaylistPath = getVariantPlaylistPath(multibitrateInfo.hash, variantHeight);
+        
+        if (!existsSync(variantPlaylistPath)) {
+          writeJson(res, 404, { error: "HLS variant playlist not found" });
+          return true;
+        }
+        
+        let playlistContent = await readFile(variantPlaylistPath, "utf-8");
+        
+        // Rewrite segment paths to use API endpoint
+        const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}&segment=`;
+        const modifiedPlaylist = playlistContent.replace(
+          /^(segment_\d+\.ts)$/gm,
+          (match) => `${baseUrl}${match}`
+        );
+        
+        res.writeHead(200, {
+          "Content-Type": "application/vnd.apple.mpegurl",
+          "Cache-Control": "public, max-age=31536000", // Pre-encoded, can cache
+          "Content-Length": Buffer.byteLength(modifiedPlaylist, "utf-8"),
+          ...(knownDuration && Number.isFinite(knownDuration) ? { "X-Content-Duration": String(knownDuration) } : {}),
+        });
+        res.end(modifiedPlaylist);
+        return true;
+      }
+
+      // Serve master playlist
+      let masterContent = await readFile(multibitrateInfo.masterPlaylistPath, "utf-8");
+      
+      // Rewrite variant playlist paths to use API endpoint
+      const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=`;
+      masterContent = masterContent.replace(
+        /^(\d+)p\/playlist\.m3u8$/gm,
+        (_, variantHeight) => `${baseVariantUrl}${variantHeight}`
+      );
+      
+      res.writeHead(200, {
+        "Content-Type": "application/vnd.apple.mpegurl",
+        "Cache-Control": "public, max-age=31536000", // Pre-encoded, can cache
+        "Content-Length": Buffer.byteLength(masterContent, "utf-8"),
+        ...(knownDuration && Number.isFinite(knownDuration) ? { "X-Content-Duration": String(knownDuration) } : {}),
+      });
+      res.end(masterContent);
+      return true;
+    }
+
+    // Fall back to on-demand single-stream HLS generation
+    const hlsInfo = await getHLSInfo(normalizedPath, height);
 
     // If requesting a segment, serve it directly if it exists
     if (segment) {

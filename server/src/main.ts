@@ -6,6 +6,7 @@ import { initializeCacheDirectories } from "./common/cacheUtils.ts";
 import { createServer } from "./createServer.ts";
 import { startBackgroundProcessExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { startBackgroundProcessFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
+import { startBackgroundHLSEncoding } from "./indexDatabase/processHLSEncoding.ts";
 
 const startServer = async () => {
   console.log("Starting photrix server...");
@@ -34,10 +35,15 @@ const startServer = async () => {
   };
 
   const startBackgroundMetadataProcessing = (db: IndexDatabase, currentPause: () => void) => {
-    // Chain the metadata processors: file info first, then EXIF
+    // Chain the metadata processors: file info → EXIF → HLS encoding
     const pauseFileInfo = startBackgroundProcessFileInfoMetadata(db, () => {
       // File info complete, start EXIF processing
-      pauseBackgroundProcessMetadata = startBackgroundProcessExifMetadata(db);
+      const pauseExif = startBackgroundProcessExifMetadata(db, () => {
+        // EXIF complete, start HLS encoding for videos
+        console.log("[bootstrap] Metadata processing complete, starting background HLS encoding...");
+        pauseBackgroundProcessMetadata = startBackgroundHLSEncoding(db);
+      });
+      pauseBackgroundProcessMetadata = pauseExif;
     });
     pauseBackgroundProcessMetadata = pauseFileInfo;
   };

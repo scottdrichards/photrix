@@ -398,6 +398,34 @@ export class IndexDatabase {
     });
   }
 
+  /**
+   * Gets the count of video files that have had EXIF processed (and thus are ready for HLS encoding).
+   */
+  countVideosReadyForHLS(): number {
+    const stmt = this.db.prepare(
+      `SELECT COUNT(*) as count FROM files WHERE mimeType LIKE 'video/%' AND exifProcessedAt IS NOT NULL`
+    );
+    const row = stmt.get() as { count: number };
+    return row.count;
+  }
+
+  /**
+   * Gets video files that have been processed for EXIF (ready for HLS encoding).
+   */
+  getVideosReadyForHLS(limit = 50): Array<{ relativePath: string }> {
+    const stmt = this.db.prepare(
+      `SELECT folder, fileName FROM files
+       WHERE mimeType LIKE 'video/%' AND exifProcessedAt IS NOT NULL
+       ORDER BY created DESC, folder DESC, fileName DESC
+       LIMIT ?`
+    );
+
+    const rows = stmt.all(limit) as Array<{ folder: string; fileName: string }>;
+    return rows.map((row) => ({
+      relativePath: joinPath(row.folder, row.fileName),
+    }));
+  }
+
   private async hydrateMetadata(
     relativePath: string,
     requiredMetadata: Array<keyof FileRecord>,
