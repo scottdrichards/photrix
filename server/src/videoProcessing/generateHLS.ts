@@ -69,7 +69,9 @@ export const generateHLS = async (
     return playlistPath;
   }
 
-  await mediaProcessingQueue.enqueue(
+  // Start transcoding in the background (don't await completion)
+  // This allows the client to start playing as soon as first segments are ready
+  void mediaProcessingQueue.enqueue(
     async () => {
       // Create directory for HLS output
       await mkdir(hlsDir, { recursive: true });
@@ -80,33 +82,35 @@ export const generateHLS = async (
         const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
 
         // FFmpeg args for HLS with NVIDIA NVENC hardware acceleration
+        // Optimized for fast initial playback with reasonable quality
         const args = [
           "-y",
-          // Hardware acceleration input
+          // Hardware acceleration for decoding
           "-hwaccel", "cuda",
-          "-hwaccel_output_format", "cuda",
           "-i", filePath,
-          // Scale filter (use CUDA scale for hardware path)
-          "-vf", `scale_cuda=${scaleFilter}:format=nv12`,
-          // NVIDIA H.264 encoder
+          // Scale filter - use software scale to allow rotation to be applied first
+          "-vf", `scale=${scaleFilter}`,
+          // NVIDIA H.264 encoder - optimized for speed
           "-c:v", "h264_nvenc",
-          "-preset", "p4", // balanced preset (p1=fastest, p7=slowest/best quality)
-          "-tune", "hq", // high quality tuning
-          "-rc", "vbr", // variable bitrate
-          "-cq", "23", // quality level (similar to CRF, lower = better)
-          "-b:v", "0", // let CQ control bitrate
-          "-maxrate", height === "original" ? "20M" : `${Math.min(20, Math.ceil(Number(height) / 100))}M`,
-          "-bufsize", height === "original" ? "40M" : `${Math.min(40, Math.ceil(Number(height) / 50))}M`,
+          "-preset", "p1", // fastest preset for quick first segment
+          "-tune", "ll", // low latency tuning
+          "-rc", "vbr",
+          "-cq", "28", // slightly lower quality for faster encoding
+          "-b:v", "0",
+          "-maxrate", height === "original" ? "15M" : `${Math.min(15, Math.ceil(Number(height) / 120))}M`,
+          "-bufsize", height === "original" ? "15M" : `${Math.min(15, Math.ceil(Number(height) / 120))}M`,
+          "-g", "60", // keyframe every 60 frames (~2 sec at 30fps)
           // Audio codec
           "-c:a", "aac",
           "-b:a", "128k",
           // HLS specific options
           "-f", "hls",
-          "-hls_time", "4", // 4-second segments
-          "-hls_list_size", "0", // Keep all segments in playlist
+          "-hls_time", "2", // 2-second segments for stable playback
+          "-hls_list_size", "0",
           "-hls_segment_type", "mpegts",
+          "-hls_flags", "independent_segments+append_list",
           "-hls_segment_filename", join(hlsDir, "segment_%03d.ts"),
-          "-hls_playlist_type", "vod", // Video on demand (complete playlist)
+          "-hls_playlist_type", "event",
           playlistPath,
         ];
 
@@ -160,7 +164,8 @@ export const generateHLSSoftware = async (
     return playlistPath;
   }
 
-  await mediaProcessingQueue.enqueue(
+  // Start transcoding in background for progressive playback
+  void mediaProcessingQueue.enqueue(
     async () => {
       await mkdir(hlsDir, { recursive: true });
 
@@ -180,11 +185,12 @@ export const generateHLSSoftware = async (
           "-c:a", "aac",
           "-b:a", "128k",
           "-f", "hls",
-          "-hls_time", "4",
+          "-hls_time", "2", // 2-second segments for faster start
           "-hls_list_size", "0",
           "-hls_segment_type", "mpegts",
+          "-hls_flags", "independent_segments+append_list",
           "-hls_segment_filename", join(hlsDir, "segment_%03d.ts"),
-          "-hls_playlist_type", "vod",
+          "-hls_playlist_type", "event", // Event type for live updates
           playlistPath,
         ];
 

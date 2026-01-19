@@ -25,7 +25,7 @@ export const filesEndpointRequestHandler = async (
     if (!pathMatch) return writeJson(res, 400, { error: "Bad request" });
     const subPath = decodeURIComponent(pathMatch[1]) || "/";
     if (subPath.endsWith("/")) return queryHandler(url, subPath, database, res);
-    await fileHandler(req, url, subPath, storageRoot, res);
+    await fileHandler(req, url, subPath, storageRoot, res, database);
   } catch (error) {
     console.error("Error processing files request:", error);
     if (!res.headersSent) writeJson(res, 500, { error: "Internal server error", message: error instanceof Error ? error.message : String(error) });
@@ -119,6 +119,7 @@ type FileHandlingContext = {
   needsFormatChange: boolean;
   isImage: boolean;
   isVideo: boolean;
+  database: IndexDatabase;
 };
 
 const serveVideoThumb = async (ctx: FileHandlingContext, height: StandardHeight, label: string) => {
@@ -146,7 +147,7 @@ const tryVideoThumbnail = (ctx: FileHandlingContext) => {
 };
 
 const tryHLSStream = async (ctx: FileHandlingContext & { url: URL }): Promise<boolean> => {
-  const { isVideo, representation, normalizedPath, subPath, height, res, url } = ctx;
+  const { isVideo, representation, normalizedPath, subPath, height, res, url, database } = ctx;
   if (!isVideo || representation !== "hls") return false;
 
   const segment = url.searchParams.get("segment");
@@ -154,12 +155,26 @@ const tryHLSStream = async (ctx: FileHandlingContext & { url: URL }): Promise<bo
   try {
     logQueueStatus(`Requesting HLS ${segment ? `segment ${segment}` : "playlist"}`, subPath);
     const hlsInfo = await getHLSInfo(normalizedPath, height);
+    
+    // Get duration from database for accurate playlist duration
+    const fileRecord = await database.getFileRecord(subPath, ["duration"]);
+    const knownDuration = fileRecord?.duration;
 
     // If requesting a segment, serve it directly if it exists
     if (segment) {
       const segmentPath = getHLSSegmentPath(hlsInfo.hash, height, segment);
+      
+      // Wait for segment to appear (it might still be encoding)
+      const maxWaitMs = 30_000;
+      const pollIntervalMs = 200;
+      let waited = 0;
+      while (!existsSync(segmentPath) && waited < maxWaitMs) {
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+        waited += pollIntervalMs;
+      }
+      
       if (!existsSync(segmentPath)) {
-        writeJson(res, 404, { error: "HLS segment not found" });
+        writeJson(res, 404, { error: "HLS segment not found or timed out" });
         return true;
       }
       const segmentStats = await stat(segmentPath);
@@ -172,11 +187,50 @@ const tryHLSStream = async (ctx: FileHandlingContext & { url: URL }): Promise<bo
       return true;
     }
 
-    // Generate HLS stream if it doesn't exist
+    // Start HLS generation (returns immediately, transcoding happens in background)
     await generateHLS(normalizedPath, height, { priority: "userBlocked" });
 
+    // Wait for playlist to have at least 3 segments for smooth initial playback
+    const maxWaitMs = 30_000;
+    const pollIntervalMs = 200;
+    let waited = 0;
+    const minSegments = 3;
+    
+    const countSegments = async (): Promise<number> => {
+      if (!existsSync(hlsInfo.playlistPath)) return 0;
+      const content = await readFile(hlsInfo.playlistPath, "utf-8");
+      const matches = content.match(/segment_\d+\.ts/g);
+      return matches?.length ?? 0;
+    };
+    
+    while ((await countSegments()) < minSegments && waited < maxWaitMs) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      waited += pollIntervalMs;
+    }
+    
+    if (!existsSync(hlsInfo.playlistPath)) {
+      writeJson(res, 500, { error: "HLS playlist generation timed out" });
+      return true;
+    }
+
     // Read and serve the playlist, modifying segment URLs to include proper path
-    const playlistContent = await readFile(hlsInfo.playlistPath, "utf-8");
+    let playlistContent = await readFile(hlsInfo.playlistPath, "utf-8");
+
+    // Inject total duration into playlist if we know it from the database
+    // This allows the player to show correct duration even during encoding
+    if (knownDuration && Number.isFinite(knownDuration)) {
+      // Add EXT-X-TARGETDURATION if not present or too low, and add a comment with total duration
+      // The #EXT-X-TOTALDURATION is a custom tag that hls.js doesn't use, but we can also
+      // manipulate the playlist to help the player
+      if (!playlistContent.includes("#EXT-X-ENDLIST")) {
+        // Still encoding - add a hint about total duration
+        // Insert after #EXTM3U line
+        playlistContent = playlistContent.replace(
+          "#EXTM3U",
+          `#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES`
+        );
+      }
+    }
 
     // Rewrite segment paths in playlist to use API endpoint
     const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&height=${height}&segment=`;
@@ -187,8 +241,10 @@ const tryHLSStream = async (ctx: FileHandlingContext & { url: URL }): Promise<bo
 
     res.writeHead(200, {
       "Content-Type": "application/vnd.apple.mpegurl",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-cache", // Don't cache since playlist updates during encoding
       "Content-Length": Buffer.byteLength(modifiedPlaylist, "utf-8"),
+      // Send the known duration as a custom header the client can use
+      ...(knownDuration && Number.isFinite(knownDuration) ? { "X-Content-Duration": String(knownDuration) } : {}),
     });
     res.end(modifiedPlaylist);
     return true;
@@ -230,6 +286,7 @@ const fileHandler = async (
   subPath: string,
   storageRoot: string,
   res: http.ServerResponse,
+  database: IndexDatabase,
 ) => {
   if (!subPath){
     return writeJson(res, 400, { error: "Missing file path" });
@@ -279,6 +336,7 @@ const fileHandler = async (
     needsFormatChange,
     isImage,
     isVideo,
+    database,
   };
 
   // HLS handler needs URL for segment parameter
