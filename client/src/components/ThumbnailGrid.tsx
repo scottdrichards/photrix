@@ -105,7 +105,20 @@ const ThumbnailTile = ({
   styles: ReturnType<typeof useStyles>;
 }) => {
   const [isHovered, setIsHovered] = useState(false);
-  const ratio = getAspectRatio(photo);
+  const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
+  const metadataRatio = getAspectRatio(photo);
+  const ratio = loadedRatio ?? metadataRatio;
+
+  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    if (img.naturalWidth && img.naturalHeight) {
+      const actualRatio = clampRatio(img.naturalWidth / img.naturalHeight);
+      // Only update if significantly different from current ratio
+      if (Math.abs(actualRatio - ratio) > 0.01) {
+        setLoadedRatio(actualRatio);
+      }
+    }
+  };
 
   return (
     <button
@@ -127,6 +140,7 @@ const ThumbnailTile = ({
             alt={photo.name}
             loading="lazy"
             className={styles.image}
+            onLoad={handleImageLoad}
           />
           {isHovered && (
             <video
@@ -146,6 +160,7 @@ const ThumbnailTile = ({
           alt={photo.name}
           loading="lazy"
           className={styles.image}
+          onLoad={handleImageLoad}
         />
       )}
     </button>
