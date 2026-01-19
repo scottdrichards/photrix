@@ -9,6 +9,8 @@ export type StringSearch =
         regex?: string;
         /** Index-friendly prefix match. Use `folder` for folder matches */
         startsWith?: string;
+        /** Index-friendly prefix negation match */
+        notStartsWith?: string;
     }
 
 /**

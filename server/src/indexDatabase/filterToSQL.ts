@@ -144,12 +144,13 @@ const constraintToSQL = <K extends keyof FileRecord>(
       return rangeToSQL(field, constraint);
     }
     
-    // Check for StringSearch (has includes, glob, regex, startsWith)
+    // Check for StringSearch (has includes, glob, regex, startsWith, notStartsWith)
     if (
       "includes" in constraint ||
       "glob" in constraint ||
       "regex" in constraint ||
-      "startsWith" in constraint
+      "startsWith" in constraint ||
+      "notStartsWith" in constraint
     ) {
       return stringSearchToSQL(field, constraint);
     }
@@ -202,12 +203,20 @@ const rangeToSQL = (field: string, range: Range<any>): SQLPart => {
 
 const stringSearchToSQL = (
   field: string,
-  search: { includes?: string; glob?: string; regex?: string; startsWith?: string }
+  search: { includes?: string; glob?: string; regex?: string; startsWith?: string; notStartsWith?: string }
 ): SQLPart => {
   if (search.startsWith) {
     const likePrefix = `${escapeLikeLiteral(search.startsWith)}%`;
     return {
       where: `${field} LIKE ? ESCAPE '\\'`,
+      params: [likePrefix],
+    };
+  }
+
+  if (search.notStartsWith) {
+    const likePrefix = `${escapeLikeLiteral(search.notStartsWith)}%`;
+    return {
+      where: `${field} NOT LIKE ? ESCAPE '\\'`,
       params: [likePrefix],
     };
   }

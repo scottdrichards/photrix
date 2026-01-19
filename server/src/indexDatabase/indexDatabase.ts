@@ -101,12 +101,40 @@ export class IndexDatabase {
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_files_thumbnailsProcessedAt ON files(thumbnailsProcessedAt)`);
     console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
     this.ensureRootPath();
+    this.populateMissingMimeTypes();
 
     this.selectDataStmt = this.db.prepare(
       "SELECT * FROM files WHERE folder = ? AND fileName = ?",
     );
     const count = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number };
     console.log(`[IndexDatabase] Contains ${count.count} entries`);
+  }
+
+  /**
+   * One-time migration to populate mimeType for files that were added before
+   * mimeType was being stored during initial file discovery.
+   */
+  private populateMissingMimeTypes(): void {
+    const countResult = this.db.prepare('SELECT COUNT(*) as count FROM files WHERE mimeType IS NULL').get() as { count: number };
+    if (countResult.count === 0) return;
+
+    console.log(`[IndexDatabase] Populating mimeType for ${countResult.count} files...`);
+    const startTime = Date.now();
+
+    const rows = this.db.prepare('SELECT folder, fileName FROM files WHERE mimeType IS NULL').all() as Array<{ folder: string; fileName: string }>;
+    const updateStmt = this.db.prepare('UPDATE files SET mimeType = ? WHERE folder = ? AND fileName = ?');
+    
+    const tx = this.db.transaction(() => {
+      for (const row of rows) {
+        const relativePath = joinPath(row.folder, row.fileName);
+        const mimeType = mimeTypeForFilename(relativePath);
+        updateStmt.run(mimeType, row.folder, row.fileName);
+      }
+    });
+    tx();
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[IndexDatabase] Populated mimeType for ${countResult.count} files in ${elapsed}s`);
   }
 
   async addFile(fileData: FileRecord): Promise<void> {
@@ -323,12 +351,13 @@ export class IndexDatabase {
   addPaths(paths: string[]): void {
     if (!paths.length) return;
     const addPath = this.db.prepare(
-      "INSERT OR IGNORE INTO files (folder, fileName) VALUES (?, ?)",
+      "INSERT OR IGNORE INTO files (folder, fileName, mimeType) VALUES (?, ?, ?)",
     );
     const tx = this.db.transaction((list: string[]) => {
       for (const relativePath of list) {
         const { folder, fileName } = splitPath(relativePath);
-        addPath.run(folder, fileName);
+        const mimeType = mimeTypeForFilename(relativePath);
+        addPath.run(folder, fileName, mimeType);
       }
     });
     tx(paths);

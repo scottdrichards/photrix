@@ -7,6 +7,18 @@
         "/^npx tsx src/main\\.ts$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^cd c:\\\\src\\\\photrix\\\\server; npx tsx src/main\\.ts$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^npx tsx src/main\\.ts 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^Set-Location c:\\\\src\\\\photrix\\\\server; npx tsx src/main\\.ts$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

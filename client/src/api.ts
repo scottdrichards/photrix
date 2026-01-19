@@ -260,15 +260,28 @@ const buildFilters = ({ ratingFilter, mediaTypeFilter, locationBounds, dateRange
   }
 
   if (mediaTypeFilter === "photo") {
-    filters.push({ mimeType: { glob: "image/*" } });
+    filters.push({ mimeType: { startsWith: "image/" } });
   } else if (mediaTypeFilter === "video") {
-    filters.push({ mimeType: { glob: "video/*" } });
+    filters.push({ mimeType: { startsWith: "video/" } });
   } else if (mediaTypeFilter === "other") {
+    // Files that are neither images nor videos (null mimeType or other types like application/pdf)
     filters.push({
-      operation: "or",
+      operation: "and",
       conditions: [
-        { mimeType: null },
-        { mimeType: { glob: "!(image|video)/*" } },
+        {
+          operation: "or",
+          conditions: [
+            { mimeType: null },
+            { mimeType: { notStartsWith: "image/" } },
+          ],
+        },
+        {
+          operation: "or",
+          conditions: [
+            { mimeType: null },
+            { mimeType: { notStartsWith: "video/" } },
+          ],
+        },
       ],
     });
   }
