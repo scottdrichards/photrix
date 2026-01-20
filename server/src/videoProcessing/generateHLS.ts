@@ -8,6 +8,46 @@ import type { StandardHeight } from "../common/standardHeights.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
 
 /**
+ * Cached CUDA availability state.
+ * null = not yet checked, true = available, false = unavailable
+ */
+let cudaAvailable: boolean | null = null;
+
+/**
+ * Checks if CUDA/NVENC hardware acceleration is available.
+ * Result is cached after first check.
+ */
+const checkCudaAvailability = (): Promise<boolean> =>
+  new Promise((resolve) => {
+    if (cudaAvailable !== null) {
+      resolve(cudaAvailable);
+      return;
+    }
+
+    const process = spawn("ffmpeg", ["-hide_banner", "-init_hw_device", "cuda", "-f", "lavfi", "-i", "nullsrc", "-t", "0", "-f", "null", "-"]);
+
+    let stderr = "";
+    process.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    process.on("close", (code) => {
+      cudaAvailable = code === 0 && !stderr.includes("Cannot load nvcuda.dll") && !stderr.includes("Could not dynamically load CUDA");
+      console.log(`[HLS] CUDA/NVENC hardware acceleration: ${cudaAvailable ? "available" : "not available"}`);
+      resolve(cudaAvailable);
+    });
+
+    process.on("error", () => {
+      cudaAvailable = false;
+      console.log("[HLS] CUDA/NVENC hardware acceleration: not available (ffmpeg error)");
+      resolve(false);
+    });
+  });
+
+// Check CUDA availability on module load
+void checkCudaAvailability();
+
+/**
  * Returns the directory path where HLS segments and playlist are stored for a given video.
  */
 export const getHLSDirectory = (hash: string, height: StandardHeight): string =>
@@ -52,7 +92,43 @@ export const listHLSSegments = async (hash: string, height: StandardHeight): Pro
 };
 
 /**
+ * Runs FFmpeg HLS generation with the given args.
+ * Returns a promise that resolves on success or rejects with the stderr on failure.
+ */
+const runHLSGeneration = (
+  args: string[],
+  hlsDir: string,
+  logPrefix: string
+): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    console.log(`[HLS] ffmpeg (${logPrefix}) args: ${JSON.stringify(args)}`);
+    const process = spawn("ffmpeg", args);
+
+    let stderr = "";
+
+    pipeChildProcessLogs(process, logPrefix, (chunk) => {
+      stderr = appendWithLimit(stderr, chunk);
+    });
+
+    process.on("close", (code) => {
+      if (code === 0) {
+        console.log(`[HLS] Successfully generated HLS stream at ${hlsDir}`);
+        resolve();
+        return;
+      }
+      console.error(`[HLS] FFmpeg HLS generation failed: ${stderr}`);
+      reject(new Error(stderr));
+    });
+
+    process.on("error", (err) => {
+      console.error(`[HLS] Failed to start ffmpeg process: ${err.message}`);
+      reject(err);
+    });
+  });
+
+/**
  * Generates HLS stream (playlist + segments) using NVIDIA NVENC hardware acceleration.
+ * Automatically falls back to software encoding if CUDA/NVENC is unavailable.
  * Returns the path to the master playlist.
  */
 export const generateHLS = async (
@@ -76,68 +152,59 @@ export const generateHLS = async (
       // Create directory for HLS output
       await mkdir(hlsDir, { recursive: true });
 
-      console.log(`[HLS] Generating ${height}p HLS stream for ${filePath} using NVENC`);
+      const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
+      const maxBitrate = height === "original" ? "15M" : `${Math.min(15, Math.ceil(Number(height) / 120))}M`;
 
-      return new Promise<void>((resolve, reject) => {
-        const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
+      const inputArgs = ["-y", "-i", filePath, "-vf", `scale=${scaleFilter}`];
 
-        // FFmpeg args for HLS with NVIDIA NVENC hardware acceleration
-        // Optimized for fast initial playback with reasonable quality
-        const args = [
-          "-y",
-          // Hardware acceleration for decoding
-          "-hwaccel", "cuda",
-          "-i", filePath,
-          // Scale filter - use software scale to allow rotation to be applied first
-          "-vf", `scale=${scaleFilter}`,
-          // NVIDIA H.264 encoder - optimized for speed
-          "-c:v", "h264_nvenc",
-          "-preset", "p1", // fastest preset for quick first segment
-          "-tune", "ll", // low latency tuning
-          "-rc", "vbr",
-          "-cq", "28", // slightly lower quality for faster encoding
-          "-b:v", "0",
-          "-maxrate", height === "original" ? "15M" : `${Math.min(15, Math.ceil(Number(height) / 120))}M`,
-          "-bufsize", height === "original" ? "15M" : `${Math.min(15, Math.ceil(Number(height) / 120))}M`,
-          "-g", "60", // keyframe every 60 frames (~2 sec at 30fps)
-          // Audio codec
-          "-c:a", "aac",
-          "-b:a", "128k",
-          // HLS specific options
-          "-f", "hls",
-          "-hls_time", "2", // 2-second segments for stable playback
-          "-hls_list_size", "0",
-          "-hls_segment_type", "mpegts",
-          "-hls_flags", "independent_segments+append_list",
-          "-hls_segment_filename", join(hlsDir, "segment_%03d.ts"),
-          "-hls_playlist_type", "event",
-          playlistPath,
-        ];
+      const outputArgs = [
+        "-g", "60", // keyframe every 60 frames (~2 sec at 30fps) for consistent segments
+        "-c:a", "aac",
+        "-b:a", "128k", // audio bitrate
+        "-f", "hls",
+        "-hls_time", "2", // 2-second segments for fast initial playback
+        "-hls_list_size", "0", // keep all segments in playlist
+        "-hls_segment_type", "mpegts",
+        "-hls_flags", "independent_segments+append_list", // segments are self-contained, playlist updated incrementally
+        "-hls_segment_filename", join(hlsDir, "segment_%03d.ts"),
+        "-hls_playlist_type", "event", // playlist grows as segments are added (for live-like behavior)
+        playlistPath,
+      ];
 
-        console.log(`[HLS] ffmpeg args: ${JSON.stringify(args)}`);
-        const process = spawn("ffmpeg", args);
+      // FFmpeg args for HLS with NVIDIA NVENC hardware acceleration
+      const nvencArgs = [
+        "-hwaccel", "cuda", // use GPU for decoding
+        ...inputArgs,
+        "-c:v", "h264_nvenc", // NVIDIA hardware encoder
+        "-preset", "p1", // fastest NVENC preset
+        "-tune", "ll", // low latency tuning
+        "-rc", "vbr", // variable bitrate rate control
+        "-cq", "28", // constant quality level (lower = better quality)
+        "-b:v", "0", // let CQ control quality, no target bitrate
+        "-maxrate", maxBitrate, // cap peak bitrate
+        "-bufsize", maxBitrate, // VBV buffer size
+        ...outputArgs,
+      ];
 
-        let stderr = "";
+      // FFmpeg args for software encoding fallback
+      const softwareArgs = [
+        ...inputArgs,
+        "-c:v", "libx264", // software H.264 encoder
+        "-preset", "fast", // balance speed vs compression
+        "-crf", "23", // constant rate factor (lower = better quality, 23 is default)
+        "-pix_fmt", "yuv420p", // widely compatible pixel format
+        ...outputArgs,
+      ];
 
-        pipeChildProcessLogs(process, "hls", (chunk) => {
-          stderr = appendWithLimit(stderr, chunk);
-        });
+      const useCuda = await checkCudaAvailability();
 
-        process.on("close", (code) => {
-          if (code === 0) {
-            console.log(`[HLS] Successfully generated HLS stream at ${hlsDir}`);
-            resolve();
-            return;
-          }
-          console.error(`[HLS] FFmpeg HLS generation failed: ${stderr}`);
-          reject(new Error(`HLS generation failed: ${stderr}`));
-        });
-
-        process.on("error", (err) => {
-          console.error(`[HLS] Failed to start ffmpeg process: ${err.message}`);
-          reject(err);
-        });
-      });
+      if (useCuda) {
+        console.log(`[HLS] Generating ${height}p HLS stream for ${filePath} using NVENC`);
+        await runHLSGeneration(nvencArgs, hlsDir, "nvenc");
+      } else {
+        console.log(`[HLS] Generating ${height}p HLS stream for ${filePath} using software encoding`);
+        await runHLSGeneration(softwareArgs, hlsDir, "software");
+      }
     },
     opts?.priority,
     "video"
@@ -147,8 +214,10 @@ export const generateHLS = async (
 };
 
 /**
- * Generates HLS with software encoding fallback (for systems without NVIDIA GPU).
+ * Generates HLS with software encoding only (for systems without NVIDIA GPU).
  * Uses libx264 instead of h264_nvenc.
+ * Note: generateHLS() automatically falls back to software encoding if CUDA is unavailable,
+ * so this function is mainly useful when you want to force software encoding.
  */
 export const generateHLSSoftware = async (
   filePath: string,
@@ -164,60 +233,36 @@ export const generateHLSSoftware = async (
     return playlistPath;
   }
 
-  // Start transcoding in background for progressive playback
   void mediaProcessingQueue.enqueue(
     async () => {
       await mkdir(hlsDir, { recursive: true });
 
       console.log(`[HLS] Generating ${height}p HLS stream for ${filePath} using software encoding`);
 
-      return new Promise<void>((resolve, reject) => {
-        const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
+      const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
 
-        const args = [
-          "-y",
-          "-i", filePath,
-          "-vf", `scale=${scaleFilter}`,
-          "-c:v", "libx264",
-          "-preset", "fast",
-          "-crf", "23",
-          "-pix_fmt", "yuv420p",
-          "-c:a", "aac",
-          "-b:a", "128k",
-          "-f", "hls",
-          "-hls_time", "2", // 2-second segments for faster start
-          "-hls_list_size", "0",
-          "-hls_segment_type", "mpegts",
-          "-hls_flags", "independent_segments+append_list",
-          "-hls_segment_filename", join(hlsDir, "segment_%03d.ts"),
-          "-hls_playlist_type", "event", // Event type for live updates
-          playlistPath,
-        ];
+      const args = [
+        "-y",
+        "-i", filePath,
+        "-vf", `scale=${scaleFilter}`,
+        "-c:v", "libx264", // software H.264 encoder
+        "-preset", "fast", // balance speed vs compression
+        "-crf", "23", // constant rate factor (lower = better quality, 23 is default)
+        "-pix_fmt", "yuv420p", // widely compatible pixel format
+        "-g", "60", // keyframe every 60 frames (~2 sec at 30fps)
+        "-c:a", "aac",
+        "-b:a", "128k", // audio bitrate
+        "-f", "hls",
+        "-hls_time", "2", // 2-second segments
+        "-hls_list_size", "0", // keep all segments in playlist
+        "-hls_segment_type", "mpegts",
+        "-hls_flags", "independent_segments+append_list",
+        "-hls_segment_filename", join(hlsDir, "segment_%03d.ts"),
+        "-hls_playlist_type", "event",
+        playlistPath,
+      ];
 
-        console.log(`[HLS] ffmpeg (software) args: ${JSON.stringify(args)}`);
-        const process = spawn("ffmpeg", args);
-
-        let stderr = "";
-
-        pipeChildProcessLogs(process, "hls-sw", (chunk) => {
-          stderr = appendWithLimit(stderr, chunk);
-        });
-
-        process.on("close", (code) => {
-          if (code === 0) {
-            console.log(`[HLS] Successfully generated HLS stream at ${hlsDir}`);
-            resolve();
-            return;
-          }
-          console.error(`[HLS] FFmpeg HLS generation failed: ${stderr}`);
-          reject(new Error(`HLS generation failed: ${stderr}`));
-        });
-
-        process.on("error", (err) => {
-          console.error(`[HLS] Failed to start ffmpeg process: ${err.message}`);
-          reject(err);
-        });
-      });
+      await runHLSGeneration(args, hlsDir, "software");
     },
     opts?.priority,
     "video"
