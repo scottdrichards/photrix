@@ -8,12 +8,12 @@ export const useSyncUrlWithFilter = (): void => {
   // Sync URL when filter changes (only path and includeSubfolders encoded)
   useEffect(() => {
     const params = new URLSearchParams();
-    if (filter.includeSubfolders) {
-      params.set("includeSubfolders", "true");
+    if (filter.includeSubfolders === false) {
+      params.set("includeSubfolders", "false");
     }
 
     const currentPathname = window.location.pathname.slice(1); // Remove leading slash
-    const currentInclude = new URLSearchParams(window.location.search).get("includeSubfolders") === "true";
+    const currentInclude = new URLSearchParams(window.location.search).get("includeSubfolders") !== "false";
 
     if (decodeURIComponent(currentPathname) !== currentPath || currentInclude !== filter.includeSubfolders) {
       const queryString = params.toString() ? `?${params.toString()}` : "";
@@ -32,7 +32,7 @@ export const useSyncUrlWithFilter = (): void => {
       const path = decodeURIComponent(window.location.pathname.slice(1));
       setFilter({
         path: path ? `${path}/` : "",
-        includeSubfolders: params.get("includeSubfolders") === "true",
+        includeSubfolders: params.get("includeSubfolders") !== "false",
       });
     };
 

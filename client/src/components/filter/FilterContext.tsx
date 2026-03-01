@@ -37,7 +37,7 @@ const createInitialFilter = (): FilterState => {
   const pathFromLocation = decodeURIComponent(window.location.pathname.slice(1));
   const path = pathFromLocation? pathFromLocation+"/" : "";
 
-  const includeSubfolders = (new URLSearchParams(window.location.search)).get("includeSubfolders") === "true";
+  const includeSubfolders = (new URLSearchParams(window.location.search)).get("includeSubfolders") !== "false";
   return {
   includeSubfolders,
   path,

@@ -16,13 +16,11 @@ import "ol/ol.css";
 import { fromLonLat, transformExtent } from "ol/proj";
 import OSM from "ol/source/OSM";
 import VectorSource from "ol/source/Vector";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchGeotaggedPhotos } from "../api";
 import type { GeoBounds, GeoPoint } from "../api";
 import { markerStyle, useMapFilterStyles } from "./MapFilter.styles";
 import { useFilterContext } from "./filter/FilterContext";
-
-type MapFilterProps = object;
 
 const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
   if (!a || !b) {
@@ -37,37 +35,47 @@ const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
   );
 };
 
-export const MapFilter = () => {
+const maybeBoundsEqual = (
+  a: GeoBounds | null | undefined,
+  b: GeoBounds | null | undefined
+) => {
+  if (!a && !b) {
+    return true;
+  }
+  return boundsEqual(a ?? null, b ?? null);
+};
+
+export const MapFilter:React.FC = () => {
   const styles = useMapFilterStyles();
   const { filter, setFilter } = useFilterContext();
-  const { includeSubfolders, path, ratingFilter, mediaTypeFilter, dateRange, locationBounds: bounds } = filter;
+  const { includeSubfolders, path, ratingFilter, mediaTypeFilter, dateRange, locationBounds } = filter;
+  const normalizedLocationBounds = locationBounds ?? undefined;
   
-  const onBoundsChange = useCallback((bounds: GeoBounds | undefined) => {
-    setFilter({ locationBounds: bounds });
-  }, [setFilter]);
-  const mapElementRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<Map | null>(null);
-  const vectorSourceRef = useRef(new VectorSource());
-  const lastBoundsRef = useRef<GeoBounds | null>(null);
-  const hasFittedRef = useRef(false);
-  const activeRef = useRef(Boolean(bounds));
-  const userInteractedRef = useRef(false);
+  const [mapElement, setMapElement] = useState<HTMLDivElement | null>(null);
+  const [mapInstance, setMapInstance] = useState<Map | null>(null);
+  const [vectorSource, setVectorSource] = useState<VectorSource | null>(null);
+  const [pendingLocationBounds, setPendingLocationBounds] = useState<GeoBounds | undefined>(normalizedLocationBounds);
+  const [hasFitted, setHasFitted] = useState(false);
   const [points, setPoints] = useState<GeoPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [totalPins, setTotalPins] = useState(0);
   const [truncated, setTruncated] = useState(false);
 
+  const mapElementRef = useCallback((element: HTMLDivElement | null) => {
+    setMapElement(element);
+  }, []);
+
   const clusterSize = useMemo(() => {
-    if (!bounds) {
+    if (!locationBounds) {
       return undefined;
     }
-    const latSpan = Math.max(Math.abs(bounds.north - bounds.south), 1e-9);
-    const lonSpan = Math.max(Math.abs(bounds.east - bounds.west), 1e-9);
+    const latSpan = Math.max(Math.abs(locationBounds.north - locationBounds.south), 1e-9);
+    const lonSpan = Math.max(Math.abs(locationBounds.east - locationBounds.west), 1e-9);
     const targetCells = 400_000;
     const cellSize = Math.max(latSpan, lonSpan) / Math.sqrt(targetCells);
     return Math.max(cellSize, 0.00000001);
-  }, [bounds]);
+  }, [locationBounds]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -81,7 +89,7 @@ export const MapFilter = () => {
           path,
           ratingFilter,
           mediaTypeFilter,
-          locationBounds: bounds,
+          locationBounds: locationBounds,
           clusterSize,
           dateRange,
           signal: controller.signal,
@@ -105,7 +113,7 @@ export const MapFilter = () => {
     loadPoints();
 
     return () => controller.abort();
-  }, [includeSubfolders, path, ratingFilter, mediaTypeFilter, bounds, clusterSize, dateRange]);
+  }, [includeSubfolders, path, ratingFilter, mediaTypeFilter, locationBounds, clusterSize, dateRange]);
 
   const pinSummary = useMemo(() => {
     const displayed = points.length;
@@ -115,20 +123,31 @@ export const MapFilter = () => {
     return `${displayed} pins`;
   }, [points.length, totalPins, truncated]);
 
-  const showOverlay = loading && vectorSourceRef.current.getFeatures().length === 0;
-
-  activeRef.current = Boolean(bounds);
+  const showOverlay = loading && (vectorSource?.getFeatures().length ?? 0) === 0;
 
   useEffect(() => {
-    if (mapRef.current || !mapElementRef.current) {
+    if (maybeBoundsEqual(pendingLocationBounds, normalizedLocationBounds)) {
       return;
     }
 
+    setFilter({ locationBounds: pendingLocationBounds });
+  }, [normalizedLocationBounds, pendingLocationBounds, setFilter]);
+
+  useEffect(() => {
+    setPendingLocationBounds(normalizedLocationBounds);
+  }, [normalizedLocationBounds]);
+
+  useEffect(() => {
+    if (!mapElement) {
+      return;
+    }
+
+    const source = new VectorSource();
     const baseLayer = new TileLayer({ source: new OSM() });
-    const pinLayer = new VectorLayer({ source: vectorSourceRef.current, style: markerStyle });
+    const pinLayer = new VectorLayer({ source, style: markerStyle });
 
     const map = new Map({
-      target: mapElementRef.current,
+      target: mapElement,
       layers: [baseLayer, pinLayer],
       view: new View({
         center: fromLonLat([0, 30]),
@@ -145,12 +164,9 @@ export const MapFilter = () => {
     const resizeObserver = new ResizeObserver(() => {
       map.updateSize();
     });
-    resizeObserver.observe(mapElementRef.current);
+    resizeObserver.observe(mapElement);
 
     const notifyBounds = () => {
-      if (!userInteractedRef.current) {
-        return;
-      }
       const size = map.getSize();
       if (!size) {
         return;
@@ -159,15 +175,23 @@ export const MapFilter = () => {
       const [west, south, east, north] = transformExtent(extent, "EPSG:3857", "EPSG:4326");
       const nextBounds: GeoBounds = { west, east, north, south };
 
-      if (!boundsEqual(lastBoundsRef.current, nextBounds)) {
-        lastBoundsRef.current = nextBounds;
-        onBoundsChange(nextBounds);
-        userInteractedRef.current = false;
+      if (!map.get("userInteracted")) {
+        return;
       }
+
+      const previousBounds = (map.get("lastBounds") as GeoBounds | null) ?? null;
+      if (boundsEqual(previousBounds, nextBounds)) {
+        map.set("userInteracted", false);
+        return;
+      }
+
+      map.set("lastBounds", nextBounds);
+      setPendingLocationBounds(nextBounds);
+      map.set("userInteracted", false);
     };
 
     const markUserInteraction = () => {
-      userInteractedRef.current = true;
+      map.set("userInteracted", true);
     };
 
     const viewport = map.getViewport();
@@ -178,7 +202,8 @@ export const MapFilter = () => {
     map.on("dblclick", markUserInteraction);
     map.on("singleclick", markUserInteraction);
     map.on("moveend", notifyBounds);
-    mapRef.current = map;
+    setMapInstance(map);
+    setVectorSource(source);
 
     return () => {
       resizeObserver.disconnect();
@@ -186,25 +211,26 @@ export const MapFilter = () => {
       map.un("pointerdrag", markUserInteraction);
       map.un("dblclick", markUserInteraction);
       map.un("singleclick", markUserInteraction);
+      map.un("moveend", notifyBounds);
       map.setTarget(undefined);
-      mapRef.current = null;
+      setMapInstance(null);
+      setVectorSource(null);
     };
-  }, [onBoundsChange]);
+  }, [mapElement]);
 
   useEffect(() => {
-    activeRef.current = Boolean(bounds);
-    if (!bounds) {
-      lastBoundsRef.current = null;
-      userInteractedRef.current = false;
+    if (!locationBounds) {
+      mapInstance?.set("userInteracted", false);
+      mapInstance?.set("lastBounds", null);
     }
-  }, [bounds]);
+  }, [locationBounds, mapInstance]);
 
   useEffect(() => {
-    if (!mapRef.current) {
+    if (!mapInstance || !vectorSource) {
       return;
     }
 
-    vectorSourceRef.current.clear();
+    vectorSource.clear();
     const features = points.map((point) => {
       const feature = new Feature({
         geometry: new Point(fromLonLat([point.longitude, point.latitude])),
@@ -212,54 +238,39 @@ export const MapFilter = () => {
       return feature;
     });
 
-    vectorSourceRef.current.addFeatures(features);
+    vectorSource.addFeatures(features);
 
     if (!points.length) {
-      hasFittedRef.current = false;
+      setHasFitted(false);
       return;
     }
 
-    if (!hasFittedRef.current) {
+    if (!hasFitted) {
       const extent = boundingExtent(features.map((feature) => (feature.getGeometry() as Point).getCoordinates()));
-      mapRef.current.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
-      hasFittedRef.current = true;
+      mapInstance.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
+      setHasFitted(true);
     }
-  }, [points]);
-
-  useEffect(() => {
-    if (!mapRef.current || !activeRef.current) {
-      return;
-    }
-
-    const size = mapRef.current.getSize();
-    if (!size) {
-      return;
-    }
-
-    const extent = mapRef.current.getView().calculateExtent(size);
-    const [west, south, east, north] = transformExtent(extent, "EPSG:3857", "EPSG:4326");
-      const nextBounds: GeoBounds = { west, east, north, south };
-    if (!boundsEqual(lastBoundsRef.current, nextBounds)) {
-      lastBoundsRef.current = nextBounds;
-      onBoundsChange(nextBounds);
-    }
-  }, [onBoundsChange]);
+  }, [hasFitted, mapInstance, points, vectorSource]);
 
   const fitToData = () => {
-    if (!mapRef.current) {
+    if (!mapInstance) {
       return;
     }
 
-    userInteractedRef.current = true;
+    mapInstance.set("userInteracted", true);
 
     if (!points.length) {
-      mapRef.current.getView().setCenter(fromLonLat([0, 0]));
-      mapRef.current.getView().setZoom(1.5);
+      mapInstance.getView().setCenter(fromLonLat([0, 0]));
+      mapInstance.getView().setZoom(1.5);
       return;
     }
 
-    const extent = vectorSourceRef.current.getExtent();
-    mapRef.current.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
+    if (!vectorSource) {
+      return;
+    }
+
+    const extent = vectorSource.getExtent();
+    mapInstance.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
   };
 
   return (
@@ -272,24 +283,25 @@ export const MapFilter = () => {
         <div className={styles.actions}>
           <Tooltip content="Keep results synced to the current map view" relationship="label">
             <Switch
-              checked={Boolean(bounds)}
+              checked={Boolean(locationBounds)}
               onChange={(_, data) => {
-                if (!mapRef.current) {
+                if (!mapInstance) {
                   return;
                 }
                 if (!data.checked) {
-                  onBoundsChange(undefined);
+                  setPendingLocationBounds(undefined);
+                  mapInstance.set("lastBounds", null);
                   return;
                 }
-                const size = mapRef.current.getSize();
+                const size = mapInstance.getSize();
                 if (!size) {
                   return;
                 }
-                const extent = mapRef.current.getView().calculateExtent(size);
+                const extent = mapInstance.getView().calculateExtent(size);
                 const [west, south, east, north] = transformExtent(extent, "EPSG:3857", "EPSG:4326");
                 const nextBounds:GeoBounds = { west, east, north, south };
-                lastBoundsRef.current = nextBounds;
-                onBoundsChange(nextBounds);
+                mapInstance.set("lastBounds", nextBounds);
+                setPendingLocationBounds(nextBounds);
               }}
               label="Filter to map view"
             />
