@@ -66,12 +66,13 @@ export const getMultibitrateHLSInfo = async (
 };
 
 /**
- * Generates a single variant stream.
+ * Generates a single variant stream with automatic fallback to software encoding.
  */
 const generateVariant = (
   filePath: string,
   hlsDir: string,
-  variant: HLSVariant
+  variant: HLSVariant,
+  useHardware: boolean = true
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
     const variantDir = join(hlsDir, `${variant.height}p`);
@@ -79,14 +80,14 @@ const generateVariant = (
 
     const args = [
       "-y",
-      "-hwaccel", "cuda",
+      ...(useHardware ? ["-hwaccel", "cuda"] : []),
       "-i", filePath,
       "-vf", `scale=-2:${variant.height}`,
-      "-c:v", "h264_nvenc",
-      "-preset", "p1",
-      "-tune", "ll",
-      "-rc", "vbr",
-      "-cq", "28",
+      "-c:v", useHardware ? "h264_nvenc" : "libx264",
+      ...(useHardware 
+        ? ["-preset", "p1", "-tune", "ll", "-rc", "vbr", "-cq", "28"]
+        : ["-preset", "veryfast", "-crf", "28"]
+      ),
       "-b:v", String(variant.bitrate),
       "-maxrate", variant.maxrate,
       "-bufsize", variant.bufsize,
@@ -103,7 +104,8 @@ const generateVariant = (
       playlistPath,
     ];
 
-    console.log(`[HLS-ABR] Generating ${variant.height}p variant for ${filePath}`);
+    const encoderType = useHardware ? "NVIDIA NVENC" : "software";
+    console.log(`[HLS-ABR] Generating ${variant.height}p variant (${encoderType}) for ${filePath}`);
     const process = spawn("ffmpeg", args);
 
     let stderr = "";
@@ -113,10 +115,19 @@ const generateVariant = (
 
     process.on("close", (code) => {
       if (code === 0) {
-        console.log(`[HLS-ABR] ${variant.height}p variant complete`);
+        console.log(`[HLS-ABR] ${variant.height}p variant complete (${encoderType})`);
         resolve();
         return;
       }
+      
+      // Check if it's a hardware encoding failure
+      if (useHardware && (stderr.includes("nvcuda") || stderr.includes("CUDA") || stderr.includes("h264_nvenc"))) {
+        console.warn(`[HLS-ABR] Hardware encoding failed for ${variant.height}p, falling back to software encoding`);
+        // Retry with software encoding
+        generateVariant(filePath, hlsDir, variant, false).then(resolve).catch(reject);
+        return;
+      }
+      
       console.error(`[HLS-ABR] ${variant.height}p failed: ${stderr}`);
       reject(new Error(`HLS ${variant.height}p generation failed`));
     });

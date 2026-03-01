@@ -16,20 +16,13 @@ import "ol/ol.css";
 import { fromLonLat, transformExtent } from "ol/proj";
 import OSM from "ol/source/OSM";
 import VectorSource from "ol/source/Vector";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchGeotaggedPhotos } from "../api";
-import type { DateRangeFilter, GeoBounds, GeoPoint } from "../api";
+import type { GeoBounds, GeoPoint } from "../api";
 import { markerStyle, useMapFilterStyles } from "./MapFilter.styles";
+import { useFilterContext } from "./filter/FilterContext";
 
-type MapFilterProps = {
-  bounds?: GeoBounds;
-  onBoundsChange: (bounds: GeoBounds | undefined) => void;
-  includeSubfolders: boolean;
-  path: string;
-  ratingFilter: { rating: number; atLeast: boolean } | null;
-  mediaTypeFilter: "all" | "photo" | "video" | "other";
-  dateRange?: DateRangeFilter | null;
-};
+type MapFilterProps = object;
 
 const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
   if (!a || !b) {
@@ -44,16 +37,14 @@ const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
   );
 };
 
-export const MapFilter = ({
-  bounds,
-  onBoundsChange,
-  includeSubfolders,
-  path,
-  ratingFilter,
-  mediaTypeFilter,
-  dateRange,
-}: MapFilterProps) => {
+export const MapFilter = () => {
   const styles = useMapFilterStyles();
+  const { filter, setFilter } = useFilterContext();
+  const { includeSubfolders, path, ratingFilter, mediaTypeFilter, dateRange, locationBounds: bounds } = filter;
+  
+  const onBoundsChange = useCallback((bounds: GeoBounds | undefined) => {
+    setFilter({ locationBounds: bounds });
+  }, [setFilter]);
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
   const vectorSourceRef = useRef(new VectorSource());

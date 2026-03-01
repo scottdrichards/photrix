@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Button, makeStyles, tokens } from "@fluentui/react-components";
 import { Dismiss24Regular } from "@fluentui/react-icons";
 import Hls from "hls.js";
-import type { PhotoItem } from "../api";
+import { useSelectionContext } from "./selection/SelectionContext";
 
 const useStyles = makeStyles({
   dialog: {
@@ -48,20 +48,9 @@ const useStyles = makeStyles({
   },
 });
 
-export interface FullscreenViewerProps {
-  photo: PhotoItem | null;
-  onDismiss: () => void;
-  onNext?: () => void;
-  onPrevious?: () => void;
-}
-
-export function FullscreenViewer({
-  photo,
-  onDismiss,
-  onNext,
-  onPrevious,
-}: FullscreenViewerProps) {
+export function FullscreenViewer() {
   const styles = useStyles();
+  const { selected: photo, setSelected, selectNext, selectPrevious } = useSelectionContext();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -206,9 +195,9 @@ export function FullscreenViewer({
     if (!photo) return;
 
     const operations = {
-      ArrowRight: onNext,
-      ArrowLeft: onPrevious,
-      Escape: onDismiss,
+      ArrowRight: selectNext,
+      ArrowLeft: selectPrevious,
+      Escape: () => setSelected(null),
     } as const satisfies Record<KeyboardEvent["key"], (() => void) | undefined>;
 
     const handleKeyDown = (e: KeyboardEvent) => operations[e.key as keyof typeof operations]?.();
@@ -216,10 +205,10 @@ export function FullscreenViewer({
     window.addEventListener("keydown", handleKeyDown);
     
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [photo, onNext, onPrevious, onDismiss]);
+  }, [photo, selectNext, selectPrevious, setSelected]);
 
   const handleClose = () => {
-    onDismiss();
+    setSelected(null);
   };
 
   const handleBackdropClick = (e: React.MouseEvent<HTMLDialogElement>) => {
@@ -247,7 +236,7 @@ export function FullscreenViewer({
           <Button
             appearance="subtle"
             icon={<Dismiss24Regular />}
-            onClick={onDismiss}
+            onClick={() => setSelected(null)}
             className={styles.closeButton}
             aria-label="Close"
             size="large"
