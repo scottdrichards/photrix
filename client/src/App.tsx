@@ -1,7 +1,6 @@
 import {
   Button,
   Caption1,
-  Divider,
   Title2,
   Tooltip,
   makeStyles,
@@ -20,10 +19,11 @@ import { useSyncUrlWithFilter } from "./hooks/useSyncUrlWithFilter";
 
 const useStyles = makeStyles({
   app: {
-    padding: tokens.spacingHorizontalXL,
+    paddingInline: tokens.spacingHorizontalXL,
+    paddingBlockEnd: tokens.spacingHorizontalXL,
     display: "flex",
     flexDirection: "column",
-    gap: tokens.spacingHorizontalXL,
+    gap: 0,
   },
   header: {
     display: "flex",
@@ -31,6 +31,29 @@ const useStyles = makeStyles({
     justifyContent: "space-between",
     flexWrap: "wrap",
     gap: tokens.spacingHorizontalM,
+    position: "sticky",
+    top: 0,
+    zIndex: 10,
+    paddingBlock: tokens.spacingHorizontalM,
+    paddingInline: tokens.spacingHorizontalXL,
+    marginInline: `calc(${tokens.spacingHorizontalXL} * -1)`,
+    backgroundColor: "rgba(255, 255, 255, 0.4)",
+    backdropFilter: "blur(10px)",
+    WebkitBackdropFilter: "blur(10px)",
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    marginBlockEnd: tokens.spacingHorizontalL,
+  },
+  headerTitle: {
+    display: "flex",
+    flexDirection: "column",
+    gap: tokens.spacingHorizontalXS,
+  },
+  headerActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalM,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
   },
 });
 
@@ -41,26 +64,26 @@ const AppContent = () => {
   return (
     <div className={styles.app}>
       <header className={styles.header}>
-        <div>
+        <div className={styles.headerTitle}>
           <Title2>Photrix</Title2>
           <Caption1>A better way to view photos.</Caption1>
         </div>
-        <Tooltip content="Server Status" relationship="description">
-          <Button
-            icon={<Info24Regular />}
-            onClick={() => setIsStatusOpen(true)}
-            appearance="subtle"
-          >
-            Status
-          </Button>
-        </Tooltip>
+
+        <div className={styles.headerActions}>
+          <Filter />
+          <Tooltip content="Server Status" relationship="description">
+            <Button
+              icon={<Info24Regular />}
+              onClick={() => setIsStatusOpen(true)}
+              appearance="subtle"
+            >
+              Status
+            </Button>
+          </Tooltip>
+        </div>
       </header>
 
       <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
-
-      <Divider />
-
-      <Filter />
 
       <ThumbnailGrid />
 
