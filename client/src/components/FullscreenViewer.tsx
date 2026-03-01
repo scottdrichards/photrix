@@ -1,8 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, makeStyles, tokens } from "@fluentui/react-components";
 import { Dismiss24Regular } from "@fluentui/react-icons";
 import Hls from "hls.js";
 import { useSelectionContext } from "./selection/SelectionContext";
+
+const SWIPE_THRESHOLD_PX = 60;
 
 const useStyles = makeStyles({
   dialog: {
@@ -55,6 +57,7 @@ export function FullscreenViewer() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
 
   // HLS setup effect
   useEffect(() => {
@@ -230,6 +233,34 @@ export function FullscreenViewer() {
     }
   };
 
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    const touch = e.changedTouches[0];
+    setTouchStart({ x: touch.clientX, y: touch.clientY });
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!touchStart) {
+      return;
+    }
+
+    const touch = e.changedTouches[0];
+    const deltaX = touch.clientX - touchStart.x;
+    const deltaY = touch.clientY - touchStart.y;
+    setTouchStart(null);
+
+    const isHorizontalSwipe = Math.abs(deltaX) > Math.abs(deltaY);
+    if (!isHorizontalSwipe || Math.abs(deltaX) < SWIPE_THRESHOLD_PX) {
+      return;
+    }
+
+    if (deltaX < 0) {
+      selectNext();
+      return;
+    }
+
+    selectPrevious();
+  };
+
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
     <dialog
@@ -250,7 +281,12 @@ export function FullscreenViewer() {
             size="large"
           />
           {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
-          <div className={styles.container} onClick={handleContainerClick}>
+          <div
+            className={styles.container}
+            onClick={handleContainerClick}
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+          >
             {photo.mediaType === "video" ? (
               <video
                 ref={videoRef}

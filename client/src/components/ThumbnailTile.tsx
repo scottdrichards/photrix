@@ -1,10 +1,11 @@
 import { makeStyles, tokens } from "@fluentui/react-components";
 import { CheckmarkCircle20Filled, PlayCircle24Regular } from "@fluentui/react-icons";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 import { useSelectionContext } from "./selection/SelectionContext";
 
 const DEFAULT_RATIO = 1;
+const LONG_PRESS_MS = 450;
 const clampRatio = (value: number): number => Math.min(Math.max(value, 0.25), 4);
 
 const getAspectRatio = (photo: PhotoItem): number => {
@@ -111,18 +112,64 @@ export const ThumbnailTile:React.FC<Props> = (props) => {
     const styles = useStyles();
   const [isHovered, setIsHovered] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
-  const { isSelected, selectionMode, setSelected, toggleSelected } = useSelectionContext();
+  const { isSelected, selectionMode, setSelected, setSelectionMode, toggleSelected } = useSelectionContext();
+  const longPressTimeoutRef = useRef<number | null>(null);
+  const suppressNextClickRef = useRef(false);
   const metadataRatio = getAspectRatio(photo);
   const ratio = loadedRatio ?? metadataRatio;
   const selected = isSelected(photo.path);
 
+  useEffect(() => {
+    return () => {
+      if (longPressTimeoutRef.current) {
+        window.clearTimeout(longPressTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const clearLongPressTimeout = () => {
+    if (!longPressTimeoutRef.current) {
+      return;
+    }
+
+    window.clearTimeout(longPressTimeoutRef.current);
+    longPressTimeoutRef.current = null;
+  };
+
   const handleClick = () => {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false;
+      return;
+    }
+
     if (selectionMode) {
       toggleSelected(photo);
       return;
     }
 
     setSelected(photo);
+  };
+
+  const handleTouchStart = () => {
+    if (selectionMode) {
+      return;
+    }
+
+    clearLongPressTimeout();
+    longPressTimeoutRef.current = window.setTimeout(() => {
+      suppressNextClickRef.current = true;
+      setSelectionMode(true);
+      setSelected(photo);
+      longPressTimeoutRef.current = null;
+    }, LONG_PRESS_MS);
+  };
+
+  const handleTouchEnd = () => {
+    clearLongPressTimeout();
+  };
+
+  const handleTouchMove = () => {
+    clearLongPressTimeout();
   };
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -144,6 +191,10 @@ export const ThumbnailTile:React.FC<Props> = (props) => {
       onClick={handleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
+      onTouchMove={handleTouchMove}
       aria-label={photo.name}
       aria-pressed={selected}
     >
