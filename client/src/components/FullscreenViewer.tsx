@@ -200,7 +200,13 @@ export function FullscreenViewer() {
       Escape: () => setSelected(null),
     } as const satisfies Record<KeyboardEvent["key"], (() => void) | undefined>;
 
-    const handleKeyDown = (e: KeyboardEvent) => operations[e.key as keyof typeof operations]?.();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const operation = operations[e.key as keyof typeof operations];
+      if (!operation) return;
+
+      e.preventDefault();
+      operation();
+    };
 
     window.addEventListener("keydown", handleKeyDown);
     
@@ -213,13 +219,13 @@ export function FullscreenViewer() {
 
   const handleBackdropClick = (e: React.MouseEvent<HTMLDialogElement>) => {
     if (e.target === dialogRef.current) {
-      onDismiss();
+      setSelected(null);
     }
   };
 
   const handleContainerClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) {
-      onDismiss();
+      setSelected(null);
     }
   };
 
@@ -229,6 +235,7 @@ export function FullscreenViewer() {
       ref={dialogRef}
       className={styles.dialog}
       onClose={handleClose}
+      onCancel={handleClose}
       onClick={handleBackdropClick}
     >
       {photo && (

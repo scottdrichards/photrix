@@ -3,6 +3,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 import { fetchPhotos } from "../api";
 import { useFilterContext } from "./filter/FilterContext";
+import { useSelectionContext } from "./selection/SelectionContext";
 import { ThumbnailTile } from "./ThumbnailTile";
 
 export const useStyles = makeStyles({
@@ -36,6 +37,7 @@ const PAGE_SIZE = 200;
 const ThumbnailGridComponent = () => {
   const styles = useStyles();
   const { filter } = useFilterContext();
+  const { setItems } = useSelectionContext();
   const [page, setPage] = useState(0);
   const [data, setData] = useState<{items: PhotoItem[]; total: number, filterUsed: typeof filter}|null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +54,23 @@ const ThumbnailGridComponent = () => {
     }
     setLoading(true);
     fetchPhotos({ page:filterChanged?0:page, pageSize: PAGE_SIZE, signal: abortController.signal, ...filter }).then((result) => {
-      setData({ ...result, filterUsed: filter });
+      setData((previousData) => {
+        if (filterChanged || !previousData) {
+          return { ...result, filterUsed: filter };
+        }
+
+        const existingPaths = new Set(previousData.items.map((item) => item.path));
+        const nextItems = [
+          ...previousData.items,
+          ...result.items.filter((item) => !existingPaths.has(item.path)),
+        ];
+
+        return {
+          ...result,
+          items: nextItems,
+          filterUsed: filter,
+        };
+      });
     }).catch((err) => {
       if (err === 'disposed') return;
       if (err.name === "AbortError") return;
@@ -65,6 +83,10 @@ const ThumbnailGridComponent = () => {
       abortController.abort(abortOnDisposed);
     };
   }, [filter, page]);
+
+  useEffect(() => {
+    setItems(data?.items ?? []);
+  }, [data, setItems]);
 
   useEffect(() => {
     if (!loadMoreSentinelRef.current || loading){

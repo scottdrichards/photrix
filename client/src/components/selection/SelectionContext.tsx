@@ -1,9 +1,15 @@
-import { createContext, useCallback, useContext, useMemo, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, ReactNode, useEffect } from "react";
 import type { PhotoItem } from "../../api";
 
 export type SelectionContextValue = {
+  items: PhotoItem[];
   selected: PhotoItem | null;
+  selectedItems: PhotoItem[];
+  selectedPaths: string[];
   setSelected: (photo: PhotoItem | null) => void;
+  toggleSelected: (photo: PhotoItem) => void;
+  clearSelection: () => void;
+  isSelected: (path: string) => boolean;
   setItems: (items: PhotoItem[]) => void;
   selectNext: () => void;
   selectPrevious: () => void;
@@ -20,26 +26,95 @@ export const useSelectionContext = (): SelectionContextValue => {
 };
 
 export const SelectionProvider = ({ children }: { children: ReactNode }) => {
-  const [selected, setSelected] = useState<PhotoItem | null>(null);
   const [items, setItems] = useState<PhotoItem[]>([]);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+
+  const itemByPath = useMemo(
+    () => new Map(items.map((item) => [item.path, item] as const)),
+    [items],
+  );
+
+  const selectedItems = useMemo(
+    () => selectedPaths.map((path) => itemByPath.get(path)).filter((item): item is PhotoItem => Boolean(item)),
+    [itemByPath, selectedPaths],
+  );
+
+  const selected = selectedItems.length === 1 ? selectedItems[0] : null;
+
+  useEffect(() => {
+    const validPaths = new Set(items.map((item) => item.path));
+    setSelectedPaths((previousPaths) => {
+      const filteredPaths = previousPaths.filter((path) => validPaths.has(path));
+      return filteredPaths.length === previousPaths.length ? previousPaths : filteredPaths;
+    });
+  }, [items]);
+
+  const setSelected = useCallback((photo: PhotoItem | null) => {
+    if (!photo) {
+      setSelectedPaths([]);
+      return;
+    }
+    setSelectedPaths([photo.path]);
+  }, []);
+
+  const toggleSelected = useCallback((photo: PhotoItem) => {
+    setSelectedPaths((previousPaths) => (
+      previousPaths.includes(photo.path)
+        ? previousPaths.filter((path) => path !== photo.path)
+        : [...previousPaths, photo.path]
+    ));
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedPaths([]);
+  }, []);
+
+  const isSelected = useCallback(
+    (path: string) => selectedPaths.includes(path),
+    [selectedPaths],
+  );
 
   const selectNext = useCallback(() => {
-    if (!selected) return;
-    const index = items.findIndex((item) => item.path === selected.path);
+    if (selectedPaths.length !== 1) return;
+    const index = items.findIndex((item) => item.path === selectedPaths[0]);
     if (index === -1 || index >= items.length - 1) return;
-    setSelected(items[index + 1]);
-  }, [items, selected]);
+    setSelectedPaths([items[index + 1].path]);
+  }, [items, selectedPaths]);
 
   const selectPrevious = useCallback(() => {
-    if (!selected) return;
-    const index = items.findIndex((item) => item.path === selected.path);
+    if (selectedPaths.length !== 1) return;
+    const index = items.findIndex((item) => item.path === selectedPaths[0]);
     if (index <= 0) return;
-    setSelected(items[index - 1]);
-  }, [items, selected]);
+    setSelectedPaths([items[index - 1].path]);
+  }, [items, selectedPaths]);
 
   const value = useMemo(
-    () => ({ selected, setSelected, setItems, selectNext, selectPrevious }),
-    [selected, setItems, selectNext, selectPrevious],
+    () => ({
+      items,
+      selected,
+      selectedItems,
+      selectedPaths,
+      setSelected,
+      toggleSelected,
+      clearSelection,
+      isSelected,
+      setItems,
+      selectNext,
+      selectPrevious,
+    }),
+    [
+      clearSelection,
+      isSelected,
+      items,
+      selectNext,
+      selectPrevious,
+      selected,
+      selectedItems,
+      selectedPaths,
+      setItems,
+      setSelected,
+      toggleSelected,
+    ],
   );
 
   return <SelectionContext.Provider value={value}>{children}</SelectionContext.Provider>;

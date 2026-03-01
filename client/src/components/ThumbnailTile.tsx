@@ -98,9 +98,17 @@ export const ThumbnailTile:React.FC<Props> = (props) => {
     const styles = useStyles();
   const [isHovered, setIsHovered] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
-  const { setSelected } = useSelectionContext();
+  const { setSelected, toggleSelected } = useSelectionContext();
   const metadataRatio = getAspectRatio(photo);
   const ratio = loadedRatio ?? metadataRatio;
+
+  const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (event.metaKey || event.ctrlKey) {
+      toggleSelected(photo);
+      return;
+    }
+    setSelected(photo);
+  };
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
@@ -118,7 +126,7 @@ export const ThumbnailTile:React.FC<Props> = (props) => {
       type="button"
       className={styles.tile}
       style={{ "--ratio": ratio.toString() } as React.CSSProperties}
-      onClick={() => setSelected(photo)}
+      onClick={handleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       aria-label={photo.name}
