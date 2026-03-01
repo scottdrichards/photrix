@@ -50,7 +50,8 @@ const useStyles = makeStyles({
 
 export function FullscreenViewer() {
   const styles = useStyles();
-  const { selected: photo, setSelected, selectNext, selectPrevious } = useSelectionContext();
+  const { selected: selectedPhoto, selectionMode, setSelected, selectNext, selectPrevious } = useSelectionContext();
+  const photo = selectionMode ? null : selectedPhoto;
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);

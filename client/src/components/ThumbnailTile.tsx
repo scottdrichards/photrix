@@ -1,5 +1,5 @@
 import { makeStyles, tokens } from "@fluentui/react-components";
-import { PlayCircle24Regular } from "@fluentui/react-icons";
+import { CheckmarkCircle20Filled, PlayCircle24Regular } from "@fluentui/react-icons";
 import { useState } from "react";
 import type { PhotoItem } from "../api";
 import { useSelectionContext } from "./selection/SelectionContext";
@@ -61,6 +61,9 @@ const useStyles = makeStyles({
       outlineOffset: "2px",
     },
   },
+  tileSelected: {
+    boxShadow: `inset 0 0 0 2px ${tokens.colorBrandStroke1}`,
+  },
   
   image: {
     width: "100%",
@@ -87,6 +90,16 @@ const useStyles = makeStyles({
     opacity: 0.86,
     zIndex: 1,
   },
+  selectedBadge: {
+    position: "absolute",
+    top: tokens.spacingHorizontalXXS,
+    left: tokens.spacingHorizontalXXS,
+    color: tokens.colorBrandForeground1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusCircular,
+    zIndex: 2,
+    display: "flex",
+  },
 });
 
 type Props =  {
@@ -98,15 +111,17 @@ export const ThumbnailTile:React.FC<Props> = (props) => {
     const styles = useStyles();
   const [isHovered, setIsHovered] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
-  const { setSelected, toggleSelected } = useSelectionContext();
+  const { isSelected, selectionMode, setSelected, toggleSelected } = useSelectionContext();
   const metadataRatio = getAspectRatio(photo);
   const ratio = loadedRatio ?? metadataRatio;
+  const selected = isSelected(photo.path);
 
-  const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
-    if (event.metaKey || event.ctrlKey) {
+  const handleClick = () => {
+    if (selectionMode) {
       toggleSelected(photo);
       return;
     }
+
     setSelected(photo);
   };
 
@@ -124,13 +139,19 @@ export const ThumbnailTile:React.FC<Props> = (props) => {
   return (
     <button
       type="button"
-      className={styles.tile}
+      className={`${styles.tile} ${selected ? styles.tileSelected : ""}`}
       style={{ "--ratio": ratio.toString() } as React.CSSProperties}
       onClick={handleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       aria-label={photo.name}
+      aria-pressed={selected}
     >
+      {selected ? (
+        <span className={styles.selectedBadge} aria-hidden="true">
+          <CheckmarkCircle20Filled />
+        </span>
+      ) : null}
       {photo.mediaType === "video" ? (
         <>
           <span className={styles.videoBadge} aria-hidden="true">

@@ -13,7 +13,7 @@ import { StatusModal } from "./components/StatusModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { Filter } from "./components/filter/Filter";
 import { FilterProvider } from "./components/filter/FilterContext";
-import { SelectionProvider } from "./components/selection/SelectionContext";
+import { SelectionProvider, useSelectionContext } from "./components/selection/SelectionContext";
 import { useSyncUrlWithFilter } from "./hooks/useSyncUrlWithFilter";
 
 
@@ -60,7 +60,43 @@ const useStyles = makeStyles({
 const AppContent = () => {
   const styles = useStyles();
   const [isStatusOpen, setIsStatusOpen] = useState(false);
+  const { clearSelection, selectedItems, selectionMode, setSelectionMode } = useSelectionContext();
   useSyncUrlWithFilter();
+
+  const canUseNativeShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+
+  const handleSelectionModeChange = (nextSelectionMode: boolean) => {
+    setSelectionMode(nextSelectionMode);
+    clearSelection();
+  };
+
+  const handleShare = async () => {
+    if (!canUseNativeShare || selectedItems.length === 0) {
+      return;
+    }
+
+    const selectedUrls = selectedItems.map((item) => new URL(item.fullUrl, window.location.origin).toString());
+
+    const sharePayload = selectedUrls.length === 1
+      ? {
+          title: selectedItems[0].name,
+          url: selectedUrls[0],
+        }
+      : {
+          title: `${selectedUrls.length} items from Photrix`,
+          text: selectedUrls.join("\n"),
+        };
+
+    try {
+      await navigator.share(sharePayload);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      console.error("Native share failed", error);
+    }
+  };
+
   return (
     <div className={styles.app}>
       <header className={styles.header}>
@@ -71,6 +107,25 @@ const AppContent = () => {
 
         <div className={styles.headerActions}>
           <Filter />
+          {selectionMode ? (
+            <>
+              <Caption1>{selectedItems.length} selected</Caption1>
+              <Button
+                onClick={handleShare}
+                appearance="primary"
+                disabled={!canUseNativeShare || selectedItems.length === 0}
+              >
+                Share
+              </Button>
+              <Button onClick={() => handleSelectionModeChange(false)} appearance="subtle">
+                Done
+              </Button>
+            </>
+          ) : (
+            <Button onClick={() => handleSelectionModeChange(true)} appearance="subtle">
+              Select
+            </Button>
+          )}
           <Tooltip content="Server Status" relationship="description">
             <Button
               icon={<Info24Regular />}

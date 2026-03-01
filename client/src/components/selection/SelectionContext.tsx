@@ -6,6 +6,8 @@ export type SelectionContextValue = {
   selected: PhotoItem | null;
   selectedItems: PhotoItem[];
   selectedPaths: string[];
+  selectionMode: boolean;
+  setSelectionMode: (selectionMode: boolean) => void;
   setSelected: (photo: PhotoItem | null) => void;
   toggleSelected: (photo: PhotoItem) => void;
   clearSelection: () => void;
@@ -28,6 +30,7 @@ export const useSelectionContext = (): SelectionContextValue => {
 export const SelectionProvider = ({ children }: { children: ReactNode }) => {
   const [items, setItems] = useState<PhotoItem[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [selectionMode, setSelectionModeState] = useState(false);
 
   const itemByPath = useMemo(
     () => new Map(items.map((item) => [item.path, item] as const)),
@@ -69,6 +72,10 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
     setSelectedPaths([]);
   }, []);
 
+  const setSelectionMode = useCallback((nextSelectionMode: boolean) => {
+    setSelectionModeState(nextSelectionMode);
+  }, []);
+
   const isSelected = useCallback(
     (path: string) => selectedPaths.includes(path),
     [selectedPaths],
@@ -94,6 +101,8 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
       selected,
       selectedItems,
       selectedPaths,
+      selectionMode,
+      setSelectionMode,
       setSelected,
       toggleSelected,
       clearSelection,
@@ -111,6 +120,8 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
       selected,
       selectedItems,
       selectedPaths,
+      selectionMode,
+      setSelectionMode,
       setItems,
       setSelected,
       toggleSelected,
