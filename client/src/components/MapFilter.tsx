@@ -1,6 +1,7 @@
 import {
   Button,
   Caption1,
+  mergeClasses,
   Spinner,
   Switch,
   Tooltip
@@ -21,6 +22,10 @@ import { fetchGeotaggedPhotos } from "../api";
 import type { GeoBounds, GeoPoint } from "../api";
 import { markerStyle, useMapFilterStyles } from "./MapFilter.styles";
 import { useFilterContext } from "./filter/FilterContext";
+
+type MapFilterProps = {
+  compact?: boolean;
+};
 
 const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
   if (!a || !b) {
@@ -45,7 +50,7 @@ const maybeBoundsEqual = (
   return boundsEqual(a ?? null, b ?? null);
 };
 
-export const MapFilter:React.FC = () => {
+export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
   const styles = useMapFilterStyles();
   const { filter, setFilter } = useFilterContext();
   const { includeSubfolders, path, ratingFilter, mediaTypeFilter, dateRange, locationBounds } = filter;
@@ -274,7 +279,7 @@ export const MapFilter:React.FC = () => {
   };
 
   return (
-    <div className={styles.card}>
+    <div className={mergeClasses(styles.card, compact ? styles.compactCard : undefined)}>
       <div className={styles.headerRow}>
         <div>
           <Caption1>Map filter</Caption1>
@@ -313,7 +318,7 @@ export const MapFilter:React.FC = () => {
       </div>
 
       <div className={styles.mapShell}>
-        <div ref={mapElementRef} className={styles.map} />
+        <div ref={mapElementRef} className={mergeClasses(styles.map, compact ? styles.compactMap : undefined)} />
         {showOverlay ? (
           <div className={styles.overlay}>
             <Spinner label="Loading map data" />

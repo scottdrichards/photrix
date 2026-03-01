@@ -15,6 +15,9 @@ export const useMapFilterStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     backgroundColor: tokens.colorNeutralBackground1,
   },
+  compactCard: {
+    padding: tokens.spacingHorizontalS,
+  },
   headerRow: {
     display: "flex",
     justifyContent: "space-between",
@@ -40,6 +43,9 @@ export const useMapFilterStyles = makeStyles({
   map: {
     width: "100%",
     height: "340px",
+  },
+  compactMap: {
+    height: "260px",
   },
   overlay: {
     position: "absolute",
