@@ -15,6 +15,7 @@ export interface PhotoItem {
   path: string;
   name: string;
   mediaType: "photo" | "video";
+  originalUrl: string;
   thumbnailUrl: string;
   previewUrl: string;
   fullUrl: string;
@@ -339,6 +340,7 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
   const relativePath = item.folder + item.fileName;
   const name = item.fileName;
   const mediaType = inferMediaType(item);
+  const originalUrl = buildFileUrl(relativePath, {});
   const thumbnailUrl = buildFileUrl(relativePath, {
     representation: "webSafe",
     height: "320",
@@ -370,6 +372,7 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
     path: relativePath,
     name,
     mediaType,
+    originalUrl,
     thumbnailUrl,
     previewUrl,
     fullUrl,
@@ -567,6 +570,7 @@ export const createFallbackPhoto = (path: string): PhotoItem => {
     path,
     name,
     mediaType: "photo",
+    originalUrl: buildFallbackUrl(path),
     thumbnailUrl: buildFallbackUrl(path),
     previewUrl: buildFallbackUrl(path),
     fullUrl: buildFallbackUrl(path),

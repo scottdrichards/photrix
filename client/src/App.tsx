@@ -60,10 +60,22 @@ const useStyles = makeStyles({
 const AppContent = () => {
   const styles = useStyles();
   const [isStatusOpen, setIsStatusOpen] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
   const { clearSelection, selectedItems, selectionMode, setSelectionMode } = useSelectionContext();
   useSyncUrlWithFilter();
 
   const canUseNativeShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  const supportsFileShare = (() => {
+    if (!canUseNativeShare || typeof navigator.canShare !== "function") {
+      return false;
+    }
+
+    try {
+      return navigator.canShare({ files: [new File([""], "share-check.txt", { type: "text/plain" })] });
+    } catch {
+      return false;
+    }
+  })();
 
   const handleSelectionModeChange = (nextSelectionMode: boolean) => {
     setSelectionMode(nextSelectionMode);
@@ -71,29 +83,40 @@ const AppContent = () => {
   };
 
   const handleShare = async () => {
-    if (!canUseNativeShare || selectedItems.length === 0) {
+    if (!canUseNativeShare || !supportsFileShare || selectedItems.length === 0 || isSharing) {
       return;
     }
 
-    const selectedUrls = selectedItems.map((item) => new URL(item.fullUrl, window.location.origin).toString());
-
-    const sharePayload = selectedUrls.length === 1
-      ? {
-          title: selectedItems[0].name,
-          url: selectedUrls[0],
-        }
-      : {
-          title: `${selectedUrls.length} items from Photrix`,
-          text: selectedUrls.join("\n"),
-        };
-
     try {
-      await navigator.share(sharePayload);
+      setIsSharing(true);
+      const files = await Promise.all(selectedItems.map(async (item) => {
+        const response = await fetch(item.originalUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch file for sharing (status ${response.status})`);
+        }
+
+        const blob = await response.blob();
+        const mimeType = blob.type || item.metadata?.mimeType || undefined;
+        return mimeType
+          ? new File([blob], item.name, { type: mimeType })
+          : new File([blob], item.name);
+      }));
+
+      if (!navigator.canShare({ files })) {
+        throw new Error("Native share does not support the selected files");
+      }
+
+      await navigator.share({
+        files,
+        title: files.length === 1 ? files[0].name : `${files.length} items from Photrix`,
+      });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
       }
       console.error("Native share failed", error);
+    } finally {
+      setIsSharing(false);
     }
   };
 
@@ -113,9 +136,9 @@ const AppContent = () => {
               <Button
                 onClick={handleShare}
                 appearance="primary"
-                disabled={!canUseNativeShare || selectedItems.length === 0}
+                disabled={!canUseNativeShare || !supportsFileShare || selectedItems.length === 0 || isSharing}
               >
-                Share
+                {isSharing ? "Preparing…" : "Share"}
               </Button>
               <Button onClick={() => handleSelectionModeChange(false)} appearance="subtle">
                 Done
