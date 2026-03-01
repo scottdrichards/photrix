@@ -19,7 +19,7 @@ import { useSyncUrlWithFilter } from "./hooks/useSyncUrlWithFilter";
 
 const useStyles = makeStyles({
   app: {
-    paddingInline: tokens.spacingHorizontalXL,
+    paddingInline: tokens.spacingHorizontalM,
     paddingBlockEnd: tokens.spacingHorizontalXL,
     display: "flex",
     flexDirection: "column",
@@ -35,8 +35,8 @@ const useStyles = makeStyles({
     top: 0,
     zIndex: 10,
     paddingBlock: tokens.spacingHorizontalM,
-    paddingInline: tokens.spacingHorizontalXL,
-    marginInline: `calc(${tokens.spacingHorizontalXL} * -1)`,
+    paddingInline: tokens.spacingHorizontalM,
+    marginInline: `calc(${tokens.spacingHorizontalM} * -1)`,
     backgroundColor: "rgba(255, 255, 255, 0.4)",
     backdropFilter: "blur(10px)",
     WebkitBackdropFilter: "blur(10px)",
