@@ -25,9 +25,8 @@ export class IndexDatabase {
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;
-    const envDbPath = process.env.INDEX_DB_PATH ?? process.env.INDEX_DB_LOCATION;
-    this.dbFilePath = envDbPath ? path.resolve(envDbPath) : path.join(CACHE_DIR, "index.db");
-    mkdirSync(path.dirname(this.dbFilePath), { recursive: true });
+    this.dbFilePath = this.resolveDatabaseFilePath();
+    this.ensureDatabaseDirectory();
 
     this.db = new Database(this.dbFilePath);
     this.db.pragma('journal_mode = WAL');
@@ -114,6 +113,29 @@ export class IndexDatabase {
     );
     const count = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number };
     console.log(`[IndexDatabase] Contains ${count.count} entries`);
+  }
+
+  private resolveDatabaseFilePath(): string {
+    const envDbPath = process.env.INDEX_DB_PATH?.trim();
+    if (envDbPath) {
+      return path.resolve(envDbPath);
+    }
+
+    const envDbLocation = process.env.INDEX_DB_LOCATION?.trim();
+    if (envDbLocation) {
+      return path.join(path.resolve(envDbLocation), "index.db");
+    }
+
+    return path.join(CACHE_DIR, "index.db");
+  }
+
+  private ensureDatabaseDirectory(): void {
+    const directoryPath = path.dirname(this.dbFilePath);
+    const rootPath = path.parse(directoryPath).root;
+    if (directoryPath === rootPath) {
+      return;
+    }
+    mkdirSync(directoryPath, { recursive: true });
   }
 
   private ensureFilesColumns(columns: Array<{ name: string; type: string }>): void {
