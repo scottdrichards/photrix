@@ -22,39 +22,62 @@ export const getFileInfo = async (fullPath: string): Promise<FileInfo> => {
 };
 
 /**
- * Convert GPS coordinates from DMS array to decimal degrees
+ * Normalizes EXIF GPS input into signed decimal degrees.
+ * @param input Raw coordinate value from EXIF (decimal number or DMS array [deg, min, sec]).
+ * @param ref Direction reference from EXIF (typically N/S for latitude, E/W for longitude).
+ * @param negativeDirection The direction letter that should produce a negative value ("S" or "W").
+ * @returns Signed decimal degrees, or undefined when input cannot be parsed.
  */
-const convertMetadataLocationToDecimalDegrees = (input: unknown): number|undefined => {
-  if (typeof input === 'number') {
-    return input;
-  }
-  if (Array.isArray(input) && input.length >= 2) {
-    const [degrees, minutes, seconds = 0] = input;
-    if (typeof degrees === 'number' && typeof minutes === 'number' && typeof seconds === 'number') {
-      return degrees + minutes / 60 + seconds / 3600;
+const normalizeGPS = (input: unknown, ref: unknown, negativeDirection: string): number | undefined => {
+  const value = (() => {
+    if (typeof input === "number") {
+      return input;
     }
+    if (Array.isArray(input) && input.length >= 2) {
+      const [degrees, minutes, seconds = 0] = input;
+      if (typeof degrees === "number" && typeof minutes === "number" && typeof seconds === "number") {
+        return degrees + minutes / 60 + seconds / 3600;
+      }
+    }
+    return undefined;
+  })();
+
+  if (typeof value !== "number" || typeof ref !== "string") {
+    return value;
   }
-  return undefined;
+
+  const initial = ref.trim().toUpperCase()[0];
+  return negativeDirection === initial && value > 0 ? -value : value;
 };
 
-const toStringList = (value: unknown): string[] => {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? [trimmed] : [];
+const toFiniteNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
   }
-  if (Array.isArray(value)) {
-    return value
-      .filter((entry): entry is string => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+
+  if (typeof value !== "string") {
+    return undefined;
   }
-  return [];
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 };
 
-const uniqueStrings = (values: string[]): string[] => [...new Set(values)];
+const getOrientation = (rawData: Record<string, unknown>): number | undefined => toFiniteNumber(rawData.Orientation);
 
-const extractRegions = (rawData: Record<string, unknown>) => {
-  const regionsSource = rawData.Regions ?? rawData["mwg-rs:Regions"] ?? rawData["mwg-rs:RegionInfo"];
+const getNormalizedDimensions = (rawData: Record<string, unknown>) => {
+  const orientation = getOrientation(rawData);
+  const needsSwap = orientation !== undefined && [5, 6, 7, 8].includes(orientation);
+  const imageWidth = toFiniteNumber(rawData.ImageWidth) ?? toFiniteNumber(rawData.ExifImageWidth);
+  const imageHeight = toFiniteNumber(rawData.ImageHeight) ?? toFiniteNumber(rawData.ExifImageHeight);
+
+  return {
+    width: needsSwap ? imageHeight : imageWidth,
+    height: needsSwap ? imageWidth : imageHeight,
+  };
+};
+
+const extractRegions = (regionsSource: unknown) => {
   const regionListValue =
     regionsSource && typeof regionsSource === "object"
       ? (regionsSource as { RegionList?: unknown }).RegionList
@@ -114,47 +137,62 @@ export const getExifMetadataFromFile = async (
     return {};
   }
 
+  type ExifRSource<K extends keyof ExifMetadata> =
+    | string
+    | {
+      exifField: string | string[];
+      conversionFn: (val: any, rawData: Record<string, unknown>) => ExifMetadata[K];
+    };
+
+  type FileFieldToExifRMetadata = {
+    [K in keyof ExifMetadata]?: ExifRSource<K> | ExifRSource<K>[];
+  }
+
   /** If multiple exifR metadata points to the same file field,
    * it takes the last field that has a value
    */
-  const exifRMetadataToFileField = {
-    // Standard EXIF fields
-    DateTimeOriginal: "dateTaken", // Prefer file-based date taken
-    ImageWidth: "dimensionWidth",
-    ImageHeight: "dimensionHeight",
-    ExifImageWidth: "dimensionWidth",
-    ExifImageHeight: "dimensionHeight",
-    GPSLatitude: {fileField:"locationLatitude", conversionFn: convertMetadataLocationToDecimalDegrees},
-    GPSLongitude: {fileField:"locationLongitude", conversionFn: convertMetadataLocationToDecimalDegrees},
-    Make: "cameraMake",
-    Model: "cameraModel",
-    ExposureTime: "exposureTime",
-    Aperture: "aperture",
-    ISO: "iso",
-    FocalLength: "focalLength",
-    'aux:Lens': 'lens',
-    'exifEX:LensModel': 'lens',
-    Lens: "lens",
-    Duration: "duration",
-    FrameRate: "framerate",
-    VideoCodec: "videoCodec",
-    AudioCodec: "audioCodec",
-    RatingPercent: {fileField: 'rating', conversionFn: (v)=>Math.round(v / 20)},
-    Rating: "rating",
-    PersonInImage: "personInImage",
-    Keywords: "tags",
-    Orientation: "orientation",
-    
-    // Lightroom and other fields
-    'photoshop:DateCreated':  {fileField:"dateTaken", conversionFn: d=>new Date(d)},
-    'xmp:CreateDate': {fileField:"dateTaken", conversionFn: d=>new Date(d)},
-    "xmp:Rating": "rating",
-    "xmp:PersonInImage": "personInImage",
-    "dc:subject": "tags",
-    "lr:hierarchicalSubject": "tags",
-  } as const satisfies {
-    [key: string]: (keyof ExifMetadata | {fileField: keyof ExifMetadata, conversionFn: (val: any)=>ExifMetadata[keyof ExifMetadata]});
-  };
+  const fileFieldToExifRMetadata = {
+    dateTaken: [
+      "DateTimeOriginal", // Prefer file-based date taken
+      { exifField: ["photoshop:DateCreated","xmp:CreateDate"], conversionFn: (d) => new Date(d) },
+    ],
+    dimensionWidth: {
+      exifField: ["ImageWidth", "ExifImageWidth"],
+      conversionFn: (_value, rawData) => getNormalizedDimensions(rawData).width,
+    },
+    dimensionHeight: {
+      exifField: ["ImageHeight", "ExifImageHeight"],
+      conversionFn: (_value, rawData) => getNormalizedDimensions(rawData).height,
+    },
+    locationLatitude: {
+      exifField: "GPSLatitude",
+      conversionFn: (value, rawData) => normalizeGPS(value, rawData.GPSLatitudeRef, "S"),
+    },
+    locationLongitude: {
+      exifField: "GPSLongitude",
+      conversionFn: (value, rawData) => normalizeGPS(value, rawData.GPSLongitudeRef, "W"),
+    },
+    cameraMake: "Make",
+    cameraModel: "Model",
+    exposureTime: "ExposureTime",
+    aperture: "Aperture",
+    iso: "ISO",
+    focalLength: "FocalLength",
+    lens: ["aux:Lens", "exifEX:LensModel", "Lens"],
+    duration: "Duration",
+    framerate: "FrameRate",
+    videoCodec: "VideoCodec",
+    audioCodec: "AudioCodec",
+    rating: [
+      { exifField: "RatingPercent", conversionFn: (v) => Math.round(v / 20) },
+      "Rating",
+      "xmp:Rating",
+    ],
+    regions: { exifField: "Regions", conversionFn: extractRegions },
+    personInImage: ["PersonInImage", "xmp:PersonInImage"],
+    tags: ["Keywords", "dc:subject", "lr:hierarchicalSubject"],
+    orientation: { exifField: "Orientation", conversionFn: (value) => toFiniteNumber(value) },
+  } as const satisfies FileFieldToExifRMetadata;
 
   let rawData:any;
   try {
@@ -185,60 +223,23 @@ export const getExifMetadataFromFile = async (
     }
   }
 
-  const metadata = Object.fromEntries(Object.entries(exifRMetadataToFileField)
-    .map(([exifField, opts])=>({exifField, exifValue: rawData?.[exifField as keyof typeof rawData], opts}))
-    .filter(p=>p.exifValue !== undefined)
-    .map(({exifField, exifValue, opts})=>{
-      const {fileField, conversionFn} = typeof opts === 'object'?opts:{fileField:opts};
-      return [fileField,conversionFn && exifField !== undefined ? conversionFn(exifValue):exifValue];
-    })
-  );
+  const metadata = Object.entries(fileFieldToExifRMetadata).reduce((acc, [fileField, sourceOrSources]) => {
+    const sources = Array.isArray(sourceOrSources) ? sourceOrSources : [sourceOrSources];
 
-  const tags = uniqueStrings([
-    ...toStringList(rawData?.Keywords),
-    ...toStringList(rawData?.["dc:subject"]),
-    ...toStringList(rawData?.["lr:hierarchicalSubject"]),
-    ...toStringList(rawData?.subject),
-    ...toStringList(rawData?.hierarchicalSubject),
-  ]);
+    const fields = sources.map((source) => {
+      const { exifField, conversionFn } = typeof source === "string" ? { exifField: source } : source;
+      const fieldArray = Array.isArray(exifField) ? exifField : [exifField];
+      const exifValue = fieldArray.map((f) => rawData?.[f as keyof any]).find((v) => v !== undefined);
+      if (exifValue === undefined) {
+        return null;
+      }
+      return [fileField, conversionFn ? conversionFn(exifValue, rawData) : exifValue] as [string, ExifMetadata[keyof ExifMetadata]];
+    }).filter((v): v is [string, ExifMetadata[keyof ExifMetadata]] => v !== null);
 
-  const regions = extractRegions(rawData ?? {});
-  const personInImage = uniqueStrings([
-    ...toStringList(rawData?.PersonInImage),
-    ...toStringList(rawData?.["xmp:PersonInImage"]),
-    ...regions.map((region) => region.name).filter((name): name is string => Boolean(name)),
-  ]);
+    return {...acc, ...Object.fromEntries(fields)};
+  }, {} as Partial<ExifMetadata>);
 
-  // GPS is stored as two fields, number and NS/EW reference. This is to convert to single signed number
-  const applyRef = (value: number|undefined, ref: unknown, negativeDirection: string) => {
-    if (typeof value !== "number" || typeof ref !== "string") {
-      return value;
-    }
-    const initial = ref.trim().toUpperCase()[0];
-    return negativeDirection === initial && value > 0 ? -value : value;
-  };
-
-  const latitudeRef = rawData?.GPSLatitudeRef;
-  const longitudeRef = rawData?.GPSLongitudeRef;
-
-  // Swap dimensions for rotated images (orientation 5-8 means 90/270 degree rotation)
-  // Since process_image.py applies exif_transpose, the output image IS rotated,
-  // so we store post-rotation dimensions to match the actual displayed image
-  const orientation = metadata.orientation as number | undefined;
-  const needsSwap = orientation && [5, 6, 7, 8].includes(orientation);
-  const dimensionWidth = needsSwap ? metadata.dimensionHeight : metadata.dimensionWidth;
-  const dimensionHeight = needsSwap ? metadata.dimensionWidth : metadata.dimensionHeight;
-
-  return {
-    ...metadata,
-    ...(tags.length ? { tags } : {}),
-    ...(regions.length ? { regions } : {}),
-    ...(personInImage.length ? { personInImage } : {}),
-    dimensionWidth,
-    dimensionHeight,
-    locationLatitude: applyRef(metadata.locationLatitude as number | undefined, latitudeRef, "S"),
-    locationLongitude: applyRef(metadata.locationLongitude as number | undefined, longitudeRef, "W"),
-  };
+  return metadata as ExifMetadata;
 
 };
 
