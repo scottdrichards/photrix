@@ -166,6 +166,13 @@ filter='{"operation":"or","conditions":[{"mimeType":"image/jpeg"},{"mimeType":"i
 curl "http://localhost:3000/files?filter=$(echo $filter | jq -sRr @uri)&metadata=mimeType,sizeInBytes,created&pageSize=25&page=2"
 ```
 
+### Partial search by person name
+```bash
+filter='{"personInImage":{"includes":"Scott"}}'
+metadata='fileName,personInImage,regions'
+curl "http://localhost:3000/files?filter=$(echo $filter | jq -sRr @uri)&metadata=$metadata&pageSize=25&page=1"
+```
+
 ### Get files with EXIF metadata
 ```bash
 filter='{"mimeType":"image/jpeg"}'
@@ -229,6 +236,8 @@ console.log(filteredData);
 - `dateTaken`
 - `latitude`
 - `longitude`
+- `personInImage`
+- `regions`
 
 **AI Metadata:**
 - `labels`

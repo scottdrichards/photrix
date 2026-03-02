@@ -8,6 +8,8 @@ type SQLPart = {
 
 type RelativePathConstraint = StringSearch & { recursive?: boolean };
 
+const stringArrayJsonFields = new Set(["tags", "aiTags", "personInImage"]);
+
 /**
  * Converts a FilterElement to SQL WHERE clause and parameters.
  * Returns empty string for no filter.
@@ -67,19 +69,27 @@ const constraintToSQL = <K extends keyof FileRecord>(
   field: K,
   constraint: FilterCondition[K]
 ): SQLPart | null => {
+  const fieldName = String(field);
+  const isStringArrayJsonField = stringArrayJsonFields.has(fieldName);
 
   // null means field must be NULL
   if (constraint === null) {
     return {
-      where: `${field} IS NULL`,
+      where: `${fieldName} IS NULL`,
       params: [],
     };
   }
 
   if (typeof constraint === "string") {
+    if (isStringArrayJsonField) {
+      return {
+        where: `EXISTS (SELECT 1 FROM json_each(${fieldName}) WHERE value = ?)`,
+        params: [constraint],
+      };
+    }
     // Exact match
     return {
-      where: `${field} = ?`,
+      where: `${fieldName} = ?`,
       params: [constraint],
     };
   }
@@ -87,7 +97,7 @@ const constraintToSQL = <K extends keyof FileRecord>(
   if (typeof constraint === "number") {
     // Exact match
     return {
-      where: `${field} = ?`,
+      where: `${fieldName} = ?`,
       params: [constraint],
     };
   }
@@ -95,7 +105,7 @@ const constraintToSQL = <K extends keyof FileRecord>(
   if (typeof constraint === "boolean") {
     // Boolean match
     return {
-      where: `${field} = ?`,
+      where: `${fieldName} = ?`,
       params: [constraint ? 1 : 0],
     };
   }
@@ -103,7 +113,7 @@ const constraintToSQL = <K extends keyof FileRecord>(
   if (constraint instanceof Date) {
     // Exact date match (as timestamp)
     return {
-      where: `${field} = ?`,
+      where: `${fieldName} = ?`,
       params: [constraint.getTime()],
     };
   }
@@ -116,10 +126,17 @@ const constraintToSQL = <K extends keyof FileRecord>(
     
     // Check if array contains strings (for glob/regex matching) or primitives
     if (typeof constraint[0] === "string") {
+      if (isStringArrayJsonField) {
+        const subquery = constraint.map(() => "value = ?").join(" OR ");
+        return {
+          where: `EXISTS (SELECT 1 FROM json_each(${fieldName}) WHERE ${subquery})`,
+          params: constraint,
+        };
+      }
       // Multiple string constraints
       const conditions = constraint.map(() => {
         // For now, treat as exact matches. Could be enhanced for glob/regex
-        return `${field} = ?`;
+        return `${fieldName} = ?`;
       });
       return {
         where: `(${conditions.join(" OR ")})`,
@@ -130,7 +147,7 @@ const constraintToSQL = <K extends keyof FileRecord>(
     // Number array - IN clause
     const placeholders = constraint.map(() => "?").join(", ");
     return {
-      where: `${field} IN (${placeholders})`,
+      where: `${fieldName} IN (${placeholders})`,
       params: constraint,
     };
   }
@@ -141,7 +158,7 @@ const constraintToSQL = <K extends keyof FileRecord>(
     
     // Check for Range (has min/max)
     if ("min" in constraint || "max" in constraint) {
-      return rangeToSQL(field, constraint);
+      return rangeToSQL(fieldName, constraint);
     }
     
     // Check for StringSearch (has includes, glob, regex, startsWith, notStartsWith)
@@ -152,10 +169,10 @@ const constraintToSQL = <K extends keyof FileRecord>(
       "startsWith" in constraint ||
       "notStartsWith" in constraint
     ) {
-      return stringSearchToSQL(field, constraint);
+      return stringSearchToSQL(fieldName, constraint, isStringArrayJsonField);
     }
 
-    if (field === "folder" && typeof constraint === 'object' && constraint !== null && 'folder' in constraint) {
+    if (fieldName === "folder" && typeof constraint === 'object' && constraint !== null && 'folder' in constraint) {
       const folderConstraint = constraint as { folder: string; recursive?: boolean };
       const normalizedFolder = normalizeFolderPath(folderConstraint.folder);
       const escapedFolder = escapeLikeLiteral(normalizedFolder);
@@ -203,10 +220,17 @@ const rangeToSQL = (field: string, range: Range<any>): SQLPart => {
 
 const stringSearchToSQL = (
   field: string,
-  search: { includes?: string; glob?: string; regex?: string; startsWith?: string; notStartsWith?: string }
+  search: { includes?: string; glob?: string; regex?: string; startsWith?: string; notStartsWith?: string },
+  isStringArrayJsonField = false,
 ): SQLPart => {
   if (search.startsWith) {
     const likePrefix = `${escapeLikeLiteral(search.startsWith)}%`;
+    if (isStringArrayJsonField) {
+      return {
+        where: `EXISTS (SELECT 1 FROM json_each(${field}) WHERE value LIKE ? ESCAPE '\\')`,
+        params: [likePrefix],
+      };
+    }
     return {
       where: `${field} LIKE ? ESCAPE '\\'`,
       params: [likePrefix],
@@ -215,6 +239,12 @@ const stringSearchToSQL = (
 
   if (search.notStartsWith) {
     const likePrefix = `${escapeLikeLiteral(search.notStartsWith)}%`;
+    if (isStringArrayJsonField) {
+      return {
+        where: `NOT EXISTS (SELECT 1 FROM json_each(${field}) WHERE value LIKE ? ESCAPE '\\')`,
+        params: [likePrefix],
+      };
+    }
     return {
       where: `${field} NOT LIKE ? ESCAPE '\\'`,
       params: [likePrefix],
@@ -222,6 +252,12 @@ const stringSearchToSQL = (
   }
 
   if (search.includes) {
+    if (isStringArrayJsonField) {
+      return {
+        where: `EXISTS (SELECT 1 FROM json_each(${field}) WHERE value LIKE ? ESCAPE '\\')`,
+        params: [`%${escapeLikeLiteral(search.includes)}%`],
+      };
+    }
     return {
       where: `${field} LIKE ? ESCAPE '\\'`,
       params: [`%${escapeLikeLiteral(search.includes)}%`],
@@ -230,6 +266,12 @@ const stringSearchToSQL = (
 
   if (search.glob) {
     const likePattern = globToLike(search.glob);
+    if (isStringArrayJsonField) {
+      return {
+        where: `EXISTS (SELECT 1 FROM json_each(${field}) WHERE value LIKE ?)`,
+        params: [likePattern],
+      };
+    }
     return {
       where: `${field} LIKE ?`,
       params: [likePattern],
@@ -237,6 +279,12 @@ const stringSearchToSQL = (
   }
 
   if (search.regex) {
+    if (isStringArrayJsonField) {
+      return {
+        where: `EXISTS (SELECT 1 FROM json_each(${field}) WHERE value REGEXP ?)`,
+        params: [search.regex],
+      };
+    }
     return {
       where: `${field} REGEXP ?`,
       params: [search.regex],

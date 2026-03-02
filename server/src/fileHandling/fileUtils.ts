@@ -37,6 +37,65 @@ const convertMetadataLocationToDecimalDegrees = (input: unknown): number|undefin
   return undefined;
 };
 
+const toStringList = (value: unknown): string[] => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+
+const uniqueStrings = (values: string[]): string[] => [...new Set(values)];
+
+const extractRegions = (rawData: Record<string, unknown>) => {
+  const regionsSource = rawData.Regions ?? rawData["mwg-rs:Regions"] ?? rawData["mwg-rs:RegionInfo"];
+  const regionListValue =
+    regionsSource && typeof regionsSource === "object"
+      ? (regionsSource as { RegionList?: unknown }).RegionList
+      : undefined;
+
+  if (!Array.isArray(regionListValue)) {
+    return [];
+  }
+
+  return regionListValue
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    .map((entry) => {
+      const area = entry.Area;
+      const normalizedArea =
+        area &&
+        typeof area === "object" &&
+        typeof (area as { x?: unknown }).x === "number" &&
+        typeof (area as { y?: unknown }).y === "number" &&
+        typeof (area as { w?: unknown }).w === "number" &&
+        typeof (area as { h?: unknown }).h === "number"
+          ? {
+              x: (area as { x: number }).x,
+              y: (area as { y: number }).y,
+              width: (area as { w: number }).w,
+              height: (area as { h: number }).h,
+            }
+          : undefined;
+
+      const name = typeof entry.Name === "string" ? entry.Name.trim() : undefined;
+      const type = typeof entry.Type === "string" ? entry.Type.trim() : undefined;
+      const rotation = typeof entry.Rotation === "number" ? entry.Rotation : undefined;
+
+      return {
+        ...(name ? { name } : {}),
+        ...(type ? { type } : {}),
+        ...(normalizedArea ? { area: normalizedArea } : {}),
+        ...(rotation !== undefined ? { rotation } : {}),
+      };
+    });
+};
+
 export const getExifMetadataFromFile = async (
   fullPath: string,
 ): Promise<ExifMetadata> => {
@@ -82,6 +141,7 @@ export const getExifMetadataFromFile = async (
     AudioCodec: "audioCodec",
     RatingPercent: {fileField: 'rating', conversionFn: (v)=>Math.round(v / 20)},
     Rating: "rating",
+    PersonInImage: "personInImage",
     Keywords: "tags",
     Orientation: "orientation",
     
@@ -89,6 +149,7 @@ export const getExifMetadataFromFile = async (
     'photoshop:DateCreated':  {fileField:"dateTaken", conversionFn: d=>new Date(d)},
     'xmp:CreateDate': {fileField:"dateTaken", conversionFn: d=>new Date(d)},
     "xmp:Rating": "rating",
+    "xmp:PersonInImage": "personInImage",
     "dc:subject": "tags",
     "lr:hierarchicalSubject": "tags",
   } as const satisfies {
@@ -133,6 +194,21 @@ export const getExifMetadataFromFile = async (
     })
   );
 
+  const tags = uniqueStrings([
+    ...toStringList(rawData?.Keywords),
+    ...toStringList(rawData?.["dc:subject"]),
+    ...toStringList(rawData?.["lr:hierarchicalSubject"]),
+    ...toStringList(rawData?.subject),
+    ...toStringList(rawData?.hierarchicalSubject),
+  ]);
+
+  const regions = extractRegions(rawData ?? {});
+  const personInImage = uniqueStrings([
+    ...toStringList(rawData?.PersonInImage),
+    ...toStringList(rawData?.["xmp:PersonInImage"]),
+    ...regions.map((region) => region.name).filter((name): name is string => Boolean(name)),
+  ]);
+
   // GPS is stored as two fields, number and NS/EW reference. This is to convert to single signed number
   const applyRef = (value: number|undefined, ref: unknown, negativeDirection: string) => {
     if (typeof value !== "number" || typeof ref !== "string") {
@@ -155,6 +231,9 @@ export const getExifMetadataFromFile = async (
 
   return {
     ...metadata,
+    ...(tags.length ? { tags } : {}),
+    ...(regions.length ? { regions } : {}),
+    ...(personInImage.length ? { personInImage } : {}),
     dimensionWidth,
     dimensionHeight,
     locationLatitude: applyRef(metadata.locationLatitude as number | undefined, latitudeRef, "S"),

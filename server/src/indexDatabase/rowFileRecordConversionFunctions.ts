@@ -19,6 +19,8 @@ export const rowToFileRecord = (row: Record<string, string|number>, wantedFields
         ["created", date],
         ["modified", date],
         ["dateTaken", date],
+        ["regions", json],
+        ["personInImage", json],
         "cameraMake",
         "cameraModel",
         "exposureTime",
@@ -101,6 +103,8 @@ export const fileRecordToColumnNamesAndValues = (entry: FileRecord): { names: st
     if (entry.exifProcessedAt){
         addColumn('exifProcessedAt', entry.exifProcessedAt);
         addColumn('dateTaken', entry.dateTaken instanceof Date ? entry.dateTaken.getTime() : entry.dateTaken);
+        addColumn('regions', JSON.stringify(entry.regions));
+        addColumn('personInImage', JSON.stringify(entry.personInImage));
         addColumn('dimensionsWidth', entry.dimensionWidth);
         addColumn('dimensionsHeight', entry.dimensionHeight);
         addColumn('locationLatitude', entry.locationLatitude);

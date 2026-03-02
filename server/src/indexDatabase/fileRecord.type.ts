@@ -15,6 +15,18 @@ export type FileInfo = {
 };
 
 export type ExifMetadata = {
+  regions?: Array<{
+    name?: string;
+    type?: string;
+    area?: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    };
+    rotation?: number;
+  }>;
+  personInImage?: string[];
   dateTaken?: Date;
   dimensionWidth?: number;
   dimensionHeight?: number;
@@ -66,6 +78,8 @@ export type AllMetaData = FileInfo & ExifMetadata & AIMetadata & FaceMetadata;
 export const MetadataGroups = {
   info: ["sizeInBytes", "created", "modified"],
   exif: [
+    "regions",
+    "personInImage",
     "dateTaken",
     "dimensionWidth",
     "dimensionHeight",

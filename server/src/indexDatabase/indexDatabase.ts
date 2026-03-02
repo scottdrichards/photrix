@@ -69,6 +69,8 @@ export class IndexDatabase {
         audioCodec TEXT,
         rating INTEGER,
         tags TEXT,
+        personInImage TEXT,
+        regions TEXT,
         orientation INTEGER,
         -- AI Metadata
         aiDescription TEXT,
@@ -90,6 +92,10 @@ export class IndexDatabase {
         value TEXT NOT NULL
       )
     `);
+    this.ensureFilesColumns([
+      { name: "personInImage", type: "TEXT" },
+      { name: "regions", type: "TEXT" },
+    ]);
 
     // Create indexes for common query patterns
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_files_dateTaken ON files(dateTaken DESC)`);
@@ -108,6 +114,19 @@ export class IndexDatabase {
     );
     const count = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number };
     console.log(`[IndexDatabase] Contains ${count.count} entries`);
+  }
+
+  private ensureFilesColumns(columns: Array<{ name: string; type: string }>): void {
+    const existingColumns = new Set(
+      (this.db.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>).map(({ name }) => name),
+    );
+
+    for (const { name, type } of columns) {
+      if (existingColumns.has(name)) {
+        continue;
+      }
+      this.db.exec(`ALTER TABLE files ADD COLUMN ${name} ${type}`);
+    }
   }
 
   /**
