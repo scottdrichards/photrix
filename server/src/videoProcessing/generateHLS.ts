@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { mkdir, stat } from "fs/promises";
 import { join } from "path";
-import { CACHE_DIR, getHash } from "../common/cacheUtils.ts";
+import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
 import { type QueuePriority, mediaProcessingQueue } from "../common/processingQueue.ts";
 import type { StandardHeight } from "../common/standardHeights.ts";
 import { appendWithLimit, pipeChildProcessLogs } from "./videoUtils.ts";
@@ -27,11 +27,11 @@ const determineIfCUDAAvailable = async () => new Promise<boolean>((resolve) => {
 
 const cudaAvailable = await determineIfCUDAAvailable();
 
-const getHLSDirectory = (hash: string, height: StandardHeight): string =>
-  join(CACHE_DIR, "hls", `${hash}.${height}`);
+const getHLSDirectory = (filePath: string, height: StandardHeight): string =>
+  getMirroredHLSDirectory(filePath, String(height));
 
-export const getHLSSegmentPath = (hash: string, height: StandardHeight, segmentName: string): string =>
-  join(getHLSDirectory(hash, height), segmentName);
+export const getHLSSegmentPath = (hlsDir: string, segmentName: string): string =>
+  join(hlsDir, segmentName);
 
 /**
  * Runs FFmpeg HLS generation with the given args.
@@ -153,18 +153,15 @@ export const getHLSInfo = async (
   filePath: string,
   height: StandardHeight = "original"
 ): Promise<{
-  hash: string;
   hlsDir: string;
   playlistPath: string;
   exists: boolean;
 }> => {
-  const modifiedTimeMs = (await stat(filePath)).mtimeMs;
-  const hash = getHash(filePath, modifiedTimeMs);
-  const hlsDir = getHLSDirectory(hash, height);
+  await stat(filePath);
+  const hlsDir = getHLSDirectory(filePath, height);
   const playlistPath = join(hlsDir, "playlist.m3u8");
 
   return {
-    hash,
     hlsDir,
     playlistPath,
     exists: existsSync(playlistPath),

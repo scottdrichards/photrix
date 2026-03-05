@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { mkdir, stat, writeFile } from "fs/promises";
 import { join } from "path";
-import { getHash, CACHE_DIR } from "../common/cacheUtils.ts";
+import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
 import { type QueuePriority, mediaProcessingQueue } from "../common/processingQueue.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
 
@@ -17,32 +17,32 @@ type HLSVariant = (typeof HLS_VARIANTS)[number];
 /**
  * Returns the base directory for multi-bitrate HLS output.
  */
-export const getMultibitrateHLSDirectory = (hash: string): string =>
-  join(CACHE_DIR, "hls-abr", hash);
+export const getMultibitrateHLSDirectory = (filePath: string): string =>
+  getMirroredHLSDirectory(filePath, "abr");
 
 /**
  * Returns the path to the master playlist for multi-bitrate HLS.
  */
-export const getMasterPlaylistPath = (hash: string): string =>
-  join(getMultibitrateHLSDirectory(hash), "master.m3u8");
+export const getMasterPlaylistPath = (hlsDir: string): string =>
+  join(hlsDir, "master.m3u8");
 
 /**
  * Returns the path to a variant's playlist.
  */
-export const getVariantPlaylistPath = (hash: string, height: number): string =>
-  join(getMultibitrateHLSDirectory(hash), `${height}p`, "playlist.m3u8");
+export const getVariantPlaylistPath = (hlsDir: string, height: number): string =>
+  join(hlsDir, `${height}p`, "playlist.m3u8");
 
 /**
  * Returns the path to a variant's segment.
  */
-export const getVariantSegmentPath = (hash: string, height: number, segmentName: string): string =>
-  join(getMultibitrateHLSDirectory(hash), `${height}p`, segmentName);
+export const getVariantSegmentPath = (hlsDir: string, height: number, segmentName: string): string =>
+  join(hlsDir, `${height}p`, segmentName);
 
 /**
  * Checks if multi-bitrate HLS exists for a video.
  */
-export const multibitrateHLSExists = (hash: string): boolean =>
-  existsSync(getMasterPlaylistPath(hash));
+export const multibitrateHLSExists = (hlsDir: string): boolean =>
+  existsSync(getMasterPlaylistPath(hlsDir));
 
 /**
  * Get HLS info for a video file.
@@ -50,18 +50,17 @@ export const multibitrateHLSExists = (hash: string): boolean =>
 export const getMultibitrateHLSInfo = async (
   filePath: string
 ): Promise<{
-  hash: string;
   hlsDir: string;
   masterPlaylistPath: string;
   exists: boolean;
 }> => {
-  const modifiedTimeMs = (await stat(filePath)).mtimeMs;
-  const hash = getHash(filePath, modifiedTimeMs);
+  await stat(filePath);
+  const hlsDir = getMultibitrateHLSDirectory(filePath);
+  const masterPlaylistPath = getMasterPlaylistPath(hlsDir);
   return {
-    hash,
-    hlsDir: getMultibitrateHLSDirectory(hash),
-    masterPlaylistPath: getMasterPlaylistPath(hash),
-    exists: multibitrateHLSExists(hash),
+    hlsDir,
+    masterPlaylistPath,
+    exists: multibitrateHLSExists(hlsDir),
   };
 };
 
@@ -165,10 +164,9 @@ export const generateMultibitrateHLS = async (
   filePath: string,
   opts?: { priority?: QueuePriority; waitForCompletion?: boolean }
 ): Promise<string> => {
-  const modifiedTimeMs = (await stat(filePath)).mtimeMs;
-  const hash = getHash(filePath, modifiedTimeMs);
-  const hlsDir = getMultibitrateHLSDirectory(hash);
-  const masterPath = getMasterPlaylistPath(hash);
+  await stat(filePath);
+  const hlsDir = getMultibitrateHLSDirectory(filePath);
+  const masterPath = getMasterPlaylistPath(hlsDir);
 
   if (existsSync(masterPath)) {
     return masterPath;

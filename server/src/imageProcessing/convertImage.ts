@@ -1,23 +1,13 @@
 import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { stat, mkdir } from "fs/promises";
-import { resolve, dirname, join } from "path";
+import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
-import { getHash, getCachedFilePath, CACHE_DIR } from "../common/cacheUtils.ts";
+import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { mediaProcessingQueue, QueuePriority } from "../common/processingQueue.ts";
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
-
-// Helper function to create cache path that mirrors the source directory structure
-const getMirroredCachePath = (
-  filePath: string,
-  hash: string,
-  height: number,
-  extension: string
-): string => {
-  return getCachedFilePath(hash, height, extension);
-};
 
 // Helper function to ensure cache directory exists
 const ensureCacheDir = async (filePath: string): Promise<void> => {
@@ -216,9 +206,8 @@ export const convertImage = async (
   height: StandardHeight = 2160,
   opts?: { priority?: QueuePriority },
 ): Promise<string> => {
-  const modifiedTimeMs = (await stat(filePath)).mtimeMs;
-  const hash = getHash(filePath, modifiedTimeMs);
-  const cachedPath = getMirroredCachePath(filePath, hash, height, "jpg");
+  await stat(filePath);
+  const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
 
   if (existsSync(cachedPath)) {
     return cachedPath;
@@ -240,13 +229,12 @@ export const convertImageToMultipleSizes = async (
   heights: StandardHeight[],
   opts?: { priority?: QueuePriority },
 ): Promise<void> => {
-  const modifiedTimeMs = (await stat(filePath)).mtimeMs;
-  const hash = getHash(filePath, modifiedTimeMs);
+  await stat(filePath);
   
   const outputs = heights
     .map(height => ({
       height,
-      path: getMirroredCachePath(filePath, hash, height, "jpg")
+      path: getMirroredCachedFilePath(filePath, height, "jpg")
     }))
     .filter(o => !existsSync(o.path));
 

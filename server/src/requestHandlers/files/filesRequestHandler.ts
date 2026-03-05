@@ -10,10 +10,8 @@ import { generateHLS, getHLSInfo, getHLSSegmentPath } from "../../videoProcessin
 import {
   generateMultibitrateHLS,
   getMultibitrateHLSInfo,
-  getMasterPlaylistPath,
   getVariantPlaylistPath,
   getVariantSegmentPath,
-  multibitrateHLSExists,
 } from "../../videoProcessing/generateMultibitrateHLS.ts";
 import { StandardHeight, standardHeights, parseToStandardHeight } from "../../common/standardHeights.ts";
 import { mediaProcessingQueue } from "../../common/processingQueue.ts";
@@ -177,7 +175,7 @@ const tryHLSStream = async (ctx: FileHandlingContext & { url: URL }): Promise<bo
       // Serve variant segment
       if (segment && variant) {
         const variantHeight = parseInt(variant, 10);
-        const segmentPath = getVariantSegmentPath(multibitrateInfo.hash, variantHeight, segment);
+        const segmentPath = getVariantSegmentPath(multibitrateInfo.hlsDir, variantHeight, segment);
         
         if (!existsSync(segmentPath)) {
           writeJson(res, 404, { error: "HLS segment not found" });
@@ -197,7 +195,7 @@ const tryHLSStream = async (ctx: FileHandlingContext & { url: URL }): Promise<bo
       // Serve variant playlist
       if (variant) {
         const variantHeight = parseInt(variant, 10);
-        const variantPlaylistPath = getVariantPlaylistPath(multibitrateInfo.hash, variantHeight);
+        const variantPlaylistPath = getVariantPlaylistPath(multibitrateInfo.hlsDir, variantHeight);
         
         if (!existsSync(variantPlaylistPath)) {
           writeJson(res, 404, { error: "HLS variant playlist not found" });
@@ -248,7 +246,7 @@ const tryHLSStream = async (ctx: FileHandlingContext & { url: URL }): Promise<bo
 
     // If requesting a segment, serve it directly if it exists
     if (segment) {
-      const segmentPath = getHLSSegmentPath(hlsInfo.hash, height, segment);
+      const segmentPath = getHLSSegmentPath(hlsInfo.hlsDir, segment);
       
       // Wait for segment to appear (it might still be encoding)
       const maxWaitMs = 30_000;
