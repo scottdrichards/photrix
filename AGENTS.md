@@ -6,6 +6,8 @@ and the implementation details benefit from testing to manage their complexity.
 # Development
 - If a prompt/interaction is testable, if possible create a test for it before implementing the solution, otherwise
 create the test after implementation.
+- If a prompt/interaction could be reflected in a prettier/linting change, suggest updating
+those configurations.
 
 # Coding style
 - Concise code is preferred
