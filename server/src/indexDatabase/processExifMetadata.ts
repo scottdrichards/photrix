@@ -24,7 +24,7 @@ export const startBackgroundProcessExifMetadata = (database: IndexDatabase, onCo
             const batchSize = 200;
             const items = database.getFilesNeedingMetadataUpdate('exif', batchSize);
             if (items.length === 0) {
-                console.log("[metadata] EXIF processing complete");
+                console.log("[metadata:exif] processing complete");
                 onComplete?.();
                 return;
             }
@@ -43,7 +43,7 @@ export const startBackgroundProcessExifMetadata = (database: IndexDatabase, onCo
                     } catch (error) {
                         const errorDate = new Date();
                         await database.addOrUpdateFileData(entry.relativePath, { exifProcessedAt: errorDate.toISOString() });
-                        console.log(`[metadata] Skipping EXIF file: ${relativePath}, ${error}`);
+                        console.log(`[metadata:exif] skipping file: ${relativePath}, ${error}`);
                     }
                     processedCount++;
                 }));
@@ -62,12 +62,12 @@ export const startBackgroundProcessExifMetadata = (database: IndexDatabase, onCo
                         minutes: minutesRemaining,
                         seconds: secondsRemaining,
                     });
-                    console.log(`[metadata] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Time remaining: ${durationString}. Last processed batch ending with: ${chunk[chunk.length - 1]?.relativePath ?? "<none>"}`);
+                    console.log(`[metadata:exif] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Time remaining: ${durationString}. Last processed batch ending with: ${chunk[chunk.length - 1]?.relativePath ?? "<none>"}`);
                     lastReportTime = now;
                 }
 
                 while (restartAtMS && restartAtMS > Date.now()) {
-                    console.log("[metadata] Paused EXIF processing...");
+                    console.log("[metadata:exif] paused processing...");
                     const timeoutDuration = restartAtMS - Date.now();
                     await new Promise((resolve) => setTimeout(resolve, timeoutDuration));
                 }

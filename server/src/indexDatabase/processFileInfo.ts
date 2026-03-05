@@ -24,7 +24,7 @@ export const startBackgroundProcessFileInfoMetadata = (database: IndexDatabase, 
             const batchSize = 200;
             const items = database.getFilesNeedingMetadataUpdate("info", batchSize);
             if (!items.length) {
-                console.log("[metadata] File info processing complete");
+                console.log("[metadata:file-info] processing complete");
                 onComplete?.();
                 return;
             }
@@ -45,13 +45,13 @@ export const startBackgroundProcessFileInfoMetadata = (database: IndexDatabase, 
                     const rate = (processedCount - lastReportCount) / ((now.getTime() - lastReportTime) / 1000);
                     lastReportCount = processedCount;
                     console.log(
-                        `[metadata] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Last processed: ${relativePath}`,
+                        `[metadata:file-info] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Last processed: ${relativePath}`,
                     );
                     lastReportTime = now.getTime();
                 }
 
                 while (restartAtMS && restartAtMS > Date.now()) {
-                    console.log("[metadata] Paused file info processing...");
+                    console.log("[metadata:file-info] paused processing...");
                     const timeoutDuration = restartAtMS - Date.now();
                     await new Promise((resolve) => setTimeout(resolve, timeoutDuration));
                 }
