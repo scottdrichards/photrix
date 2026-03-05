@@ -131,4 +131,16 @@ describe("ThumbnailTile", () => {
     expect(toggleSelected).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
+
+  it("fades image in when it finishes loading", () => {
+    const photo = createPhoto();
+    render(<ThumbnailTile photo={photo} />);
+
+    const image = screen.getByRole("img", { name: "1.jpg" });
+    expect(image).toHaveStyle({ opacity: "0" });
+
+    fireEvent.load(image);
+
+    expect(image).toHaveStyle({ opacity: "1" });
+  });
 });

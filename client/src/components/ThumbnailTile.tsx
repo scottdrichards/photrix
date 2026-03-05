@@ -111,6 +111,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   const { photo } = props;
   const styles = useStyles();
   const [isHovered, setIsHovered] = useState(false);
+  const [isImageLoaded, setIsImageLoaded] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
   const { isSelected, selectionMode, setSelected, setSelectionMode, toggleSelected } =
     useSelectionContext();
@@ -127,6 +128,10 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       }
     };
   }, []);
+
+  useEffect(() => {
+    setIsImageLoaded(false);
+  }, [photo.thumbnailUrl]);
 
   const clearLongPressTimeout = () => {
     if (!longPressTimeoutRef.current) {
@@ -174,6 +179,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   };
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    setIsImageLoaded(true);
     const img = e.currentTarget;
     if (img.naturalWidth && img.naturalHeight) {
       const actualRatio = clampRatio(img.naturalWidth / img.naturalHeight);
@@ -214,6 +220,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
             alt={photo.name}
             loading="lazy"
             className={styles.image}
+            style={{ opacity: isImageLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
             onLoad={handleImageLoad}
           />
           {isHovered && (
@@ -234,6 +241,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           alt={photo.name}
           loading="lazy"
           className={styles.image}
+          style={{ opacity: isImageLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
           onLoad={handleImageLoad}
         />
       )}
