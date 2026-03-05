@@ -33,12 +33,12 @@ const createDb = (): InstanceType<typeof IndexDatabase> => new IndexDatabase(EXA
 
 beforeAll(async () => {
 	process.env.ThumbnailCacheDirectory ??= path.join(os.tmpdir(), "photrix-test-thumbs");
-	process.env.INDEX_DB_PATH = path.join(os.tmpdir(), "photrix-test-index.db");
+	process.env.INDEX_DB_LOCATION = path.join(os.tmpdir(), "photrix-test-index-db");
 });
 
 const cleanDb = () => {
 	try {
-		rmSync(process.env.INDEX_DB_PATH ?? "", { force: true });
+		rmSync(path.join(process.env.INDEX_DB_LOCATION ?? "", "index.db"), { force: true });
 	} catch {
 		/* ignore */
 	}

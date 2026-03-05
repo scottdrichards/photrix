@@ -14,13 +14,13 @@ describe("FileWatcher", () => {
 
   beforeAll(async () => {
     process.env.ThumbnailCacheDirectory ??= path.join(os.tmpdir(), "photrix-test-thumbs");
-    process.env.INDEX_DB_PATH = path.join(os.tmpdir(), "photrix-test-index.db");
+    process.env.INDEX_DB_LOCATION = path.join(os.tmpdir(), "photrix-test-index-db");
   });
 
   beforeEach(async () => {
     // Create a temporary directory for testing
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "photrix-watcher-"));
-    process.env.INDEX_DB_PATH = path.join(tempDir, "index.db");
+    process.env.INDEX_DB_LOCATION = path.join(tempDir, "db");
     db = new IndexDatabase(tempDir);
   });
 

@@ -116,12 +116,7 @@ export class IndexDatabase {
   }
 
   private resolveDatabaseFilePath(): string {
-    const envDbPath = process.env.INDEX_DB_PATH?.trim();
-    if (envDbPath) {
-      return path.resolve(envDbPath);
-    }
-
-    const envDbLocation = process.env.INDEX_DB_LOCATION?.trim();
+        const envDbLocation = process.env.INDEX_DB_LOCATION?.trim();
     if (envDbLocation) {
       return path.join(path.resolve(envDbLocation), "index.db");
     }
