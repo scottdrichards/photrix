@@ -1,13 +1,13 @@
-# Testing Philosophy
-- Tests should not be tied to implementation details and should be as high-level as appropriate. Tests should generally focus on the user experience or things that impact the user experience. Some systems may be complex
-and the implementation details benefit from testing to manage their complexity.
-- Tests should balance runtime with minimal mocking.
+# Links
+Review these files when implicated
+- Testing: /TESTING.md (at root)
 
-# Development
-- If a prompt/interaction is testable, if possible create a test for it before implementing the solution, otherwise
-create the test after implementation.
+# Agent interactions
+- If a prompt/interaction is testable, create a test before implementation if possible. If not possible, inform the user and create one after implementation.
 - If a prompt/interaction could be reflected in a prettier/linting change, suggest updating
 those configurations.
+- If a misunderstanding occurs, ensure the learnings are captured in documentation somewhere
+- Ensure contexts are concise and only relevant contexts are loaded. For example, don't put much information in this file, but put it in a file/comment/etc. close to the relevant file.
 
 # Coding style
 - Concise code is preferred
