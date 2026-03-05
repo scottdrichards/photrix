@@ -19,6 +19,7 @@
         "/^Set-Location c:\\\\src\\\\photrix\\\\server; npx tsx src/main\\.ts$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        "npm run lint": true,
     }
 }

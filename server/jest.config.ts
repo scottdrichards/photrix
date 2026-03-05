@@ -1,6 +1,6 @@
 import type { JestConfigWithTsJest } from "ts-jest";
 
-const config: JestConfigWithTsJest = {
+const sharedConfig: JestConfigWithTsJest = {
   preset: "ts-jest/presets/default-esm",
   testEnvironment: "node",
   extensionsToTreatAsEsm: [".ts"],
@@ -21,10 +21,27 @@ const config: JestConfigWithTsJest = {
       },
     ],
   },
-  testMatch: ["<rootDir>/src/**/*.spec.ts"],
   setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
   testPathIgnorePatterns: ["<rootDir>/dist/"],
-  maxWorkers: 1, // Run tests serially to avoid port conflicts
+};
+
+const config: JestConfigWithTsJest = {
+  projects: [
+    {
+      ...sharedConfig,
+      displayName: "unit",
+      testMatch: [
+        "<rootDir>/src/**/*.spec.ts",
+        "!<rootDir>/src/main.spec.ts",
+      ],
+    },
+    {
+      ...sharedConfig,
+      displayName: "integration",
+      testMatch: ["<rootDir>/src/main.spec.ts"],
+      maxWorkers: 1,
+    },
+  ],
 };
 
 export default config;
