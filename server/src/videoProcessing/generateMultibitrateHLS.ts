@@ -13,6 +13,7 @@ const HLS_VARIANTS = [
 ] as const;
 
 type HLSVariant = (typeof HLS_VARIANTS)[number];
+const isVerboseHlsLoggingEnabled = () => process.env.HLS_ENCODE_VERBOSE === "1";
 
 /**
  * Returns the base directory for multi-bitrate HLS output.
@@ -122,9 +123,11 @@ const generateVariant = (
     ];
 
     const encoderType = useHardware ? "NVIDIA NVENC" : "software";
-    console.log(
-      `[HLS-ABR] Generating ${variant.height}p variant (${encoderType}) for ${filePath}`,
-    );
+    if (isVerboseHlsLoggingEnabled()) {
+      console.log(
+        `[HLS-ABR] Generating ${variant.height}p variant (${encoderType}) for ${filePath}`,
+      );
+    }
     const process = spawn("ffmpeg", args);
 
     let stderr = "";
@@ -134,7 +137,9 @@ const generateVariant = (
 
     process.on("close", (code) => {
       if (code === 0) {
-        console.log(`[HLS-ABR] ${variant.height}p variant complete (${encoderType})`);
+        if (isVerboseHlsLoggingEnabled()) {
+          console.log(`[HLS-ABR] ${variant.height}p variant complete (${encoderType})`);
+        }
         resolve();
         return;
       }
@@ -179,7 +184,9 @@ const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
 
   const masterPath = join(hlsDir, "master.m3u8");
   await writeFile(masterPath, lines.join("\n"), "utf-8");
-  console.log(`[HLS-ABR] Created master playlist at ${masterPath}`);
+  if (isVerboseHlsLoggingEnabled()) {
+    console.log(`[HLS-ABR] Created master playlist at ${masterPath}`);
+  }
 };
 
 /**
@@ -188,7 +195,11 @@ const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
  */
 export const generateMultibitrateHLS = async (
   filePath: string,
-  opts?: { priority?: QueuePriority; waitForCompletion?: boolean },
+  opts?: {
+    priority?: QueuePriority;
+    waitForCompletion?: boolean;
+    estimatedDurationSeconds?: number;
+  },
 ): Promise<string> => {
   await stat(filePath);
   const hlsDir = getMultibitrateHLSDirectory(filePath);
@@ -204,7 +215,9 @@ export const generateMultibitrateHLS = async (
       await mkdir(join(hlsDir, `${variant.height}p`), { recursive: true });
     }
 
-    console.log(`[HLS-ABR] Generating multi-bitrate HLS for ${filePath}`);
+    if (isVerboseHlsLoggingEnabled()) {
+      console.log(`[HLS-ABR] Generating multi-bitrate HLS for ${filePath}`);
+    }
     const startTime = Date.now();
 
     // Generate variants sequentially (NVENC can only do one encode at a time efficiently)
@@ -216,13 +229,19 @@ export const generateMultibitrateHLS = async (
     await createMasterPlaylist(hlsDir);
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[HLS-ABR] Multi-bitrate HLS complete for ${filePath} in ${elapsed}s`);
+    if (isVerboseHlsLoggingEnabled()) {
+      console.log(`[HLS-ABR] Multi-bitrate HLS complete for ${filePath} in ${elapsed}s`);
+    }
   };
 
   if (opts?.waitForCompletion) {
-    await mediaProcessingQueue.enqueue(doEncode, opts.priority, "video");
+    await mediaProcessingQueue.enqueue(doEncode, opts.priority, "video", {
+      videoSeconds: opts?.estimatedDurationSeconds,
+    });
   } else {
-    void mediaProcessingQueue.enqueue(doEncode, opts?.priority, "video");
+    void mediaProcessingQueue.enqueue(doEncode, opts?.priority, "video", {
+      videoSeconds: opts?.estimatedDurationSeconds,
+    });
   }
 
   return masterPath;

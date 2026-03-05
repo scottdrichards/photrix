@@ -8,7 +8,62 @@ type QueueTask = {
   fn: () => Promise<void>;
   priority: QueuePriority;
   mediaType: MediaType;
+  conversionUnits: {
+    imageCount: number;
+    videoSeconds: number;
+  };
 };
+
+type ConversionUnitsInput = {
+  imageCount?: number;
+  videoSeconds?: number;
+};
+
+type ConversionUnits = {
+  imageCount: number;
+  videoSeconds: number;
+};
+
+const emptyConversionUnits = (): ConversionUnits => ({
+  imageCount: 0,
+  videoSeconds: 0,
+});
+
+const addConversionUnits = (
+  left: ConversionUnits,
+  right: ConversionUnits,
+): ConversionUnits => ({
+  imageCount: left.imageCount + right.imageCount,
+  videoSeconds: left.videoSeconds + right.videoSeconds,
+});
+
+const subtractConversionUnits = (
+  left: ConversionUnits,
+  right: ConversionUnits,
+): ConversionUnits => ({
+  imageCount: Math.max(0, left.imageCount - right.imageCount),
+  videoSeconds: Math.max(0, left.videoSeconds - right.videoSeconds),
+});
+
+const normalizeConversionUnits = (
+  mediaType: MediaType,
+  units?: ConversionUnitsInput,
+): ConversionUnits => ({
+  imageCount: Math.max(
+    0,
+    units?.imageCount ?? (mediaType === "image" ? 1 : 0),
+  ),
+  videoSeconds: Math.max(
+    0,
+    Number.isFinite(units?.videoSeconds) ? (units?.videoSeconds ?? 0) : 0,
+  ),
+});
+
+const sumConversionUnits = (tasks: Array<QueueTask>): ConversionUnits =>
+  tasks.reduce(
+    (acc, task) => addConversionUnits(acc, task.conversionUnits),
+    emptyConversionUnits(),
+  );
 
 /**
  * A queue that processes tasks sequentially with optional concurrency limit.
@@ -16,11 +71,14 @@ type QueueTask = {
  */
 export class ProcessingQueue {
   private queue: Array<QueueTask> = [];
+  private activeTasks: Array<QueueTask> = [];
   private processing = 0;
   private readonly concurrency: number;
   private paused = false;
   private pauseUntil = 0;
   private pauseTimer: NodeJS.Timeout | null = null;
+  private enqueuedTotals: ConversionUnits = emptyConversionUnits();
+  private completedTotals: ConversionUnits = emptyConversionUnits();
 
   constructor(concurrency = 2) {
     this.concurrency = concurrency;
@@ -73,10 +131,15 @@ export class ProcessingQueue {
     task: () => Promise<T>,
     priority: QueuePriority = "background",
     mediaType: MediaType = "image",
+    conversionUnits?: ConversionUnitsInput,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const priorityIndex = priorityList.indexOf(priority);
       const mediaTypeIndex = mediaTypeList.indexOf(mediaType);
+      const normalizedConversionUnits = normalizeConversionUnits(
+        mediaType,
+        conversionUnits,
+      );
 
       // LIFO within a given priority/mediaType bucket: insert just after the last
       // task of the same priority/mediaType (or at the front of that bucket) so the
@@ -115,7 +178,12 @@ export class ProcessingQueue {
         priority,
         mediaType,
         fn,
+        conversionUnits: normalizedConversionUnits,
       });
+      this.enqueuedTotals = addConversionUnits(
+        this.enqueuedTotals,
+        normalizedConversionUnits,
+      );
       this.processNext();
     });
   }
@@ -147,11 +215,17 @@ export class ProcessingQueue {
     );
 
     if (task) {
+      this.activeTasks.push(task);
       try {
         await task.fn();
       } catch (error) {
         console.error("[ProcessingQueue] Task failed:", error);
       } finally {
+        this.activeTasks = this.activeTasks.filter((entry) => entry !== task);
+        this.completedTotals = addConversionUnits(
+          this.completedTotals,
+          task.conversionUnits,
+        );
         this.processing--;
         this.processNext(); // Process next task
       }
@@ -164,6 +238,47 @@ export class ProcessingQueue {
 
   getProcessing(): number {
     return this.processing;
+  }
+
+  getConversionStatus(): {
+    overall: {
+      images: { remaining: number; total: number };
+      videoSeconds: { remaining: number; total: number };
+    };
+    queued: {
+      images: { remaining: number; total: number };
+      videoSeconds: { remaining: number; total: number };
+    };
+  } {
+    const queuedTotals = sumConversionUnits(this.queue);
+    const processingTotals = sumConversionUnits(this.activeTasks);
+    const remainingOverall = subtractConversionUnits(
+      this.enqueuedTotals,
+      this.completedTotals,
+    );
+
+    return {
+      overall: {
+        images: {
+          remaining: remainingOverall.imageCount,
+          total: this.enqueuedTotals.imageCount,
+        },
+        videoSeconds: {
+          remaining: remainingOverall.videoSeconds,
+          total: this.enqueuedTotals.videoSeconds,
+        },
+      },
+      queued: {
+        images: {
+          remaining: queuedTotals.imageCount,
+          total: queuedTotals.imageCount + processingTotals.imageCount,
+        },
+        videoSeconds: {
+          remaining: queuedTotals.videoSeconds,
+          total: queuedTotals.videoSeconds + processingTotals.videoSeconds,
+        },
+      },
+    };
   }
 }
 

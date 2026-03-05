@@ -355,6 +355,15 @@ export class IndexDatabase {
     return row.count;
   }
 
+  countImageEntries(): number {
+    const stmt = this.db.prepare(
+      `SELECT COUNT(*) as count FROM files
+       WHERE mimeType LIKE 'image/%'`,
+    );
+    const row = stmt.get() as { count: number };
+    return row.count;
+  }
+
   countAllEntries(): number {
     const stmt = this.db.prepare(`SELECT COUNT(*) as count FROM files`);
     const row = stmt.get() as { count: number };
@@ -537,17 +546,25 @@ export class IndexDatabase {
   /**
    * Gets video files that have been processed for EXIF (ready for HLS encoding).
    */
-  getVideosReadyForHLS(limit = 50): Array<{ relativePath: string }> {
+  getVideosReadyForHLS(limit = 50): Array<{
+    relativePath: string;
+    duration?: number;
+  }> {
     const stmt = this.db.prepare(
-      `SELECT folder, fileName FROM files
+      `SELECT folder, fileName, duration FROM files
        WHERE mimeType LIKE 'video/%' AND exifProcessedAt IS NOT NULL
        ORDER BY created DESC, folder DESC, fileName DESC
        LIMIT ?`,
     );
 
-    const rows = stmt.all(limit) as Array<{ folder: string; fileName: string }>;
+    const rows = stmt.all(limit) as Array<{
+      folder: string;
+      fileName: string;
+      duration: number | null;
+    }>;
     return rows.map((row) => ({
       relativePath: joinPath(row.folder, row.fileName),
+      duration: typeof row.duration === "number" ? row.duration : undefined,
     }));
   }
 

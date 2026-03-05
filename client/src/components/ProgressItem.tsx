@@ -31,9 +31,18 @@ interface ProgressItemProps {
   progress: ProgressEntry;
   detail?: string;
   eta?: string | null;
+  summaryLabel?: string;
+  valueFormatter?: (value: number) => string;
 }
 
-export const ProgressItem = ({ label, progress, detail, eta }: ProgressItemProps) => {
+export const ProgressItem = ({
+  label,
+  progress,
+  detail,
+  eta,
+  summaryLabel = "ready",
+  valueFormatter = (value: number) => value.toLocaleString(),
+}: ProgressItemProps) => {
   const styles = useStyles();
   const percentFormatter = new Intl.NumberFormat("en-US", {
     style: "percent",
@@ -50,7 +59,7 @@ export const ProgressItem = ({ label, progress, detail, eta }: ProgressItemProps
       </div>
       <ProgressBar value={progress.percent} max={1} />
       <Text className={styles.muted}>
-        {progress.completed.toLocaleString()} / {progress.total.toLocaleString()} ready
+        {valueFormatter(progress.completed)} / {valueFormatter(progress.total)} {summaryLabel}
         {detail ? ` • ${detail}` : ""}
         {eta ? ` • ETA: ${eta}` : ""}
       </Text>

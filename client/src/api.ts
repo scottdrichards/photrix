@@ -139,6 +139,11 @@ export interface ProgressEntry {
   percent: number;
 }
 
+export type RemainingTotal = {
+  remaining: number;
+  total: number;
+};
+
 export interface RecentMaintenance {
   folder: string;
   fileName: string;
@@ -148,12 +153,26 @@ export interface RecentMaintenance {
 export interface ServerStatus {
   databaseSize: number;
   scannedFilesCount: number;
+  queues: {
+    pending: number;
+    processing: number;
+  };
   pending: {
     info: number;
     exif: number;
   };
   maintenance: {
     exifActive: boolean;
+  };
+  conversion: {
+    overall: {
+      videoMinutes: RemainingTotal;
+      images: RemainingTotal;
+    };
+    queued: {
+      videoMinutes: RemainingTotal;
+      images: RemainingTotal;
+    };
   };
   progress: {
     overall: ProgressEntry;

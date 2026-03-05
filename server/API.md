@@ -271,6 +271,10 @@ console.log(filteredData);
 - `faceCount`
 - `faceNames`
 
+## Environment
+
+- `HLS_ENCODE_VERBOSE` (optional): set to `1` to enable verbose HLS encoding logs (`[hls-encode]` and `[HLS-ABR]` per-file/per-variant details). By default, routine per-item logs are suppressed and only key progress/errors are logged.
+
 ## Error Responses
 
 **400 Bad Request:**

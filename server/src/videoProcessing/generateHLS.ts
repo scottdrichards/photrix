@@ -91,7 +91,7 @@ const generateHLSWithFFMPEG = (
 export const generateHLS = async (
   filePath: string,
   height: StandardHeight = "original",
-  opts?: { priority?: QueuePriority },
+  opts?: { priority?: QueuePriority; estimatedDurationSeconds?: number },
 ): Promise<string> => {
   const { exists, playlistPath, hlsDir } = await getHLSInfo(filePath, height);
 
@@ -185,6 +185,9 @@ export const generateHLS = async (
     },
     opts?.priority,
     "video",
+    {
+      videoSeconds: opts?.estimatedDurationSeconds,
+    },
   );
 
   return playlistPath;

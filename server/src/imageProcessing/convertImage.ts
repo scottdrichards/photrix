@@ -249,7 +249,7 @@ export const convertImage = async (
     await ensureCacheDir(cachedPath);
     console.log(`[ImageCache] Generating ${height} for ${filePath}`);
     await generateImage(filePath, [{ path: cachedPath, height }]);
-  }, opts?.priority);
+  }, opts?.priority, "image", { imageCount: 1 });
   return cachedPath;
 };
 
@@ -278,5 +278,5 @@ export const convertImageToMultipleSizes = async (
       `[ImageCache] Generating sizes ${outputs.map((o) => o.height).join(", ")} for ${filePath}`,
     );
     await generateImage(filePath, outputs);
-  }, opts?.priority);
+  }, opts?.priority, "image", { imageCount: 1 });
 };

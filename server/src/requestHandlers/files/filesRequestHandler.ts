@@ -328,7 +328,13 @@ const tryHLSStream = async (
     }
 
     // Start HLS generation (returns immediately, transcoding happens in background)
-    await generateHLS(normalizedPath, height, { priority: "userBlocked" });
+    await generateHLS(normalizedPath, height, {
+      priority: "userBlocked",
+      estimatedDurationSeconds:
+        typeof knownDuration === "number" && Number.isFinite(knownDuration)
+          ? knownDuration
+          : undefined,
+    });
 
     // Wait for playlist to have at least 3 segments for smooth initial playback
     const maxWaitMs = 30_000;

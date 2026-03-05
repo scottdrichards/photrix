@@ -12,7 +12,12 @@ import {
   Text,
 } from "@fluentui/react-components";
 import { useEffect, useState } from "react";
-import { subscribeStatusStream, type ProgressEntry, type ServerStatus } from "../api";
+import {
+  subscribeStatusStream,
+  type ProgressEntry,
+  type RemainingTotal,
+  type ServerStatus,
+} from "../api";
 import { ProgressItem } from "./ProgressItem";
 import { RecentActivity } from "./RecentActivity";
 
@@ -88,6 +93,20 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     return `~${Math.round(etaSeconds / 3600)}h`;
   };
 
+  const formatMinutes = (value: number): string =>
+    value < 10 ? value.toFixed(1) : Math.round(value).toLocaleString();
+
+  const toRemainingProgress = (value: RemainingTotal): ProgressEntry => {
+    const total = Math.max(value.total, 0);
+    const remaining = Math.min(Math.max(value.remaining, 0), total);
+    const completed = Math.max(total - remaining, 0);
+    return {
+      completed,
+      total,
+      percent: total <= 0 ? 1 : completed / total,
+    };
+  };
+
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -143,6 +162,13 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                       {status.maintenance.exifActive ? "active" : "idle"}
                     </span>
                   </Text>
+                  <Text>
+                    <span className={styles.label}>Queue:</span>
+                    <span className={styles.value}>
+                      {status.queues.pending.toLocaleString()} waiting / {" "}
+                      {status.queues.processing.toLocaleString()} processing
+                    </span>
+                  </Text>
                 </div>
                 <ProgressItem
                   label="Overall progress"
@@ -166,6 +192,25 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                     progress={status.progress.exif}
                     detail={`${status.pending.exif.toLocaleString()} remaining`}
                     eta={calculateETA(status.progress.exif, "exif")}
+                  />
+                </div>
+
+                <Text size={400} weight="semibold">
+                  Conversion status
+                </Text>
+                <div className={styles.progressGrid}>
+                  <ProgressItem
+                    label="Video conversion"
+                    progress={toRemainingProgress(status.conversion.overall.videoMinutes)}
+                    summaryLabel="min processed"
+                    valueFormatter={formatMinutes}
+                    detail={`${formatMinutes(status.conversion.overall.videoMinutes.remaining)} min remaining`}
+                  />
+                  <ProgressItem
+                    label="Image conversion"
+                    progress={toRemainingProgress(status.conversion.overall.images)}
+                    summaryLabel="items processed"
+                    detail={`${status.conversion.overall.images.remaining.toLocaleString()} items remaining`}
                   />
                 </div>
 

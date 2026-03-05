@@ -11,3 +11,7 @@ those configurations.
 
 # Coding style
 - Concise code is preferred
+- Prefer to inline single-use small functions
+- Prefer to not use defaults unless there's a good reason to have one.
+- Prefer to not "future-proof" or have backwards compatability - make it so the current version is
+optimized for itself.
