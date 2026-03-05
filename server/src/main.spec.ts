@@ -37,12 +37,12 @@ describe("main.ts HTTP Server", () => {
   let server: http.Server;
   let database: IndexDatabase;
   let storagePath: string;
-  const TEST_DB_PATH = path.resolve("./.cache/test-index.db");
+  const TEST_DB_LOCATION = path.resolve("./.cache/test-index-db");
   const TEST_PORT = 3001;
 
   const cleanDb = () => {
     try {
-      rmSync(TEST_DB_PATH, { force: true });
+      rmSync(path.join(TEST_DB_LOCATION, "index.db"), { force: true });
     } catch {
       /* no-op */
     }
@@ -51,7 +51,7 @@ describe("main.ts HTTP Server", () => {
   beforeEach(async () => {
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    process.env.INDEX_DB_PATH = TEST_DB_PATH;
+    process.env.INDEX_DB_LOCATION = TEST_DB_LOCATION;
     cleanDb();
     
     storagePath = path.resolve("./exampleFolder");
