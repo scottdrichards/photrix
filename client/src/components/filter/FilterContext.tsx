@@ -14,6 +14,7 @@ export type FilterState = Partial<{
   includeSubfolders: boolean;
   path: string;
   mediaTypeFilter: MediaTypeFilter;
+  peopleInImageFilter: string[];
 } &{
   [K in keyof NullableFilter]: NullableFilter[K] | null;
 }>;
@@ -43,6 +44,7 @@ const createInitialFilter = (): FilterState => {
   path,
   ratingFilter: null,
   mediaTypeFilter: "all",
+  peopleInImageFilter: [],
   locationBounds: undefined,
   dateRange: null,
 }};

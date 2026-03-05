@@ -53,7 +53,7 @@ const maybeBoundsEqual = (
 export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
   const styles = useMapFilterStyles();
   const { filter, setFilter } = useFilterContext();
-  const { includeSubfolders, path, ratingFilter, mediaTypeFilter, dateRange, locationBounds } = filter;
+  const { locationBounds } = filter;
   const normalizedLocationBounds = locationBounds ?? undefined;
   
   const [mapElement, setMapElement] = useState<HTMLDivElement | null>(null);
@@ -71,17 +71,6 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
     setMapElement(element);
   }, []);
 
-  const clusterSize = useMemo(() => {
-    if (!locationBounds) {
-      return undefined;
-    }
-    const latSpan = Math.max(Math.abs(locationBounds.north - locationBounds.south), 1e-9);
-    const lonSpan = Math.max(Math.abs(locationBounds.east - locationBounds.west), 1e-9);
-    const targetCells = 400_000;
-    const cellSize = Math.max(latSpan, lonSpan) / Math.sqrt(targetCells);
-    return Math.max(cellSize, 0.00000001);
-  }, [locationBounds]);
-
   useEffect(() => {
     const controller = new AbortController();
 
@@ -89,16 +78,15 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
       setLoading(true);
       setError(null);
       try {
-        const result = await fetchGeotaggedPhotos({
-          includeSubfolders,
-          path,
-          ratingFilter,
-          mediaTypeFilter,
-          locationBounds: locationBounds,
-          clusterSize,
-          dateRange,
-          signal: controller.signal,
-        });
+        let clusterSize = undefined;
+        if (normalizedLocationBounds) {
+          const latSpan = Math.max(Math.abs(normalizedLocationBounds.north - normalizedLocationBounds.south), 1e-9);
+          const lonSpan = Math.max(Math.abs(normalizedLocationBounds.east - normalizedLocationBounds.west), 1e-9);
+          const targetCells = 400_000;
+          const cellSize = Math.max(latSpan, lonSpan) / Math.sqrt(targetCells);
+          clusterSize = Math.max(cellSize, 0.00000001);
+        }
+        const result = await fetchGeotaggedPhotos({...filter, locationBounds: normalizedLocationBounds, clusterSize, signal: controller.signal });
         setPoints(result.points);
         setTotalPins(result.total);
         setTruncated(result.truncated);
@@ -118,7 +106,7 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
     loadPoints();
 
     return () => controller.abort();
-  }, [includeSubfolders, path, ratingFilter, mediaTypeFilter, locationBounds, clusterSize, dateRange]);
+  }, [filter, normalizedLocationBounds]);
 
   const pinSummary = useMemo(() => {
     const displayed = points.length;

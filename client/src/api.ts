@@ -84,7 +84,24 @@ export interface FetchPhotosOptions {
   mediaTypeFilter?: "all" | "photo" | "video" | "other";
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
+  peopleInImageFilter?: string[];
 }
+
+export type SuggestionsField = "personInImage" | "tags" | "aiTags" | "cameraMake" | "cameraModel" | "lens";
+
+export type FetchSuggestionsOptions = {
+  field: SuggestionsField;
+  q: string;
+  limit?: number;
+  includeSubfolders?: boolean;
+  path?: string;
+  ratingFilter?: { rating: number; atLeast: boolean } | null;
+  mediaTypeFilter?: "all" | "photo" | "video" | "other";
+  locationBounds?: GeoBounds | null;
+  dateRange?: DateRangeFilter | null;
+  peopleInImageFilter?: string[];
+  signal?: AbortSignal;
+};
 
 export interface FetchPhotosResult {
   items: PhotoItem[];
@@ -248,9 +265,10 @@ type BuildFiltersInput = {
   mediaTypeFilter?: "all" | "photo" | "video" | "other";
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
+  peopleInImageFilter?: string[] | string;
 };
 
-const buildFilters = ({ ratingFilter, mediaTypeFilter, locationBounds, dateRange }: BuildFiltersInput) => {
+const buildFilters = ({ ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter }: BuildFiltersInput) => {
   const filters: any[] = [];
 
   if (ratingFilter) {
@@ -294,6 +312,18 @@ const buildFilters = ({ ratingFilter, mediaTypeFilter, locationBounds, dateRange
   const dateFilter = dateRangeToFilter(dateRange);
   if (dateFilter) {
     filters.push(dateFilter);
+  }
+
+  if (Array.isArray(peopleInImageFilter)) {
+    const normalizedPeople = Array.from(new Set(peopleInImageFilter.map((person) => person.trim()).filter((person) => person.length > 0)));
+    if (normalizedPeople.length > 0) {
+      filters.push({ personInImage: normalizedPeople });
+    }
+  } else if (typeof peopleInImageFilter === "string") {
+    const normalizedSearch = peopleInImageFilter.trim();
+    if (normalizedSearch.length > 0) {
+      filters.push({ personInImage: { includes: normalizedSearch } });
+    }
   }
 
   return filters;
@@ -407,6 +437,7 @@ export const fetchPhotos = async ({
   mediaTypeFilter = "all",
   locationBounds,
   dateRange,
+  peopleInImageFilter,
 }: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
   const params = new URLSearchParams();
   params.set("metadata", Array.from(metadata).join(","));
@@ -416,7 +447,7 @@ export const fetchPhotos = async ({
     params.set("includeSubfolders", "true");
   }
   
-  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange });
+  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter });
   
   if (filters.length > 0) {
     const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
@@ -449,6 +480,7 @@ export const fetchGeotaggedPhotos = async ({
   ratingFilter,
   mediaTypeFilter = "all",
   dateRange,
+  peopleInImageFilter,
   signal,
 }: FetchGeotaggedPhotosOptions = {}): Promise<{ points: GeoPoint[]; total: number; truncated: boolean }> => {
   const params = new URLSearchParams();
@@ -461,7 +493,7 @@ export const fetchGeotaggedPhotos = async ({
     params.set("clusterSize", clusterSize.toString());
   }
 
-  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange });
+  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter });
 
   if (filters.length > 0) {
     const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
@@ -507,6 +539,7 @@ export const fetchDateRange = async ({
   ratingFilter,
   mediaTypeFilter = "all",
   locationBounds,
+  peopleInImageFilter,
   signal,
 }: FetchDateRangeOptions = {}): Promise<{ minDate: number | null; maxDate: number | null }> => {
   const params = new URLSearchParams();
@@ -515,7 +548,7 @@ export const fetchDateRange = async ({
     params.set("includeSubfolders", "true");
   }
 
-  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange: null });
+  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange: null, peopleInImageFilter });
 
   if (filters.length > 0) {
     const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
@@ -539,6 +572,7 @@ export const fetchDateHistogram = async ({
   mediaTypeFilter = "all",
   locationBounds,
   dateRange,
+  peopleInImageFilter,
   signal,
 }: FetchDateHistogramOptions = {}): Promise<DateHistogramResult> => {
   const params = new URLSearchParams();
@@ -547,7 +581,7 @@ export const fetchDateHistogram = async ({
     params.set("includeSubfolders", "true");
   }
 
-  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange });
+  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter });
 
   if (filters.length > 0) {
     const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
@@ -575,4 +609,51 @@ export const createFallbackPhoto = (path: string): PhotoItem => {
     previewUrl: buildFallbackUrl(path),
     fullUrl: buildFallbackUrl(path),
   };
+};
+
+export const fetchSuggestions = async ({
+  field,
+  q,
+  limit = 8,
+  includeSubfolders = false,
+  path = "",
+  ratingFilter,
+  mediaTypeFilter = "all",
+  locationBounds,
+  dateRange,
+  peopleInImageFilter,
+  signal,
+}: FetchSuggestionsOptions): Promise<string[]> => {
+  const normalizedQuery = q.trim();
+  if (normalizedQuery.length === 0) {
+    return [];
+  }
+
+  const params = new URLSearchParams();
+  params.set("field", field);
+  params.set("q", normalizedQuery);
+  params.set("limit", String(limit));
+
+  if (includeSubfolders) {
+    params.set("includeSubfolders", "true");
+  }
+
+  if (path) {
+    params.set("path", path);
+  }
+
+  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter });
+  if (filters.length > 0) {
+    const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    params.set("filter", JSON.stringify(filterObj));
+  }
+
+  const response = await fetch(`/api/suggestions?${params.toString()}`, { signal });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch suggestions (status ${response.status})`);
+  }
+
+  const payload = await response.json() as { suggestions: string[] };
+  return payload.suggestions;
 };

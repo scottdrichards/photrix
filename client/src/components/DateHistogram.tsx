@@ -120,7 +120,7 @@ export const DateHistogram = ({
 }: DateHistogramProps) => {
   const styles = useStyles();
   const { filter, setFilter } = useFilterContext();
-  const { includeSubfolders, path, ratingFilter, mediaTypeFilter, locationBounds, dateRange } = filter;
+  const { includeSubfolders, path, ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter } = filter;
   const value = dateRange;
   const onChange = useCallback((range: Range) => setFilter({ dateRange: range }), [setFilter]);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -169,6 +169,7 @@ export const DateHistogram = ({
           mediaTypeFilter,
           locationBounds,
           dateRange: null,
+          peopleInImageFilter,
           signal: controller.signal,
         });
 
@@ -210,7 +211,7 @@ export const DateHistogram = ({
     void loadHistogram();
 
     return () => controller.abort();
-  }, [includeSubfolders, path, ratingFilter, mediaTypeFilter, locationBounds, onChange]);
+  }, [includeSubfolders, path, ratingFilter, mediaTypeFilter, locationBounds, peopleInImageFilter, onChange]);
 
   const domain = useMemo(() => {
     const min = minDate ?? (buckets[0]?.start ?? null);

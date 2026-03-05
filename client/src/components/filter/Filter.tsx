@@ -1,6 +1,7 @@
 import {
   Button,
   Caption1,
+  Input,
   Popover,
   PopoverSurface,
   PopoverTrigger,
@@ -16,16 +17,17 @@ import {
   Folder24Regular,
   Image24Regular,
   Location24Regular,
+  Person24Regular,
   Star24Filled,
   Star24Regular,
 } from "@fluentui/react-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchFolders } from "../../api";
+import { fetchFolders, fetchSuggestions } from "../../api";
 import { DateHistogram } from "../DateHistogram";
 import { MapFilter } from "../MapFilter";
 import { MediaTypeFilter, useFilterContext } from "./FilterContext";
 
-type FilterPanel = "folders" | "type" | "rating" | "date" | "map";
+type FilterPanel = "folders" | "type" | "people" | "rating" | "date" | "map";
 
 const useStyles = makeStyles({
   iconBar: {
@@ -63,6 +65,26 @@ const useStyles = makeStyles({
     alignItems: "center",
     gap: tokens.spacingHorizontalS,
     flexWrap: "wrap",
+  },
+  textFilterInput: {
+    width: "100%",
+  },
+  suggestionsList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: tokens.spacingHorizontalXS,
+  },
+  suggestionButton: {
+    justifyContent: "flex-start",
+  },
+  selectedPeopleRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: "wrap",
+  },
+  selectedPersonButton: {
+    paddingInline: tokens.spacingHorizontalS,
   },
   ratingFilter: {
     display: "flex",
@@ -114,7 +136,19 @@ const useStyles = makeStyles({
 export const Filter = () => {
   const styles = useStyles();
   const { filter, setFilter } = useFilterContext();
-  const { includeSubfolders, ratingFilter, mediaTypeFilter, path } = filter;
+  const {
+    includeSubfolders,
+    ratingFilter,
+    mediaTypeFilter,
+    path,
+    peopleInImageFilter = [],
+    locationBounds,
+    dateRange,
+  } = filter;
+
+  const selectedPeople = useMemo(() => {
+    return peopleInImageFilter;
+  }, [peopleInImageFilter]);
 
   const ratingValue = ratingFilter?.rating ?? null;
   const ratingAtLeast = ratingFilter?.atLeast ?? true;
@@ -122,6 +156,9 @@ export const Filter = () => {
   const [activePanel, setActivePanel] = useState<FilterPanel | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
+  const [peopleSuggestions, setPeopleSuggestions] = useState<string[]>([]);
+  const [loadingPeopleSuggestions, setLoadingPeopleSuggestions] = useState(false);
+  const [peopleSearchText, setPeopleSearchText] = useState("");
 
   const currentPath = path?.replace(/\/$/, "");
 
@@ -148,6 +185,40 @@ export const Filter = () => {
     setFilter({ mediaTypeFilter: type });
   };
 
+  const handleAddPerson = (value: string) => {
+    const normalizedValue = value.trim();
+    if (!normalizedValue) {
+      return;
+    }
+
+    setFilter((previous) => {
+      const existing = previous.peopleInImageFilter ?? [];
+
+      const hasDuplicate = existing.some((person) => person.toLocaleLowerCase() === normalizedValue.toLocaleLowerCase());
+      return hasDuplicate
+        ? previous
+        : { ...previous, peopleInImageFilter: [...existing, normalizedValue] };
+    });
+
+    setPeopleSearchText("");
+  };
+
+  const handleRemovePerson = (value: string) => {
+    setFilter((previous) => {
+      const existing = previous.peopleInImageFilter ?? [];
+
+      return {
+        ...previous,
+        peopleInImageFilter: existing.filter((person) => person !== value),
+      };
+    });
+  };
+
+  const handleClearPeople = () => {
+    setPeopleSearchText("");
+    setFilter({ peopleInImageFilter: [] });
+  };
+
   useEffect(() => {
     const loadFolders = async () => {
       setLoadingFolders(true);
@@ -163,6 +234,66 @@ export const Filter = () => {
 
     void loadFolders();
   }, [currentPath]);
+
+  useEffect(() => {
+    if (activePanel !== "people") {
+      return;
+    }
+
+    const searchText = peopleSearchText.trim();
+    if (searchText.length === 0) {
+      setPeopleSuggestions([]);
+      setLoadingPeopleSuggestions(false);
+      return;
+    }
+
+    const abortController = new AbortController();
+    const timeoutId = window.setTimeout(async () => {
+      setLoadingPeopleSuggestions(true);
+      try {
+        const result = await fetchSuggestions({
+          field: "personInImage",
+          q: searchText,
+          limit: 8,
+          includeSubfolders,
+          path,
+          ratingFilter,
+          mediaTypeFilter,
+          locationBounds,
+          dateRange,
+          peopleInImageFilter: selectedPeople,
+          signal: abortController.signal,
+        });
+        const selectedPeopleLookup = new Set(selectedPeople.map((person) => person.toLocaleLowerCase()));
+        setPeopleSuggestions(result.filter((person) => !selectedPeopleLookup.has(person.toLocaleLowerCase())));
+      } catch (error) {
+        if ((error as Error).name === "AbortError") {
+          return;
+        }
+        console.error("Failed to load people suggestions:", error);
+        setPeopleSuggestions([]);
+      } finally {
+        if (!abortController.signal.aborted) {
+          setLoadingPeopleSuggestions(false);
+        }
+      }
+    }, 200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      abortController.abort();
+    };
+  }, [
+    activePanel,
+    peopleSearchText,
+    selectedPeople,
+    includeSubfolders,
+    path,
+    ratingFilter,
+    mediaTypeFilter,
+    locationBounds,
+    dateRange,
+  ]);
 
   const breadcrumbs = useMemo(() => {
     if (!currentPath) return [];
@@ -298,6 +429,78 @@ export const Filter = () => {
                 Other
               </Button>
             </div>
+          </div>
+        </PopoverSurface>
+      </Popover>
+
+      <Popover
+        open={activePanel === "people"}
+        onOpenChange={(_, data) => setActivePanel(data.open ? "people" : null)}
+        positioning="below-start"
+      >
+        <PopoverTrigger disableButtonEnhancement>
+          <Tooltip content="People in image" relationship="label">
+            <Button
+              aria-label="People in image filter"
+              icon={<Person24Regular />}
+              appearance={activePanel === "people" || selectedPeople.length > 0 ? "primary" : "subtle"}
+              className={styles.filterIconButton}
+            />
+          </Tooltip>
+        </PopoverTrigger>
+        <PopoverSurface className={styles.panelSurface}>
+          <div className={styles.panelSection}>
+            <Subtitle2>People in image</Subtitle2>
+            {selectedPeople.length > 0 ? (
+              <div className={styles.selectedPeopleRow}>
+                {selectedPeople.map((person) => (
+                  <Button
+                    key={person}
+                    size="small"
+                    appearance="secondary"
+                    className={styles.selectedPersonButton}
+                    onClick={() => handleRemovePerson(person)}
+                  >
+                    {person} ×
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+            <Input
+              className={styles.textFilterInput}
+              value={peopleSearchText}
+              onChange={(_, data) => setPeopleSearchText(data.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  handleAddPerson(peopleSearchText);
+                }
+              }}
+              placeholder="Search names (e.g. Scott)"
+            />
+            {loadingPeopleSuggestions ? <Spinner size="tiny" label="Finding people..." /> : null}
+            {peopleSuggestions.length > 0 ? (
+              <div className={styles.suggestionsList}>
+                {peopleSuggestions.map((person) => (
+                  <Button
+                    key={person}
+                    size="small"
+                    appearance="subtle"
+                    className={styles.suggestionButton}
+                    onClick={() => handleAddPerson(person)}
+                  >
+                    {person}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+            {(selectedPeople.length > 0 || peopleSearchText.trim().length > 0) ? (
+              <div className={styles.controlsRow}>
+                <Button size="small" appearance="subtle" onClick={handleClearPeople}>
+                  Clear
+                </Button>
+              </div>
+            ) : null}
           </div>
         </PopoverSurface>
       </Popover>

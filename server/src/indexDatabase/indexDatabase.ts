@@ -584,6 +584,54 @@ export class IndexDatabase {
       .sort((a, b) => a.localeCompare(b));
   }
 
+  queryFieldSuggestions(options: {
+    field: "personInImage" | "tags" | "aiTags" | "cameraMake" | "cameraModel" | "lens";
+    search: string;
+    filter: FilterElement;
+    limit?: number;
+  }): string[] {
+    const { field, search, filter } = options;
+    const limit = Math.max(1, Math.min(100, options.limit ?? 8));
+    const normalizedSearch = search.trim();
+
+    if (normalizedSearch.length === 0) {
+      return [];
+    }
+
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    const likeQuery = `%${escapeLikeLiteral(normalizedSearch)}%`;
+    const whereFragment = whereClause ? `AND (${whereClause})` : "";
+
+    if (field === "personInImage" || field === "tags" || field === "aiTags") {
+      const rows = this.db.prepare(
+        `SELECT DISTINCT json_each.value AS suggestion
+         FROM files, json_each(${field})
+         WHERE files.${field} IS NOT NULL
+           AND json_each.value IS NOT NULL
+           AND json_each.value != ''
+           AND json_each.value LIKE ? ESCAPE '\\'
+           ${whereFragment}
+         ORDER BY suggestion COLLATE NOCASE ASC
+         LIMIT ?`
+      ).all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string }>;
+
+      return rows.map((row) => row.suggestion).filter((value) => typeof value === "string" && value.length > 0);
+    }
+
+    const rows = this.db.prepare(
+      `SELECT DISTINCT ${field} AS suggestion
+       FROM files
+       WHERE ${field} IS NOT NULL
+         AND ${field} != ''
+         AND ${field} LIKE ? ESCAPE '\\'
+         ${whereFragment}
+       ORDER BY suggestion COLLATE NOCASE ASC
+       LIMIT ?`
+    ).all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string }>;
+
+    return rows.map((row) => row.suggestion).filter((value) => typeof value === "string" && value.length > 0);
+  }
+
   queryGeoClusters(options: { filter: QueryOptions["filter"]; clusterSize: number; bounds?: { west: number; east: number; north: number; south: number } | null }): GeoClusterResult {
     const { filter, clusterSize, bounds } = options;
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
@@ -677,7 +725,7 @@ export class IndexDatabase {
     const mainSQL = `
       SELECT * FROM files 
       ${whereClause ? `WHERE ${whereClause}` : ''}
-      ORDER BY CASE WHEN dateTaken IS NULL THEN 0 ELSE 1 END DESC, dateTaken DESC, folder ASC, fileName ASC
+      ORDER BY COALESCE(CAST(dateTaken AS INTEGER), CAST(created AS INTEGER), CAST(modified AS INTEGER), 0) DESC, folder ASC, fileName ASC
       LIMIT ? OFFSET ?
     `;
 

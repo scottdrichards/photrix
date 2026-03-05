@@ -38,6 +38,24 @@ Get a list of subfolders at the specified path.
 }
 ```
 
+### GET `/suggestions`
+Get distinct text suggestions for searchable metadata fields.
+
+**Query Parameters:**
+- `field` (required): one of `personInImage`, `tags`, `aiTags`, `cameraMake`, `cameraModel`, `lens`
+- `q` (required): search text (substring match)
+- `limit` (optional): max number of suggestions (default: 8, max: 100)
+- `path` (optional): folder path scope
+- `includeSubfolders` (optional): `true` to include descendants when `path` is provided
+- `filter` (optional): JSON-encoded FilterElement for additional constraints
+
+**Response:**
+```json
+{
+  "suggestions": ["Scott", "Scott and Ruby"]
+}
+```
+
 ### GET `/files/{path}` - File Representations
 
 Access files with different representations (thumbnails, previews, HLS streaming).
@@ -171,6 +189,11 @@ curl "http://localhost:3000/files?filter=$(echo $filter | jq -sRr @uri)&metadata
 filter='{"personInImage":{"includes":"Scott"}}'
 metadata='fileName,personInImage,regions'
 curl "http://localhost:3000/files?filter=$(echo $filter | jq -sRr @uri)&metadata=$metadata&pageSize=25&page=1"
+```
+
+### Get people suggestions for typeahead
+```bash
+curl "http://localhost:3000/api/suggestions?field=personInImage&q=sco&limit=8"
 ```
 
 ### Get files with EXIF metadata

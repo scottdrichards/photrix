@@ -2,6 +2,7 @@ import http from "node:http";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { filesEndpointRequestHandler } from "./requestHandlers/files/filesRequestHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
+import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
 
 const PORT = process.env.PORT || 3000;
 
@@ -48,6 +49,11 @@ export const createServer = (database: IndexDatabase, storagePath: string, optio
         // Get folders endpoint - list subfolders at a given path
         if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
             foldersRequestHandler(req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>, res, { database });
+            return;
+        }
+
+        if (req.url?.startsWith("/api/suggestions") && req.method === "GET") {
+            suggestionsRequestHandler(req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>, res, { database });
             return;
         }
 
