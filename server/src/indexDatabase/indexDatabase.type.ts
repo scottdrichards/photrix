@@ -18,10 +18,14 @@ export type StringSearch =
  */
 export type Range<T extends Date | number> = { min?: T; max?: T };
 
+export type FilterField = keyof FileRecord | "relativePath";
+
 export type FilterCondition = {
-  [K in keyof FileRecord]?:
+  [K in FilterField]?:
     | null
-    | (K extends "folder"
+    | (K extends "relativePath"
+        ? StringSearch
+        : K extends "folder"
         ?
             | StringSearch
             | {
@@ -29,8 +33,9 @@ export type FilterCondition = {
                 recursive?: boolean;
                 folder: string;
               }
-        : NonNullable<FileRecord[K]> extends number
-          ? number[] | Range<number>
+        : K extends keyof FileRecord
+          ? NonNullable<FileRecord[K]> extends number
+            ? number | number[] | Range<number>
           : NonNullable<FileRecord[K]> extends Record<string, number>
             ? { [P in keyof NonNullable<FileRecord[K]>]?: number[] | Range<number> }
             : NonNullable<FileRecord[K]> extends string | string[]
@@ -39,7 +44,8 @@ export type FilterCondition = {
                 ? Range<Date>
                 : NonNullable<FileRecord[K]> extends boolean
                   ? NonNullable<FileRecord[K]>
-                  : FileRecord[K]);
+                  : FileRecord[K]
+          : never);
 };
 
 export type LogicalFilter = {

@@ -30,16 +30,13 @@ const config: JestConfigWithTsJest = {
     {
       ...sharedConfig,
       displayName: "unit",
-      testMatch: [
-        "<rootDir>/src/**/*.spec.ts",
-        "!<rootDir>/src/main.spec.ts",
-      ],
+      testMatch: ["<rootDir>/src/**/*.spec.ts"],
+      testPathIgnorePatterns: ["<rootDir>/dist/", "<rootDir>/src/main.spec.ts"],
     },
     {
       ...sharedConfig,
       displayName: "integration",
       testMatch: ["<rootDir>/src/main.spec.ts"],
-      maxWorkers: 1,
     },
   ],
 };

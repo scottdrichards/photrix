@@ -1,4 +1,4 @@
-import type { FilterCondition, FilterElement, Range } from "./indexDatabase.type.ts";
+import type { FilterCondition, FilterElement, FilterField, Range } from "./indexDatabase.type.ts";
 import type { FileRecord } from "./fileRecord.type.ts";
 import { normalizeFolderPath } from "./utils/pathUtils.ts";
 
@@ -57,7 +57,7 @@ const buildFilterSQL = (filter: FilterElement, results: SQLPart[]): void => {
       continue;
     }
 
-    const sql = constraintToSQL(key as keyof FileRecord, constraint);
+    const sql = constraintToSQL(key as FilterField, constraint);
     if (sql) {
       results.push(sql);
     }
@@ -65,16 +65,17 @@ const buildFilterSQL = (filter: FilterElement, results: SQLPart[]): void => {
 };
 
 const constraintToSQL = (
-  field: keyof FileRecord,
-  constraint: FilterCondition[keyof FileRecord],
+  field: FilterField,
+  constraint: FilterCondition[FilterField],
 ): SQLPart | null => {
   const fieldName = String(field);
+  const sqlField = fieldName === "relativePath" ? "(folder || fileName)" : fieldName;
   const isStringArrayJsonField = stringArrayJsonFields.has(fieldName);
 
   // null means field must be NULL
   if (constraint === null) {
     return {
-      where: `${fieldName} IS NULL`,
+      where: `${sqlField} IS NULL`,
       params: [],
     };
   }
@@ -88,7 +89,7 @@ const constraintToSQL = (
     }
     // Exact match
     return {
-      where: `${fieldName} = ?`,
+      where: `${sqlField} = ?`,
       params: [constraint],
     };
   }
@@ -96,7 +97,7 @@ const constraintToSQL = (
   if (typeof constraint === "number") {
     // Exact match
     return {
-      where: `${fieldName} = ?`,
+      where: `${sqlField} = ?`,
       params: [constraint],
     };
   }
@@ -104,7 +105,7 @@ const constraintToSQL = (
   if (typeof constraint === "boolean") {
     // Boolean match
     return {
-      where: `${fieldName} = ?`,
+      where: `${sqlField} = ?`,
       params: [constraint ? 1 : 0],
     };
   }
@@ -112,7 +113,7 @@ const constraintToSQL = (
   if (constraint instanceof Date) {
     // Exact date match (as timestamp)
     return {
-      where: `${fieldName} = ?`,
+      where: `${sqlField} = ?`,
       params: [constraint.getTime()],
     };
   }
@@ -135,7 +136,7 @@ const constraintToSQL = (
       // Multiple string constraints
       const conditions = constraint.map(() => {
         // For now, treat as exact matches. Could be enhanced for glob/regex
-        return `${fieldName} = ?`;
+        return `${sqlField} = ?`;
       });
       return {
         where: `(${conditions.join(" OR ")})`,
@@ -146,7 +147,7 @@ const constraintToSQL = (
     // Number array - IN clause
     const placeholders = constraint.map(() => "?").join(", ");
     return {
-      where: `${fieldName} IN (${placeholders})`,
+      where: `${sqlField} IN (${placeholders})`,
       params: constraint,
     };
   }
@@ -160,7 +161,7 @@ const constraintToSQL = (
 
     // Check for Range (has min/max)
     if ("min" in constraint || "max" in constraint) {
-      return rangeToSQL(fieldName, constraint);
+      return rangeToSQL(sqlField, constraint);
     }
 
     // Check for StringSearch (has includes, glob, regex, startsWith, notStartsWith)
@@ -171,7 +172,7 @@ const constraintToSQL = (
       "startsWith" in constraint ||
       "notStartsWith" in constraint
     ) {
-      return stringSearchToSQL(fieldName, constraint, isStringArrayJsonField);
+      return stringSearchToSQL(sqlField, constraint, isStringArrayJsonField);
     }
 
     if (

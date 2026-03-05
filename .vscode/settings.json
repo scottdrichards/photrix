@@ -21,5 +21,21 @@
             "matchCommandLine": true
         },
         "npm run lint": true,
+        "/^npm --prefix server test$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^npm --prefix server run test:integration$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^npm --prefix server run test:all$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^npm --prefix server run test:coverage$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }
