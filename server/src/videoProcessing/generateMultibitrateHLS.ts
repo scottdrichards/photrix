@@ -35,8 +35,11 @@ export const getVariantPlaylistPath = (hlsDir: string, height: number): string =
 /**
  * Returns the path to a variant's segment.
  */
-export const getVariantSegmentPath = (hlsDir: string, height: number, segmentName: string): string =>
-  join(hlsDir, `${height}p`, segmentName);
+export const getVariantSegmentPath = (
+  hlsDir: string,
+  height: number,
+  segmentName: string,
+): string => join(hlsDir, `${height}p`, segmentName);
 
 /**
  * Checks if multi-bitrate HLS exists for a video.
@@ -48,7 +51,7 @@ export const multibitrateHLSExists = (hlsDir: string): boolean =>
  * Get HLS info for a video file.
  */
 export const getMultibitrateHLSInfo = async (
-  filePath: string
+  filePath: string,
 ): Promise<{
   hlsDir: string;
   masterPlaylistPath: string;
@@ -71,7 +74,7 @@ const generateVariant = (
   filePath: string,
   hlsDir: string,
   variant: HLSVariant,
-  useHardware: boolean = true
+  useHardware: boolean = true,
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
     const variantDir = join(hlsDir, `${variant.height}p`);
@@ -80,31 +83,48 @@ const generateVariant = (
     const args = [
       "-y",
       ...(useHardware ? ["-hwaccel", "cuda"] : []),
-      "-i", filePath,
-      "-vf", `scale=-2:${variant.height}`,
-      "-c:v", useHardware ? "h264_nvenc" : "libx264",
-      ...(useHardware 
+      "-i",
+      filePath,
+      "-vf",
+      `scale=-2:${variant.height}`,
+      "-c:v",
+      useHardware ? "h264_nvenc" : "libx264",
+      ...(useHardware
         ? ["-preset", "p1", "-tune", "ll", "-rc", "vbr", "-cq", "28"]
-        : ["-preset", "veryfast", "-crf", "28"]
-      ),
-      "-b:v", String(variant.bitrate),
-      "-maxrate", variant.maxrate,
-      "-bufsize", variant.bufsize,
-      "-g", "60",
-      "-c:a", "aac",
-      "-b:a", variant.height <= 360 ? "96k" : "128k",
-      "-f", "hls",
-      "-hls_time", "2",
-      "-hls_list_size", "0",
-      "-hls_segment_type", "mpegts",
-      "-hls_flags", "independent_segments",
-      "-hls_segment_filename", join(variantDir, "segment_%03d.ts"),
-      "-hls_playlist_type", "vod",
+        : ["-preset", "veryfast", "-crf", "28"]),
+      "-b:v",
+      String(variant.bitrate),
+      "-maxrate",
+      variant.maxrate,
+      "-bufsize",
+      variant.bufsize,
+      "-g",
+      "60",
+      "-c:a",
+      "aac",
+      "-b:a",
+      variant.height <= 360 ? "96k" : "128k",
+      "-f",
+      "hls",
+      "-hls_time",
+      "2",
+      "-hls_list_size",
+      "0",
+      "-hls_segment_type",
+      "mpegts",
+      "-hls_flags",
+      "independent_segments",
+      "-hls_segment_filename",
+      join(variantDir, "segment_%03d.ts"),
+      "-hls_playlist_type",
+      "vod",
       playlistPath,
     ];
 
     const encoderType = useHardware ? "NVIDIA NVENC" : "software";
-    console.log(`[HLS-ABR] Generating ${variant.height}p variant (${encoderType}) for ${filePath}`);
+    console.log(
+      `[HLS-ABR] Generating ${variant.height}p variant (${encoderType}) for ${filePath}`,
+    );
     const process = spawn("ffmpeg", args);
 
     let stderr = "";
@@ -118,15 +138,22 @@ const generateVariant = (
         resolve();
         return;
       }
-      
+
       // Check if it's a hardware encoding failure
-      if (useHardware && (stderr.includes("nvcuda") || stderr.includes("CUDA") || stderr.includes("h264_nvenc"))) {
-        console.warn(`[HLS-ABR] Hardware encoding failed for ${variant.height}p, falling back to software encoding`);
+      if (
+        useHardware &&
+        (stderr.includes("nvcuda") ||
+          stderr.includes("CUDA") ||
+          stderr.includes("h264_nvenc"))
+      ) {
+        console.warn(
+          `[HLS-ABR] Hardware encoding failed for ${variant.height}p, falling back to software encoding`,
+        );
         // Retry with software encoding
         generateVariant(filePath, hlsDir, variant, false).then(resolve).catch(reject);
         return;
       }
-      
+
       console.error(`[HLS-ABR] ${variant.height}p failed: ${stderr}`);
       reject(new Error(`HLS ${variant.height}p generation failed`));
     });
@@ -143,10 +170,9 @@ const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
 
   for (const variant of HLS_VARIANTS) {
     const bandwidth = variant.bitrate;
-    const resolution = variant.height <= 360 
-      ? `640x${variant.height}` 
-      : `1280x${variant.height}`;
-    
+    const resolution =
+      variant.height <= 360 ? `640x${variant.height}` : `1280x${variant.height}`;
+
     lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution}`);
     lines.push(`${variant.height}p/playlist.m3u8`);
   }
@@ -162,7 +188,7 @@ const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
  */
 export const generateMultibitrateHLS = async (
   filePath: string,
-  opts?: { priority?: QueuePriority; waitForCompletion?: boolean }
+  opts?: { priority?: QueuePriority; waitForCompletion?: boolean },
 ): Promise<string> => {
   await stat(filePath);
   const hlsDir = getMultibitrateHLSDirectory(filePath);

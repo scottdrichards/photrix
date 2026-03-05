@@ -1,12 +1,22 @@
 import path from "node:path";
 import { IndexDatabase } from "./indexDatabase.ts";
-import { generateMultibitrateHLS, multibitrateHLSExists } from "../videoProcessing/generateMultibitrateHLS.ts";
+import {
+  generateMultibitrateHLS,
+  multibitrateHLSExists,
+} from "../videoProcessing/generateMultibitrateHLS.ts";
 import { getHash } from "../common/cacheUtils.ts";
 import { stat } from "node:fs/promises";
 
 const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
 
-const durationFormatter = new (Intl as any).DurationFormat("en");
+const formatDuration = (totalSeconds: number): string => {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+
+  return `${hours}h ${minutes}m ${seconds}s`;
+};
 
 let isProcessingHLS = false;
 
@@ -14,7 +24,10 @@ let isProcessingHLS = false;
  * Starts background HLS encoding for all videos after metadata processing is complete.
  * Similar to processExifMetadata but specifically for video HLS pre-encoding.
  */
-export const startBackgroundHLSEncoding = (database: IndexDatabase, onComplete?: () => void) => {
+export const startBackgroundHLSEncoding = (
+  database: IndexDatabase,
+  onComplete?: () => void,
+) => {
   if (isProcessingHLS) {
     throw new Error("HLS encoding is already running");
   }
@@ -28,7 +41,9 @@ export const startBackgroundHLSEncoding = (database: IndexDatabase, onComplete?:
 
   const processAll = async () => {
     totalToProcess = database.countVideosReadyForHLS();
-    console.log(`[hls-encode] Starting background HLS encoding for ${totalToProcess} videos`);
+    console.log(
+      `[hls-encode] Starting background HLS encoding for ${totalToProcess} videos`,
+    );
 
     while (true) {
       const batchSize = 20; // Smaller batch since HLS encoding takes longer
@@ -37,7 +52,10 @@ export const startBackgroundHLSEncoding = (database: IndexDatabase, onComplete?:
       // Filter to only videos that don't have HLS yet
       const needsEncoding: Array<{ relativePath: string; fullPath: string }> = [];
       for (const item of items) {
-        const fullPath = path.join(database.storagePath, stripLeadingSlash(item.relativePath));
+        const fullPath = path.join(
+          database.storagePath,
+          stripLeadingSlash(item.relativePath),
+        );
         try {
           const modifiedTimeMs = (await stat(fullPath)).mtimeMs;
           const hash = getHash(fullPath, modifiedTimeMs);
@@ -88,24 +106,20 @@ export const startBackgroundHLSEncoding = (database: IndexDatabase, onComplete?:
         if (now - lastReportTime > 10_000) {
           // Report every 10s for slow HLS encoding
           const percentComplete = ((processedCount / totalToProcess) * 100).toFixed(2);
-          const rate = (processedCount - lastReportCount) / ((now - lastReportTime) / 1000);
+          const rate =
+            (processedCount - lastReportCount) / ((now - lastReportTime) / 1000);
           lastReportCount = processedCount;
 
           if (rate > 0) {
             const totalSecondsRemaining = (totalToProcess - processedCount) / rate;
-            const hoursRemaining = Math.floor(totalSecondsRemaining / 3600);
-            const minutesRemaining = Math.floor((totalSecondsRemaining % 3600) / 60);
-            const secondsRemaining = Math.floor(totalSecondsRemaining % 60);
-            const durationString = durationFormatter.format({
-              hours: hoursRemaining,
-              minutes: minutesRemaining,
-              seconds: secondsRemaining,
-            });
+            const durationString = formatDuration(totalSecondsRemaining);
             console.log(
-              `[hls-encode] ${percentComplete}% complete. ${(rate * 3600).toFixed(1)} videos/hour. Time remaining: ${durationString}`
+              `[hls-encode] ${percentComplete}% complete. ${(rate * 3600).toFixed(1)} videos/hour. Time remaining: ${durationString}`,
             );
           } else {
-            console.log(`[hls-encode] ${percentComplete}% complete (${processedCount}/${totalToProcess})`);
+            console.log(
+              `[hls-encode] ${percentComplete}% complete (${processedCount}/${totalToProcess})`,
+            );
           }
           lastReportTime = now;
         }

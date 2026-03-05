@@ -3,12 +3,11 @@ import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "../../indexDatabase/indexDatabase.type.ts";
 import { writeJson } from "../../utils.ts";
 
-
 export const queryHandler = async (
   url: URL,
   directoryPath: string,
   database: IndexDatabase,
-  res: http.ServerResponse
+  res: http.ServerResponse,
 ) => {
   const filterParam = url.searchParams.get("filter");
   const metadataParam = url.searchParams.get("metadata");
@@ -24,20 +23,21 @@ export const queryHandler = async (
   const southParam = url.searchParams.get("south");
   const aggregate = url.searchParams.get("aggregate");
 
-  const pathFilter: QueryOptions["filter"] = directoryPath ? {
-    folder: {
-      folder: directoryPath,
-      recursive: includeSubfolders,
-    }
-  } : {};
+  const pathFilter: QueryOptions["filter"] = directoryPath
+    ? {
+        folder: {
+          folder: directoryPath,
+          recursive: includeSubfolders,
+        },
+      }
+    : {};
 
-  const filter = filterParam ? {
-    operation: "and" as const,
-    conditions: [
-      pathFilter,
-      JSON.parse(filterParam) as QueryOptions["filter"],
-    ],
-  } : pathFilter;
+  const filter = filterParam
+    ? {
+        operation: "and" as const,
+        conditions: [pathFilter, JSON.parse(filterParam) as QueryOptions["filter"]],
+      }
+    : pathFilter;
 
   // Parse metadata (comma-separated list or JSON array)
   let metadata: Array<string> = [];
@@ -63,7 +63,10 @@ export const queryHandler = async (
 
   if (aggregate === "dateRange") {
     const { minDate, maxDate } = database.getDateRange(filter);
-    writeJson(res, 200, { minDate: minDate ? minDate.getTime() : null, maxDate: maxDate ? maxDate.getTime() : null });
+    writeJson(res, 200, {
+      minDate: minDate ? minDate.getTime() : null,
+      maxDate: maxDate ? maxDate.getTime() : null,
+    });
     return;
   }
 
@@ -73,17 +76,26 @@ export const queryHandler = async (
   }
 
   if (cluster) {
-    const parsedClusterSize = clusterSizeParam ? Number.parseFloat(clusterSizeParam) : NaN;
-    const clusterSize = Number.isFinite(parsedClusterSize) && parsedClusterSize > 0 ? parsedClusterSize : 0.00002;
+    const parsedClusterSize = clusterSizeParam
+      ? Number.parseFloat(clusterSizeParam)
+      : NaN;
+    const clusterSize =
+      Number.isFinite(parsedClusterSize) && parsedClusterSize > 0
+        ? parsedClusterSize
+        : 0.00002;
     const bounds = [westParam, eastParam, northParam, southParam].every((v) => v !== null)
       ? {
-        west: Number.parseFloat(westParam ?? ""),
-        east: Number.parseFloat(eastParam ?? ""),
-        north: Number.parseFloat(northParam ?? ""),
-        south: Number.parseFloat(southParam ?? ""),
-      }
+          west: Number.parseFloat(westParam ?? ""),
+          east: Number.parseFloat(eastParam ?? ""),
+          north: Number.parseFloat(northParam ?? ""),
+          south: Number.parseFloat(southParam ?? ""),
+        }
       : null;
-    const { clusters, total } = database.queryGeoClusters({ filter, clusterSize, bounds });
+    const { clusters, total } = database.queryGeoClusters({
+      filter,
+      clusterSize,
+      bounds,
+    });
     writeJson(res, 200, { clusters, total });
     return;
   }
@@ -97,7 +109,8 @@ export const queryHandler = async (
     if (message.toLowerCase().includes("invalid string length")) {
       writeJson(res, 413, {
         error: "Response too large",
-        message: "The query result was too large to serialize. Try requesting fewer metadata fields or a smaller pageSize.",
+        message:
+          "The query result was too large to serialize. Try requesting fewer metadata fields or a smaller pageSize.",
       });
       return;
     }

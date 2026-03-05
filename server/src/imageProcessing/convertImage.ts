@@ -25,7 +25,13 @@ const runProbe = async (
   command: string,
   args: string[],
   timeoutMs = 2_000,
-): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }> =>
+): Promise<{
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+}> =>
   await new Promise((resolveProbe) => {
     const process = spawn(command, args, { windowsHide: true });
 
@@ -97,13 +103,21 @@ const resolvePythonInvocation = async (): Promise<PythonInvocation> => {
           ];
 
     for (const candidate of candidates) {
-      const probe = await runProbe(candidate.command, [...candidate.baseArgs, "-c", probeCode]);
+      const probe = await runProbe(candidate.command, [
+        ...candidate.baseArgs,
+        "-c",
+        probeCode,
+      ]);
       if (!probe.ok) {
         continue;
       }
 
       const sysExecutable = probe.stdout.trim();
-      if (process.platform === "win32" && candidate.command === "python" && isWindowsStorePythonShim(sysExecutable)) {
+      if (
+        process.platform === "win32" &&
+        candidate.command === "python" &&
+        isWindowsStorePythonShim(sysExecutable)
+      ) {
         // This commonly hangs or redirects to the Store; skip it.
         continue;
       }
@@ -116,7 +130,9 @@ const resolvePythonInvocation = async (): Promise<PythonInvocation> => {
         ? "Install Python from python.org (or via winget) so the `py` launcher is available, or set PHOTRIX_PYTHON to your python.exe. Also ensure App Execution Aliases for python.exe are disabled if you only have the Windows Store shim."
         : "Install Python 3 (python3) or set PHOTRIX_PYTHON to your python executable.";
 
-    throw new Error(`Python is required for image conversion but was not found. ${guidance}`);
+    throw new Error(
+      `Python is required for image conversion but was not found. ${guidance}`,
+    );
   })();
 
   return await pythonInvocationPromise;
@@ -134,7 +150,6 @@ export class ImageConversionError extends Error {
   }
 }
 
-
 const generateImage = async (
   inputPath: string,
   outputs: Array<{ path: string; height: StandardHeight }>,
@@ -145,56 +160,73 @@ const generateImage = async (
       scriptPath,
       inputPath,
       "--outputs",
-      JSON.stringify(outputs.map(o => ({
-        path: o.path,
-        height: o.height === 'original' ? null : o.height
-      })))
+      JSON.stringify(
+        outputs.map((o) => ({
+          path: o.path,
+          height: o.height === "original" ? null : o.height,
+        })),
+      ),
     ];
 
     // Resolve a real python executable (Windows Store shim `python.exe` will not work).
-    void resolvePythonInvocation().then(({ command, baseArgs }) => {
-      const process = spawn(command, [...baseArgs, ...args], { windowsHide: true });
+    void resolvePythonInvocation()
+      .then(({ command, baseArgs }) => {
+        const process = spawn(command, [...baseArgs, ...args], { windowsHide: true });
 
-      let stderr = "";
+        let stderr = "";
 
-      process.stderr.on("data", (data) => {
-        stderr += data.toString();
+        process.stderr.on("data", (data) => {
+          stderr += data.toString();
+        });
+
+        process.on("close", (code) => {
+          const duration = performance.now() - start;
+          console.log(
+            `[ImageCache] Image processing completed in ${duration.toFixed(2)}ms for ${inputPath} and outputs: ${outputs.map((o) => o.height).join(", ")}`,
+          );
+          if (code === 0) {
+            resolve();
+            return;
+          }
+
+          const normalizedError =
+            stderr.trim() || `Python exited with code ${code ?? "unknown"}`;
+          const isCorrupt =
+            /unexpected end of file/i.test(normalizedError) ||
+            /invalid input/i.test(normalizedError);
+          const isMissingDependency =
+            /modulenotfounderror/i.test(normalizedError) ||
+            /no module named/i.test(normalizedError);
+
+          const baseMessage = isCorrupt
+            ? `Corrupt or unreadable image ${inputPath}: ${normalizedError}`
+            : `Image conversion failed for ${inputPath}: ${normalizedError}`;
+
+          const message = isMissingDependency
+            ? `${baseMessage}\n\nPython dependencies may be missing. Try: pip install -r server/src/imageProcessing/requirements.txt`
+            : baseMessage;
+
+          console.error(
+            `[ImageCache] Python script failed (${code ?? "unknown"}): ${baseMessage}`,
+          );
+          reject(
+            new ImageConversionError(
+              message,
+              inputPath,
+              normalizedError,
+              code ?? undefined,
+            ),
+          );
+        });
+
+        process.on("error", (err) => {
+          console.error(`[ImageCache] Failed to start python process: ${err.message}`);
+          reject(err);
+        });
+      })
+      .catch((error) => {
+        reject(error);
       });
-
-      process.on("close", (code) => {
-        const duration = performance.now() - start;
-        console.log(
-          `[ImageCache] Image processing completed in ${duration.toFixed(2)}ms for ${inputPath} and outputs: ${outputs.map(o => o.height).join(", ")}`,
-        );
-        if (code === 0) {
-          resolve();
-          return;
-        }
-
-        const normalizedError = stderr.trim() || `Python exited with code ${code ?? "unknown"}`;
-        const isCorrupt = /unexpected end of file/i.test(normalizedError) || /invalid input/i.test(normalizedError);
-        const isMissingDependency =
-          /modulenotfounderror/i.test(normalizedError) || /no module named/i.test(normalizedError);
-
-        const baseMessage = isCorrupt
-          ? `Corrupt or unreadable image ${inputPath}: ${normalizedError}`
-          : `Image conversion failed for ${inputPath}: ${normalizedError}`;
-
-        const message = isMissingDependency
-          ? `${baseMessage}\n\nPython dependencies may be missing. Try: pip install -r server/src/imageProcessing/requirements.txt`
-          : baseMessage;
-
-        console.error(`[ImageCache] Python script failed (${code ?? "unknown"}): ${baseMessage}`);
-        reject(new ImageConversionError(message, inputPath, normalizedError, code ?? undefined));
-      });
-
-      process.on("error", (err) => {
-        console.error(`[ImageCache] Failed to start python process: ${err.message}`);
-        reject(err);
-      });
-    }).catch((error) => {
-      reject(error);
-    });
   });
 
 /**
@@ -213,14 +245,11 @@ export const convertImage = async (
     return cachedPath;
   }
 
-  await mediaProcessingQueue.enqueue(
-    async () => {
-      await ensureCacheDir(cachedPath);
-      console.log(`[ImageCache] Generating ${height} for ${filePath}`);
-      await generateImage(filePath, [{ path: cachedPath, height }]);
-    },
-    opts?.priority,
-  );
+  await mediaProcessingQueue.enqueue(async () => {
+    await ensureCacheDir(cachedPath);
+    console.log(`[ImageCache] Generating ${height} for ${filePath}`);
+    await generateImage(filePath, [{ path: cachedPath, height }]);
+  }, opts?.priority);
   return cachedPath;
 };
 
@@ -230,27 +259,24 @@ export const convertImageToMultipleSizes = async (
   opts?: { priority?: QueuePriority },
 ): Promise<void> => {
   await stat(filePath);
-  
+
   const outputs = heights
-    .map(height => ({
+    .map((height) => ({
       height,
-      path: getMirroredCachedFilePath(filePath, height, "jpg")
+      path: getMirroredCachedFilePath(filePath, height, "jpg"),
     }))
-    .filter(o => !existsSync(o.path));
+    .filter((o) => !existsSync(o.path));
 
   if (outputs.length === 0) {
     return;
   }
 
-  await mediaProcessingQueue.enqueue(
-    async () => {
-      // Ensure all cache directories exist
-      await Promise.all(outputs.map(o => ensureCacheDir(o.path)));
-      console.log(
-        `[ImageCache] Generating sizes ${outputs.map(o => o.height).join(", ")} for ${filePath}`,
-      );
-      await generateImage(filePath, outputs);
-    },
-    opts?.priority,
-  );
+  await mediaProcessingQueue.enqueue(async () => {
+    // Ensure all cache directories exist
+    await Promise.all(outputs.map((o) => ensureCacheDir(o.path)));
+    console.log(
+      `[ImageCache] Generating sizes ${outputs.map((o) => o.height).join(", ")} for ${filePath}`,
+    );
+    await generateImage(filePath, outputs);
+  }, opts?.priority);
 };

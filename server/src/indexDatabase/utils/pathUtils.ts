@@ -25,7 +25,10 @@ export const splitPath = (relativePath: string): { folder: string; fileName: str
   const withLeading = normalized.startsWith("/") ? normalized : `/${normalized}`;
   const lastSlash = withLeading.lastIndexOf("/");
   if (lastSlash <= 0) {
-    return { folder: "/", fileName: withLeading.slice(lastSlash + 1) || withLeading.slice(1) };
+    return {
+      folder: "/",
+      fileName: withLeading.slice(lastSlash + 1) || withLeading.slice(1),
+    };
   }
   const folderRaw = withLeading.slice(0, lastSlash + 1);
   const fileName = withLeading.slice(lastSlash + 1);

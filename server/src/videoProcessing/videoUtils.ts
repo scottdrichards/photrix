@@ -3,10 +3,7 @@ import { existsSync } from "fs";
 import { mkdir, stat } from "fs/promises";
 import { dirname } from "path";
 import { StandardHeight } from "../common/standardHeights.ts";
-import {
-  CACHE_DIR,
-  getMirroredCachedFilePath,
-} from "../common/cacheUtils.ts";
+import { CACHE_DIR, getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { mediaProcessingQueue, QueuePriority } from "../common/processingQueue.ts";
 
 console.log(`[VideoCache] Initialized at ${CACHE_DIR}`);
@@ -180,7 +177,7 @@ export const generateVideoPreview = async (
       });
     },
     opts?.priority,
-    'video',
+    "video",
   );
   return cachedPath;
 };
@@ -204,7 +201,9 @@ export const generateVideoThumbnail = async (
     () => {
       const generateWithMode = async (useHardware: boolean): Promise<void> => {
         const encoderType = useHardware ? "CUDA" : "software";
-        console.log(`[VideoCache] Generating ${height}p thumbnail for ${filePath} (${encoderType})`);
+        console.log(
+          `[VideoCache] Generating ${height}p thumbnail for ${filePath} (${encoderType})`,
+        );
         await mkdir(dirname(cachedPath), { recursive: true });
         await new Promise<void>((resolve, reject) => {
           const args = [
@@ -221,7 +220,9 @@ export const generateVideoThumbnail = async (
             cachedPath,
           ];
 
-          console.log(`[VideoCache] ffmpeg (thumbnail:${encoderType}) args: ${JSON.stringify(args)}`);
+          console.log(
+            `[VideoCache] ffmpeg (thumbnail:${encoderType}) args: ${JSON.stringify(args)}`,
+          );
           const process = spawn("ffmpeg", args);
 
           let stderr = "";
@@ -237,7 +238,9 @@ export const generateVideoThumbnail = async (
             }
 
             if (useHardware && isCUDAFailure(stderr)) {
-              console.warn(`[VideoCache] CUDA thumbnail generation failed, retrying with software encoding`);
+              console.warn(
+                `[VideoCache] CUDA thumbnail generation failed, retrying with software encoding`,
+              );
               generateWithMode(false).then(resolve).catch(reject);
               return;
             }
@@ -256,9 +259,7 @@ export const generateVideoThumbnail = async (
       return generateWithMode(cudaAvailable);
     },
     opts?.priority,
-    'video',
+    "video",
   );
   return cachedPath;
 };
-
-

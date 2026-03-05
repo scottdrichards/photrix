@@ -7,23 +7,40 @@ import { type QueuePriority, mediaProcessingQueue } from "../common/processingQu
 import type { StandardHeight } from "../common/standardHeights.ts";
 import { appendWithLimit, pipeChildProcessLogs } from "./videoUtils.ts";
 
-const determineIfCUDAAvailable = async () => new Promise<boolean>((resolve) => {
-  const process = spawn("ffmpeg", ["-hide_banner", "-init_hw_device", "cuda", "-f", "lavfi", "-i", "nullsrc", "-t", "0", "-f", "null", "-"]);
+const determineIfCUDAAvailable = async () =>
+  new Promise<boolean>((resolve) => {
+    const process = spawn("ffmpeg", [
+      "-hide_banner",
+      "-init_hw_device",
+      "cuda",
+      "-f",
+      "lavfi",
+      "-i",
+      "nullsrc",
+      "-t",
+      "0",
+      "-f",
+      "null",
+      "-",
+    ]);
 
-  let stderr = "";
-  process.stderr?.on("data", (chunk) => {
-    stderr += chunk.toString();
-  });
+    let stderr = "";
+    process.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
 
-  process.on("close", (code) => {
-    const available = code === 0 && !stderr.includes("Cannot load nvcuda.dll") && !stderr.includes("Could not dynamically load CUDA");
-    resolve(available);
-  });
+    process.on("close", (code) => {
+      const available =
+        code === 0 &&
+        !stderr.includes("Cannot load nvcuda.dll") &&
+        !stderr.includes("Could not dynamically load CUDA");
+      resolve(available);
+    });
 
-  process.on("error", () => {
-    resolve(false);
+    process.on("error", () => {
+      resolve(false);
+    });
   });
-})
 
 const cudaAvailable = await determineIfCUDAAvailable();
 
@@ -40,7 +57,7 @@ export const getHLSSegmentPath = (hlsDir: string, segmentName: string): string =
 const generateHLSWithFFMPEG = (
   args: string[],
   hlsDir: string,
-  logPrefix: string
+  logPrefix: string,
 ): Promise<void> =>
   new Promise<void>((resolve, reject) => {
     console.log(`[HLS] ffmpeg (${logPrefix}) args: ${JSON.stringify(args)}`);
@@ -74,10 +91,9 @@ const generateHLSWithFFMPEG = (
 export const generateHLS = async (
   filePath: string,
   height: StandardHeight = "original",
-  opts?: { priority?: QueuePriority }
+  opts?: { priority?: QueuePriority },
 ): Promise<string> => {
-  
-  const {exists, playlistPath, hlsDir } = await getHLSInfo(filePath, height);
+  const { exists, playlistPath, hlsDir } = await getHLSInfo(filePath, height);
 
   if (exists) {
     return playlistPath;
@@ -90,37 +106,59 @@ export const generateHLS = async (
       await mkdir(hlsDir, { recursive: true });
 
       const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
-      const maxBitrate = height === "original" ? "15M" : `${Math.min(15, Math.ceil(Number(height) / 120))}M`;
+      const maxBitrate =
+        height === "original"
+          ? "15M"
+          : `${Math.min(15, Math.ceil(Number(height) / 120))}M`;
 
       const inputArgs = ["-y", "-i", filePath, "-vf", `scale=${scaleFilter}`];
 
       const outputArgs = [
-        "-g", "60", // keyframe every 60 frames (~2 sec at 30fps) for consistent segments
-        "-c:a", "aac",
-        "-b:a", "128k", // audio bitrate
-        "-f", "hls",
-        "-hls_time", "2", // 2-second segments for fast initial playback
-        "-hls_list_size", "0", // keep all segments in playlist
-        "-hls_segment_type", "mpegts",
-        "-hls_flags", "independent_segments+append_list", // segments are self-contained, playlist updated incrementally
-        "-hls_segment_filename", join(hlsDir, "segment_%03d.ts"),
-        "-hls_playlist_type", "event", // playlist grows as segments are added (for live-like behavior)
+        "-g",
+        "60", // keyframe every 60 frames (~2 sec at 30fps) for consistent segments
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k", // audio bitrate
+        "-f",
+        "hls",
+        "-hls_time",
+        "2", // 2-second segments for fast initial playback
+        "-hls_list_size",
+        "0", // keep all segments in playlist
+        "-hls_segment_type",
+        "mpegts",
+        "-hls_flags",
+        "independent_segments+append_list", // segments are self-contained, playlist updated incrementally
+        "-hls_segment_filename",
+        join(hlsDir, "segment_%03d.ts"),
+        "-hls_playlist_type",
+        "event", // playlist grows as segments are added (for live-like behavior)
         playlistPath,
       ];
 
       if (cudaAvailable) {
         // FFmpeg args for HLS with NVIDIA NVENC hardware acceleration
         const nvencArgs = [
-          "-hwaccel", "cuda", // use GPU for decoding
+          "-hwaccel",
+          "cuda", // use GPU for decoding
           ...inputArgs,
-          "-c:v", "h264_nvenc", // NVIDIA hardware encoder
-          "-preset", "p1", // fastest NVENC preset
-          "-tune", "ll", // low latency tuning
-          "-rc", "vbr", // variable bitrate rate control
-          "-cq", "28", // constant quality level (lower = better quality)
-          "-b:v", "0", // let CQ control quality, no target bitrate
-          "-maxrate", maxBitrate, // cap peak bitrate
-          "-bufsize", maxBitrate, // VBV buffer size
+          "-c:v",
+          "h264_nvenc", // NVIDIA hardware encoder
+          "-preset",
+          "p1", // fastest NVENC preset
+          "-tune",
+          "ll", // low latency tuning
+          "-rc",
+          "vbr", // variable bitrate rate control
+          "-cq",
+          "28", // constant quality level (lower = better quality)
+          "-b:v",
+          "0", // let CQ control quality, no target bitrate
+          "-maxrate",
+          maxBitrate, // cap peak bitrate
+          "-bufsize",
+          maxBitrate, // VBV buffer size
           ...outputArgs,
         ];
         console.log(`[HLS] Generating ${height}p HLS stream for ${filePath} using NVENC`);
@@ -129,18 +167,24 @@ export const generateHLS = async (
         // FFmpeg args for software encoding fallback
         const softwareArgs = [
           ...inputArgs,
-          "-c:v", "libx264", // software H.264 encoder
-          "-preset", "fast", // balance speed vs compression
-          "-crf", "23", // constant rate factor (lower = better quality, 23 is default)
-          "-pix_fmt", "yuv420p", // widely compatible pixel format
+          "-c:v",
+          "libx264", // software H.264 encoder
+          "-preset",
+          "fast", // balance speed vs compression
+          "-crf",
+          "23", // constant rate factor (lower = better quality, 23 is default)
+          "-pix_fmt",
+          "yuv420p", // widely compatible pixel format
           ...outputArgs,
         ];
-        console.log(`[HLS] Generating ${height}p HLS stream for ${filePath} using software encoding`);
+        console.log(
+          `[HLS] Generating ${height}p HLS stream for ${filePath} using software encoding`,
+        );
         await generateHLSWithFFMPEG(softwareArgs, hlsDir, "software");
       }
     },
     opts?.priority,
-    "video"
+    "video",
   );
 
   return playlistPath;
@@ -151,7 +195,7 @@ export const generateHLS = async (
  */
 export const getHLSInfo = async (
   filePath: string,
-  height: StandardHeight = "original"
+  height: StandardHeight = "original",
 ): Promise<{
   hlsDir: string;
   playlistPath: string;

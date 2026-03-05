@@ -194,7 +194,9 @@ export const Filter = () => {
     setFilter((previous) => {
       const existing = previous.peopleInImageFilter ?? [];
 
-      const hasDuplicate = existing.some((person) => person.toLocaleLowerCase() === normalizedValue.toLocaleLowerCase());
+      const hasDuplicate = existing.some(
+        (person) => person.toLocaleLowerCase() === normalizedValue.toLocaleLowerCase(),
+      );
       return hasDuplicate
         ? previous
         : { ...previous, peopleInImageFilter: [...existing, normalizedValue] };
@@ -264,8 +266,14 @@ export const Filter = () => {
           peopleInImageFilter: selectedPeople,
           signal: abortController.signal,
         });
-        const selectedPeopleLookup = new Set(selectedPeople.map((person) => person.toLocaleLowerCase()));
-        setPeopleSuggestions(result.filter((person) => !selectedPeopleLookup.has(person.toLocaleLowerCase())));
+        const selectedPeopleLookup = new Set(
+          selectedPeople.map((person) => person.toLocaleLowerCase()),
+        );
+        setPeopleSuggestions(
+          result.filter(
+            (person) => !selectedPeopleLookup.has(person.toLocaleLowerCase()),
+          ),
+        );
       } catch (error) {
         if ((error as Error).name === "AbortError") {
           return;
@@ -300,16 +308,22 @@ export const Filter = () => {
     return currentPath.split("/");
   }, [currentPath]);
 
-  const handleFolderClick = useCallback((folderName: string) => {
-    const newPath = currentPath ? `${currentPath}/${folderName}` : folderName;
-    setFilter({ path: `${newPath}/` });
-  }, [currentPath, setFilter]);
+  const handleFolderClick = useCallback(
+    (folderName: string) => {
+      const newPath = currentPath ? `${currentPath}/${folderName}` : folderName;
+      setFilter({ path: `${newPath}/` });
+    },
+    [currentPath, setFilter],
+  );
 
-  const handleBreadcrumbClick = useCallback((index: number) => {
-    const pathParts = currentPath?.split("/");
-    const newPath = pathParts?.slice(0, index + 1).join("/");
-    setFilter({ path: newPath ? `${newPath}/` : "" });
-  }, [currentPath, setFilter]);
+  const handleBreadcrumbClick = useCallback(
+    (index: number) => {
+      const pathParts = currentPath?.split("/");
+      const newPath = pathParts?.slice(0, index + 1).join("/");
+      setFilter({ path: newPath ? `${newPath}/` : "" });
+    },
+    [currentPath, setFilter],
+  );
 
   return (
     <div className={styles.iconBar}>
@@ -344,7 +358,10 @@ export const Filter = () => {
                 {breadcrumbs.map((part, index) => (
                   <span key={index}>
                     <span>/</span>
-                    <Button appearance="transparent" onClick={() => handleBreadcrumbClick(index)}>
+                    <Button
+                      appearance="transparent"
+                      onClick={() => handleBreadcrumbClick(index)}
+                    >
                       {part}
                     </Button>
                   </span>
@@ -443,7 +460,11 @@ export const Filter = () => {
             <Button
               aria-label="People in image filter"
               icon={<Person24Regular />}
-              appearance={activePanel === "people" || selectedPeople.length > 0 ? "primary" : "subtle"}
+              appearance={
+                activePanel === "people" || selectedPeople.length > 0
+                  ? "primary"
+                  : "subtle"
+              }
               className={styles.filterIconButton}
             />
           </Tooltip>
@@ -478,7 +499,9 @@ export const Filter = () => {
               }}
               placeholder="Search names (e.g. Scott)"
             />
-            {loadingPeopleSuggestions ? <Spinner size="tiny" label="Finding people..." /> : null}
+            {loadingPeopleSuggestions ? (
+              <Spinner size="tiny" label="Finding people..." />
+            ) : null}
             {peopleSuggestions.length > 0 ? (
               <div className={styles.suggestionsList}>
                 {peopleSuggestions.map((person) => (
@@ -494,7 +517,7 @@ export const Filter = () => {
                 ))}
               </div>
             ) : null}
-            {(selectedPeople.length > 0 || peopleSearchText.trim().length > 0) ? (
+            {selectedPeople.length > 0 || peopleSearchText.trim().length > 0 ? (
               <div className={styles.controlsRow}>
                 <Button size="small" appearance="subtle" onClick={handleClearPeople}>
                   Clear
@@ -539,7 +562,10 @@ export const Filter = () => {
                 </button>
               ))}
               {ratingFilter !== null ? (
-                <Tooltip content={ratingAtLeast ? "At least this rating" : "Exactly this rating"} relationship="label">
+                <Tooltip
+                  content={ratingAtLeast ? "At least this rating" : "Exactly this rating"}
+                  relationship="label"
+                >
                   <Button
                     size="small"
                     appearance={ratingAtLeast ? "primary" : "subtle"}

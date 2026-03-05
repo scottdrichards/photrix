@@ -10,7 +10,7 @@ import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
 export const generateWebSafeVideo = async (
   filePath: string,
   height: StandardHeight = "original",
-  opts?: { priority?: QueuePriority; }
+  opts?: { priority?: QueuePriority },
 ): Promise<string> => {
   const modifiedTimeMs = (await stat(filePath)).mtimeMs;
   const hash = getHash(filePath, modifiedTimeMs);
@@ -73,7 +73,7 @@ export const generateWebSafeVideo = async (
       });
     },
     opts?.priority,
-    'video'
+    "video",
   );
   return cachedPath;
 };

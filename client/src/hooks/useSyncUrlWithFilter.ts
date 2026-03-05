@@ -13,9 +13,13 @@ export const useSyncUrlWithFilter = (): void => {
     }
 
     const currentPathname = window.location.pathname.slice(1); // Remove leading slash
-    const currentInclude = new URLSearchParams(window.location.search).get("includeSubfolders") !== "false";
+    const currentInclude =
+      new URLSearchParams(window.location.search).get("includeSubfolders") !== "false";
 
-    if (decodeURIComponent(currentPathname) !== currentPath || currentInclude !== filter.includeSubfolders) {
+    if (
+      decodeURIComponent(currentPathname) !== currentPath ||
+      currentInclude !== filter.includeSubfolders
+    ) {
       const queryString = params.toString() ? `?${params.toString()}` : "";
       const encodedPath = currentPath
         ? currentPath.split("/").map(encodeURIComponent).join("/")

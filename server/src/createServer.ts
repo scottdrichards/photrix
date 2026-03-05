@@ -2,79 +2,108 @@ import http from "node:http";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { filesEndpointRequestHandler } from "./requestHandlers/files/filesRequestHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
+import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts";
 import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
 
 const PORT = process.env.PORT || 3000;
 
 type ServerOptions = {
-    onRequest: () => void;
+  onRequest: () => void;
 };
 
-export const createServer = (database: IndexDatabase, storagePath: string, options: ServerOptions) => {
-    const { onRequest } = options;
-    const server = http.createServer((req, res) => {
-        onRequest();
-        const requestStart = Date.now();
-        console.log(`[server] ${req.method} ${req.url}`);
+export const createServer = (
+  database: IndexDatabase,
+  storagePath: string,
+  options: ServerOptions = { onRequest: () => {} },
+) => {
+  const { onRequest } = options;
+  const server = http.createServer((req, res) => {
+    onRequest();
+    const requestStart = Date.now();
+    console.log(`[server] ${req.method} ${req.url}`);
 
-        // Intercept res.end to log timing
-        const originalEnd = res.end.bind(res);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        res.end = function (...args: any[]) {
-            const elapsed = Date.now() - requestStart;
-            console.log(`[server] ${req.method} ${req.url} completed in ${elapsed}ms (status: ${res.statusCode})`);
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-            return originalEnd(...args);
-        } as typeof res.end;
+    // Intercept res.end to log timing
+    const originalEnd = res.end.bind(res);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    res.end = function (...args: any[]) {
+      const elapsed = Date.now() - requestStart;
+      console.log(
+        `[server] ${req.method} ${req.url} completed in ${elapsed}ms (status: ${res.statusCode})`,
+      );
 
-        // Enable CORS for client
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      return originalEnd(...args);
+    } as typeof res.end;
 
-        // Handle preflight requests
-        if (req.method === "OPTIONS") {
-            res.writeHead(200);
-            res.end();
-            return;
-        }
+    // Enable CORS for client
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-        // Basic health check endpoint
-        if (req.url === "/api/health" && req.method === "GET") {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ status: "ok", message: "Server is running" }));
-            return;
-        }
+    // Handle preflight requests
+    if (req.method === "OPTIONS") {
+      res.writeHead(200);
+      res.end();
+      return;
+    }
 
-        // Get folders endpoint - list subfolders at a given path
-        if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
-            foldersRequestHandler(req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>, res, { database });
-            return;
-        }
+    // Basic health check endpoint
+    if (req.url === "/api/health" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", message: "Server is running" }));
+      return;
+    }
 
-        if (req.url?.startsWith("/api/suggestions") && req.method === "GET") {
-            suggestionsRequestHandler(req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>, res, { database });
-            return;
-        }
+    if (req.url?.startsWith("/api/status/stream") && req.method === "GET") {
+      statusRequestHandler(req, res, { database, stream: true });
+      return;
+    }
 
-        // Files endpoint - serves individual files or queries for multiple files
-        // Query mode REQUIRES trailing slash: /api/files/ or /api/files/subfolder/
-        // File serving has NO trailing slash: /api/files/image.jpg
-        if (req.url?.startsWith("/api/files/") && req.method === "GET") {
-            filesEndpointRequestHandler(req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>, res, {
-                database,
-                storageRoot: storagePath,
-            });
-            return;
-        }
+    if (req.url?.startsWith("/api/status") && req.method === "GET") {
+      statusRequestHandler(req, res, { database, stream: false });
+      return;
+    }
 
-        // Default 404
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Not found" }));
-    });
-    server.listen(PORT, () => {
-        console.log(`Server listening on port ${PORT}`);
-        console.log(`Health check: http://localhost:${PORT}/health`);
-    });
-    return server;
+    // Get folders endpoint - list subfolders at a given path
+    if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
+      foldersRequestHandler(
+        req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+        res,
+        { database },
+      );
+      return;
+    }
+
+    if (req.url?.startsWith("/api/suggestions") && req.method === "GET") {
+      suggestionsRequestHandler(
+        req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+        res,
+        { database },
+      );
+      return;
+    }
+
+    // Files endpoint - serves individual files or queries for multiple files
+    // Query mode REQUIRES trailing slash: /api/files/ or /api/files/subfolder/
+    // File serving has NO trailing slash: /api/files/image.jpg
+    if (req.url?.startsWith("/api/files/") && req.method === "GET") {
+      filesEndpointRequestHandler(
+        req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+        res,
+        {
+          database,
+          storageRoot: storagePath,
+        },
+      );
+      return;
+    }
+
+    // Default 404
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
+  });
+  server.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/health`);
+  });
+  return server;
 };

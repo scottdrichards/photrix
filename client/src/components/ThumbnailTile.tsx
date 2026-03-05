@@ -9,18 +9,18 @@ const LONG_PRESS_MS = 450;
 const clampRatio = (value: number): number => Math.min(Math.max(value, 0.25), 4);
 
 const getAspectRatio = (photo: PhotoItem): number => {
-    const toFiniteNumber = (value: unknown): number | null => {
+  const toFiniteNumber = (value: unknown): number | null => {
     if (typeof value === "number" && Number.isFinite(value)) {
-        return value;
+      return value;
     }
 
     if (typeof value === "string") {
-        const parsed = Number.parseFloat(value);
-        return Number.isFinite(parsed) ? parsed : null;
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : null;
     }
 
     return null;
-    };
+  };
   // Server now provides post-rotation dimensions, so no need to check orientation
   const width = toFiniteNumber(photo.metadata?.dimensionWidth);
   const height = toFiniteNumber(photo.metadata?.dimensionHeight);
@@ -34,8 +34,8 @@ const getAspectRatio = (photo: PhotoItem): number => {
 
 const useStyles = makeStyles({
   tile: {
-    borderRadius:tokens.borderRadiusMedium,
-    overflow:"hidden",
+    borderRadius: tokens.borderRadiusMedium,
+    overflow: "hidden",
     display: "flex",
     flexDirection: "column",
     justifyContent: "flex-start",
@@ -65,7 +65,7 @@ const useStyles = makeStyles({
   tileSelected: {
     boxShadow: `inset 0 0 0 2px ${tokens.colorBrandStroke1}`,
   },
-  
+
   image: {
     width: "100%",
     height: "100%",
@@ -103,16 +103,17 @@ const useStyles = makeStyles({
   },
 });
 
-type Props =  {
+type Props = {
   photo: PhotoItem;
 };
 
-export const ThumbnailTile:React.FC<Props> = (props) => {
-    const { photo } = props;
-    const styles = useStyles();
+export const ThumbnailTile: React.FC<Props> = (props) => {
+  const { photo } = props;
+  const styles = useStyles();
   const [isHovered, setIsHovered] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
-  const { isSelected, selectionMode, setSelected, setSelectionMode, toggleSelected } = useSelectionContext();
+  const { isSelected, selectionMode, setSelected, setSelectionMode, toggleSelected } =
+    useSelectionContext();
   const longPressTimeoutRef = useRef<number | null>(null);
   const suppressNextClickRef = useRef(false);
   const metadataRatio = getAspectRatio(photo);
@@ -213,7 +214,8 @@ export const ThumbnailTile:React.FC<Props> = (props) => {
             alt={photo.name}
             loading="lazy"
             className={styles.image}
-            onLoad={handleImageLoad} />
+            onLoad={handleImageLoad}
+          />
           {isHovered && (
             <video
               src={photo.videoPreviewUrl}
@@ -222,7 +224,8 @@ export const ThumbnailTile:React.FC<Props> = (props) => {
               muted
               loop
               playsInline
-              autoPlay />
+              autoPlay
+            />
           )}
         </>
       ) : (
@@ -231,7 +234,8 @@ export const ThumbnailTile:React.FC<Props> = (props) => {
           alt={photo.name}
           loading="lazy"
           className={styles.image}
-          onLoad={handleImageLoad} />
+          onLoad={handleImageLoad}
+        />
       )}
     </button>
   );

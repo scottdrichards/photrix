@@ -12,7 +12,7 @@ import {
   Text,
 } from "@fluentui/react-components";
 import { useEffect, useState } from "react";
-import { subscribeStatusStream, type ProgressEntry, type RecentMaintenance, type ServerStatus } from "../api";
+import { subscribeStatusStream, type ProgressEntry, type ServerStatus } from "../api";
 import { ProgressItem } from "./ProgressItem";
 import { RecentActivity } from "./RecentActivity";
 
@@ -58,19 +58,23 @@ interface StatusModalProps {
 
 export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   const styles = useStyles();
-  const [statusHistory, setStatusHistory] = useState<Array<{ timestamp: number; status: ServerStatus }> | undefined>(undefined);
+  const [statusHistory, setStatusHistory] = useState<
+    Array<{ timestamp: number; status: ServerStatus }> | undefined
+  >(undefined);
 
   const status = statusHistory?.at(-1)?.status;
 
-  const calculateETA = (progress: ProgressEntry, completedKey: 'exif'): string | null => {
+  const calculateETA = (progress: ProgressEntry, completedKey: "exif"): string | null => {
     if (!statusHistory || statusHistory.length < 2 || progress.percent >= 1) {
       return null;
     }
 
     const oldestSample = statusHistory.at(0)!;
     const latestSample = statusHistory.at(-1)!;
-    
-    const completedDelta = latestSample.status.progress[completedKey].completed - oldestSample.status.progress[completedKey].completed;
+
+    const completedDelta =
+      latestSample.status.progress[completedKey].completed -
+      oldestSample.status.progress[completedKey].completed;
     const timeDeltaSecs = (latestSample.timestamp - oldestSample.timestamp) / 1000;
 
     if (completedDelta <= 0 || timeDeltaSecs <= 0) return null;
@@ -88,18 +92,21 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     if (!isOpen) {
       return;
     }
-    const unsubscribe = subscribeStatusStream((data) => {
-      setStatusHistory(prev => {
-        const newEntry = {
-          timestamp: Date.now(),
-          status: data,
-        };
-        const updated = [...(prev ?? []), newEntry];
-        return updated.slice(-5);
-      });
-    }, (error) => {
-      console.error("Failed to receive status", error);
-    });
+    const unsubscribe = subscribeStatusStream(
+      (data) => {
+        setStatusHistory((prev) => {
+          const newEntry = {
+            timestamp: Date.now(),
+            status: data,
+          };
+          const updated = [...(prev ?? []), newEntry];
+          return updated.slice(-5);
+        });
+      },
+      (error) => {
+        console.error("Failed to receive status", error);
+      },
+    );
 
     return () => {
       unsubscribe();
@@ -120,15 +127,21 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                 <div className={styles.statsRow}>
                   <Text>
                     <span className={styles.label}>Database Size:</span>
-                    <span className={styles.value}>{status.databaseSize.toLocaleString()} files</span>
+                    <span className={styles.value}>
+                      {status.databaseSize.toLocaleString()} files
+                    </span>
                   </Text>
                   <Text>
                     <span className={styles.label}>Scanned:</span>
-                    <span className={styles.value}>{status.scannedFilesCount.toLocaleString()} files</span>
+                    <span className={styles.value}>
+                      {status.scannedFilesCount.toLocaleString()} files
+                    </span>
                   </Text>
                   <Text>
                     <span className={styles.label}>EXIF worker:</span>
-                    <span className={styles.value}>{status.maintenance.exifActive ? "active" : "idle"}</span>
+                    <span className={styles.value}>
+                      {status.maintenance.exifActive ? "active" : "idle"}
+                    </span>
                   </Text>
                 </div>
                 <ProgressItem
@@ -152,11 +165,13 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                     label="EXIF metadata"
                     progress={status.progress.exif}
                     detail={`${status.pending.exif.toLocaleString()} remaining`}
-                    eta={calculateETA(status.progress.exif, 'exif')}
+                    eta={calculateETA(status.progress.exif, "exif")}
                   />
                 </div>
 
-                <Text size={400} weight="semibold">Recent activity</Text>
+                <Text size={400} weight="semibold">
+                  Recent activity
+                </Text>
                 <div className={styles.recentRow}>
                   <RecentActivity label="Last EXIF" entry={status.recent.exif} />
                 </div>
@@ -164,7 +179,9 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
             )}
           </DialogContent>
           <DialogActions>
-            <Button appearance="primary" onClick={onDismiss}>Close</Button>
+            <Button appearance="primary" onClick={onDismiss}>
+              Close
+            </Button>
           </DialogActions>
         </DialogBody>
       </DialogSurface>

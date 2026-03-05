@@ -1,8 +1,8 @@
-const priorityList = ['userBlocked', 'userImplicit', 'background'] as const;
-export type QueuePriority = typeof priorityList[number];
+const priorityList = ["userBlocked", "userImplicit", "background"] as const;
+export type QueuePriority = (typeof priorityList)[number];
 
-const mediaTypeList = ['image', 'video'] as const;
-export type MediaType = typeof mediaTypeList[number];
+const mediaTypeList = ["image", "video"] as const;
+export type MediaType = (typeof mediaTypeList)[number];
 
 type QueueTask = {
   fn: () => Promise<void>;
@@ -69,7 +69,11 @@ export class ProcessingQueue {
     }, 100);
   }
 
-  async enqueue<T>(task: () => Promise<T>, priority: QueuePriority = 'background', mediaType: MediaType = 'image'): Promise<T> {
+  async enqueue<T>(
+    task: () => Promise<T>,
+    priority: QueuePriority = "background",
+    mediaType: MediaType = "image",
+  ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const priorityIndex = priorityList.indexOf(priority);
       const mediaTypeIndex = mediaTypeList.indexOf(mediaType);
@@ -85,7 +89,10 @@ export class ProcessingQueue {
           if (tPriorityIndex === priorityIndex && tMediaTypeIndex === mediaTypeIndex) {
             return i + 1;
           }
-          if (tPriorityIndex > priorityIndex || (tPriorityIndex === priorityIndex && tMediaTypeIndex > mediaTypeIndex)) {
+          if (
+            tPriorityIndex > priorityIndex ||
+            (tPriorityIndex === priorityIndex && tMediaTypeIndex > mediaTypeIndex)
+          ) {
             // Keep scanning upward until we find the bucket boundary
             continue;
           }
@@ -102,12 +109,12 @@ export class ProcessingQueue {
         } catch (error) {
           reject(error);
         }
-      }
+      };
 
       this.queue.splice(insertIndex === -1 ? this.queue.length : insertIndex, 0, {
         priority,
         mediaType,
-        fn
+        fn,
       });
       this.processNext();
     });
@@ -127,18 +134,23 @@ export class ProcessingQueue {
     this.processing++;
     const task = this.queue.shift();
 
-    const queueStatus = this.queue.reduce((acc, task) => {
-      acc[task.priority] = (acc[task.priority] || 0) + 1;
-      return acc;
-    }, {} as Record<QueuePriority, number>);
+    const queueStatus = this.queue.reduce(
+      (acc, task) => {
+        acc[task.priority] = (acc[task.priority] || 0) + 1;
+        return acc;
+      },
+      {} as Record<QueuePriority, number>,
+    );
 
-    console.log(`[ProcessingQueue] Processing next task. Queue status: ${JSON.stringify(queueStatus)}, Currently processing: ${this.processing}`);
+    console.log(
+      `[ProcessingQueue] Processing next task. Queue status: ${JSON.stringify(queueStatus)}, Currently processing: ${this.processing}`,
+    );
 
     if (task) {
       try {
         await task.fn();
       } catch (error) {
-        console.error('[ProcessingQueue] Task failed:', error);
+        console.error("[ProcessingQueue] Task failed:", error);
       } finally {
         this.processing--;
         this.processNext(); // Process next task

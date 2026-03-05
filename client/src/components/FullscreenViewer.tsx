@@ -6,6 +6,17 @@ import { useSelectionContext } from "./selection/SelectionContext";
 
 const SWIPE_THRESHOLD_PX = 60;
 
+type DefaultLoader = InstanceType<typeof Hls.DefaultConfig.loader>;
+type DefaultLoadArgs = Parameters<DefaultLoader["load"]>;
+
+type HlsNetworkDetails = {
+  xhr?: XMLHttpRequest;
+};
+
+type HlsMediaWithSource = HTMLMediaElement & {
+  mediaSource?: MediaSource & { updating?: boolean };
+};
+
 const useStyles = makeStyles({
   dialog: {
     border: "none",
@@ -52,11 +63,18 @@ const useStyles = makeStyles({
 
 export function FullscreenViewer() {
   const styles = useStyles();
-  const { selected: selectedPhoto, selectionMode, setSelected, selectNext, selectPrevious } = useSelectionContext();
+  const {
+    selected: selectedPhoto,
+    selectionMode,
+    setSelected,
+    selectNext,
+    selectPrevious,
+  } = useSelectionContext();
   const photo = selectionMode ? null : selectedPhoto;
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const durationIntervalRef = useRef<number | null>(null);
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
 
   // HLS setup effect
@@ -71,24 +89,39 @@ export function FullscreenViewer() {
     }
 
     // Get the known duration from metadata (for progressive HLS)
-    const knownDuration = photo.metadata?.duration as number | undefined;
+    const rawDuration = photo.metadata?.duration;
+    const knownDuration =
+      typeof rawDuration === "number" && Number.isFinite(rawDuration)
+        ? rawDuration
+        : undefined;
 
     // Custom loader to capture duration header
     let serverDuration: number | undefined;
-    
+
     class DurationCapturingLoader extends Hls.DefaultConfig.loader {
-      load(context: any, config: any, callbacks: any) {
+      load(...args: DefaultLoadArgs) {
+        const [context, config, callbacks] = args;
         const originalOnSuccess = callbacks.onSuccess;
-        callbacks.onSuccess = (response: any, stats: any, context: any, networkDetails: any) => {
+        callbacks.onSuccess = (...onSuccessArgs) => {
+          const [, , callbackContext, networkDetails] = onSuccessArgs;
+          const details =
+            typeof networkDetails === "object" && networkDetails !== null
+              ? (networkDetails as HlsNetworkDetails)
+              : undefined;
+          const requestType =
+            typeof callbackContext === "object" && callbackContext !== null
+              ? (callbackContext as { type?: string }).type
+              : undefined;
+
           // Check for X-Content-Duration header on manifest requests
-          if (context.type === "manifest" && networkDetails?.xhr) {
-            const durationHeader = networkDetails.xhr.getResponseHeader("X-Content-Duration");
+          if (requestType === "manifest" && details?.xhr) {
+            const durationHeader = details.xhr.getResponseHeader("X-Content-Duration");
             if (durationHeader) {
               serverDuration = parseFloat(durationHeader);
               console.log("[HLS] Got server duration:", serverDuration);
             }
           }
-          originalOnSuccess(response, stats, context, networkDetails);
+          originalOnSuccess(...onSuccessArgs);
         };
         super.load(context, config, callbacks);
       }
@@ -118,7 +151,7 @@ export function FullscreenViewer() {
 
       // Intercept duration to show correct total time
       const getDuration = () => serverDuration ?? knownDuration ?? video.duration;
-      
+
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         video.play().catch((err) => {
           console.log("[HLS] Autoplay prevented:", err);
@@ -134,8 +167,13 @@ export function FullscreenViewer() {
           if (hls.media && hls.media.duration !== dur) {
             try {
               // MediaSource duration can be set if the source is open
-              const mediaSource = (hls as any).media?.mediaSource;
-              if (mediaSource && mediaSource.readyState === "open" && !mediaSource.updating) {
+              const media = hls.media as HlsMediaWithSource | null;
+              const mediaSource = media?.mediaSource;
+              if (
+                mediaSource &&
+                mediaSource.readyState === "open" &&
+                !mediaSource.updating
+              ) {
                 mediaSource.duration = dur;
               }
             } catch {
@@ -157,8 +195,7 @@ export function FullscreenViewer() {
         }
       });
 
-      // Store interval for cleanup
-      (hls as any)._durationInterval = durationInterval;
+      durationIntervalRef.current = durationInterval;
 
       hlsRef.current = hls;
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -173,10 +210,11 @@ export function FullscreenViewer() {
     }
 
     return () => {
+      if (durationIntervalRef.current !== null) {
+        clearInterval(durationIntervalRef.current);
+        durationIntervalRef.current = null;
+      }
       if (hlsRef.current) {
-        // Clean up duration interval
-        const interval = (hlsRef.current as any)._durationInterval;
-        if (interval) clearInterval(interval);
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
@@ -192,7 +230,6 @@ export function FullscreenViewer() {
     } else if (!photo && dialog.open) {
       dialog.close();
     }
-    
   }, [photo]);
 
   useEffect(() => {
@@ -213,7 +250,7 @@ export function FullscreenViewer() {
     };
 
     window.addEventListener("keydown", handleKeyDown);
-    
+
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [photo, selectNext, selectPrevious, setSelected]);
 

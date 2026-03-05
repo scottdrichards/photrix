@@ -1,7 +1,4 @@
-import {
-    makeStyles,
-    tokens
-} from "@fluentui/react-components";
+import { makeStyles, tokens } from "@fluentui/react-components";
 import "ol/ol.css";
 import { Circle as CircleStyle, Fill, Stroke, Style } from "ol/style";
 

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Caption1, Spinner, makeStyles, tokens } from "@fluentui/react-components";
+import {
+  Button,
+  Caption1,
+  Spinner,
+  makeStyles,
+  tokens,
+} from "@fluentui/react-components";
 import { fetchDateHistogram } from "../api";
 import type { DateHistogramBucket } from "../api";
 import { useFilterContext } from "./filter/FilterContext";
@@ -9,6 +15,8 @@ type Range = { start: number; end: number } | null;
 type DateHistogramProps = {
   label?: string;
 };
+
+const CHART_PADDING = { left: 18, right: 18, top: 10, bottom: 22 } as const;
 
 const useStyles = makeStyles({
   root: {
@@ -57,7 +65,11 @@ const useStyles = makeStyles({
 });
 
 const formatDate = (value: number) =>
-  new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  new Date(value).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 
 const formatTick = (value: number, grouping: "day" | "month") => {
   const date = new Date(value);
@@ -115,18 +127,27 @@ const buildTicks = (
   return ticks;
 };
 
-export const DateHistogram = ({
-  label = "Date range",
-}: DateHistogramProps) => {
+export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
   const styles = useStyles();
   const { filter, setFilter } = useFilterContext();
-  const { includeSubfolders, path, ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter } = filter;
+  const {
+    includeSubfolders,
+    path,
+    ratingFilter,
+    mediaTypeFilter,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+  } = filter;
   const value = dateRange;
-  const onChange = useCallback((range: Range) => setFilter({ dateRange: range }), [setFilter]);
+  const onChange = useCallback(
+    (range: Range) => setFilter({ dateRange: range }),
+    [setFilter],
+  );
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(640);
   const height = 140;
-  const padding = { left: 18, right: 18, top: 10, bottom: 22 };
+  const padding = CHART_PADDING;
   const DAY_MS = 24 * 60 * 60 * 1000;
 
   const [buckets, setBuckets] = useState<DateHistogramBucket[]>([]);
@@ -183,8 +204,14 @@ export const DateHistogram = ({
 
         if (result.minDate !== null && result.maxDate !== null) {
           if (value) {
-            const clampedStart = Math.max(result.minDate, Math.min(value.start, result.maxDate));
-            const clampedEnd = Math.max(clampedStart, Math.min(value.end, result.maxDate));
+            const clampedStart = Math.max(
+              result.minDate,
+              Math.min(value.start, result.maxDate),
+            );
+            const clampedEnd = Math.max(
+              clampedStart,
+              Math.min(value.end, result.maxDate),
+            );
             if (value.start !== clampedStart || value.end !== clampedEnd) {
               onChange({ start: clampedStart, end: clampedEnd });
             }
@@ -211,11 +238,20 @@ export const DateHistogram = ({
     void loadHistogram();
 
     return () => controller.abort();
-  }, [includeSubfolders, path, ratingFilter, mediaTypeFilter, locationBounds, peopleInImageFilter, onChange]);
+  }, [
+    includeSubfolders,
+    path,
+    ratingFilter,
+    mediaTypeFilter,
+    locationBounds,
+    peopleInImageFilter,
+    onChange,
+    value,
+  ]);
 
   const domain = useMemo(() => {
-    const min = minDate ?? (buckets[0]?.start ?? null);
-    const max = maxDate ?? (buckets[buckets.length - 1]?.end ?? null);
+    const min = minDate ?? buckets[0]?.start ?? null;
+    const max = maxDate ?? buckets[buckets.length - 1]?.end ?? null;
     if (min === null || max === null || min === max) {
       return null;
     }
@@ -227,7 +263,10 @@ export const DateHistogram = ({
     [buckets],
   );
 
-  const bucketSpan = useMemo(() => (buckets[0] ? buckets[0].end - buckets[0].start : 0), [buckets]);
+  const bucketSpan = useMemo(
+    () => (buckets[0] ? buckets[0].end - buckets[0].start : 0),
+    [buckets],
+  );
   const inferredGrouping: "day" | "month" = useMemo(
     () => (bucketSpan > 28 * DAY_MS ? "month" : "day"),
     [DAY_MS, bucketSpan],
@@ -319,7 +358,14 @@ export const DateHistogram = ({
   const activeRange = dragRange ?? value;
 
   const bars = useMemo(() => {
-    if (!domain || maxCount === 0) return [] as Array<{ x: number; width: number; height: number; y: number; count: number }>;
+    if (!domain || maxCount === 0)
+      return [] as Array<{
+        x: number;
+        width: number;
+        height: number;
+        y: number;
+        count: number;
+      }>;
     const innerHeight = height - padding.bottom - padding.top;
     return buckets.map((bucket) => {
       const x0 = xFor(bucket.start);

@@ -1,12 +1,39 @@
 import { spawn } from "child_process";
 import type { ExifMetadata } from "../indexDatabase/fileRecord.type.ts";
 
+type FFProbeStream = {
+  codec_type?: string;
+  width?: number;
+  height?: number;
+  codec_name?: string;
+  r_frame_rate?: string;
+  tags?: {
+    rotate?: string;
+  };
+  side_data_list?: Array<{
+    rotation?: number;
+  }>;
+};
 
-export const getVideoMetadata = async (filePath: string): Promise<Partial<ExifMetadata>> => {
+type FFProbeOutput = {
+  format?: {
+    duration?: string;
+    tags?: {
+      creation_time?: string;
+    };
+  };
+  streams?: FFProbeStream[];
+};
+
+export const getVideoMetadata = async (
+  filePath: string,
+): Promise<Partial<ExifMetadata>> => {
   return new Promise((resolve, reject) => {
     const args = [
-      "-v", "quiet",
-      "-print_format", "json",
+      "-v",
+      "quiet",
+      "-print_format",
+      "json",
       "-show_format",
       "-show_streams",
       filePath,
@@ -31,12 +58,11 @@ export const getVideoMetadata = async (filePath: string): Promise<Partial<ExifMe
       }
 
       try {
-        const data = JSON.parse(stdout);
+        const data = JSON.parse(stdout) as FFProbeOutput;
         const format = data.format;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const videoStream = data.streams.find((s: any) => s.codec_type === "video");
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const audioStream = data.streams.find((s: any) => s.codec_type === "audio");
+        const streams = data.streams ?? [];
+        const videoStream = streams.find((s) => s.codec_type === "video");
+        const audioStream = streams.find((s) => s.codec_type === "audio");
 
         const metadata: Partial<ExifMetadata> = {};
 
@@ -58,14 +84,15 @@ export const getVideoMetadata = async (filePath: string): Promise<Partial<ExifMe
           if (videoStream.tags && videoStream.tags.rotate) {
             rotate = Number(videoStream.tags.rotate);
           } else if (videoStream.side_data_list) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const sideData = videoStream.side_data_list.find((sd: any) => sd.rotation !== undefined);
-            if (sideData && typeof sideData.rotation === 'number') {
+            const sideData = videoStream.side_data_list.find(
+              (sd) => sd.rotation !== undefined,
+            );
+            if (sideData && typeof sideData.rotation === "number") {
               rotate = sideData.rotation;
             }
           }
 
-          if (typeof rotate === 'number' && Number.isFinite(rotate)) {
+          if (typeof rotate === "number" && Number.isFinite(rotate)) {
             // Normalize rotation to 0-360 positive
             rotate = ((rotate % 360) + 360) % 360;
 

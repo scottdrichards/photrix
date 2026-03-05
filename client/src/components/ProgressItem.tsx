@@ -1,9 +1,4 @@
-import {
-  ProgressBar,
-  makeStyles,
-  tokens,
-  Text,
-} from "@fluentui/react-components";
+import { ProgressBar, makeStyles, tokens, Text } from "@fluentui/react-components";
 import type { ProgressEntry } from "../api";
 
 const useStyles = makeStyles({
@@ -40,13 +35,18 @@ interface ProgressItemProps {
 
 export const ProgressItem = ({ label, progress, detail, eta }: ProgressItemProps) => {
   const styles = useStyles();
-  const percentFormatter = new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 0 });
+  const percentFormatter = new Intl.NumberFormat("en-US", {
+    style: "percent",
+    maximumFractionDigits: 0,
+  });
 
   return (
     <div className={styles.progressCard}>
       <div className={styles.progressHeader}>
         <Text className={styles.label}>{label}</Text>
-        <Text className={styles.percent}>{percentFormatter.format(progress.percent)}</Text>
+        <Text className={styles.percent}>
+          {percentFormatter.format(progress.percent)}
+        </Text>
       </div>
       <ProgressBar value={progress.percent} max={1} />
       <Text className={styles.muted}>

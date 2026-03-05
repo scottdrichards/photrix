@@ -28,14 +28,22 @@ export const getFileInfo = async (fullPath: string): Promise<FileInfo> => {
  * @param negativeDirection The direction letter that should produce a negative value ("S" or "W").
  * @returns Signed decimal degrees, or undefined when input cannot be parsed.
  */
-const normalizeGPS = (input: unknown, ref: unknown, negativeDirection: string): number | undefined => {
+const normalizeGPS = (
+  input: unknown,
+  ref: unknown,
+  negativeDirection: string,
+): number | undefined => {
   const value = (() => {
     if (typeof input === "number") {
       return input;
     }
     if (Array.isArray(input) && input.length >= 2) {
       const [degrees, minutes, seconds = 0] = input;
-      if (typeof degrees === "number" && typeof minutes === "number" && typeof seconds === "number") {
+      if (
+        typeof degrees === "number" &&
+        typeof minutes === "number" &&
+        typeof seconds === "number"
+      ) {
         return degrees + minutes / 60 + seconds / 3600;
       }
     }
@@ -63,13 +71,16 @@ const toFiniteNumber = (value: unknown): number | undefined => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
-const getOrientation = (rawData: Record<string, unknown>): number | undefined => toFiniteNumber(rawData.Orientation);
+const getOrientation = (rawData: Record<string, unknown>): number | undefined =>
+  toFiniteNumber(rawData.Orientation);
 
 const getNormalizedDimensions = (rawData: Record<string, unknown>) => {
   const orientation = getOrientation(rawData);
   const needsSwap = orientation !== undefined && [5, 6, 7, 8].includes(orientation);
-  const imageWidth = toFiniteNumber(rawData.ImageWidth) ?? toFiniteNumber(rawData.ExifImageWidth);
-  const imageHeight = toFiniteNumber(rawData.ImageHeight) ?? toFiniteNumber(rawData.ExifImageHeight);
+  const imageWidth =
+    toFiniteNumber(rawData.ImageWidth) ?? toFiniteNumber(rawData.ExifImageWidth);
+  const imageHeight =
+    toFiniteNumber(rawData.ImageHeight) ?? toFiniteNumber(rawData.ExifImageHeight);
 
   return {
     width: needsSwap ? imageHeight : imageWidth,
@@ -88,7 +99,10 @@ const extractRegions = (regionsSource: unknown) => {
   }
 
   return regionListValue
-    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    .filter(
+      (entry): entry is Record<string, unknown> =>
+        Boolean(entry) && typeof entry === "object",
+    )
     .map((entry) => {
       const area = entry.Area;
       const normalizedArea =
@@ -123,7 +137,7 @@ export const getExifMetadataFromFile = async (
   fullPath: string,
 ): Promise<ExifMetadata> => {
   const mimeType = mimeTypeForFilename(fullPath);
-  if (!mimeType){
+  if (!mimeType) {
     // console.log(`[exif] No mime type for file ${fullPath}`);
     return {};
   }
@@ -140,13 +154,13 @@ export const getExifMetadataFromFile = async (
   type ExifRSource<K extends keyof ExifMetadata> =
     | string
     | {
-      exifField: string | string[];
-      conversionFn: (val: any, rawData: Record<string, unknown>) => ExifMetadata[K];
-    };
+        exifField: string | string[];
+        conversionFn: (val: any, rawData: Record<string, unknown>) => ExifMetadata[K];
+      };
 
   type FileFieldToExifRMetadata = {
     [K in keyof ExifMetadata]?: ExifRSource<K> | ExifRSource<K>[];
-  }
+  };
 
   /** If multiple exifR metadata points to the same file field,
    * it takes the last field that has a value
@@ -154,7 +168,10 @@ export const getExifMetadataFromFile = async (
   const fileFieldToExifRMetadata = {
     dateTaken: [
       "DateTimeOriginal", // Prefer file-based date taken
-      { exifField: ["photoshop:DateCreated","xmp:CreateDate"], conversionFn: (d) => new Date(d) },
+      {
+        exifField: ["photoshop:DateCreated", "xmp:CreateDate"],
+        conversionFn: (d) => new Date(d),
+      },
     ],
     dimensionWidth: {
       exifField: ["ImageWidth", "ExifImageWidth"],
@@ -191,14 +208,17 @@ export const getExifMetadataFromFile = async (
     regions: { exifField: "Regions", conversionFn: extractRegions },
     personInImage: ["PersonInImage", "xmp:PersonInImage"],
     tags: ["Keywords", "dc:subject", "lr:hierarchicalSubject"],
-    orientation: { exifField: "Orientation", conversionFn: (value) => toFiniteNumber(value) },
+    orientation: {
+      exifField: "Orientation",
+      conversionFn: (value) => toFiniteNumber(value),
+    },
   } as const satisfies FileFieldToExifRMetadata;
 
-  let rawData:any;
+  let rawData: any;
   try {
     rawData = await exifr.parse(fullPath, {
       translateValues: false,
-      xmp: true,  // Enable XMP parsing for Lightroom ratings
+      xmp: true, // Enable XMP parsing for Lightroom ratings
       ifd0: {},
       exif: {},
       gps: {},
@@ -213,8 +233,11 @@ export const getExifMetadataFromFile = async (
         try {
           return (await getVideoMetadata(fullPath)) as ExifMetadata;
         } catch (videoError) {
-          const msg = videoError instanceof Error ? videoError.message : String(videoError);
-          console.warn(`[exif] QuickTime-branded file failed video metadata for ${fullPath}: ${msg}. Ensure ffprobe is installed and on PATH.`);
+          const msg =
+            videoError instanceof Error ? videoError.message : String(videoError);
+          console.warn(
+            `[exif] QuickTime-branded file failed video metadata for ${fullPath}: ${msg}. Ensure ffprobe is installed and on PATH.`,
+          );
           return {};
         }
       }
@@ -223,24 +246,36 @@ export const getExifMetadataFromFile = async (
     }
   }
 
-  const metadata = Object.entries(fileFieldToExifRMetadata).reduce((acc, [fileField, sourceOrSources]) => {
-    const sources = Array.isArray(sourceOrSources) ? sourceOrSources : [sourceOrSources];
+  const metadata = Object.entries(fileFieldToExifRMetadata).reduce(
+    (acc, [fileField, sourceOrSources]) => {
+      const sources = Array.isArray(sourceOrSources)
+        ? sourceOrSources
+        : [sourceOrSources];
 
-    const fields = sources.map((source) => {
-      const { exifField, conversionFn } = typeof source === "string" ? { exifField: source } : source;
-      const fieldArray = Array.isArray(exifField) ? exifField : [exifField];
-      const exifValue = fieldArray.map((f) => rawData?.[f as keyof any]).find((v) => v !== undefined);
-      if (exifValue === undefined) {
-        return null;
-      }
-      return [fileField, conversionFn ? conversionFn(exifValue, rawData) : exifValue] as [string, ExifMetadata[keyof ExifMetadata]];
-    }).filter((v): v is [string, ExifMetadata[keyof ExifMetadata]] => v !== null);
+      const fields = sources
+        .map((source) => {
+          const { exifField, conversionFn } =
+            typeof source === "string" ? { exifField: source } : source;
+          const fieldArray = Array.isArray(exifField) ? exifField : [exifField];
+          const exifValue = fieldArray
+            .map((f) => rawData?.[f as keyof any])
+            .find((v) => v !== undefined);
+          if (exifValue === undefined) {
+            return null;
+          }
+          return [
+            fileField,
+            conversionFn ? conversionFn(exifValue, rawData) : exifValue,
+          ] as [string, ExifMetadata[keyof ExifMetadata]];
+        })
+        .filter((v): v is [string, ExifMetadata[keyof ExifMetadata]] => v !== null);
 
-    return {...acc, ...Object.fromEntries(fields)};
-  }, {} as Partial<ExifMetadata>);
+      return { ...acc, ...Object.fromEntries(fields) };
+    },
+    {} as Partial<ExifMetadata>,
+  );
 
   return metadata as ExifMetadata;
-
 };
 
 /**

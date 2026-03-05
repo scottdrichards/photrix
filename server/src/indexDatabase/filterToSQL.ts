@@ -1,12 +1,11 @@
-import type { FileRecord, FilterCondition, FilterElement, Range, StringSearch } from "./indexDatabase.type.ts";
+import type { FilterCondition, FilterElement, Range } from "./indexDatabase.type.ts";
+import type { FileRecord } from "./fileRecord.type.ts";
 import { normalizeFolderPath } from "./utils/pathUtils.ts";
 
 type SQLPart = {
   where: string;
   params: unknown[];
 };
-
-type RelativePathConstraint = StringSearch & { recursive?: boolean };
 
 const stringArrayJsonFields = new Set(["tags", "aiTags", "personInImage"]);
 
@@ -17,18 +16,18 @@ const stringArrayJsonFields = new Set(["tags", "aiTags", "personInImage"]);
 export const filterToSQL = (filter: FilterElement): SQLPart => {
   const parts: SQLPart[] = [];
   buildFilterSQL(filter, parts);
-  
+
   if (parts.length === 0) {
     return { where: "", params: [] };
   }
-  
+
   if (parts.length === 1) {
     return parts[0];
   }
-  
+
   // Join multiple parts (should only happen with logical operators)
-  const where = parts.map(p => p.where).join(" AND ");
-  const params = parts.flatMap(p => p.params);
+  const where = parts.map((p) => p.where).join(" AND ");
+  const params = parts.flatMap((p) => p.params);
   return { where, params };
 };
 
@@ -39,25 +38,25 @@ const buildFilterSQL = (filter: FilterElement, results: SQLPart[]): void => {
     for (const condition of filter.conditions) {
       buildFilterSQL(condition, subParts);
     }
-    
+
     if (subParts.length === 0) return;
-    
+
     const operator = filter.operation === "and" ? " AND " : " OR ";
-    const where = subParts.map(p => `(${p.where})`).join(operator);
-    const params = subParts.flatMap(p => p.params);
+    const where = subParts.map((p) => `(${p.where})`).join(operator);
+    const params = subParts.flatMap((p) => p.params);
     results.push({ where, params });
     return;
   }
-  
+
   // Filter condition - one or more field constraints
   const conditions = filter as FilterCondition;
-  
+
   for (const [key, constraint] of Object.entries(conditions)) {
     if (constraint === undefined) {
       // No constraint on this field
       continue;
     }
-    
+
     const sql = constraintToSQL(key as keyof FileRecord, constraint);
     if (sql) {
       results.push(sql);
@@ -65,9 +64,9 @@ const buildFilterSQL = (filter: FilterElement, results: SQLPart[]): void => {
   }
 };
 
-const constraintToSQL = <K extends keyof FileRecord>(
-  field: K,
-  constraint: FilterCondition[K]
+const constraintToSQL = (
+  field: keyof FileRecord,
+  constraint: FilterCondition[keyof FileRecord],
 ): SQLPart | null => {
   const fieldName = String(field);
   const isStringArrayJsonField = stringArrayJsonFields.has(fieldName);
@@ -123,7 +122,7 @@ const constraintToSQL = <K extends keyof FileRecord>(
     if (constraint.length === 0) {
       return null;
     }
-    
+
     // Check if array contains strings (for glob/regex matching) or primitives
     if (typeof constraint[0] === "string") {
       if (isStringArrayJsonField) {
@@ -143,7 +142,7 @@ const constraintToSQL = <K extends keyof FileRecord>(
         params: constraint, // NOTE: Should this be string[] if multiple conditions??
       };
     }
-    
+
     // Number array - IN clause
     const placeholders = constraint.map(() => "?").join(", ");
     return {
@@ -154,13 +153,16 @@ const constraintToSQL = <K extends keyof FileRecord>(
 
   if (typeof constraint === "object" && constraint !== null) {
     // Could be Range, StringSearch, or complex object
-    console.log(`[filterToSQL] Object constraint for field "${String(field)}":`, JSON.stringify(constraint));
-    
+    console.log(
+      `[filterToSQL] Object constraint for field "${String(field)}":`,
+      JSON.stringify(constraint),
+    );
+
     // Check for Range (has min/max)
     if ("min" in constraint || "max" in constraint) {
       return rangeToSQL(fieldName, constraint);
     }
-    
+
     // Check for StringSearch (has includes, glob, regex, startsWith, notStartsWith)
     if (
       "includes" in constraint ||
@@ -172,11 +174,18 @@ const constraintToSQL = <K extends keyof FileRecord>(
       return stringSearchToSQL(fieldName, constraint, isStringArrayJsonField);
     }
 
-    if (fieldName === "folder" && typeof constraint === 'object' && constraint !== null && 'folder' in constraint) {
+    if (
+      fieldName === "folder" &&
+      typeof constraint === "object" &&
+      constraint !== null &&
+      "folder" in constraint
+    ) {
       const folderConstraint = constraint as { folder: string; recursive?: boolean };
       const normalizedFolder = normalizeFolderPath(folderConstraint.folder);
       const escapedFolder = escapeLikeLiteral(normalizedFolder);
-      console.log(`[filterToSQL] Folder constraint: folder="${folderConstraint.folder}", normalized="${normalizedFolder}", recursive=${folderConstraint.recursive}`);
+      console.log(
+        `[filterToSQL] Folder constraint: folder="${folderConstraint.folder}", normalized="${normalizedFolder}", recursive=${folderConstraint.recursive}`,
+      );
 
       if (folderConstraint.recursive) {
         return {
@@ -184,13 +193,13 @@ const constraintToSQL = <K extends keyof FileRecord>(
           params: [`${escapedFolder}%`],
         };
       }
-      
+
       return {
         where: `folder = ?`,
         params: [normalizedFolder],
       };
     }
-    
+
     // Complex nested object - not directly supported
     return null;
   }
@@ -198,7 +207,7 @@ const constraintToSQL = <K extends keyof FileRecord>(
   return null;
 };
 
-const rangeToSQL = (field: string, range: Range<any>): SQLPart => {
+const rangeToSQL = (field: string, range: Range<number | Date>): SQLPart => {
   const conditions: string[] = [];
   const params: unknown[] = [];
 
@@ -220,7 +229,13 @@ const rangeToSQL = (field: string, range: Range<any>): SQLPart => {
 
 const stringSearchToSQL = (
   field: string,
-  search: { includes?: string; glob?: string; regex?: string; startsWith?: string; notStartsWith?: string },
+  search: {
+    includes?: string;
+    glob?: string;
+    regex?: string;
+    startsWith?: string;
+    notStartsWith?: string;
+  },
   isStringArrayJsonField = false,
 ): SQLPart => {
   if (search.startsWith) {
@@ -300,7 +315,7 @@ const stringSearchToSQL = (
 /**
  * Escape special characters for SQL LIKE literal (%, _, \)
  */
-const escapeLikeLiteral = (value: string) =>  value.replace(/[\\%_]/g, (m) => `\\${m}`);
+const escapeLikeLiteral = (value: string) => value.replace(/[\\%_]/g, (m) => `\\${m}`);
 
 const globToLike = (glob: string): string => {
   // Convert glob pattern to SQL LIKE pattern

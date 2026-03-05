@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useMemo, useState, ReactNode, useEffect } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  ReactNode,
+  useEffect,
+} from "react";
 import type { PhotoItem } from "../../api";
 
 export type SelectionContextValue = {
@@ -38,7 +46,10 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const selectedItems = useMemo(
-    () => selectedPaths.map((path) => itemByPath.get(path)).filter((item): item is PhotoItem => Boolean(item)),
+    () =>
+      selectedPaths
+        .map((path) => itemByPath.get(path))
+        .filter((item): item is PhotoItem => Boolean(item)),
     [itemByPath, selectedPaths],
   );
 
@@ -48,7 +59,9 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
     const validPaths = new Set(items.map((item) => item.path));
     setSelectedPaths((previousPaths) => {
       const filteredPaths = previousPaths.filter((path) => validPaths.has(path));
-      return filteredPaths.length === previousPaths.length ? previousPaths : filteredPaths;
+      return filteredPaths.length === previousPaths.length
+        ? previousPaths
+        : filteredPaths;
     });
   }, [items]);
 
@@ -61,11 +74,11 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const toggleSelected = useCallback((photo: PhotoItem) => {
-    setSelectedPaths((previousPaths) => (
+    setSelectedPaths((previousPaths) =>
       previousPaths.includes(photo.path)
         ? previousPaths.filter((path) => path !== photo.path)
-        : [...previousPaths, photo.path]
-    ));
+        : [...previousPaths, photo.path],
+    );
   }, []);
 
   const clearSelection = useCallback(() => {

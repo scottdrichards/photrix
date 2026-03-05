@@ -4,82 +4,107 @@ import { IndexDatabase } from "./indexDatabase.ts";
 
 const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
 
-const durationFormatter = new (Intl as any).DurationFormat("en");
+const formatDuration = (totalSeconds: number): string => {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+
+  return `${hours}h ${minutes}m ${seconds}s`;
+};
 
 let isProcessingExif = false;
-export const startBackgroundProcessExifMetadata = (database: IndexDatabase, onComplete?: () => void) => {
-    if (isProcessingExif) {
-        // Just for deugging - should never happen in practice
-        throw new Error("EXIF processing is already running");
-    }
-    isProcessingExif = true;
-    const totalToProcess = database.countFilesNeedingMetadataUpdate('exif');
-    let processedCount = 0;
-    let restartAtMS: number = 0;
-    let lastReportTime = Date.now();
-    let lastReportCount = 0;
 
-    const processAll = async ()=>{
-        while (true) {
-            const batchSize = 200;
-            const items = database.getFilesNeedingMetadataUpdate('exif', batchSize);
-            if (items.length === 0) {
-                console.log("[metadata:exif] processing complete");
-                onComplete?.();
-                return;
+export const isExifMetadataProcessingActive = () => isProcessingExif;
+
+export const startBackgroundProcessExifMetadata = (
+  database: IndexDatabase,
+  onComplete?: () => void,
+) => {
+  if (isProcessingExif) {
+    // Just for deugging - should never happen in practice
+    throw new Error("EXIF processing is already running");
+  }
+  isProcessingExif = true;
+  const totalToProcess = database.countFilesNeedingMetadataUpdate("exif");
+  let processedCount = 0;
+  let restartAtMS: number = 0;
+  let lastReportTime = Date.now();
+  let lastReportCount = 0;
+
+  const processAll = async () => {
+    while (true) {
+      const batchSize = 200;
+      const items = database.getFilesNeedingMetadataUpdate("exif", batchSize);
+      if (items.length === 0) {
+        console.log("[metadata:exif] processing complete");
+        isProcessingExif = false;
+        onComplete?.();
+        return;
+      }
+      for (let i = 0; i < items.length; i += 4) {
+        const chunk = items.slice(i, i + 4);
+        await Promise.all(
+          chunk.map(async (entry) => {
+            const { relativePath } = entry;
+            const fullPath = path.join(
+              database.storagePath,
+              stripLeadingSlash(relativePath),
+            );
+            const now = new Date();
+            try {
+              if (!entry.sizeInBytes) {
+                throw new Error("zero-byte file");
+              }
+              const exif = await getExifMetadataFromFile(fullPath);
+              await database.addOrUpdateFileData(entry.relativePath, {
+                ...exif,
+                exifProcessedAt: now.toISOString(),
+              });
+            } catch (error) {
+              const errorDate = new Date();
+              await database.addOrUpdateFileData(entry.relativePath, {
+                exifProcessedAt: errorDate.toISOString(),
+              });
+              console.log(`[metadata:exif] skipping file: ${relativePath}, ${error}`);
             }
-            for (let i = 0; i < items.length; i += 4) {
-                const chunk = items.slice(i, i + 4);
-                await Promise.all(chunk.map(async (entry) => {
-                    const { relativePath } = entry;
-                    const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
-                    const now = new Date();
-                    try {
-                        if (!entry.sizeInBytes) {
-                            throw new Error("zero-byte file");
-                        }
-                        const exif = await getExifMetadataFromFile(fullPath);
-                        await database.addOrUpdateFileData(entry.relativePath, { ...exif, exifProcessedAt: now.toISOString() });
-                    } catch (error) {
-                        const errorDate = new Date();
-                        await database.addOrUpdateFileData(entry.relativePath, { exifProcessedAt: errorDate.toISOString() });
-                        console.log(`[metadata:exif] skipping file: ${relativePath}, ${error}`);
-                    }
-                    processedCount++;
-                }));
+            processedCount++;
+          }),
+        );
 
-                const now = Date.now();
-                if (now - lastReportTime > 1000) {
-                    const percentComplete = ((processedCount / totalToProcess) * 100).toFixed(2);
-                    const rate = (processedCount - lastReportCount) / ((now - lastReportTime) / 1000);
-                    lastReportCount = processedCount;
-                    const totalSecondsRemaining = (totalToProcess - processedCount) / rate;
-                    const hoursRemaining = Math.floor(totalSecondsRemaining / 3600);
-                    const minutesRemaining = Math.floor((totalSecondsRemaining % 3600) / 60);
-                    const secondsRemaining = Math.floor(totalSecondsRemaining % 60);
-                    const durationString = durationFormatter.format({
-                        hours: hoursRemaining,
-                        minutes: minutesRemaining,
-                        seconds: secondsRemaining,
-                    });
-                    console.log(`[metadata:exif] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Time remaining: ${durationString}. Last processed batch ending with: ${chunk[chunk.length - 1]?.relativePath ?? "<none>"}`);
-                    lastReportTime = now;
-                }
-
-                while (restartAtMS && restartAtMS > Date.now()) {
-                    console.log("[metadata:exif] paused processing...");
-                    const timeoutDuration = restartAtMS - Date.now();
-                    await new Promise((resolve) => setTimeout(resolve, timeoutDuration));
-                }
-            }
+        const now = Date.now();
+        if (now - lastReportTime > 1000) {
+          const percentComplete = ((processedCount / totalToProcess) * 100).toFixed(2);
+          const rate =
+            (processedCount - lastReportCount) / ((now - lastReportTime) / 1000);
+          lastReportCount = processedCount;
+          const totalSecondsRemaining = (totalToProcess - processedCount) / rate;
+          const hoursRemaining = Math.floor(totalSecondsRemaining / 3600);
+          const minutesRemaining = Math.floor((totalSecondsRemaining % 3600) / 60);
+          const secondsRemaining = Math.floor(totalSecondsRemaining % 60);
+          const durationString = formatDuration(
+            hoursRemaining * 3600 + minutesRemaining * 60 + secondsRemaining,
+          );
+          console.log(
+            `[metadata:exif] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Time remaining: ${durationString}. Last processed batch ending with: ${chunk[chunk.length - 1]?.relativePath ?? "<none>"}`,
+          );
+          lastReportTime = now;
         }
-    }
 
-    processAll();
-    
-    const pause = (durationMS: number =  10_000) => {
-        const localRestartMs = Date.now() + durationMS;
-        restartAtMS = Math.max(restartAtMS, localRestartMs);
+        while (restartAtMS && restartAtMS > Date.now()) {
+          console.log("[metadata:exif] paused processing...");
+          const timeoutDuration = restartAtMS - Date.now();
+          await new Promise((resolve) => setTimeout(resolve, timeoutDuration));
+        }
+      }
     }
-    return pause;
-}
+  };
+
+  processAll();
+
+  const pause = (durationMS: number = 10_000) => {
+    const localRestartMs = Date.now() + durationMS;
+    restartAtMS = Math.max(restartAtMS, localRestartMs);
+  };
+  return pause;
+};

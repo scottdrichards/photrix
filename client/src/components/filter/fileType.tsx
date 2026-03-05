@@ -6,7 +6,10 @@ type FileTypeFilterProps = {
   handleMediaTypeChange: (type: MediaTypeFilter) => void;
 };
 
-export const FileTypeFilter = ({ mediaTypeFilter, handleMediaTypeChange }: FileTypeFilterProps) => {
+export const FileTypeFilter = ({
+  mediaTypeFilter,
+  handleMediaTypeChange,
+}: FileTypeFilterProps) => {
   return (
     <div>
       <Caption1>Type:</Caption1>

@@ -3,13 +3,26 @@ import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
 import { writeJson } from "../utils.ts";
 
-type SuggestionsField = "personInImage" | "tags" | "aiTags" | "cameraMake" | "cameraModel" | "lens";
+type SuggestionsField =
+  | "personInImage"
+  | "tags"
+  | "aiTags"
+  | "cameraMake"
+  | "cameraModel"
+  | "lens";
 
 type Options = {
   database: IndexDatabase;
 };
 
-const suggestionFields: SuggestionsField[] = ["personInImage", "tags", "aiTags", "cameraMake", "cameraModel", "lens"];
+const suggestionFields: SuggestionsField[] = [
+  "personInImage",
+  "tags",
+  "aiTags",
+  "cameraMake",
+  "cameraModel",
+  "lens",
+];
 
 const isSuggestionsField = (value: string): value is SuggestionsField => {
   return suggestionFields.includes(value as SuggestionsField);
@@ -48,7 +61,9 @@ export const suggestionsRequestHandler = async (
         }
       : {};
 
-    const extraFilter: FilterElement | null = filterParam ? (JSON.parse(filterParam) as FilterElement) : null;
+    const extraFilter: FilterElement | null = filterParam
+      ? (JSON.parse(filterParam) as FilterElement)
+      : null;
 
     const filter: FilterElement = extraFilter
       ? {
@@ -66,6 +81,9 @@ export const suggestionsRequestHandler = async (
 
     writeJson(res, 200, { suggestions });
   } catch (error) {
-    writeJson(res, 400, { error: "Invalid suggestions query", message: error instanceof Error ? error.message : String(error) });
+    writeJson(res, 400, {
+      error: "Invalid suggestions query",
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
 };

@@ -1,8 +1,4 @@
-import {
-  makeStyles,
-  tokens,
-  Text,
-} from "@fluentui/react-components";
+import { makeStyles, tokens, Text } from "@fluentui/react-components";
 import type { RecentMaintenance } from "../api";
 
 const useStyles = makeStyles({

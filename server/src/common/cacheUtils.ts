@@ -26,11 +26,16 @@ export const getCachedFilePath = (
 ) => join(MEDIA_CACHE_DIR, `${hash}.${suffix}.${extension}`);
 
 const getRootKey = (rootPath: string): string => {
-  const normalized = rootPath.replace(/[\\/:]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
+  const normalized = rootPath
+    .replace(/[\\/:]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
   return normalized || "root";
 };
 
-const getMirroredSourceParts = (filePath: string): {
+const getMirroredSourceParts = (
+  filePath: string,
+): {
   rootKey: string;
   relativeDirectory: string;
   sourceName: string;
@@ -57,5 +62,7 @@ export const getMirroredCachedFilePath = (
   extension: string,
 ): string => join(getMirroredCacheBaseDirectory(filePath), `${suffix}.${extension}`);
 
-export const getMirroredHLSDirectory = (filePath: string, ...subdirectories: string[]): string =>
-  join(getMirroredCacheBaseDirectory(filePath), "hls", ...subdirectories);
+export const getMirroredHLSDirectory = (
+  filePath: string,
+  ...subdirectories: string[]
+): string => join(getMirroredCacheBaseDirectory(filePath), "hls", ...subdirectories);

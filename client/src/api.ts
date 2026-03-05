@@ -87,7 +87,13 @@ export interface FetchPhotosOptions {
   peopleInImageFilter?: string[];
 }
 
-export type SuggestionsField = "personInImage" | "tags" | "aiTags" | "cameraMake" | "cameraModel" | "lens";
+export type SuggestionsField =
+  | "personInImage"
+  | "tags"
+  | "aiTags"
+  | "cameraMake"
+  | "cameraModel"
+  | "lens";
 
 export type FetchSuggestionsOptions = {
   field: SuggestionsField;
@@ -110,15 +116,22 @@ export interface FetchPhotosResult {
   pageSize: number;
 }
 
-export interface FetchGeotaggedPhotosOptions extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata"> {
+export interface FetchGeotaggedPhotosOptions
+  extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata"> {
   pageSize?: number;
   locationBounds?: GeoBounds | null;
   clusterSize?: number;
 }
 
-export interface FetchDateRangeOptions extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata" | "dateRange"> {}
+export type FetchDateRangeOptions = Omit<
+  FetchPhotosOptions,
+  "page" | "pageSize" | "metadata" | "dateRange"
+>;
 
-export interface FetchDateHistogramOptions extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata"> {}
+export type FetchDateHistogramOptions = Omit<
+  FetchPhotosOptions,
+  "page" | "pageSize" | "metadata"
+>;
 
 export interface ProgressEntry {
   completed: number;
@@ -199,7 +212,8 @@ const DEFAULT_METADATA_KEYS = [
   "framerate",
 ] as const;
 
-const clampNumber = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+const clampNumber = (value: number, min: number, max: number) =>
+  Math.min(Math.max(value, min), max);
 
 const normalizeBounds = (bounds: GeoBounds): GeoBounds => ({
   west: clampNumber(bounds.west, -180, 180),
@@ -268,8 +282,14 @@ type BuildFiltersInput = {
   peopleInImageFilter?: string[] | string;
 };
 
-const buildFilters = ({ ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter }: BuildFiltersInput) => {
-  const filters: any[] = [];
+const buildFilters = ({
+  ratingFilter,
+  mediaTypeFilter,
+  locationBounds,
+  dateRange,
+  peopleInImageFilter,
+}: BuildFiltersInput) => {
+  const filters: Record<string, unknown>[] = [];
 
   if (ratingFilter) {
     const ratingFilterObj = ratingFilter.atLeast
@@ -289,17 +309,11 @@ const buildFilters = ({ ratingFilter, mediaTypeFilter, locationBounds, dateRange
       conditions: [
         {
           operation: "or",
-          conditions: [
-            { mimeType: null },
-            { mimeType: { notStartsWith: "image/" } },
-          ],
+          conditions: [{ mimeType: null }, { mimeType: { notStartsWith: "image/" } }],
         },
         {
           operation: "or",
-          conditions: [
-            { mimeType: null },
-            { mimeType: { notStartsWith: "video/" } },
-          ],
+          conditions: [{ mimeType: null }, { mimeType: { notStartsWith: "video/" } }],
         },
       ],
     });
@@ -315,7 +329,13 @@ const buildFilters = ({ ratingFilter, mediaTypeFilter, locationBounds, dateRange
   }
 
   if (Array.isArray(peopleInImageFilter)) {
-    const normalizedPeople = Array.from(new Set(peopleInImageFilter.map((person) => person.trim()).filter((person) => person.length > 0)));
+    const normalizedPeople = Array.from(
+      new Set(
+        peopleInImageFilter
+          .map((person) => person.trim())
+          .filter((person) => person.length > 0),
+      ),
+    );
     if (normalizedPeople.length > 0) {
       filters.push({ personInImage: normalizedPeople });
     }
@@ -340,12 +360,12 @@ export const fetchStatus = async (): Promise<ServerStatus> => {
 export const fetchFolders = async (path: string = ""): Promise<string[]> => {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
   const response = await fetch(`/api/folders/${normalizedPath}`);
-  
+
   if (!response.ok) {
     throw new Error(`Failed to fetch folders (status ${response.status})`);
   }
-  
-  const data = await response.json() as { folders: string[] };
+
+  const data = (await response.json()) as { folders: string[] };
   return data.folders;
 };
 
@@ -395,9 +415,10 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
       ? buildFileUrl(relativePath, { representation: "hls", height: "original" })
       : undefined;
 
-  // Include all metadata from the API response
-  const { folder, fileName, ...metadata } = item;
-  
+  const metadata = Object.fromEntries(
+    Object.entries(item).filter(([key]) => key !== "folder" && key !== "fileName"),
+  );
+
   return {
     path: relativePath,
     name,
@@ -446,16 +467,25 @@ export const fetchPhotos = async ({
   if (includeSubfolders) {
     params.set("includeSubfolders", "true");
   }
-  
-  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter });
-  
+
+  const filters = buildFilters({
+    ratingFilter,
+    mediaTypeFilter,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+  });
+
   if (filters.length > 0) {
-    const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    const filterObj =
+      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
     params.set("filter", JSON.stringify(filterObj));
   }
 
   // Use /api/files/ with trailing slash to query for multiple files
-  const url = path ? `/api/files/${path}?${params.toString()}` : `/api/files/?${params.toString()}`;
+  const url = path
+    ? `/api/files/${path}?${params.toString()}`
+    : `/api/files/?${params.toString()}`;
   const response = await fetch(url, { signal });
 
   if (!response.ok) {
@@ -482,21 +512,36 @@ export const fetchGeotaggedPhotos = async ({
   dateRange,
   peopleInImageFilter,
   signal,
-}: FetchGeotaggedPhotosOptions = {}): Promise<{ points: GeoPoint[]; total: number; truncated: boolean }> => {
+}: FetchGeotaggedPhotosOptions = {}): Promise<{
+  points: GeoPoint[];
+  total: number;
+  truncated: boolean;
+}> => {
   const params = new URLSearchParams();
   params.set("cluster", "true");
   params.set("pageSize", pageSize.toString());
   if (includeSubfolders) {
     params.set("includeSubfolders", "true");
   }
-  if (typeof clusterSize === "number" && Number.isFinite(clusterSize) && clusterSize > 0) {
+  if (
+    typeof clusterSize === "number" &&
+    Number.isFinite(clusterSize) &&
+    clusterSize > 0
+  ) {
     params.set("clusterSize", clusterSize.toString());
   }
 
-  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter });
+  const filters = buildFilters({
+    ratingFilter,
+    mediaTypeFilter,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+  });
 
   if (filters.length > 0) {
-    const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    const filterObj =
+      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
     params.set("filter", JSON.stringify(filterObj));
   }
 
@@ -507,19 +552,30 @@ export const fetchGeotaggedPhotos = async ({
     params.set("south", locationBounds.south.toString());
   }
 
-  const url = path ? `/api/files/${path}?${params.toString()}` : `/api/files/?${params.toString()}`;
+  const url = path
+    ? `/api/files/${path}?${params.toString()}`
+    : `/api/files/?${params.toString()}`;
   const response = await fetch(url, { signal });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch geotagged photos (status ${response.status})`);
   }
 
-  const payload = await response.json() as {
-    clusters: Array<{ latitude: number; longitude: number; count: number; samplePath?: string; sampleName?: string }>;
+  const payload = (await response.json()) as {
+    clusters: Array<{
+      latitude: number;
+      longitude: number;
+      count: number;
+      samplePath?: string;
+      sampleName?: string;
+    }>;
     total: number;
   };
 
-  const coveredCount = payload.clusters.reduce((sum, cluster) => sum + (cluster.count ?? 0), 0);
+  const coveredCount = payload.clusters.reduce(
+    (sum, cluster) => sum + (cluster.count ?? 0),
+    0,
+  );
   const points: GeoPoint[] = payload.clusters.map((cluster) => ({
     path: cluster.samplePath ?? "",
     name: cluster.sampleName ?? `${cluster.count} items`,
@@ -541,28 +597,40 @@ export const fetchDateRange = async ({
   locationBounds,
   peopleInImageFilter,
   signal,
-}: FetchDateRangeOptions = {}): Promise<{ minDate: number | null; maxDate: number | null }> => {
+}: FetchDateRangeOptions = {}): Promise<{
+  minDate: number | null;
+  maxDate: number | null;
+}> => {
   const params = new URLSearchParams();
   params.set("aggregate", "dateRange");
   if (includeSubfolders) {
     params.set("includeSubfolders", "true");
   }
 
-  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange: null, peopleInImageFilter });
+  const filters = buildFilters({
+    ratingFilter,
+    mediaTypeFilter,
+    locationBounds,
+    dateRange: null,
+    peopleInImageFilter,
+  });
 
   if (filters.length > 0) {
-    const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    const filterObj =
+      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
     params.set("filter", JSON.stringify(filterObj));
   }
 
-  const url = path ? `/api/files/${path}?${params.toString()}` : `/api/files/?${params.toString()}`;
+  const url = path
+    ? `/api/files/${path}?${params.toString()}`
+    : `/api/files/?${params.toString()}`;
   const response = await fetch(url, { signal });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch date range (status ${response.status})`);
   }
 
-  return await response.json() as { minDate: number | null; maxDate: number | null };
+  return (await response.json()) as { minDate: number | null; maxDate: number | null };
 };
 
 export const fetchDateHistogram = async ({
@@ -581,21 +649,30 @@ export const fetchDateHistogram = async ({
     params.set("includeSubfolders", "true");
   }
 
-  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter });
+  const filters = buildFilters({
+    ratingFilter,
+    mediaTypeFilter,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+  });
 
   if (filters.length > 0) {
-    const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    const filterObj =
+      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
     params.set("filter", JSON.stringify(filterObj));
   }
 
-  const url = path ? `/api/files/${path}?${params.toString()}` : `/api/files/?${params.toString()}`;
+  const url = path
+    ? `/api/files/${path}?${params.toString()}`
+    : `/api/files/?${params.toString()}`;
   const response = await fetch(url, { signal });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch date histogram (status ${response.status})`);
   }
 
-  return await response.json() as DateHistogramResult;
+  return (await response.json()) as DateHistogramResult;
 };
 
 export const createFallbackPhoto = (path: string): PhotoItem => {
@@ -642,9 +719,16 @@ export const fetchSuggestions = async ({
     params.set("path", path);
   }
 
-  const filters = buildFilters({ ratingFilter, mediaTypeFilter, locationBounds, dateRange, peopleInImageFilter });
+  const filters = buildFilters({
+    ratingFilter,
+    mediaTypeFilter,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+  });
   if (filters.length > 0) {
-    const filterObj = filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    const filterObj =
+      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
     params.set("filter", JSON.stringify(filterObj));
   }
 
@@ -654,6 +738,6 @@ export const fetchSuggestions = async ({
     throw new Error(`Failed to fetch suggestions (status ${response.status})`);
   }
 
-  const payload = await response.json() as { suggestions: string[] };
+  const payload = (await response.json()) as { suggestions: string[] };
   return payload.suggestions;
 };

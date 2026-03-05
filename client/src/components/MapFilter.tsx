@@ -4,7 +4,7 @@ import {
   mergeClasses,
   Spinner,
   Switch,
-  Tooltip
+  Tooltip,
 } from "@fluentui/react-components";
 import Feature from "ol/Feature";
 import Map from "ol/Map";
@@ -42,7 +42,7 @@ const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
 
 const maybeBoundsEqual = (
   a: GeoBounds | null | undefined,
-  b: GeoBounds | null | undefined
+  b: GeoBounds | null | undefined,
 ) => {
   if (!a && !b) {
     return true;
@@ -50,16 +50,18 @@ const maybeBoundsEqual = (
   return boundsEqual(a ?? null, b ?? null);
 };
 
-export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
+export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
   const styles = useMapFilterStyles();
   const { filter, setFilter } = useFilterContext();
   const { locationBounds } = filter;
   const normalizedLocationBounds = locationBounds ?? undefined;
-  
+
   const [mapElement, setMapElement] = useState<HTMLDivElement | null>(null);
   const [mapInstance, setMapInstance] = useState<Map | null>(null);
   const [vectorSource, setVectorSource] = useState<VectorSource | null>(null);
-  const [pendingLocationBounds, setPendingLocationBounds] = useState<GeoBounds | undefined>(normalizedLocationBounds);
+  const [pendingLocationBounds, setPendingLocationBounds] = useState<
+    GeoBounds | undefined
+  >(normalizedLocationBounds);
   const [hasFitted, setHasFitted] = useState(false);
   const [points, setPoints] = useState<GeoPoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -80,13 +82,24 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
       try {
         let clusterSize = undefined;
         if (normalizedLocationBounds) {
-          const latSpan = Math.max(Math.abs(normalizedLocationBounds.north - normalizedLocationBounds.south), 1e-9);
-          const lonSpan = Math.max(Math.abs(normalizedLocationBounds.east - normalizedLocationBounds.west), 1e-9);
+          const latSpan = Math.max(
+            Math.abs(normalizedLocationBounds.north - normalizedLocationBounds.south),
+            1e-9,
+          );
+          const lonSpan = Math.max(
+            Math.abs(normalizedLocationBounds.east - normalizedLocationBounds.west),
+            1e-9,
+          );
           const targetCells = 400_000;
           const cellSize = Math.max(latSpan, lonSpan) / Math.sqrt(targetCells);
           clusterSize = Math.max(cellSize, 0.00000001);
         }
-        const result = await fetchGeotaggedPhotos({...filter, locationBounds: normalizedLocationBounds, clusterSize, signal: controller.signal });
+        const result = await fetchGeotaggedPhotos({
+          ...filter,
+          locationBounds: normalizedLocationBounds,
+          clusterSize,
+          signal: controller.signal,
+        });
         setPoints(result.points);
         setTotalPins(result.total);
         setTruncated(result.truncated);
@@ -111,7 +124,9 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
   const pinSummary = useMemo(() => {
     const displayed = points.length;
     if (typeof totalPins === "number") {
-      return truncated ? `${displayed} of ${totalPins} pins (limited)` : `${displayed} of ${totalPins} pins`;
+      return truncated
+        ? `${displayed} of ${totalPins} pins (limited)`
+        : `${displayed} of ${totalPins} pins`;
     }
     return `${displayed} pins`;
   }, [points.length, totalPins, truncated]);
@@ -165,7 +180,11 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
         return;
       }
       const extent = map.getView().calculateExtent(size);
-      const [west, south, east, north] = transformExtent(extent, "EPSG:3857", "EPSG:4326");
+      const [west, south, east, north] = transformExtent(
+        extent,
+        "EPSG:3857",
+        "EPSG:4326",
+      );
       const nextBounds: GeoBounds = { west, east, north, south };
 
       if (!map.get("userInteracted")) {
@@ -239,8 +258,12 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
     }
 
     if (!hasFitted) {
-      const extent = boundingExtent(features.map((feature) => (feature.getGeometry() as Point).getCoordinates()));
-      mapInstance.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
+      const extent = boundingExtent(
+        features.map((feature) => (feature.getGeometry() as Point).getCoordinates()),
+      );
+      mapInstance
+        .getView()
+        .fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
       setHasFitted(true);
     }
   }, [hasFitted, mapInstance, points, vectorSource]);
@@ -263,7 +286,9 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
     }
 
     const extent = vectorSource.getExtent();
-    mapInstance.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
+    mapInstance
+      .getView()
+      .fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
   };
 
   return (
@@ -271,10 +296,15 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
       <div className={styles.headerRow}>
         <div>
           <Caption1>Map filter</Caption1>
-          <Caption1 className={styles.description}>Pins show items with location metadata.</Caption1>
+          <Caption1 className={styles.description}>
+            Pins show items with location metadata.
+          </Caption1>
         </div>
         <div className={styles.actions}>
-          <Tooltip content="Keep results synced to the current map view" relationship="label">
+          <Tooltip
+            content="Keep results synced to the current map view"
+            relationship="label"
+          >
             <Switch
               checked={Boolean(locationBounds)}
               onChange={(_, data) => {
@@ -291,22 +321,34 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
                   return;
                 }
                 const extent = mapInstance.getView().calculateExtent(size);
-                const [west, south, east, north] = transformExtent(extent, "EPSG:3857", "EPSG:4326");
-                const nextBounds:GeoBounds = { west, east, north, south };
+                const [west, south, east, north] = transformExtent(
+                  extent,
+                  "EPSG:3857",
+                  "EPSG:4326",
+                );
+                const nextBounds: GeoBounds = { west, east, north, south };
                 mapInstance.set("lastBounds", nextBounds);
                 setPendingLocationBounds(nextBounds);
               }}
               label="Filter to map view"
             />
           </Tooltip>
-          <Button size="small" appearance="secondary" onClick={fitToData} disabled={!points.length}>
+          <Button
+            size="small"
+            appearance="secondary"
+            onClick={fitToData}
+            disabled={!points.length}
+          >
             Fit to pins
           </Button>
         </div>
       </div>
 
       <div className={styles.mapShell}>
-        <div ref={mapElementRef} className={mergeClasses(styles.map, compact ? styles.compactMap : undefined)} />
+        <div
+          ref={mapElementRef}
+          className={mergeClasses(styles.map, compact ? styles.compactMap : undefined)}
+        />
         {showOverlay ? (
           <div className={styles.overlay}>
             <Spinner label="Loading map data" />
@@ -317,7 +359,11 @@ export const MapFilter:React.FC<MapFilterProps> = ({ compact = false }) => {
       <div className={styles.statusRow}>
         <Caption1>{pinSummary}</Caption1>
         {error ? <Caption1 className={styles.error}>{error}</Caption1> : null}
-        {truncated ? <Caption1 className={styles.description}>Limited to current slice for performance.</Caption1> : null}
+        {truncated ? (
+          <Caption1 className={styles.description}>
+            Limited to current slice for performance.
+          </Caption1>
+        ) : null}
       </div>
     </div>
   );

@@ -7,7 +7,7 @@ type DiscoverFilesProps = {
   directory?: string;
   root: string;
   db: IndexDatabase;
-}
+};
 
 export const discoverFiles = async (props: DiscoverFilesProps): Promise<void> => {
   const { root, directory = root, db } = props;
@@ -24,7 +24,6 @@ export const discoverFiles = async (props: DiscoverFilesProps): Promise<void> =>
   let scannedFilesCount = 0;
 
   for (const absolutePath of walkFiles(directory)) {
-
     const relativePath = path.relative(root, absolutePath);
     batch.push(relativePath);
     if (batch.length >= batchSize) {
@@ -40,7 +39,9 @@ export const discoverFiles = async (props: DiscoverFilesProps): Promise<void> =>
     }
 
     if (scannedFilesCount % 10000 === 0) {
-      console.log(`[fileWatcher] Discovered ${scannedFilesCount} files... Current: ${relativePath}`);
+      console.log(
+        `[fileWatcher] Discovered ${scannedFilesCount} files... Current: ${relativePath}`,
+      );
     }
   }
 
@@ -50,4 +51,4 @@ export const discoverFiles = async (props: DiscoverFilesProps): Promise<void> =>
   }
 
   console.log(`[fileWatcher] Completed discovering ${scannedFilesCount} files`);
-}
+};

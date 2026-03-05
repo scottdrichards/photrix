@@ -39,46 +39,59 @@ const ThumbnailGridComponent = () => {
   const { filter } = useFilterContext();
   const { setItems } = useSelectionContext();
   const [page, setPage] = useState(0);
-  const [data, setData] = useState<{items: PhotoItem[]; total: number, filterUsed: typeof filter}|null>(null);
+  const [data, setData] = useState<{
+    items: PhotoItem[];
+    total: number;
+    filterUsed: typeof filter;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading]= useState(false);
+  const [loading, setLoading] = useState(false);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
-  
+
   useEffect(() => {
-    const abortOnDisposed = 'disposed';
-    const filterChanged = filter !== data?.filterUsed;
+    setPage(0);
+    setData(null);
+  }, [filter]);
+
+  useEffect(() => {
+    const abortOnDisposed = "disposed";
     const abortController = new AbortController();
-    if (filterChanged) {
-      setPage(0);
-      setData(null);
-    }
+
     setLoading(true);
-    fetchPhotos({ page:filterChanged?0:page, pageSize: PAGE_SIZE, signal: abortController.signal, ...filter }).then((result) => {
-      setData((previousData) => {
-        if (filterChanged || !previousData) {
-          return { ...result, filterUsed: filter };
-        }
+    fetchPhotos({
+      page,
+      pageSize: PAGE_SIZE,
+      signal: abortController.signal,
+      ...filter,
+    })
+      .then((result) => {
+        setData((previousData) => {
+          if (page === 0 || !previousData) {
+            return { ...result, filterUsed: filter };
+          }
 
-        const existingPaths = new Set(previousData.items.map((item) => item.path));
-        const nextItems = [
-          ...previousData.items,
-          ...result.items.filter((item) => !existingPaths.has(item.path)),
-        ];
+          const existingPaths = new Set(previousData.items.map((item) => item.path));
+          const nextItems = [
+            ...previousData.items,
+            ...result.items.filter((item) => !existingPaths.has(item.path)),
+          ];
 
-        return {
-          ...result,
-          items: nextItems,
-          filterUsed: filter,
-        };
+          return {
+            ...result,
+            items: nextItems,
+            filterUsed: filter,
+          };
+        });
+      })
+      .catch((err) => {
+        if (err === "disposed") return;
+        if (err.name === "AbortError") return;
+        setError("Failed to fetch photos");
+        console.error("Failed to fetch photos:", err);
+      })
+      .finally(() => {
+        setLoading(false);
       });
-    }).catch((err) => {
-      if (err === 'disposed') return;
-      if (err.name === "AbortError") return;
-      setError("Failed to fetch photos");
-      console.error("Failed to fetch photos:", err);
-    }).finally(() => {
-      setLoading(false);
-    });
     return () => {
       abortController.abort(abortOnDisposed);
     };
@@ -89,39 +102,44 @@ const ThumbnailGridComponent = () => {
   }, [data, setItems]);
 
   useEffect(() => {
-    if (!loadMoreSentinelRef.current || loading){
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel || loading) {
       return;
-    };
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        setPage((prev) => prev + 1);
-      }
-    }, {
-      rootMargin: "200px",
-    });
-    observer.observe(loadMoreSentinelRef.current);
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setPage((prev) => prev + 1);
+        }
+      },
+      {
+        rootMargin: "200px",
+      },
+    );
+    observer.observe(sentinel);
     return () => {
       observer.disconnect();
     };
-  }, [loading, loadMoreSentinelRef.current]);
+  }, [loading, data?.items.length, data?.total]);
 
   return (
     <>
       {error ? <Subtitle2>{error}</Subtitle2> : null}
       <div className={styles.grid}>
         {data?.items.map((item) => (
-          <ThumbnailTile key={item.path} photo={item}/>
+          <ThumbnailTile key={item.path} photo={item} />
         ))}
-        {(data && data.items.length < data.total) && (
+        {data && data.items.length < data.total && (
           <div ref={loadMoreSentinelRef} className={styles.sentinel}>
             {loading && <Spinner size="extra-tiny" />}
           </div>
         )}
       </div>
-      {data && data.items.length === 0 && <Subtitle2>No photos yet. Upload some to get started.</Subtitle2>}
+      {data && data.items.length === 0 && (
+        <Subtitle2>No photos yet. Upload some to get started.</Subtitle2>
+      )}
     </>
   );
 };
 
 export const ThumbnailGrid = memo(ThumbnailGridComponent);
-

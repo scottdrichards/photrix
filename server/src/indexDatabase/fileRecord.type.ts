@@ -98,7 +98,7 @@ export const MetadataGroups = {
     "audioCodec",
     "rating",
     "tags",
-    "orientation"
+    "orientation",
   ],
   aiMetadata: ["aiDescription", "aiTags"],
   faceMetadata: ["faceTags"],
@@ -116,7 +116,8 @@ type _ErrorsIfUnassignedMetadataKeys = AssertNever<AllMetadataKeysInGroups>;
 
 /** Undefined means "I don't know", null means "I know there is no value
  * Generally, it is best to look at the presence of the `${MetadataGroup}ProcessedAt` fields to see if metadata has been processed
-*/
-export type FileRecord = BaseFileRecord & Partial<AllMetaData> & {
-  [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null;
-};
+ */
+export type FileRecord = BaseFileRecord &
+  Partial<AllMetaData> & {
+    [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null;
+  };

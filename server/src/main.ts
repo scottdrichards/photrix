@@ -27,14 +27,14 @@ const startServer = async () => {
   console.log("[bootstrap] Starting file discovery in background...");
   discoverFiles({ root: absolutePath, db: database }).then(() => {
     console.log("[pipeline] file-discovery complete → metadata:file-info start");
-    startBackgroundMetadataProcessing(database, pauseBackgroundProcessMetadata);
+    startBackgroundMetadataProcessing(database);
   });
 
   let pauseBackgroundProcessMetadata = () => {
     // No-op until metadata processing starts
   };
 
-  const startBackgroundMetadataProcessing = (db: IndexDatabase, currentPause: () => void) => {
+  const startBackgroundMetadataProcessing = (db: IndexDatabase) => {
     // Chain the metadata processors: file info → EXIF → HLS encoding
     const pauseFileInfo = startBackgroundProcessFileInfoMetadata(db, () => {
       console.log("[pipeline] metadata:file-info complete → metadata:exif start");

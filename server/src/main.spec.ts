@@ -10,7 +10,7 @@ import { mimeTypeForFilename } from "./fileHandling/mimeTypes.ts";
 const makeRequest = (
   port: number,
   path: string,
-  method: string = "GET"
+  method: string = "GET",
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> => {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -24,9 +24,9 @@ const makeRequest = (
         let body = "";
         res.on("data", (chunk) => (body += chunk));
         res.on("end", () =>
-          resolve({ status: res.statusCode || 0, headers: res.headers, body })
+          resolve({ status: res.statusCode || 0, headers: res.headers, body }),
         );
-      }
+      },
     );
     req.on("error", reject);
     req.end();
@@ -49,14 +49,14 @@ describe("main.ts HTTP Server", () => {
   };
 
   beforeEach(async () => {
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     process.env.INDEX_DB_LOCATION = TEST_DB_LOCATION;
     cleanDb();
-    
+
     storagePath = path.resolve("./exampleFolder");
     database = new IndexDatabase(storagePath);
-    
+
     // Scan existing files to populate the database
     for (const filePath of walkFiles(storagePath)) {
       const relativePath = toRelative(storagePath, filePath);
@@ -77,7 +77,7 @@ describe("main.ts HTTP Server", () => {
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     cleanDb();
   });
 
@@ -167,7 +167,10 @@ describe("main.ts HTTP Server", () => {
       const data = JSON.parse(response.body);
       // subFolder has 2 files: soundboard.heic and grandchildFolder/.gitkeep
       expect(data.items.length).toBeGreaterThanOrEqual(1);
-      const soundboardFile = data.items.find((item: { relativePath: string }) => item.relativePath === "subFolder/soundboard.heic");
+      const soundboardFile = data.items.find(
+        (item: { relativePath: string }) =>
+          item.relativePath === "subFolder/soundboard.heic",
+      );
       expect(soundboardFile).toBeDefined();
     });
 
@@ -180,7 +183,10 @@ describe("main.ts HTTP Server", () => {
 
     it("should handle explicit filter parameter", async () => {
       const filter = JSON.stringify({ relativePath: { regex: ".*\\.heic$" } });
-      const response = await makeRequest(TEST_PORT, `/api/files/?filter=${encodeURIComponent(filter)}`);
+      const response = await makeRequest(
+        TEST_PORT,
+        `/api/files/?filter=${encodeURIComponent(filter)}`,
+      );
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       // Should match both .heic files
@@ -189,14 +195,20 @@ describe("main.ts HTTP Server", () => {
 
     it("should parse metadata as JSON array", async () => {
       const metadata = JSON.stringify(["mimeType"]);
-      const response = await makeRequest(TEST_PORT, `/api/files/?metadata=${encodeURIComponent(metadata)}`);
+      const response = await makeRequest(
+        TEST_PORT,
+        `/api/files/?metadata=${encodeURIComponent(metadata)}`,
+      );
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data.items[0]).toHaveProperty("mimeType");
     });
 
     it("should parse metadata as comma-separated string", async () => {
-      const response = await makeRequest(TEST_PORT, "/api/files/?metadata=mimeType,relativePath");
+      const response = await makeRequest(
+        TEST_PORT,
+        "/api/files/?metadata=mimeType,relativePath",
+      );
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data.items[0]).toHaveProperty("mimeType");
@@ -216,7 +228,7 @@ describe("main.ts HTTP Server", () => {
       const allResponse = await makeRequest(TEST_PORT, "/api/files/");
       const allData = JSON.parse(allResponse.body);
       const totalFiles = allData.total;
-      
+
       const response = await makeRequest(TEST_PORT, "/api/files/?page=2&pageSize=1");
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
@@ -249,7 +261,10 @@ describe("main.ts HTTP Server", () => {
 
     it("should return count with custom filter when count=true", async () => {
       const filter = JSON.stringify({ relativePath: { regex: ".*\\.heic$" } });
-      const response = await makeRequest(TEST_PORT, `/api/files/?filter=${encodeURIComponent(filter)}&count=true`);
+      const response = await makeRequest(
+        TEST_PORT,
+        `/api/files/?filter=${encodeURIComponent(filter)}&count=true`,
+      );
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       expect(data).toHaveProperty("count");
@@ -266,7 +281,10 @@ describe("main.ts HTTP Server", () => {
     });
 
     it("should match files in folder and all subfolders when includeSubfolders=true", async () => {
-      const response = await makeRequest(TEST_PORT, "/api/files/subFolder/?includeSubfolders=true");
+      const response = await makeRequest(
+        TEST_PORT,
+        "/api/files/subFolder/?includeSubfolders=true",
+      );
       expect(response.status).toBe(200);
       const data = JSON.parse(response.body);
       // Should match files in subFolder and any nested folders
@@ -277,8 +295,14 @@ describe("main.ts HTTP Server", () => {
     });
 
     it("should return correct count with includeSubfolders=true", async () => {
-      const withoutSubfolders = await makeRequest(TEST_PORT, "/api/files/subFolder/?count=true");
-      const withSubfolders = await makeRequest(TEST_PORT, "/api/files/subFolder/?count=true&includeSubfolders=true");
+      const withoutSubfolders = await makeRequest(
+        TEST_PORT,
+        "/api/files/subFolder/?count=true",
+      );
+      const withSubfolders = await makeRequest(
+        TEST_PORT,
+        "/api/files/subFolder/?count=true&includeSubfolders=true",
+      );
       expect(withoutSubfolders.status).toBe(200);
       expect(withSubfolders.status).toBe(200);
       const dataWithout = JSON.parse(withoutSubfolders.body);
@@ -305,14 +329,20 @@ describe("main.ts HTTP Server", () => {
 
     it("should return 403 for path traversal attempts", async () => {
       // Try to access a file outside the storage directory using ../ in the filename
-      const response = await makeRequest(TEST_PORT, "/api/files/..%2F..%2F..%2Fetc%2Fpasswd");
+      const response = await makeRequest(
+        TEST_PORT,
+        "/api/files/..%2F..%2F..%2Fetc%2Fpasswd",
+      );
       expect(response.status).toBe(403);
       const data = JSON.parse(response.body);
       expect(data.error).toBe("Access denied");
     });
 
     it("should serve file from subfolder", async () => {
-      const response = await makeRequest(TEST_PORT, "/api/files/subFolder/soundboard.heic");
+      const response = await makeRequest(
+        TEST_PORT,
+        "/api/files/subFolder/soundboard.heic",
+      );
       expect(response.status).toBe(200);
       expect(response.headers["content-type"]).toContain("image/");
     });

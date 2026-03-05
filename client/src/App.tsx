@@ -13,9 +13,11 @@ import { StatusModal } from "./components/StatusModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { Filter } from "./components/filter/Filter";
 import { FilterProvider } from "./components/filter/FilterContext";
-import { SelectionProvider, useSelectionContext } from "./components/selection/SelectionContext";
+import {
+  SelectionProvider,
+  useSelectionContext,
+} from "./components/selection/SelectionContext";
 import { useSyncUrlWithFilter } from "./hooks/useSyncUrlWithFilter";
-
 
 const useStyles = makeStyles({
   app: {
@@ -61,17 +63,21 @@ const AppContent = () => {
   const styles = useStyles();
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
-  const { clearSelection, selectedItems, selectionMode, setSelectionMode } = useSelectionContext();
+  const { clearSelection, selectedItems, selectionMode, setSelectionMode } =
+    useSelectionContext();
   useSyncUrlWithFilter();
 
-  const canUseNativeShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  const canUseNativeShare =
+    typeof navigator !== "undefined" && typeof navigator.share === "function";
   const supportsFileShare = (() => {
     if (!canUseNativeShare || typeof navigator.canShare !== "function") {
       return false;
     }
 
     try {
-      return navigator.canShare({ files: [new File([""], "share-check.txt", { type: "text/plain" })] });
+      return navigator.canShare({
+        files: [new File([""], "share-check.txt", { type: "text/plain" })],
+      });
     } catch {
       return false;
     }
@@ -83,24 +89,33 @@ const AppContent = () => {
   };
 
   const handleShare = async () => {
-    if (!canUseNativeShare || !supportsFileShare || selectedItems.length === 0 || isSharing) {
+    if (
+      !canUseNativeShare ||
+      !supportsFileShare ||
+      selectedItems.length === 0 ||
+      isSharing
+    ) {
       return;
     }
 
     try {
       setIsSharing(true);
-      const files = await Promise.all(selectedItems.map(async (item) => {
-        const response = await fetch(item.originalUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch file for sharing (status ${response.status})`);
-        }
+      const files = await Promise.all(
+        selectedItems.map(async (item) => {
+          const response = await fetch(item.originalUrl);
+          if (!response.ok) {
+            throw new Error(
+              `Failed to fetch file for sharing (status ${response.status})`,
+            );
+          }
 
-        const blob = await response.blob();
-        const mimeType = blob.type || item.metadata?.mimeType || undefined;
-        return mimeType
-          ? new File([blob], item.name, { type: mimeType })
-          : new File([blob], item.name);
-      }));
+          const blob = await response.blob();
+          const mimeType = blob.type || item.metadata?.mimeType || undefined;
+          return mimeType
+            ? new File([blob], item.name, { type: mimeType })
+            : new File([blob], item.name);
+        }),
+      );
 
       if (!navigator.canShare({ files })) {
         throw new Error("Native share does not support the selected files");
@@ -136,11 +151,19 @@ const AppContent = () => {
               <Button
                 onClick={handleShare}
                 appearance="primary"
-                disabled={!canUseNativeShare || !supportsFileShare || selectedItems.length === 0 || isSharing}
+                disabled={
+                  !canUseNativeShare ||
+                  !supportsFileShare ||
+                  selectedItems.length === 0 ||
+                  isSharing
+                }
               >
                 {isSharing ? "Preparing…" : "Share"}
               </Button>
-              <Button onClick={() => handleSelectionModeChange(false)} appearance="subtle">
+              <Button
+                onClick={() => handleSelectionModeChange(false)}
+                appearance="subtle"
+              >
                 Done
               </Button>
             </>
