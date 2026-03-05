@@ -41,6 +41,22 @@ describe("filterToSQL", () => {
     expect(result.params).toEqual(["family"]);
   });
 
+  it("requires all values for non-mutually-exclusive json array fields", () => {
+    const result = filterToSQL({ tags: ["family", "vacation"] });
+
+    expect(result.where).toBe(
+      "EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?) AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)",
+    );
+    expect(result.params).toEqual(["family", "vacation"]);
+  });
+
+  it("matches any value for mutually-exclusive scalar fields", () => {
+    const result = filterToSQL({ cameraModel: ["R6", "A7 IV"] });
+
+    expect(result.where).toBe("(cameraModel = ? OR cameraModel = ?)");
+    expect(result.params).toEqual(["R6", "A7 IV"]);
+  });
+
   it("builds glob search with LIKE", () => {
     const result = filterToSQL({ fileName: { glob: "IMG_*.jpg" } });
     expect(result.where).toBe("fileName LIKE ?");

@@ -36,6 +36,14 @@
         "/^npm --prefix server run test:coverage$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^npm --prefix client run test$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^npm --prefix client run lint$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

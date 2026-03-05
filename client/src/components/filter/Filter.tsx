@@ -161,6 +161,12 @@ export const Filter = () => {
   const [peopleSearchText, setPeopleSearchText] = useState("");
 
   const currentPath = path?.replace(/\/$/, "");
+  const isFolderFilterActive = Boolean(currentPath) || includeSubfolders === false;
+  const isMediaTypeFilterActive = Boolean(mediaTypeFilter && mediaTypeFilter !== "all");
+  const isPeopleFilterActive = selectedPeople.length > 0;
+  const isRatingFilterActive = ratingFilter !== null && ratingFilter !== undefined;
+  const isDateFilterActive = dateRange !== null && dateRange !== undefined;
+  const isMapFilterActive = locationBounds !== undefined;
 
   const handleRatingClick = (star: number) => {
     if (ratingValue === star) {
@@ -337,7 +343,8 @@ export const Filter = () => {
             <Button
               aria-label="Folders filter"
               icon={<Folder24Regular />}
-              appearance={activePanel === "folders" ? "primary" : "subtle"}
+              aria-pressed={isFolderFilterActive}
+              appearance={activePanel === "folders" || isFolderFilterActive ? "primary" : "subtle"}
               className={styles.filterIconButton}
             />
           </Tooltip>
@@ -408,7 +415,8 @@ export const Filter = () => {
             <Button
               aria-label="Media type filter"
               icon={<Image24Regular />}
-              appearance={activePanel === "type" ? "primary" : "subtle"}
+              aria-pressed={isMediaTypeFilterActive}
+              appearance={activePanel === "type" || isMediaTypeFilterActive ? "primary" : "subtle"}
               className={styles.filterIconButton}
             />
           </Tooltip>
@@ -460,11 +468,8 @@ export const Filter = () => {
             <Button
               aria-label="People in image filter"
               icon={<Person24Regular />}
-              appearance={
-                activePanel === "people" || selectedPeople.length > 0
-                  ? "primary"
-                  : "subtle"
-              }
+              aria-pressed={isPeopleFilterActive}
+              appearance={activePanel === "people" || isPeopleFilterActive ? "primary" : "subtle"}
               className={styles.filterIconButton}
             />
           </Tooltip>
@@ -538,7 +543,8 @@ export const Filter = () => {
             <Button
               aria-label="Rating filter"
               icon={<Star24Regular />}
-              appearance={activePanel === "rating" ? "primary" : "subtle"}
+              aria-pressed={isRatingFilterActive}
+              appearance={activePanel === "rating" || isRatingFilterActive ? "primary" : "subtle"}
               className={styles.filterIconButton}
             />
           </Tooltip>
@@ -596,7 +602,8 @@ export const Filter = () => {
             <Button
               aria-label="Date filter"
               icon={<Calendar24Regular />}
-              appearance={activePanel === "date" ? "primary" : "subtle"}
+              aria-pressed={isDateFilterActive}
+              appearance={activePanel === "date" || isDateFilterActive ? "primary" : "subtle"}
               className={styles.filterIconButton}
             />
           </Tooltip>
@@ -616,7 +623,8 @@ export const Filter = () => {
             <Button
               aria-label="Map filter"
               icon={<Location24Regular />}
-              appearance={activePanel === "map" ? "primary" : "subtle"}
+              aria-pressed={isMapFilterActive}
+              appearance={activePanel === "map" || isMapFilterActive ? "primary" : "subtle"}
               className={styles.filterIconButton}
             />
           </Tooltip>

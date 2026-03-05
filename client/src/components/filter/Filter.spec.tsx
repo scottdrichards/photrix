@@ -27,6 +27,28 @@ const FilterStateProbe = () => {
   return <pre data-testid="filter-state">{JSON.stringify(filter)}</pre>;
 };
 
+const FilterStateMutator = () => {
+  const { setFilter } = useFilterContext();
+
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        setFilter({
+          locationBounds: {
+            west: -122.4,
+            south: 37.7,
+            east: -122.3,
+            north: 37.8,
+          },
+        })
+      }
+    >
+      Enable map filter
+    </button>
+  );
+};
+
 const renderFilter = () =>
   render(
     <FilterProvider>
@@ -82,6 +104,37 @@ describe("Filter", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("filter-state").textContent).toContain('"path":"trip/"');
+    });
+  });
+
+  it("keeps active indicator on filter icons after panel closes", async () => {
+    render(
+      <FilterProvider>
+        <Filter />
+        <FilterStateMutator />
+      </FilterProvider>,
+    );
+
+    const mapFilterButton = screen.getByRole("button", { name: "Map filter" });
+    expect(mapFilterButton).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable map filter" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Map filter" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Video" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Media type filter" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
     });
   });
 });

@@ -127,9 +127,11 @@ const constraintToSQL = (
     // Check if array contains strings (for glob/regex matching) or primitives
     if (typeof constraint[0] === "string") {
       if (isStringArrayJsonField) {
-        const subquery = constraint.map(() => "value = ?").join(" OR ");
+        const allValuesMustMatch = constraint
+          .map(() => `EXISTS (SELECT 1 FROM json_each(${fieldName}) WHERE value = ?)`)
+          .join(" AND ");
         return {
-          where: `EXISTS (SELECT 1 FROM json_each(${fieldName}) WHERE ${subquery})`,
+          where: allValuesMustMatch,
           params: constraint,
         };
       }
