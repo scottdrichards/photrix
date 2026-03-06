@@ -48,7 +48,7 @@ describe("ProcessingQueue", () => {
     expect(events).toEqual(["userBlocked", "background"]);
   });
 
-  it("preserves enqueue order within same priority and media type bucket", async () => {
+  it("uses LIFO order for queued userBlocked tasks within same bucket", async () => {
     const queue = new ProcessingQueue(1);
     const order: string[] = [];
     const blocker = deferred<void>();
@@ -56,21 +56,46 @@ describe("ProcessingQueue", () => {
     const firstPromise = queue.enqueue(async () => {
       order.push("first");
       await blocker.promise;
-    }, "background", "image");
+    }, "userBlocked", "video");
 
     const secondPromise = queue.enqueue(async () => {
       order.push("second");
-    }, "background", "image");
+    }, "userBlocked", "video");
 
     const thirdPromise = queue.enqueue(async () => {
       order.push("third");
-    }, "background", "image");
+    }, "userBlocked", "video");
 
     await wait(10);
     blocker.resolve();
 
     await Promise.all([firstPromise, secondPromise, thirdPromise]);
-    expect(order).toEqual(["first", "second", "third"]);
+    expect(order).toEqual(["first", "third", "second"]);
+  });
+
+  it("prioritizes background image tasks over background video tasks", async () => {
+    const queue = new ProcessingQueue(1);
+    const order: string[] = [];
+    const blocker = deferred<void>();
+
+    const blockingTask = queue.enqueue(async () => {
+      order.push("blocker");
+      await blocker.promise;
+    }, "userBlocked", "image");
+
+    const backgroundVideo = queue.enqueue(async () => {
+      order.push("video");
+    }, "background", "video");
+
+    const backgroundImage = queue.enqueue(async () => {
+      order.push("image");
+    }, "background", "image");
+
+    await wait(10);
+    blocker.resolve();
+
+    await Promise.all([blockingTask, backgroundVideo, backgroundImage]);
+    expect(order).toEqual(["blocker", "image", "video"]);
   });
 
   it("tracks conversion status totals and remaining counts", async () => {

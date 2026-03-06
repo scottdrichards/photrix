@@ -141,28 +141,40 @@ export class ProcessingQueue {
         conversionUnits,
       );
 
-      // LIFO within a given priority/mediaType bucket: insert just after the last
-      // task of the same priority/mediaType (or at the front of that bucket) so the
-      // most recently enqueued at that level is processed next.
+      // Keep queue ordered by priority/mediaType. Within a matching bucket,
+      // userBlocked tasks are true LIFO, others remain FIFO.
       const insertIndex = (() => {
-        for (let i = this.queue.length - 1; i >= 0; i--) {
+        let bucketStart = -1;
+        let bucketEnd = -1;
+
+        for (let i = 0; i < this.queue.length; i++) {
           const t = this.queue[i];
           const tPriorityIndex = priorityList.indexOf(t.priority);
           const tMediaTypeIndex = mediaTypeList.indexOf(t.mediaType);
           if (tPriorityIndex === priorityIndex && tMediaTypeIndex === mediaTypeIndex) {
-            return i + 1;
+            if (bucketStart === -1) {
+              bucketStart = i;
+            }
+            bucketEnd = i;
           }
-          if (
+        }
+
+        if (bucketStart !== -1 && bucketEnd !== -1) {
+          return priority === "userBlocked" ? bucketStart : bucketEnd + 1;
+        }
+
+        const firstLowerPrecedenceIndex = this.queue.findIndex((t) => {
+          const tPriorityIndex = priorityList.indexOf(t.priority);
+          const tMediaTypeIndex = mediaTypeList.indexOf(t.mediaType);
+          return (
             tPriorityIndex > priorityIndex ||
             (tPriorityIndex === priorityIndex && tMediaTypeIndex > mediaTypeIndex)
-          ) {
-            // Keep scanning upward until we find the bucket boundary
-            continue;
-          }
-          // We crossed into higher-priority bucket; insert here to keep ordering
-          return i + 1;
-        }
-        return 0;
+          );
+        });
+
+        return firstLowerPrecedenceIndex === -1
+          ? this.queue.length
+          : firstLowerPrecedenceIndex;
       })();
 
       const fn = async () => {
@@ -174,7 +186,7 @@ export class ProcessingQueue {
         }
       };
 
-      this.queue.splice(insertIndex === -1 ? this.queue.length : insertIndex, 0, {
+      this.queue.splice(insertIndex, 0, {
         priority,
         mediaType,
         fn,
