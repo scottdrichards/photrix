@@ -8,9 +8,10 @@ Review these files when implicated
 those configurations.
 - If a misunderstanding occurs, ensure the learnings are captured in documentation somewhere
 - Ensure contexts are concise and only relevant contexts are loaded. For example, don't put much information in this file, but put it in a file/comment/etc. close to the relevant file.
+- Challenge the user if a prompt seems to go against any directive, best practice, or principle in the repository.
 
 # Coding style
-- Concise code is preferred
+- Concise code is preferred, including a preference to fewer lines at the sacrifice of some clarity. It is better to foster legibility for the file as a whole at the expense of legibility for a particular line or function.
 - Prefer to inline single-use small functions
 - Prefer to not use defaults unless there's a good reason to have one.
 - Prefer to not "future-proof" or have backwards compatability - make it so the current version is
