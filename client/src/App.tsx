@@ -3,6 +3,7 @@ import {
   Caption1,
   Title2,
   Tooltip,
+  mergeClasses,
   makeStyles,
   tokens,
 } from "@fluentui/react-components";
@@ -44,6 +45,10 @@ const useStyles = makeStyles({
     WebkitBackdropFilter: "blur(10px)",
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     marginBlockEnd: tokens.spacingHorizontalL,
+  },
+  headerStatusOpen: {
+    zIndex: 2000,
+    pointerEvents: "none",
   },
   headerTitle: {
     display: "flex",
@@ -137,7 +142,12 @@ const AppContent = () => {
 
   return (
     <div className={styles.app}>
-      <header className={styles.header}>
+      <header
+        className={mergeClasses(
+          styles.header,
+          isStatusOpen ? styles.headerStatusOpen : undefined,
+        )}
+      >
         <div className={styles.headerTitle}>
           <Title2>Photrix</Title2>
           <Caption1>A better way to view photos.</Caption1>

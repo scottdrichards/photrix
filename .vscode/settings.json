@@ -44,6 +44,10 @@
         "/^npm --prefix client run lint$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^npm --prefix client test$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

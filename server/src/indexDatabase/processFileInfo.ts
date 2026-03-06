@@ -1,5 +1,5 @@
 import path from "node:path";
-import { getFileInfo } from "../fileHandling/fileUtils.ts";
+import { getFastMediaDimensions, getFileInfo } from "../fileHandling/fileUtils.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 
 const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
@@ -37,8 +37,13 @@ export const startBackgroundProcessFileInfoMetadata = (
         const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
 
         const fileInfo = await getFileInfo(fullPath);
+        const fastDimensions = await getFastMediaDimensions(fullPath);
         const now = new Date();
-        const metadata = { ...fileInfo, infoProcessedAt: now.toISOString() };
+        const metadata = {
+          ...fileInfo,
+          ...fastDimensions,
+          infoProcessedAt: now.toISOString(),
+        };
 
         await database.addOrUpdateFileData(relativePath, metadata);
 

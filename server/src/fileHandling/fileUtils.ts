@@ -22,6 +22,37 @@ export const getFileInfo = async (fullPath: string): Promise<FileInfo> => {
   };
 };
 
+export const getFastMediaDimensions = async (
+  fullPath: string,
+): Promise<Pick<ExifMetadata, "dimensionWidth" | "dimensionHeight">> => {
+  const mimeType = mimeTypeForFilename(fullPath);
+  if (!mimeType) {
+    return {};
+  }
+
+  if (mimeType.startsWith("image/")) {
+    const { width, height } = await getNormalizedDecodedDimensions(fullPath);
+    return {
+      ...(width !== undefined ? { dimensionWidth: width } : {}),
+      ...(height !== undefined ? { dimensionHeight: height } : {}),
+    };
+  }
+
+  if (mimeType.startsWith("video/")) {
+    const metadata = await getVideoMetadata(fullPath);
+    return {
+      ...(metadata.dimensionWidth !== undefined
+        ? { dimensionWidth: metadata.dimensionWidth }
+        : {}),
+      ...(metadata.dimensionHeight !== undefined
+        ? { dimensionHeight: metadata.dimensionHeight }
+        : {}),
+    };
+  }
+
+  return {};
+};
+
 /**
  * Normalizes EXIF GPS input into signed decimal degrees.
  * @param input Raw coordinate value from EXIF (decimal number or DMS array [deg, min, sec]).

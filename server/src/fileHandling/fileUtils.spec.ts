@@ -6,7 +6,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 
-import { getFileInfo, getExifMetadataFromFile, walkFiles } from "./fileUtils.ts";
+import {
+  getFileInfo,
+  getExifMetadataFromFile,
+  getFastMediaDimensions,
+  walkFiles,
+} from "./fileUtils.ts";
 
 const EXAMPLE_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -121,6 +126,37 @@ describe("getExifMetadataFromFile", () => {
 
     expect(result.dimensionWidth).toBe(expected.width);
     expect(result.dimensionHeight).toBe(expected.height);
+  });
+});
+
+describe("getFastMediaDimensions", () => {
+  it("returns dimensions from decoded image metadata", async () => {
+    jest.resetModules();
+
+    const imagePath = path.join(tmpDir(), "fast-dims.jpg");
+    writeFileSync(imagePath, "not-a-real-image");
+
+    jest.unstable_mockModule("sharp", () => ({
+      default: jest.fn(() => ({
+        metadata: async () => ({ width: 1500, height: 1000, orientation: 1 }),
+      })),
+    }));
+
+    const { getFastMediaDimensions: getFastMediaDimensionsWithMocks } = await import(
+      "./fileUtils.ts"
+    );
+    const result = await getFastMediaDimensionsWithMocks(imagePath);
+
+    expect(result.dimensionWidth).toBe(1500);
+    expect(result.dimensionHeight).toBe(1000);
+  });
+
+  it("returns empty object for unknown mime type", async () => {
+    const filePath = path.join(tmpDir(), "unknown.nope");
+    writeFileSync(filePath, "data");
+
+    const result = await getFastMediaDimensions(filePath);
+    expect(result).toEqual({});
   });
 });
 

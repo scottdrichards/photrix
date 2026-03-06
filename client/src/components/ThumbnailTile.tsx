@@ -6,21 +6,23 @@ import { useSelectionContext } from "./selection/SelectionContext";
 
 const DEFAULT_RATIO = 1;
 const LONG_PRESS_MS = 450;
+const RATIO_MISMATCH_LOG_THRESHOLD = 0.01;
 const clampRatio = (value: number): number => Math.min(Math.max(value, 0.25), 4);
 
+const toFiniteNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+};
+
 const getAspectRatio = (photo: PhotoItem): number => {
-  const toFiniteNumber = (value: unknown): number | null => {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-
-    if (typeof value === "string") {
-      const parsed = Number.parseFloat(value);
-      return Number.isFinite(parsed) ? parsed : null;
-    }
-
-    return null;
-  };
   // Server now provides post-rotation dimensions, so no need to check orientation
   const width = toFiniteNumber(photo.metadata?.dimensionWidth);
   const height = toFiniteNumber(photo.metadata?.dimensionHeight);
@@ -110,6 +112,10 @@ type Props = {
 export const ThumbnailTile: React.FC<Props> = (props) => {
   const { photo } = props;
   const styles = useStyles();
+  const tileRef = useRef<HTMLButtonElement | null>(null);
+  const supportsIntersectionObserver = typeof IntersectionObserver !== "undefined";
+  const [isNearViewport, setIsNearViewport] = useState(!supportsIntersectionObserver);
+  const [canRequestThumbnail, setCanRequestThumbnail] = useState(!supportsIntersectionObserver);
   const [isHovered, setIsHovered] = useState(false);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
@@ -132,6 +138,36 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   useEffect(() => {
     setIsImageLoaded(false);
   }, [photo.thumbnailUrl]);
+
+  useEffect(() => {
+    if (!supportsIntersectionObserver) {
+      setIsNearViewport(true);
+      setCanRequestThumbnail(true);
+      return;
+    }
+
+    const tile = tileRef.current;
+    if (!tile) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(({ isIntersecting }) => {
+          setIsNearViewport(isIntersecting);
+          if (isIntersecting) {
+            setCanRequestThumbnail(true);
+          }
+        });
+      },
+      { rootMargin: "300px" },
+    );
+
+    observer.observe(tile);
+    return () => {
+      observer.disconnect();
+    };
+  }, [supportsIntersectionObserver]);
 
   const clearLongPressTimeout = () => {
     if (!longPressTimeoutRef.current) {
@@ -183,16 +219,23 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     const img = e.currentTarget;
     if (img.naturalWidth && img.naturalHeight) {
       const actualRatio = clampRatio(img.naturalWidth / img.naturalHeight);
+      const ratioDeltaFromDisplayed = Math.abs(actualRatio - ratio);
+
       // Only update if significantly different from current ratio
-      if (Math.abs(actualRatio - ratio) > 0.01) {
+      if (ratioDeltaFromDisplayed > RATIO_MISMATCH_LOG_THRESHOLD) {
         setLoadedRatio(actualRatio);
       }
     }
   };
 
+  const loading = isNearViewport ? "eager" : "lazy";
+  const fetchPriority = isNearViewport ? "high" : "low";
+  const thumbnailUrl = canRequestThumbnail ? photo.thumbnailUrl : undefined;
+
   return (
     <button
       type="button"
+      ref={tileRef}
       className={`${styles.tile} ${selected ? styles.tileSelected : ""}`}
       style={{ "--ratio": ratio.toString() } as React.CSSProperties}
       onClick={handleClick}
@@ -216,9 +259,10 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
             <PlayCircle24Regular />
           </span>
           <img
-            src={photo.thumbnailUrl}
+            src={thumbnailUrl}
             alt={photo.name}
-            loading="lazy"
+            loading={loading}
+            fetchPriority={fetchPriority}
             className={styles.image}
             style={{ opacity: isImageLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
             onLoad={handleImageLoad}
@@ -237,9 +281,10 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
         </>
       ) : (
         <img
-          src={photo.thumbnailUrl}
+          src={thumbnailUrl}
           alt={photo.name}
-          loading="lazy"
+          loading={loading}
+          fetchPriority={fetchPriority}
           className={styles.image}
           style={{ opacity: isImageLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
           onLoad={handleImageLoad}

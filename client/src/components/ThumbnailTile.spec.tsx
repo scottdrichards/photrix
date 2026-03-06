@@ -1,12 +1,48 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { PhotoItem } from "../api";
 import { ThumbnailTile } from "./ThumbnailTile";
 
 const useSelectionContextMock = vi.fn();
+const intersectionObservers: { trigger: (isIntersecting: boolean) => void }[] = [];
+const originalIntersectionObserver = globalThis.IntersectionObserver;
 
 vi.mock("./selection/SelectionContext", () => ({
   useSelectionContext: () => useSelectionContextMock(),
 }));
+
+beforeAll(() => {
+  class FakeIntersectionObserver {
+    private callback: IntersectionObserverCallback;
+
+    constructor(callback: IntersectionObserverCallback) {
+      this.callback = callback;
+      intersectionObservers.push({
+        trigger: (isIntersecting: boolean) => {
+          this.callback(
+            [{ isIntersecting } as IntersectionObserverEntry],
+            this as unknown as IntersectionObserver,
+          );
+        },
+      });
+    }
+
+    observe = vi.fn();
+    disconnect = vi.fn();
+  }
+
+  // @ts-expect-error test override
+  globalThis.IntersectionObserver = FakeIntersectionObserver;
+});
+
+afterAll(() => {
+  globalThis.IntersectionObserver = originalIntersectionObserver;
+});
+
+const triggerIntersection = (isIntersecting: boolean) => {
+  act(() => {
+    intersectionObservers.forEach((observer) => observer.trigger(isIntersecting));
+  });
+};
 
 const createPhoto = (overrides: Partial<PhotoItem> = {}): PhotoItem => ({
   path: "a/1.jpg",
@@ -22,6 +58,7 @@ const createPhoto = (overrides: Partial<PhotoItem> = {}): PhotoItem => ({
 describe("ThumbnailTile", () => {
   beforeEach(() => {
     useSelectionContextMock.mockReset();
+    intersectionObservers.length = 0;
     useSelectionContextMock.mockReturnValue({
       isSelected: vi.fn().mockReturnValue(false),
       selectionMode: false,
@@ -135,6 +172,7 @@ describe("ThumbnailTile", () => {
   it("fades image in when it finishes loading", () => {
     const photo = createPhoto();
     render(<ThumbnailTile photo={photo} />);
+    triggerIntersection(true);
 
     const image = screen.getByRole("img", { name: "1.jpg" });
     expect(image).toHaveStyle({ opacity: "0" });
@@ -142,5 +180,25 @@ describe("ThumbnailTile", () => {
     fireEvent.load(image);
 
     expect(image).toHaveStyle({ opacity: "1" });
+  });
+
+  it("prioritizes in-view thumbnails over offscreen thumbnails", () => {
+    const photo = createPhoto();
+    render(<ThumbnailTile photo={photo} />);
+
+    const image = screen.getByRole("img", { name: "1.jpg" });
+    expect(image).toHaveAttribute("loading", "lazy");
+    expect(image).toHaveAttribute("fetchpriority", "low");
+    expect(image).not.toHaveAttribute("src");
+
+    triggerIntersection(true);
+    expect(image).toHaveAttribute("loading", "eager");
+    expect(image).toHaveAttribute("fetchpriority", "high");
+    expect(image).toHaveAttribute("src", "http://localhost/a/1.jpg");
+
+    triggerIntersection(false);
+    expect(image).toHaveAttribute("loading", "lazy");
+    expect(image).toHaveAttribute("fetchpriority", "low");
+    expect(image).toHaveAttribute("src", "http://localhost/a/1.jpg");
   });
 });

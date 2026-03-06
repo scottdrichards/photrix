@@ -174,4 +174,5 @@ describe("filesRequestHandler representation paths", () => {
     const payload = JSON.parse(getBody());
     expect(payload.error).toBe("HLS generation failed");
   });
+
 });

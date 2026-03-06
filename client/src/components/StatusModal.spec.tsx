@@ -88,6 +88,14 @@ describe("StatusModal", () => {
     expect(screen.getByRole("progressbar")).toBeInTheDocument();
   });
 
+  it("renders as a modal dialog", () => {
+    subscribeStatusStreamMock.mockReturnValue(() => undefined);
+
+    render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
+
+    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
+  });
+
   it("renders idle worker and empty recent activity across progress updates", async () => {
     const unsubscribe = vi.fn();
     let onUpdate: ((status: unknown) => void) | undefined;
