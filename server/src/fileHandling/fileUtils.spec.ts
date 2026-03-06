@@ -1,9 +1,10 @@
-import { describe, it, expect } from "@jest/globals";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { describe, it, expect, jest } from "@jest/globals";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import sharp from "sharp";
 
 import { getFileInfo, getExifMetadataFromFile, walkFiles } from "./fileUtils.ts";
 
@@ -14,6 +15,19 @@ const EXAMPLE_ROOT = path.resolve(
 const resolveExamplePath = (...segments: string[]): string =>
   path.join(EXAMPLE_ROOT, ...segments);
 const tmpDir = () => mkdtempSync(path.join(os.tmpdir(), "fileutils-test-"));
+
+const getNormalizedDimensionsFromDecodedMetadata = (metadata: {
+  width?: number;
+  height?: number;
+  orientation?: number;
+}) => {
+  const orientationNeedsSwap =
+    metadata.orientation !== undefined && [5, 6, 7, 8].includes(metadata.orientation);
+  return {
+    width: orientationNeedsSwap ? metadata.height : metadata.width,
+    height: orientationNeedsSwap ? metadata.width : metadata.height,
+  };
+};
 
 describe("getFileInfo", () => {
   it("returns file statistics for sample image", async () => {
@@ -56,6 +70,57 @@ describe("getExifMetadataFromFile", () => {
     if (result.dateTaken) {
       expect(result.dateTaken).toBeInstanceOf(Date);
     }
+  });
+
+  it("prefers decoded image dimensions over stale EXIF width/height tags", async () => {
+    jest.resetModules();
+
+    const imagePath = path.join(tmpDir(), "stale-exif.jpg");
+    writeFileSync(imagePath, "not-a-real-image");
+
+    jest.unstable_mockModule("exifr", () => ({
+      default: {
+        parse: jest.fn(async () => ({
+          ImageWidth: 6000,
+          ImageHeight: 4000,
+          ExifImageWidth: 6000,
+          ExifImageHeight: 4000,
+          Orientation: 1,
+        })),
+      },
+    }));
+
+    jest.unstable_mockModule("sharp", () => ({
+      default: jest.fn(() => ({
+        metadata: async () => ({
+          width: 3000,
+          height: 2000,
+          orientation: 1,
+        }),
+      })),
+    }));
+
+    const { getExifMetadataFromFile: getExifMetadataFromFileWithMocks } = await import(
+      "./fileUtils.ts"
+    );
+    const result = await getExifMetadataFromFileWithMocks(imagePath);
+
+    expect(result.dimensionWidth).toBe(3000);
+    expect(result.dimensionHeight).toBe(2000);
+  });
+
+  it("matches decoded dimensions for _MG_0475 regression fixture when present", async () => {
+    const fixturePath = resolveExamplePath("_MG_0475.cr2.jpg");
+    if (!existsSync(fixturePath)) {
+      return;
+    }
+
+    const decodedMetadata = await sharp(fixturePath).metadata();
+    const expected = getNormalizedDimensionsFromDecodedMetadata(decodedMetadata);
+    const result = await getExifMetadataFromFile(fixturePath);
+
+    expect(result.dimensionWidth).toBe(expected.width);
+    expect(result.dimensionHeight).toBe(expected.height);
   });
 });
 
