@@ -12,6 +12,7 @@ import { useState } from "react";
 import { FullscreenViewer } from "./components/FullscreenViewer";
 import { StatusModal } from "./components/StatusModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
+import { AuthGate } from "./auth/AuthGate";
 import { Filter } from "./components/filter/Filter";
 import { FilterProvider } from "./components/filter/FilterContext";
 import {
@@ -205,10 +206,12 @@ const AppContent = () => {
 
 export default function App() {
   return (
-    <FilterProvider>
-      <SelectionProvider>
-        <AppContent />
-      </SelectionProvider>
-    </FilterProvider>
+    <AuthGate>
+      <FilterProvider>
+        <SelectionProvider>
+          <AppContent />
+        </SelectionProvider>
+      </FilterProvider>
+    </AuthGate>
   );
 }

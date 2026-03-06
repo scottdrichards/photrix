@@ -9,6 +9,10 @@ vi.mock("./components/filter/Filter", () => ({
   Filter: () => <div data-testid="filter">filter</div>,
 }));
 
+vi.mock("./auth/AuthGate", () => ({
+  AuthGate: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
 vi.mock("./components/filter/FilterContext", () => ({
   FilterProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));

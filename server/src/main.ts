@@ -4,12 +4,14 @@ import { discoverFiles } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { initializeCacheDirectories } from "./common/cacheUtils.ts";
 import { createServer } from "./createServer.ts";
+import { runAuthStartupChecks } from "./auth/authStartupChecks.ts";
 import { startBackgroundProcessExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { startBackgroundProcessFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
 import { startBackgroundHLSEncoding } from "./indexDatabase/processHLSEncoding.ts";
 
 const startServer = async () => {
   console.log("Starting photrix server...");
+  runAuthStartupChecks();
 
   await initializeCacheDirectories();
   console.log("[bootstrap] Cache directories initialized");

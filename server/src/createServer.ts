@@ -1,9 +1,11 @@
 import http from "node:http";
+import { AuthService } from "./auth/authService.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { filesEndpointRequestHandler } from "./requestHandlers/files/filesRequestHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
 import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts";
 import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
+import { writeJson } from "./utils.ts";
 
 const PORT = process.env.PORT || 3000;
 
@@ -17,7 +19,9 @@ export const createServer = (
   options: ServerOptions = { onRequest: () => {} },
 ) => {
   const { onRequest } = options;
-  const server = http.createServer((req, res) => {
+  const authService = new AuthService();
+
+  const server = http.createServer(async (req, res) => {
     onRequest();
     const requestStart = Date.now();
     console.log(`[server] ${req.method} ${req.url}`);
@@ -34,22 +38,47 @@ export const createServer = (
       return originalEnd(...args);
     } as typeof res.end;
 
-    // Enable CORS for client
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    authService.applyResponseHeaders(req, res);
 
-    // Handle preflight requests
-    if (req.method === "OPTIONS") {
-      res.writeHead(200);
-      res.end();
+    const requestRejection = authService.validateRequest(req);
+    if (requestRejection) {
+      writeJson(res, requestRejection.status, { error: requestRejection.error });
       return;
     }
 
-    // Basic health check endpoint
+    // Handle preflight requests
+    if (req.method === "OPTIONS") {
+      authService.handlePreflight(req, res);
+      return;
+    }
+
+    if (!req.url) {
+      writeJson(res, 400, { error: "Bad request" });
+      return;
+    }
+
+    const authHandled = await authService.handleAuthRequest(
+      req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+    );
+
+    if (authHandled) {
+      return;
+    }
+
+    const session = authService.requireAuthenticated(req, res);
+    if (!session) {
+      return;
+    }
+
     if (req.url === "/api/health" && req.method === "GET") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", message: "Server is running" }));
+      const payload = {
+        status: "ok",
+        message: "Server is running",
+        ...(authService.enabled ? { user: session.username } : {}),
+      };
+
+      writeJson(res, 200, payload);
       return;
     }
 
@@ -101,6 +130,11 @@ export const createServer = (
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Not found" }));
   });
+
+  server.on("close", () => {
+    authService.close();
+  });
+
   server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/health`);

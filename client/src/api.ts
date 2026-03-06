@@ -189,7 +189,7 @@ export const subscribeStatusStream = (
   onUpdate: (status: ServerStatus) => void,
   onError?: (error: unknown) => void,
 ) => {
-  const source = new EventSource("/api/status/stream");
+  const source = new EventSource("/api/status/stream", { withCredentials: true });
 
   source.onmessage = (event) => {
     try {
@@ -369,7 +369,7 @@ const buildFilters = ({
 };
 
 export const fetchStatus = async (): Promise<ServerStatus> => {
-  const response = await fetch("/api/status");
+  const response = await fetch("/api/status", { credentials: "include" });
   if (!response.ok) {
     throw new Error(`Failed to fetch status (status ${response.status})`);
   }
@@ -378,7 +378,9 @@ export const fetchStatus = async (): Promise<ServerStatus> => {
 
 export const fetchFolders = async (path: string = ""): Promise<string[]> => {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
-  const response = await fetch(`/api/folders/${normalizedPath}`);
+  const response = await fetch(`/api/folders/${normalizedPath}`, {
+    credentials: "include",
+  });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch folders (status ${response.status})`);
@@ -505,7 +507,7 @@ export const fetchPhotos = async ({
   const url = path
     ? `/api/files/${path}?${params.toString()}`
     : `/api/files/?${params.toString()}`;
-  const response = await fetch(url, { signal });
+  const response = await fetch(url, { signal, credentials: "include" });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch photos (status ${response.status})`);
@@ -574,7 +576,7 @@ export const fetchGeotaggedPhotos = async ({
   const url = path
     ? `/api/files/${path}?${params.toString()}`
     : `/api/files/?${params.toString()}`;
-  const response = await fetch(url, { signal });
+  const response = await fetch(url, { signal, credentials: "include" });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch geotagged photos (status ${response.status})`);
@@ -643,7 +645,7 @@ export const fetchDateRange = async ({
   const url = path
     ? `/api/files/${path}?${params.toString()}`
     : `/api/files/?${params.toString()}`;
-  const response = await fetch(url, { signal });
+  const response = await fetch(url, { signal, credentials: "include" });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch date range (status ${response.status})`);
@@ -685,7 +687,7 @@ export const fetchDateHistogram = async ({
   const url = path
     ? `/api/files/${path}?${params.toString()}`
     : `/api/files/?${params.toString()}`;
-  const response = await fetch(url, { signal });
+  const response = await fetch(url, { signal, credentials: "include" });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch date histogram (status ${response.status})`);
@@ -751,7 +753,10 @@ export const fetchSuggestions = async ({
     params.set("filter", JSON.stringify(filterObj));
   }
 
-  const response = await fetch(`/api/suggestions?${params.toString()}`, { signal });
+  const response = await fetch(`/api/suggestions?${params.toString()}`, {
+    signal,
+    credentials: "include",
+  });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch suggestions (status ${response.status})`);

@@ -46,6 +46,7 @@ describe("main.ts HTTP Server", () => {
   });
 
   beforeEach(async () => {
+    process.env.AUTH_REQUIRED = "false";
     storagePath = mkdtempSync(path.join(os.tmpdir(), "photrix-main-spec-root-"));
     process.env.INDEX_DB_LOCATION = mkdtempSync(path.join(os.tmpdir(), "photrix-main-spec-db-"));
 
@@ -70,6 +71,7 @@ describe("main.ts HTTP Server", () => {
       server.close(() => resolve());
     });
     rmSync(storagePath, { recursive: true, force: true });
+    delete process.env.AUTH_REQUIRED;
   });
 
   it("returns health response", async () => {
@@ -83,8 +85,7 @@ describe("main.ts HTTP Server", () => {
 
   it("returns CORS headers and handles OPTIONS", async () => {
     const response = await makeRequest(TEST_PORT, "/api/health", "OPTIONS");
-    expect(response.status).toBe(200);
-    expect(response.headers["access-control-allow-origin"]).toBe("*");
+    expect(response.status).toBe(204);
     expect(response.headers["access-control-allow-methods"]).toBe("GET, POST, OPTIONS");
   });
 
