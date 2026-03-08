@@ -127,7 +127,8 @@ describe("createServer auth gate", () => {
 
     expect(response.status).toBe(400);
     expect(JSON.parse(response.body)).toEqual({
-      error: "Forwarded headers are only accepted from trusted proxies",
+      error:
+        "Forwarded headers are only accepted from trusted proxies. Add your reverse proxy IP to AUTH_TRUSTED_PROXY_IPS.",
     });
   });
 });

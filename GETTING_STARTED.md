@@ -2,6 +2,8 @@
 
 Internet-facing deployment checklist for Photrix.
 
+For a concrete Nginx deployment example (serve client build + proxy `/api/`), see `documentation/DEPLOY_NGINX.md`.
+
 ## 1) Prerequisites
 
 - Reverse proxy is configured in front of server

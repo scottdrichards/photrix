@@ -29,6 +29,7 @@ The client proxies `/api` to `http://localhost:3000` in development.
 - Use `server/.env.example` as the source of truth for all environment variables.
 - Local and production examples are included in that file.
 - For internet-facing setup details, see `GETTING_STARTED.md`.
+- For Nginx static+API deployment steps, see `documentation/DEPLOY_NGINX.md`.
 
 ## Authentication and security
 

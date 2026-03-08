@@ -4,7 +4,11 @@
   "description": "A new way to enjoy your memories",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build:client": "npm --prefix client run build",
+    "deploy:client": "node scripts/deploy-client.mjs",
+    "deploy:client:build": "npm run build:client && npm run deploy:client",
+    "tunnel:test": "powershell -ExecutionPolicy Bypass -File ./scripts/start-test-tunnels.ps1"
   },
   "repository": {
     "type": "git",

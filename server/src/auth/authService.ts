@@ -275,7 +275,11 @@ export class AuthService {
     }
 
     if (this.hasForwardedHeader(req) && !this.isTrustedProxy(req)) {
-      return { status: 400, error: "Forwarded headers are only accepted from trusted proxies" };
+      return {
+        status: 400,
+        error:
+          "Forwarded headers are only accepted from trusted proxies. Add your reverse proxy IP to AUTH_TRUSTED_PROXY_IPS.",
+      };
     }
 
     if (this.config.requireHttps && this.requestProtocol(req) !== "https") {
