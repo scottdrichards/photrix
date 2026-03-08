@@ -4,6 +4,7 @@ import App from "./App";
 
 const useSelectionContextMock = vi.fn();
 const useSyncUrlWithFilterMock = vi.fn();
+const useAuthSessionMock = vi.fn();
 
 vi.mock("./components/filter/Filter", () => ({
   Filter: () => <div data-testid="filter">filter</div>,
@@ -11,6 +12,7 @@ vi.mock("./components/filter/Filter", () => ({
 
 vi.mock("./auth/AuthGate", () => ({
   AuthGate: ({ children }: { children: ReactNode }) => <>{children}</>,
+  useAuthSession: () => useAuthSessionMock(),
 }));
 
 vi.mock("./components/filter/FilterContext", () => ({
@@ -44,6 +46,12 @@ describe("App", () => {
   beforeEach(() => {
     useSelectionContextMock.mockReset();
     useSyncUrlWithFilterMock.mockReset();
+    useAuthSessionMock.mockReset();
+    useAuthSessionMock.mockReturnValue({
+      username: "scott",
+      isSigningOut: false,
+      signOut: vi.fn(),
+    });
   });
 
   it("calls url sync hook and enters selection mode from Select button", () => {
@@ -141,5 +149,27 @@ describe("App", () => {
     });
 
     fetchMock.mockRestore();
+  });
+
+  it("opens user menu and signs out from the header", async () => {
+    const signOut = vi.fn().mockResolvedValue(undefined);
+    useAuthSessionMock.mockReturnValue({
+      username: "Scott",
+      isSigningOut: false,
+      signOut,
+    });
+    useSelectionContextMock.mockReturnValue({
+      clearSelection: vi.fn(),
+      selectedItems: [],
+      selectionMode: false,
+      setSelectionMode: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Scott" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+
+    expect(signOut).toHaveBeenCalledTimes(1);
   });
 });

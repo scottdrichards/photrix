@@ -1,18 +1,23 @@
 import {
   Button,
   Caption1,
+  Menu,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
   Title2,
   Tooltip,
   mergeClasses,
   makeStyles,
   tokens,
 } from "@fluentui/react-components";
-import { Info24Regular } from "@fluentui/react-icons";
+import { Info24Regular, Person24Regular, SignOut24Regular } from "@fluentui/react-icons";
 import { useState } from "react";
 import { FullscreenViewer } from "./components/FullscreenViewer";
 import { StatusModal } from "./components/StatusModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
-import { AuthGate } from "./auth/AuthGate";
+import { AuthGate, useAuthSession } from "./auth/AuthGate";
 import { Filter } from "./components/filter/Filter";
 import { FilterProvider } from "./components/filter/FilterContext";
 import {
@@ -63,12 +68,16 @@ const useStyles = makeStyles({
     flexWrap: "wrap",
     justifyContent: "flex-end",
   },
+  headerAuthMenu: {
+    marginInlineStart: "auto",
+  },
 });
 
 const AppContent = () => {
   const styles = useStyles();
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const { username, isSigningOut, signOut } = useAuthSession();
   const { clearSelection, selectedItems, selectionMode, setSelectionMode } =
     useSelectionContext();
   useSyncUrlWithFilter();
@@ -193,6 +202,21 @@ const AppContent = () => {
             </Button>
           </Tooltip>
         </div>
+
+        <Menu positioning="below-end">
+          <MenuTrigger disableButtonEnhancement>
+            <Button className={styles.headerAuthMenu} appearance="subtle" icon={<Person24Regular />}>
+              {username}
+            </Button>
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList>
+              <MenuItem icon={<SignOut24Regular />} onClick={signOut} disabled={isSigningOut}>
+                Sign out
+              </MenuItem>
+            </MenuList>
+          </MenuPopover>
+        </Menu>
       </header>
 
       <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />

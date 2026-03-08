@@ -10,8 +10,7 @@ import {
   makeStyles,
   tokens,
 } from "@fluentui/react-components";
-import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 import {
   getAuthSession,
   loginWithPasskey,
@@ -39,11 +38,6 @@ const useStyles = makeStyles({
     flexDirection: "column",
     gap: tokens.spacingHorizontalM,
   },
-  actions: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalS,
-  },
 });
 
 type AuthGateProps = {
@@ -56,6 +50,14 @@ type AuthState = {
   setupRequired: boolean;
   username: string;
 };
+
+type AuthContextValue = {
+  username: string;
+  isSigningOut: boolean;
+  signOut: () => Promise<void>;
+};
+
+const AuthContext = createContext<AuthContextValue | null>(null);
 
 const initialState: AuthState = {
   loading: true,
@@ -142,17 +144,11 @@ export const AuthGate = ({ children }: AuthGateProps) => {
 
   if (state.authenticated) {
     return (
-      <>
-        <div className={styles.root} style={{ minHeight: "auto", justifyContent: "flex-end" }}>
-          <div className={styles.actions}>
-            <Text>Signed in as {state.username}</Text>
-            <Button appearance="subtle" onClick={handleSignOut} disabled={busy}>
-              Sign out
-            </Button>
-          </div>
-        </div>
+      <AuthContext.Provider
+        value={{ username: state.username, isSigningOut: busy, signOut: handleSignOut }}
+      >
         {children}
-      </>
+      </AuthContext.Provider>
     );
   }
 
@@ -206,4 +202,13 @@ export const AuthGate = ({ children }: AuthGateProps) => {
       </Card>
     </div>
   );
+};
+
+export const useAuthSession = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAuthSession must be used within AuthGate");
+  }
+
+  return context;
 };
