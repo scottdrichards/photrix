@@ -30,6 +30,8 @@ The client proxies `/api` to `http://localhost:3000` in development.
 - Local and production examples are included in that file.
 - For internet-facing setup details, see `GETTING_STARTED.md`.
 - For Nginx static+API deployment steps, see `documentation/DEPLOY_NGINX.md`.
+- For the planned face-tagging architecture and phased implementation roadmap, see `documentation/FACE_TAGGING_ROADMAP.md`.
+- For a task-ready Phase 1 implementation checklist, see `documentation/FACE_TAGGING_PHASE1_CHECKLIST.md`.
 
 ## Authentication and security
 
