@@ -9,7 +9,8 @@ type SuggestionsField =
   | "aiTags"
   | "cameraMake"
   | "cameraModel"
-  | "lens";
+  | "lens"
+  | "rating";
 
 type Options = {
   database: IndexDatabase;
@@ -22,6 +23,7 @@ const suggestionFields: SuggestionsField[] = [
   "cameraMake",
   "cameraModel",
   "lens",
+  "rating",
 ];
 
 const isSuggestionsField = (value: string): value is SuggestionsField => {
@@ -39,16 +41,12 @@ export const suggestionsRequestHandler = async (
     const query = (url.searchParams.get("q") ?? "").trim();
     const path = (url.searchParams.get("path") ?? "").trim();
     const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
+    const includeCounts = url.searchParams.get("includeCounts") === "true";
     const limitParam = Number.parseInt(url.searchParams.get("limit") ?? "", 10);
     const filterParam = url.searchParams.get("filter");
 
     if (!isSuggestionsField(fieldParam)) {
       writeJson(res, 400, { error: "Invalid field" });
-      return;
-    }
-
-    if (!query) {
-      writeJson(res, 200, { suggestions: [] });
       return;
     }
 
@@ -72,12 +70,19 @@ export const suggestionsRequestHandler = async (
         }
       : pathFilter;
 
-    const suggestions = database.queryFieldSuggestions({
-      field: fieldParam,
-      search: query,
-      filter,
-      limit: Number.isFinite(limitParam) ? limitParam : 8,
-    });
+    const suggestions = includeCounts
+      ? database.queryFieldSuggestionsWithCounts({
+          field: fieldParam,
+          search: query,
+          filter,
+          limit: Number.isFinite(limitParam) ? limitParam : 8,
+        })
+      : database.queryFieldSuggestions({
+          field: fieldParam,
+          search: query,
+          filter,
+          limit: Number.isFinite(limitParam) ? limitParam : 8,
+        });
 
     writeJson(res, 200, { suggestions });
   } catch (error) {

@@ -3,6 +3,7 @@ import {
   fetchFolders,
   fetchGeotaggedPhotos,
   fetchPhotos,
+  fetchSuggestionsWithCounts,
   fetchSuggestions,
   subscribeStatusStream,
 } from "./api";
@@ -21,7 +22,9 @@ describe("api", () => {
     const result = await fetchFolders("/photos/2024/");
 
     expect(result).toEqual(["a", "b"]);
-    expect(fetchMock).toHaveBeenCalledWith("/api/folders/photos/2024/");
+    expect(fetchMock).toHaveBeenCalledWith("/api/folders/photos/2024/", {
+      credentials: "include",
+    });
   });
 
   it("fetchPhotos builds query and maps media urls/metadata", async () => {
@@ -50,6 +53,8 @@ describe("api", () => {
       ratingFilter: { rating: 3, atLeast: true },
       mediaTypeFilter: "video",
       peopleInImageFilter: [" Sam ", "sam", "Taylor"],
+      cameraModelFilter: ["EOS R6"],
+      lensFilter: ["RF 24-70mm"],
     });
 
     const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -69,6 +74,8 @@ describe("api", () => {
         { rating: { min: 3 } },
         { mimeType: { startsWith: "video/" } },
         { personInImage: ["Sam", "sam", "Taylor"] },
+        { cameraModel: ["EOS R6"] },
+        { lens: ["RF 24-70mm"] },
       ]),
     );
 
@@ -121,7 +128,7 @@ describe("api", () => {
     ]);
   });
 
-  it("fetchSuggestions returns empty list for blank query without network request", async () => {
+  it("fetchSuggestions returns empty list for blank query without network request by default", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
 
     const result = await fetchSuggestions({
@@ -131,6 +138,60 @@ describe("api", () => {
 
     expect(result).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fetchSuggestions can request blank-query suggestions when enabled", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ suggestions: ["Canon EOS R6"] }),
+    } as Response);
+
+    const result = await fetchSuggestions({
+      field: "cameraModel",
+      q: "   ",
+      allowBlankQuery: true,
+    });
+
+    expect(result).toEqual(["Canon EOS R6"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const url = new URL(calledUrl, window.location.origin);
+    expect(url.pathname).toBe("/api/suggestions");
+    expect(url.searchParams.get("q")).toBe("");
+    expect(url.searchParams.get("field")).toBe("cameraModel");
+  });
+
+  it("fetchSuggestionsWithCounts requests count-ranked suggestions", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        suggestions: [
+          { value: "Sam", count: 14 },
+          { value: "Taylor", count: 9 },
+        ],
+      }),
+    } as Response);
+
+    const result = await fetchSuggestionsWithCounts({
+      field: "personInImage",
+      q: "",
+      allowBlankQuery: true,
+      includeCounts: true,
+      limit: 10,
+    });
+
+    expect(result).toEqual([
+      { value: "Sam", count: 14 },
+      { value: "Taylor", count: 9 },
+    ]);
+
+    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const url = new URL(calledUrl, window.location.origin);
+    expect(url.pathname).toBe("/api/suggestions");
+    expect(url.searchParams.get("field")).toBe("personInImage");
+    expect(url.searchParams.get("q")).toBe("");
+    expect(url.searchParams.get("includeCounts")).toBe("true");
+    expect(url.searchParams.get("limit")).toBe("10");
   });
 
   it("createFallbackPhoto returns upload-based urls", () => {

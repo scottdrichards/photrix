@@ -41,9 +41,9 @@ describe("suggestionsRequestHandler", () => {
     expect(JSON.parse(getBody())).toEqual({ error: "Invalid field" });
   });
 
-  it("returns empty suggestions when q is blank", async () => {
+  it("returns context-aware suggestions when q is blank", async () => {
     const { res, getBody } = createMockResponse();
-    const queryFieldSuggestions = jest.fn();
+    const queryFieldSuggestions = jest.fn(() => ["Canon EOS R6"]);
 
     await suggestionsRequestHandler(
       {
@@ -57,8 +57,13 @@ describe("suggestionsRequestHandler", () => {
     );
 
     expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
-    expect(JSON.parse(getBody())).toEqual({ suggestions: [] });
-    expect(queryFieldSuggestions).not.toHaveBeenCalled();
+    expect(JSON.parse(getBody())).toEqual({ suggestions: ["Canon EOS R6"] });
+    expect(queryFieldSuggestions).toHaveBeenCalledWith({
+      field: "tags",
+      search: "",
+      filter: {},
+      limit: 8,
+    });
   });
 
   it("passes parsed query options to database and returns suggestions", async () => {
@@ -91,6 +96,76 @@ describe("suggestionsRequestHandler", () => {
     });
     expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
     expect(JSON.parse(getBody())).toEqual({ suggestions: ["Canon", "Canon EOS"] });
+  });
+
+  it("uses count-ranked suggestions when includeCounts=true", async () => {
+    const { res, getBody } = createMockResponse();
+    const queryFieldSuggestionsWithCounts = jest.fn(() => [
+      { value: "Sam", count: 14 },
+      { value: "Taylor", count: 9 },
+    ]);
+
+    await suggestionsRequestHandler(
+      {
+        url: "/api/suggestions?field=personInImage&q=&includeCounts=true&limit=5",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      {
+        database: {
+          queryFieldSuggestionsWithCounts,
+        } as unknown as IndexDatabase,
+      },
+    );
+
+    expect(queryFieldSuggestionsWithCounts).toHaveBeenCalledWith({
+      field: "personInImage",
+      search: "",
+      filter: {},
+      limit: 5,
+    });
+    expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
+    expect(JSON.parse(getBody())).toEqual({
+      suggestions: [
+        { value: "Sam", count: 14 },
+        { value: "Taylor", count: 9 },
+      ],
+    });
+  });
+
+  it("supports rating count suggestions", async () => {
+    const { res, getBody } = createMockResponse();
+    const queryFieldSuggestionsWithCounts = jest.fn(() => [
+      { value: "5", count: 12 },
+      { value: "4", count: 8 },
+    ]);
+
+    await suggestionsRequestHandler(
+      {
+        url: "/api/suggestions?field=rating&q=&includeCounts=true&limit=5",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      {
+        database: {
+          queryFieldSuggestionsWithCounts,
+        } as unknown as IndexDatabase,
+      },
+    );
+
+    expect(queryFieldSuggestionsWithCounts).toHaveBeenCalledWith({
+      field: "rating",
+      search: "",
+      filter: {},
+      limit: 5,
+    });
+    expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
+    expect(JSON.parse(getBody())).toEqual({
+      suggestions: [
+        { value: "5", count: 12 },
+        { value: "4", count: 8 },
+      ],
+    });
   });
 
   it("returns 400 for invalid JSON filter", async () => {

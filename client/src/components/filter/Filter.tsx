@@ -1,7 +1,6 @@
 import {
   Button,
   Caption1,
-  Input,
   Popover,
   PopoverSurface,
   PopoverTrigger,
@@ -13,6 +12,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import {
+  Camera24Regular,
   Calendar24Regular,
   Folder24Regular,
   Image24Regular,
@@ -22,12 +22,21 @@ import {
   Star24Regular,
 } from "@fluentui/react-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchFolders, fetchSuggestions } from "../../api";
+import { fetchFolders, fetchSuggestionsWithCounts } from "../../api";
 import { DateHistogram } from "../DateHistogram";
 import { MapFilter } from "../MapFilter";
+import { CountOptionList } from "./CountOptionList";
 import { MediaTypeFilter, useFilterContext } from "./FilterContext";
+import { SuggestionFilterField } from "./SuggestionFilterField";
 
-type FilterPanel = "folders" | "type" | "people" | "rating" | "date" | "map";
+type FilterPanel =
+  | "folders"
+  | "type"
+  | "people"
+  | "gear"
+  | "rating"
+  | "date"
+  | "map";
 
 const useStyles = makeStyles({
   iconBar: {
@@ -65,26 +74,6 @@ const useStyles = makeStyles({
     alignItems: "center",
     gap: tokens.spacingHorizontalS,
     flexWrap: "wrap",
-  },
-  textFilterInput: {
-    width: "100%",
-  },
-  suggestionsList: {
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingHorizontalXS,
-  },
-  suggestionButton: {
-    justifyContent: "flex-start",
-  },
-  selectedPeopleRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: "wrap",
-  },
-  selectedPersonButton: {
-    paddingInline: tokens.spacingHorizontalS,
   },
   ratingFilter: {
     display: "flex",
@@ -142,6 +131,8 @@ export const Filter = () => {
     mediaTypeFilter,
     path,
     peopleInImageFilter = [],
+    cameraModelFilter = [],
+    lensFilter = [],
     locationBounds,
     dateRange,
   } = filter;
@@ -150,20 +141,29 @@ export const Filter = () => {
     return peopleInImageFilter;
   }, [peopleInImageFilter]);
 
+  const selectedCameraModels = useMemo(() => {
+    return cameraModelFilter;
+  }, [cameraModelFilter]);
+
+  const selectedLensModels = useMemo(() => {
+    return lensFilter;
+  }, [lensFilter]);
+
   const ratingValue = ratingFilter?.rating ?? null;
   const ratingAtLeast = ratingFilter?.atLeast ?? true;
 
   const [activePanel, setActivePanel] = useState<FilterPanel | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
-  const [peopleSuggestions, setPeopleSuggestions] = useState<string[]>([]);
-  const [loadingPeopleSuggestions, setLoadingPeopleSuggestions] = useState(false);
-  const [peopleSearchText, setPeopleSearchText] = useState("");
+  const [ratingCounts, setRatingCounts] = useState<Record<number, number>>({});
+  const [loadingRatingCounts, setLoadingRatingCounts] = useState(false);
 
   const currentPath = path?.replace(/\/$/, "");
   const isFolderFilterActive = Boolean(currentPath) || includeSubfolders === false;
   const isMediaTypeFilterActive = Boolean(mediaTypeFilter && mediaTypeFilter !== "all");
   const isPeopleFilterActive = selectedPeople.length > 0;
+  const isGearFilterActive =
+    selectedCameraModels.length > 0 || selectedLensModels.length > 0;
   const isRatingFilterActive = ratingFilter !== null && ratingFilter !== undefined;
   const isDateFilterActive = dateRange !== null && dateRange !== undefined;
   const isMapFilterActive = locationBounds !== undefined;
@@ -191,41 +191,20 @@ export const Filter = () => {
     setFilter({ mediaTypeFilter: type });
   };
 
-  const handleAddPerson = (value: string) => {
-    const normalizedValue = value.trim();
-    if (!normalizedValue) {
-      return;
-    }
+  const setPeopleFilterValues = useCallback(
+    (nextValues: string[]) => setFilter({ peopleInImageFilter: nextValues }),
+    [setFilter],
+  );
 
-    setFilter((previous) => {
-      const existing = previous.peopleInImageFilter ?? [];
+  const setCameraModelFilterValues = useCallback(
+    (nextValues: string[]) => setFilter({ cameraModelFilter: nextValues }),
+    [setFilter],
+  );
 
-      const hasDuplicate = existing.some(
-        (person) => person.toLocaleLowerCase() === normalizedValue.toLocaleLowerCase(),
-      );
-      return hasDuplicate
-        ? previous
-        : { ...previous, peopleInImageFilter: [...existing, normalizedValue] };
-    });
-
-    setPeopleSearchText("");
-  };
-
-  const handleRemovePerson = (value: string) => {
-    setFilter((previous) => {
-      const existing = previous.peopleInImageFilter ?? [];
-
-      return {
-        ...previous,
-        peopleInImageFilter: existing.filter((person) => person !== value),
-      };
-    });
-  };
-
-  const handleClearPeople = () => {
-    setPeopleSearchText("");
-    setFilter({ peopleInImageFilter: [] });
-  };
+  const setLensFilterValues = useCallback(
+    (nextValues: string[]) => setFilter({ lensFilter: nextValues }),
+    [setFilter],
+  );
 
   useEffect(() => {
     const loadFolders = async () => {
@@ -244,51 +223,49 @@ export const Filter = () => {
   }, [currentPath]);
 
   useEffect(() => {
-    if (activePanel !== "people") {
-      return;
-    }
-
-    const searchText = peopleSearchText.trim();
-    if (searchText.length === 0) {
-      setPeopleSuggestions([]);
-      setLoadingPeopleSuggestions(false);
+    if (activePanel !== "rating") {
       return;
     }
 
     const abortController = new AbortController();
     const timeoutId = window.setTimeout(async () => {
-      setLoadingPeopleSuggestions(true);
+      setLoadingRatingCounts(true);
       try {
-        const result = await fetchSuggestions({
-          field: "personInImage",
-          q: searchText,
-          limit: 8,
+        const result = await fetchSuggestionsWithCounts({
+          field: "rating",
+          q: "",
+          allowBlankQuery: true,
+          includeCounts: true,
+          limit: 5,
           includeSubfolders,
           path,
-          ratingFilter,
+          ratingFilter: null,
           mediaTypeFilter,
           locationBounds,
           dateRange,
           peopleInImageFilter: selectedPeople,
+          cameraModelFilter: selectedCameraModels,
+          lensFilter: selectedLensModels,
           signal: abortController.signal,
         });
-        const selectedPeopleLookup = new Set(
-          selectedPeople.map((person) => person.toLocaleLowerCase()),
-        );
-        setPeopleSuggestions(
-          result.filter(
-            (person) => !selectedPeopleLookup.has(person.toLocaleLowerCase()),
-          ),
-        );
+
+        const nextCounts = result.reduce<Record<number, number>>((acc, suggestion) => {
+          const rating = Number.parseInt(suggestion.value, 10);
+          if (Number.isFinite(rating) && rating >= 1 && rating <= 5) {
+            acc[rating] = suggestion.count;
+          }
+          return acc;
+        }, {});
+        setRatingCounts(nextCounts);
       } catch (error) {
         if ((error as Error).name === "AbortError") {
           return;
         }
-        console.error("Failed to load people suggestions:", error);
-        setPeopleSuggestions([]);
+        console.error("Failed to load rating counts:", error);
+        setRatingCounts({});
       } finally {
         if (!abortController.signal.aborted) {
-          setLoadingPeopleSuggestions(false);
+          setLoadingRatingCounts(false);
         }
       }
     }, 200);
@@ -299,15 +276,26 @@ export const Filter = () => {
     };
   }, [
     activePanel,
-    peopleSearchText,
-    selectedPeople,
     includeSubfolders,
     path,
-    ratingFilter,
     mediaTypeFilter,
     locationBounds,
     dateRange,
+    selectedPeople,
+    selectedCameraModels,
+    selectedLensModels,
   ]);
+
+  const ratingOptions = useMemo(
+    () =>
+      [5, 4, 3, 2, 1].map((star) => ({
+        key: String(star),
+        label: `${"★".repeat(star)}${"☆".repeat(5 - star)}`,
+        count: ratingCounts[star] ?? 0,
+        selected: ratingValue === star,
+      })),
+    [ratingCounts, ratingValue],
+  );
 
   const breadcrumbs = useMemo(() => {
     if (!currentPath) return [];
@@ -475,61 +463,81 @@ export const Filter = () => {
           </Tooltip>
         </PopoverTrigger>
         <PopoverSurface className={styles.panelSurface}>
-          <div className={styles.panelSection}>
-            <Subtitle2>People in image</Subtitle2>
-            {selectedPeople.length > 0 ? (
-              <div className={styles.selectedPeopleRow}>
-                {selectedPeople.map((person) => (
-                  <Button
-                    key={person}
-                    size="small"
-                    appearance="secondary"
-                    className={styles.selectedPersonButton}
-                    onClick={() => handleRemovePerson(person)}
-                  >
-                    {person} ×
-                  </Button>
-                ))}
-              </div>
-            ) : null}
-            <Input
-              className={styles.textFilterInput}
-              value={peopleSearchText}
-              onChange={(_, data) => setPeopleSearchText(data.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  handleAddPerson(peopleSearchText);
-                }
-              }}
-              placeholder="Search names (e.g. Scott)"
+          <SuggestionFilterField
+            title="People in image"
+            placeholder="Search names (e.g. Scott)"
+            loadingLabel="Finding people..."
+            field="personInImage"
+            selectedValues={selectedPeople}
+            onSelectedValuesChange={setPeopleFilterValues}
+            isActive={activePanel === "people"}
+            includeSubfolders={includeSubfolders}
+            path={path}
+            ratingFilter={ratingFilter}
+            mediaTypeFilter={mediaTypeFilter}
+            locationBounds={locationBounds}
+            dateRange={dateRange}
+            peopleInImageFilter={selectedPeople}
+            cameraModelFilter={selectedCameraModels}
+            lensFilter={selectedLensModels}
+          />
+        </PopoverSurface>
+      </Popover>
+
+      <Popover
+        open={activePanel === "gear"}
+        onOpenChange={(_, data) => setActivePanel(data.open ? "gear" : null)}
+        positioning="below-start"
+      >
+        <PopoverTrigger disableButtonEnhancement>
+          <Tooltip content="Camera and lens" relationship="label">
+            <Button
+              aria-label="Camera and lens filter"
+              icon={<Camera24Regular />}
+              aria-pressed={isGearFilterActive}
+              appearance={activePanel === "gear" || isGearFilterActive ? "primary" : "subtle"}
+              className={styles.filterIconButton}
             />
-            {loadingPeopleSuggestions ? (
-              <Spinner size="tiny" label="Finding people..." />
-            ) : null}
-            {peopleSuggestions.length > 0 ? (
-              <div className={styles.suggestionsList}>
-                {peopleSuggestions.map((person) => (
-                  <Button
-                    key={person}
-                    size="small"
-                    appearance="subtle"
-                    className={styles.suggestionButton}
-                    onClick={() => handleAddPerson(person)}
-                  >
-                    {person}
-                  </Button>
-                ))}
-              </div>
-            ) : null}
-            {selectedPeople.length > 0 || peopleSearchText.trim().length > 0 ? (
-              <div className={styles.controlsRow}>
-                <Button size="small" appearance="subtle" onClick={handleClearPeople}>
-                  Clear
-                </Button>
-              </div>
-            ) : null}
-          </div>
+          </Tooltip>
+        </PopoverTrigger>
+        <PopoverSurface className={styles.panelSurface}>
+          <SuggestionFilterField
+            title="Camera model"
+            placeholder="Search camera model (e.g. R6 Mark II)"
+            loadingLabel="Finding camera models..."
+            field="cameraModel"
+            selectedValues={selectedCameraModels}
+            onSelectedValuesChange={setCameraModelFilterValues}
+            isActive={activePanel === "gear"}
+            includeSubfolders={includeSubfolders}
+            path={path}
+            ratingFilter={ratingFilter}
+            mediaTypeFilter={mediaTypeFilter}
+            locationBounds={locationBounds}
+            dateRange={dateRange}
+            peopleInImageFilter={selectedPeople}
+            cameraModelFilter={selectedCameraModels}
+            lensFilter={selectedLensModels}
+          />
+
+          <SuggestionFilterField
+            title="Lens model"
+            placeholder="Search lens model (e.g. RF 24-70mm F2.8)"
+            loadingLabel="Finding lenses..."
+            field="lens"
+            selectedValues={selectedLensModels}
+            onSelectedValuesChange={setLensFilterValues}
+            isActive={activePanel === "gear"}
+            includeSubfolders={includeSubfolders}
+            path={path}
+            ratingFilter={ratingFilter}
+            mediaTypeFilter={mediaTypeFilter}
+            locationBounds={locationBounds}
+            dateRange={dateRange}
+            peopleInImageFilter={selectedPeople}
+            cameraModelFilter={selectedCameraModels}
+            lensFilter={selectedLensModels}
+          />
         </PopoverSurface>
       </Popover>
 
@@ -588,6 +596,18 @@ export const Filter = () => {
                 </Button>
               ) : null}
             </div>
+            {loadingRatingCounts ? (
+              <Spinner size="tiny" label="Loading rating counts..." />
+            ) : null}
+            <CountOptionList
+              options={ratingOptions}
+              onSelect={(optionKey) => {
+                const selectedStar = Number.parseInt(optionKey, 10);
+                if (Number.isFinite(selectedStar)) {
+                  handleRatingClick(selectedStar);
+                }
+              }}
+            />
           </div>
         </PopoverSurface>
       </Popover>

@@ -729,7 +729,14 @@ export class IndexDatabase {
   }
 
   queryFieldSuggestions(options: {
-    field: "personInImage" | "tags" | "aiTags" | "cameraMake" | "cameraModel" | "lens";
+    field:
+      | "personInImage"
+      | "tags"
+      | "aiTags"
+      | "cameraMake"
+      | "cameraModel"
+      | "lens"
+      | "rating";
     search: string;
     filter: FilterElement;
     limit?: number;
@@ -738,12 +745,11 @@ export class IndexDatabase {
     const limit = Math.max(1, Math.min(100, options.limit ?? 8));
     const normalizedSearch = search.trim();
 
-    if (normalizedSearch.length === 0) {
-      return [];
-    }
-
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
-    const likeQuery = `%${escapeLikeLiteral(normalizedSearch)}%`;
+    const likeQuery =
+      normalizedSearch.length === 0
+        ? "%"
+        : `%${escapeLikeLiteral(normalizedSearch)}%`;
     const whereFragment = whereClause ? `AND (${whereClause})` : "";
 
     if (field === "personInImage" || field === "tags" || field === "aiTags") {
@@ -757,6 +763,24 @@ export class IndexDatabase {
            AND json_each.value LIKE ? ESCAPE '\\'
            ${whereFragment}
          ORDER BY suggestion COLLATE NOCASE ASC
+         LIMIT ?`,
+        )
+        .all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string }>;
+
+      return rows
+        .map((row) => row.suggestion)
+        .filter((value) => typeof value === "string" && value.length > 0);
+    }
+
+    if (field === "rating") {
+      const rows = this.db
+        .prepare(
+          `SELECT DISTINCT CAST(rating AS TEXT) AS suggestion
+         FROM files
+         WHERE rating IS NOT NULL
+           AND CAST(rating AS TEXT) LIKE ? ESCAPE '\\'
+           ${whereFragment}
+         ORDER BY CAST(suggestion AS INTEGER) DESC
          LIMIT ?`,
         )
         .all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string }>;
@@ -782,6 +806,113 @@ export class IndexDatabase {
     return rows
       .map((row) => row.suggestion)
       .filter((value) => typeof value === "string" && value.length > 0);
+  }
+
+  queryFieldSuggestionsWithCounts(options: {
+    field:
+      | "personInImage"
+      | "tags"
+      | "aiTags"
+      | "cameraMake"
+      | "cameraModel"
+      | "lens"
+      | "rating";
+    search: string;
+    filter: FilterElement;
+    limit?: number;
+  }): Array<{ value: string; count: number }> {
+    const { field, search, filter } = options;
+    const limit = Math.max(1, Math.min(100, options.limit ?? 8));
+    const normalizedSearch = search.trim();
+
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    const likeQuery =
+      normalizedSearch.length === 0
+        ? "%"
+        : `%${escapeLikeLiteral(normalizedSearch)}%`;
+    const whereFragment = whereClause ? `AND (${whereClause})` : "";
+
+    if (field === "personInImage" || field === "tags" || field === "aiTags") {
+      const rows = this.db
+        .prepare(
+          `SELECT
+             json_each.value AS suggestion,
+             COUNT(DISTINCT files.folder || files.fileName) AS count
+           FROM files, json_each(${field})
+           WHERE files.${field} IS NOT NULL
+             AND json_each.value IS NOT NULL
+             AND json_each.value != ''
+             AND json_each.value LIKE ? ESCAPE '\\'
+             ${whereFragment}
+           GROUP BY json_each.value
+           ORDER BY count DESC, suggestion COLLATE NOCASE ASC
+           LIMIT ?`,
+        )
+        .all(likeQuery, ...whereParams, limit) as Array<{
+        suggestion: string;
+        count: number;
+      }>;
+
+      return rows
+        .filter(
+          (row) =>
+            typeof row.suggestion === "string" &&
+            row.suggestion.length > 0 &&
+            Number.isFinite(row.count),
+        )
+        .map((row) => ({ value: row.suggestion, count: row.count }));
+    }
+
+    if (field === "rating") {
+      const rows = this.db
+        .prepare(
+          `SELECT
+             CAST(rating AS TEXT) AS suggestion,
+             COUNT(*) AS count
+           FROM files
+           WHERE rating IS NOT NULL
+             AND CAST(rating AS TEXT) LIKE ? ESCAPE '\\'
+             ${whereFragment}
+           GROUP BY rating
+           ORDER BY CAST(suggestion AS INTEGER) DESC
+           LIMIT ?`,
+        )
+        .all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string; count: number }>;
+
+      return rows
+        .filter(
+          (row) =>
+            typeof row.suggestion === "string" &&
+            row.suggestion.length > 0 &&
+            Number.isFinite(row.count),
+        )
+        .map((row) => ({ value: row.suggestion, count: row.count }));
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT
+           ${field} AS suggestion,
+           COUNT(*) AS count
+         FROM files
+         WHERE ${field} IS NOT NULL
+           AND ${field} != ''
+           AND ${field} LIKE ? ESCAPE '\\'
+           ${whereFragment}
+         GROUP BY ${field}
+         ORDER BY count DESC, suggestion COLLATE NOCASE ASC
+         LIMIT ?`,
+      )
+      .all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string; count: number }>;
+
+    return rows
+      .filter(
+        (row) =>
+          typeof row.suggestion === "string" &&
+          row.suggestion.length > 0 &&
+          Number.isFinite(row.count),
+      )
+      .map((row) => ({ value: row.suggestion, count: row.count }));
   }
 
   queryGeoClusters(options: {

@@ -23,6 +23,8 @@ export type FilterState = Partial<
     path: string;
     mediaTypeFilter: MediaTypeFilter;
     peopleInImageFilter: string[];
+    cameraModelFilter: string[];
+    lensFilter: string[];
   } & {
     [K in keyof NullableFilter]: NullableFilter[K] | null;
   }
@@ -57,6 +59,8 @@ const createInitialFilter = (): FilterState => {
     ratingFilter: null,
     mediaTypeFilter: "all",
     peopleInImageFilter: [],
+    cameraModelFilter: [],
+    lensFilter: [],
     locationBounds: undefined,
     dateRange: null,
   };
