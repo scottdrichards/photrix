@@ -128,6 +128,71 @@ export type SuggestionWithCount = {
   count: number;
 };
 
+export type FaceQueueStatus = "unverified" | "confirmed" | "rejected";
+
+export type FaceQueueItem = {
+  faceId: string;
+  relativePath: string;
+  fileName: string;
+  dateTaken?: number;
+  dimensions: { x: number; y: number; width: number; height: number };
+  person: { id: string; name?: string } | null;
+  status: FaceQueueStatus;
+  source?: "seed-known" | "auto-detected";
+  suggestion?: {
+    personId: string;
+    confidence: number;
+    modelVersion?: string;
+    suggestedAt?: string;
+  };
+  quality?: {
+    overall?: number;
+    sharpness?: number;
+    effectiveResolution?: number;
+  };
+  thumbnail?: {
+    preferredHeight?: number;
+    cropVersion?: string;
+  };
+};
+
+export type FaceQueueResult = {
+  items: FaceQueueItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type FaceMatchItem = {
+  faceId: string;
+  relativePath: string;
+  fileName: string;
+  dimensions: { x: number; y: number; width: number; height: number };
+  confidence: number;
+  thumbnail?: {
+    preferredHeight?: number;
+    cropVersion?: string;
+  };
+  person: { id: string; name?: string } | null;
+  status: FaceQueueStatus;
+};
+
+export type FacePerson = {
+  id: string;
+  name?: string;
+  count: number;
+  representativeFace?: {
+    faceId: string;
+    relativePath: string;
+    fileName: string;
+    dimensions: { x: number; y: number; width: number; height: number };
+    thumbnail?: {
+      preferredHeight?: number;
+      cropVersion?: string;
+    };
+  };
+};
+
 export interface FetchGeotaggedPhotosOptions
   extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata"> {
   pageSize?: number;
@@ -145,16 +210,22 @@ export type FetchDateHistogramOptions = Omit<
   "page" | "pageSize" | "metadata"
 >;
 
+export type FetchFaceQueueOptions = {
+  status?: FaceQueueStatus;
+  personId?: string;
+  minConfidence?: number;
+  page?: number;
+  pageSize?: number;
+  path?: string;
+  includeSubfolders?: boolean;
+  signal?: AbortSignal;
+};
+
 export interface ProgressEntry {
   completed: number;
   total: number;
   percent: number;
 }
-
-export type RemainingTotal = {
-  remaining: number;
-  total: number;
-};
 
 export interface RecentMaintenance {
   folder: string;
@@ -175,16 +246,14 @@ export interface ServerStatus {
   };
   maintenance: {
     exifActive: boolean;
+    faceActive?: boolean;
+    backgroundTasksEnabled?: boolean;
   };
-  conversion: {
-    overall: {
-      videoMinutes: RemainingTotal;
-      images: RemainingTotal;
-    };
-    queued: {
-      videoMinutes: RemainingTotal;
-      images: RemainingTotal;
-    };
+  faceProcessing?: {
+    processed: number;
+    workerSuccess: number;
+    fallbackCount: number;
+    workerFailures: number;
   };
   progress: {
     overall: ProgressEntry;
@@ -410,6 +479,27 @@ export const fetchStatus = async (): Promise<ServerStatus> => {
   if (!response.ok) {
     throw new Error(`Failed to fetch status (status ${response.status})`);
   }
+  return await response.json();
+};
+
+export const setBackgroundTasksEnabled = async (
+  enabled: boolean,
+): Promise<{ enabled: boolean }> => {
+  const response = await fetch("/api/status/background-tasks", {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ enabled }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to update background task setting (status ${response.status})`,
+    );
+  }
+
   return await response.json();
 };
 
@@ -892,4 +982,174 @@ export const fetchSuggestionsWithCounts = async ({
 
   const payload = (await response.json()) as { suggestions: SuggestionWithCount[] };
   return payload.suggestions;
+};
+
+export const fetchFaceQueue = async ({
+  status,
+  personId,
+  minConfidence,
+  page = 1,
+  pageSize = 100,
+  path,
+  includeSubfolders,
+  signal,
+}: FetchFaceQueueOptions = {}): Promise<FaceQueueResult> => {
+  const params = new URLSearchParams();
+  params.set("page", page.toString());
+  params.set("pageSize", pageSize.toString());
+  if (status) {
+    params.set("status", status);
+  }
+  if (personId) {
+    params.set("personId", personId);
+  }
+  if (typeof minConfidence === "number" && Number.isFinite(minConfidence)) {
+    params.set("minConfidence", minConfidence.toString());
+  }
+  if (path) {
+    params.set("path", path);
+  }
+  if (typeof includeSubfolders === "boolean") {
+    params.set("includeSubfolders", includeSubfolders.toString());
+  }
+
+  const response = await fetch(`/api/faces/queue?${params.toString()}`, {
+    signal,
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch face queue (status ${response.status})`);
+  }
+
+  return (await response.json()) as FaceQueueResult;
+};
+
+export const fetchFacePeople = async (options: {
+  path?: string;
+  includeSubfolders?: boolean;
+  signal?: AbortSignal;
+} = {}): Promise<FacePerson[]> => {
+  const { path, includeSubfolders, signal } = options;
+  const params = new URLSearchParams();
+  if (path) {
+    params.set("path", path);
+  }
+  if (typeof includeSubfolders === "boolean") {
+    params.set("includeSubfolders", includeSubfolders.toString());
+  }
+  const query = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`/api/faces/people${query}`, {
+    signal,
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch face people (status ${response.status})`);
+  }
+
+  const payload = (await response.json()) as { people: FacePerson[] };
+  return payload.people;
+};
+
+export const fetchFaceMatches = async (options: {
+  faceId: string;
+  limit?: number;
+  signal?: AbortSignal;
+}): Promise<FaceMatchItem[]> => {
+  const { faceId, limit = 8, signal } = options;
+  const params = new URLSearchParams({ limit: String(limit) });
+
+  const response = await fetch(
+    `/api/faces/${encodeURIComponent(faceId)}/matches?${params.toString()}`,
+    {
+      signal,
+      credentials: "include",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch face matches (status ${response.status})`);
+  }
+
+  const payload = (await response.json()) as { items: FaceMatchItem[] };
+  return payload.items;
+};
+
+export const fetchFacePersonSuggestions = async (options: {
+  personId: string;
+  limit?: number;
+  signal?: AbortSignal;
+}): Promise<FaceMatchItem[]> => {
+  const { personId, limit = 200, signal } = options;
+  const params = new URLSearchParams({ limit: String(limit) });
+
+  const response = await fetch(
+    `/api/faces/people/${encodeURIComponent(personId)}/suggestions?${params.toString()}`,
+    {
+      signal,
+      credentials: "include",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch person face suggestions (status ${response.status})`);
+  }
+
+  const payload = (await response.json()) as { items: FaceMatchItem[] };
+  return payload.items;
+};
+
+export const acceptFaceSuggestion = async (options: {
+  faceId: string;
+  personId?: string;
+  personName?: string;
+  reviewer?: string;
+  signal?: AbortSignal;
+}): Promise<{ ok: true; action: "accept"; faceId: string }> => {
+  const { faceId, personId, personName, reviewer, signal } = options;
+
+  const response = await fetch(`/api/faces/${encodeURIComponent(faceId)}/accept`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...(personId ? { personId } : {}),
+      ...(personName ? { personName } : {}),
+      ...(reviewer ? { reviewer } : {}),
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to accept face suggestion (status ${response.status})`);
+  }
+
+  return (await response.json()) as { ok: true; action: "accept"; faceId: string };
+};
+
+export const rejectFaceSuggestion = async (options: {
+  faceId: string;
+  personId?: string;
+  reviewer?: string;
+  signal?: AbortSignal;
+}): Promise<{ ok: true; action: "reject"; faceId: string }> => {
+  const { faceId, personId, reviewer, signal } = options;
+
+  const response = await fetch(`/api/faces/${encodeURIComponent(faceId)}/reject`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...(personId ? { personId } : {}),
+      ...(reviewer ? { reviewer } : {}),
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to reject face suggestion (status ${response.status})`);
+  }
+
+  return (await response.json()) as { ok: true; action: "reject"; faceId: string };
 };

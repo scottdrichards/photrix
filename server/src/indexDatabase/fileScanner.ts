@@ -1,5 +1,6 @@
 import path from "path/win32";
 import { walkFiles } from "../fileHandling/fileUtils.ts";
+import { waitForBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 
 type DiscoverFilesProps = {
@@ -24,6 +25,8 @@ export const discoverFiles = async (props: DiscoverFilesProps): Promise<void> =>
   let scannedFilesCount = 0;
 
   for (const absolutePath of walkFiles(directory)) {
+    await waitForBackgroundTasksEnabled();
+
     const relativePath = path.relative(root, absolutePath);
     batch.push(relativePath);
     if (batch.length >= batchSize) {

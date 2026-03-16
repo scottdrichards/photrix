@@ -65,8 +65,8 @@ describe("generateWebSafeVideo", () => {
       return proc;
     });
 
-    const enqueue = jest.fn(async (task: () => Promise<void>) => {
-      await task();
+    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
+      await task.fn();
     });
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
@@ -100,8 +100,8 @@ describe("generateWebSafeVideo", () => {
       return proc;
     });
 
-    const enqueue = jest.fn(async (task: () => Promise<void>) => {
-      await task();
+    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
+      await task.fn();
     });
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
@@ -131,8 +131,8 @@ describe("generateWebSafeVideo", () => {
       return proc;
     });
 
-    const enqueue = jest.fn(async (task: () => Promise<void>) => {
-      await task();
+    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
+      await task.fn();
     });
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));

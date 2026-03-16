@@ -238,18 +238,23 @@ export const convertImage = async (
   height: StandardHeight = 2160,
   opts?: { priority?: QueuePriority },
 ): Promise<string> => {
-  await stat(filePath);
+  const fileStats = await stat(filePath);
   const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
 
   if (existsSync(cachedPath)) {
     return cachedPath;
   }
 
-  await mediaProcessingQueue.enqueue(async () => {
-    await ensureCacheDir(cachedPath);
-    console.log(`[ImageCache] Generating ${height} for ${filePath}`);
-    await generateImage(filePath, [{ path: cachedPath, height }]);
-  }, opts?.priority, "image", { imageCount: 1 });
+  await mediaProcessingQueue.enqueue({
+    fn: async () => {
+      await ensureCacheDir(cachedPath);
+      console.log(`[ImageCache] Generating ${height} for ${filePath}`);
+      await generateImage(filePath, [{ path: cachedPath, height }]);
+    },
+    priority: opts?.priority ?? "background",
+    mediaType: "image",
+    sizeBytes: fileStats.size,
+  });
   return cachedPath;
 };
 
@@ -258,7 +263,7 @@ export const convertImageToMultipleSizes = async (
   heights: StandardHeight[],
   opts?: { priority?: QueuePriority },
 ): Promise<void> => {
-  await stat(filePath);
+  const fileStats = await stat(filePath);
 
   const outputs = heights
     .map((height) => ({
@@ -271,12 +276,16 @@ export const convertImageToMultipleSizes = async (
     return;
   }
 
-  await mediaProcessingQueue.enqueue(async () => {
-    // Ensure all cache directories exist
-    await Promise.all(outputs.map((o) => ensureCacheDir(o.path)));
-    console.log(
-      `[ImageCache] Generating sizes ${outputs.map((o) => o.height).join(", ")} for ${filePath}`,
-    );
-    await generateImage(filePath, outputs);
-  }, opts?.priority, "image", { imageCount: 1 });
+  await mediaProcessingQueue.enqueue({
+    fn: async () => {
+      await Promise.all(outputs.map((o) => ensureCacheDir(o.path)));
+      console.log(
+        `[ImageCache] Generating sizes ${outputs.map((o) => o.height).join(", ")} for ${filePath}`,
+      );
+      await generateImage(filePath, outputs);
+    },
+    priority: opts?.priority ?? "background",
+    mediaType: "image",
+    sizeBytes: fileStats.size,
+  });
 };

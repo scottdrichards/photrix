@@ -57,8 +57,8 @@ describe("generateMultibitrateHLS", () => {
     const { getMirroredHLSDirectory } = await import("../common/cacheUtils.ts");
     const hlsDir = getMirroredHLSDirectory(source, "abr");
 
-    const enqueue = jest.fn(async (task: () => Promise<void>) => {
-      await task();
+    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
+      await task.fn();
     });
 
     const spawnMock = jest.fn((_command: string, args: string[]) => {
@@ -86,7 +86,7 @@ describe("generateMultibitrateHLS", () => {
     const masterPath = await generateMultibitrateHLS(source, {
       waitForCompletion: true,
       priority: "foreground",
-      estimatedDurationSeconds: 14,
+      contentDurationSeconds: 14,
     });
 
     expect(masterPath).toBe(getMasterPlaylistPath(hlsDir));
@@ -108,8 +108,8 @@ describe("generateMultibitrateHLS", () => {
     const { getMirroredHLSDirectory } = await import("../common/cacheUtils.ts");
     const hlsDir = getMirroredHLSDirectory(source, "abr");
 
-    const enqueue = jest.fn(async (task: () => Promise<void>) => {
-      await task();
+    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
+      await task.fn();
     });
 
     const spawnMock = jest
@@ -155,8 +155,8 @@ describe("generateMultibitrateHLS", () => {
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const enqueue = jest.fn(async (task: () => Promise<void>) => {
-      await task();
+    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
+      await task.fn();
     });
 
     const spawnMock = jest.fn((_command: string, _args: string[]) => {

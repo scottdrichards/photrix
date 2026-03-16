@@ -108,7 +108,7 @@ export const generateVideoPreview = async (
   durationMS: number = 5_000,
   opts?: { priority?: QueuePriority },
 ): Promise<string> => {
-  await stat(filePath);
+  const fileStats = await stat(filePath);
   const durationSeconds = Math.round(durationMS / 1000);
   const cachedPath = getMirroredCachedFilePath(
     filePath,
@@ -120,8 +120,8 @@ export const generateVideoPreview = async (
     return cachedPath;
   }
 
-  await mediaProcessingQueue.enqueue(
-    async () => {
+  await mediaProcessingQueue.enqueue({
+    fn: async () => {
       console.log(`[VideoCache] Generating ${height}p preview for ${filePath}`);
       await mkdir(dirname(cachedPath), { recursive: true });
       await new Promise<void>((resolve, reject) => {
@@ -176,9 +176,11 @@ export const generateVideoPreview = async (
         });
       });
     },
-    opts?.priority,
-    "video",
-  );
+    priority: opts?.priority ?? "background",
+    mediaType: "video",
+    sizeBytes: fileStats.size,
+    durationMilliseconds: durationMS,
+  });
   return cachedPath;
 };
 
@@ -188,7 +190,7 @@ export const generateVideoThumbnail = async (
   height: StandardHeight = 320,
   opts?: { priority?: QueuePriority },
 ): Promise<string> => {
-  await stat(filePath);
+  const fileStats = await stat(filePath);
   const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
 
   if (existsSync(cachedPath)) {
@@ -197,8 +199,8 @@ export const generateVideoThumbnail = async (
 
   const cudaAvailable = await determineIfCUDAAvailable();
 
-  await mediaProcessingQueue.enqueue(
-    () => {
+  await mediaProcessingQueue.enqueue({
+    fn: () => {
       const generateWithMode = async (useHardware: boolean): Promise<void> => {
         const encoderType = useHardware ? "CUDA" : "software";
         console.log(
@@ -258,8 +260,10 @@ export const generateVideoThumbnail = async (
 
       return generateWithMode(cudaAvailable);
     },
-    opts?.priority,
-    "video",
-  );
+    priority: opts?.priority ?? "background",
+    mediaType: "video",
+    sizeBytes: fileStats.size,
+    durationMilliseconds: 0,
+  });
   return cachedPath;
 };

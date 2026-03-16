@@ -42,6 +42,10 @@ vi.mock("./components/StatusModal", () => ({
   ),
 }));
 
+vi.mock("./components/faces/FacesReviewPage", () => ({
+  FacesReviewPage: () => <div data-testid="faces-review-page">faces</div>,
+}));
+
 describe("App", () => {
   beforeEach(() => {
     useSelectionContextMock.mockReset();
@@ -171,5 +175,62 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
 
     expect(signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it("switches between library and faces views", () => {
+    useSelectionContextMock.mockReturnValue({
+      clearSelection: vi.fn(),
+      selectedItems: [],
+      selectionMode: false,
+      setSelectionMode: vi.fn(),
+    });
+
+    render(<App />);
+
+    expect(screen.getByTestId("thumbnail-grid")).toBeInTheDocument();
+    expect(screen.queryByTestId("faces-review-page")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Faces" }));
+
+    expect(screen.getByTestId("faces-review-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("thumbnail-grid")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Library" }));
+
+    expect(screen.getByTestId("thumbnail-grid")).toBeInTheDocument();
+  });
+
+  it("initializes faces view when URL has view=faces", () => {
+    window.history.pushState(null, "", "/?view=faces");
+    useSelectionContextMock.mockReturnValue({
+      clearSelection: vi.fn(),
+      selectedItems: [],
+      selectionMode: false,
+      setSelectionMode: vi.fn(),
+    });
+
+    render(<App />);
+
+    expect(screen.getByTestId("faces-review-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("thumbnail-grid")).not.toBeInTheDocument();
+
+    window.history.pushState(null, "", "/");
+  });
+
+  it("shows filter in both library and faces views", () => {
+    useSelectionContextMock.mockReturnValue({
+      clearSelection: vi.fn(),
+      selectedItems: [],
+      selectionMode: false,
+      setSelectionMode: vi.fn(),
+    });
+
+    render(<App />);
+
+    expect(screen.getByTestId("filter")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Faces" }));
+
+    expect(screen.getByTestId("filter")).toBeInTheDocument();
   });
 });

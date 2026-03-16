@@ -6,6 +6,20 @@ Owner: Photrix
 
 Execution checklist: `documentation/FACE_TAGGING_PHASE1_CHECKLIST.md`
 
+## Current Implementation Snapshot
+
+- Phase 1 milestones are implemented and test-covered.
+- A face metadata processor scaffold exists at `server/src/indexDatabase/processFaceMetadata.ts`.
+- Face extraction/embedding now goes through a Python worker boundary at `server/src/imageProcessing/faceEmbedding.ts` using `server/src/imageProcessing/process_face_embeddings.py`.
+- Worker mode uses OpenCV face detection + HOG-derived embeddings when Python dependencies are available.
+- Runtime decision: CPU-first baseline (no GPU requirement) until a model/runtime change is explicitly introduced.
+- Face metadata stage is default-on at startup and runs before HLS/video conversion (opt out via `PHOTRIX_ENABLE_FACE_METADATA=false`).
+- If worker execution fails (for example missing `cv2`), processing falls back to deterministic geometry-derived embeddings so indexing continues.
+- Queue payload includes `status`, `source`, `quality`, and `thumbnail.preferredHeight`.
+- Faces review UI uses `thumbnail.preferredHeight` when requesting preview images.
+
+This is scaffolding to support a future real embedding model/runtime integration.
+
 ## Goals
 
 - Detect faces in photos (videos are out of scope for now).

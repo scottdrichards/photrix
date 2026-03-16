@@ -3,11 +3,6 @@ import { ProcessingQueue } from "./processingQueue.ts";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const flushMicrotasks = async () => {
-  await Promise.resolve();
-  await Promise.resolve();
-};
-
 const deferred = <T>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((r) => {
@@ -21,50 +16,41 @@ afterEach(() => {
 });
 
 describe("ProcessingQueue", () => {
-  it("runs high-priority tasks while paused background waits", async () => {
-    jest.useFakeTimers();
-    const queue = new ProcessingQueue(1);
-    const events: string[] = [];
-
-    queue.pause(80);
-    const backgroundPromise = queue.enqueue(async () => {
-      events.push("background");
-    }, "background");
-
-    await flushMicrotasks();
-    expect(events).toEqual([]);
-
-    const highPriorityPromise = queue.enqueue(async () => {
-      events.push("userBlocked");
-    }, "userBlocked");
-    await flushMicrotasks();
-    await highPriorityPromise;
-
-    expect(events).toEqual(["userBlocked"]);
-
-    jest.advanceTimersByTime(100);
-    await flushMicrotasks();
-    await backgroundPromise;
-    expect(events).toEqual(["userBlocked", "background"]);
-  });
-
   it("uses LIFO order for queued userBlocked tasks within same bucket", async () => {
     const queue = new ProcessingQueue(1);
     const order: string[] = [];
     const blocker = deferred<void>();
 
-    const firstPromise = queue.enqueue(async () => {
-      order.push("first");
-      await blocker.promise;
-    }, "userBlocked", "video");
+    const firstPromise = queue.enqueue({
+      fn: async () => {
+        order.push("first");
+        await blocker.promise;
+      },
+      priority: "userBlocked",
+      mediaType: "video",
+      sizeBytes: 10,
+      durationMilliseconds: 100,
+    });
 
-    const secondPromise = queue.enqueue(async () => {
-      order.push("second");
-    }, "userBlocked", "video");
+    const secondPromise = queue.enqueue({
+      fn: async () => {
+        order.push("second");
+      },
+      priority: "userBlocked",
+      mediaType: "video",
+      sizeBytes: 10,
+      durationMilliseconds: 100,
+    });
 
-    const thirdPromise = queue.enqueue(async () => {
-      order.push("third");
-    }, "userBlocked", "video");
+    const thirdPromise = queue.enqueue({
+      fn: async () => {
+        order.push("third");
+      },
+      priority: "userBlocked",
+      mediaType: "video",
+      sizeBytes: 10,
+      durationMilliseconds: 100,
+    });
 
     await wait(10);
     blocker.resolve();
@@ -78,18 +64,34 @@ describe("ProcessingQueue", () => {
     const order: string[] = [];
     const blocker = deferred<void>();
 
-    const blockingTask = queue.enqueue(async () => {
-      order.push("blocker");
-      await blocker.promise;
-    }, "userBlocked", "image");
+    const blockingTask = queue.enqueue({
+      fn: async () => {
+        order.push("blocker");
+        await blocker.promise;
+      },
+      priority: "userBlocked",
+      mediaType: "image",
+      sizeBytes: 10,
+    });
 
-    const backgroundVideo = queue.enqueue(async () => {
-      order.push("video");
-    }, "background", "video");
+    const backgroundVideo = queue.enqueue({
+      fn: async () => {
+        order.push("video");
+      },
+      priority: "background",
+      mediaType: "video",
+      sizeBytes: 10,
+      durationMilliseconds: 100,
+    });
 
-    const backgroundImage = queue.enqueue(async () => {
-      order.push("image");
-    }, "background", "image");
+    const backgroundImage = queue.enqueue({
+      fn: async () => {
+        order.push("image");
+      },
+      priority: "background",
+      mediaType: "image",
+      sizeBytes: 10,
+    });
 
     await wait(10);
     blocker.resolve();
@@ -98,35 +100,37 @@ describe("ProcessingQueue", () => {
     expect(order).toEqual(["blocker", "image", "video"]);
   });
 
-  it("tracks conversion status totals and remaining counts", async () => {
+  it("reports queue size and processing counts", async () => {
     const queue = new ProcessingQueue(1);
-    const imageGate = deferred<void>();
-    const videoGate = deferred<void>();
+    const blocker = deferred<void>();
 
-    const imageTask = queue.enqueue(async () => {
-      await imageGate.promise;
-    }, "background", "image");
+    const firstTask = queue.enqueue({
+      fn: async () => {
+        await blocker.promise;
+      },
+      priority: "userBlocked",
+      mediaType: "image",
+      sizeBytes: 10,
+    });
 
-    const videoTask = queue.enqueue(async () => {
-      await videoGate.promise;
-    }, "background", "video", { videoSeconds: 120 });
+    const secondTask = queue.enqueue({
+      fn: async () => undefined,
+      priority: "background",
+      mediaType: "video",
+      sizeBytes: 10,
+      durationMilliseconds: 120_000,
+    });
 
-    const during = queue.getConversionStatus();
-    expect(during.overall.images.total).toBe(1);
-    expect(during.overall.videoSeconds.total).toBe(120);
-    expect(during.overall.images.remaining).toBe(1);
-    expect(during.overall.videoSeconds.remaining).toBe(120);
+    await wait(5);
+    expect(queue.getProcessing()).toBe(1);
+    expect(queue.getQueueSize()).toBe(1);
 
-    imageGate.resolve();
+    blocker.resolve();
     await wait(10);
-    videoGate.resolve();
 
-    await Promise.all([imageTask, videoTask]);
+    await Promise.all([firstTask, secondTask]);
 
-    const done = queue.getConversionStatus();
-    expect(done.overall.images.remaining).toBe(0);
-    expect(done.overall.videoSeconds.remaining).toBe(0);
-    expect(done.overall.images.total).toBe(1);
-    expect(done.overall.videoSeconds.total).toBe(120);
+    expect(queue.getProcessing()).toBe(0);
+    expect(queue.getQueueSize()).toBe(0);
   });
 });

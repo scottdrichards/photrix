@@ -1,6 +1,7 @@
 import path from "node:path";
 import { stat } from "node:fs/promises";
 import { IndexDatabase } from "./indexDatabase.ts";
+import { waitForBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
 import {
   generateMultibitrateHLS,
   getMultibitrateHLSDirectory,
@@ -140,6 +141,8 @@ export const startBackgroundHLSEncoding = (
   };
 
   const processAll = async () => {
+    await waitForBackgroundTasksEnabled();
+
     const totalCandidates = database.countVideosReadyForHLS();
     const candidates = database.getVideosReadyForHLS(totalCandidates || 1);
 
@@ -200,6 +203,8 @@ export const startBackgroundHLSEncoding = (
     }
 
     for (const item of needsEncoding) {
+      await waitForBackgroundTasksEnabled();
+
       while (restartAtMS && restartAtMS > Date.now()) {
         console.log("[hls-encode] Paused HLS encoding...");
         const timeoutDuration = restartAtMS - Date.now();
@@ -216,7 +221,7 @@ export const startBackgroundHLSEncoding = (
         await generateMultibitrateHLS(fullPath, {
           priority: "background",
           waitForCompletion: true,
-          estimatedDurationSeconds: durationSeconds,
+          contentDurationSeconds: durationSeconds,
         });
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);

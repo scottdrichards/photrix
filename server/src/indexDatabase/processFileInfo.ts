@@ -1,5 +1,6 @@
 import path from "node:path";
 import { getFastMediaDimensions, getFileInfo } from "../fileHandling/fileUtils.ts";
+import { waitForBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 
 const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
@@ -24,6 +25,8 @@ export const startBackgroundProcessFileInfoMetadata = (
 
   const processAll = async () => {
     while (true) {
+      await waitForBackgroundTasksEnabled();
+
       const batchSize = 200;
       const items = database.getFilesNeedingMetadataUpdate("info", batchSize);
       if (!items.length) {
@@ -33,6 +36,8 @@ export const startBackgroundProcessFileInfoMetadata = (
       }
 
       for (const entry of items) {
+        await waitForBackgroundTasksEnabled();
+
         const { relativePath } = entry;
         const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
 

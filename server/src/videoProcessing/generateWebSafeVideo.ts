@@ -12,7 +12,8 @@ export const generateWebSafeVideo = async (
   height: StandardHeight = "original",
   opts?: { priority?: QueuePriority },
 ): Promise<string> => {
-  const modifiedTimeMs = (await stat(filePath)).mtimeMs;
+  const fileStats = await stat(filePath);
+  const modifiedTimeMs = fileStats.mtimeMs;
   const hash = getHash(filePath, modifiedTimeMs);
   const cachedPath = getCachedFilePath(hash, height, "mp4");
 
@@ -20,8 +21,8 @@ export const generateWebSafeVideo = async (
     return cachedPath;
   }
 
-  await mediaProcessingQueue.enqueue(
-    () => {
+  await mediaProcessingQueue.enqueue({
+    fn: () => {
       console.log(`[VideoCache] Generating ${height}p web-safe video for ${filePath}`);
       return new Promise<void>((resolve, reject) => {
         const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
@@ -72,8 +73,10 @@ export const generateWebSafeVideo = async (
         });
       });
     },
-    opts?.priority,
-    "video",
-  );
+    priority: opts?.priority ?? "background",
+    mediaType: "video",
+    sizeBytes: fileStats.size,
+    durationMilliseconds: 0,
+  });
   return cachedPath;
 };

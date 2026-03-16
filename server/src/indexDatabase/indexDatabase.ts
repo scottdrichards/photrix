@@ -4,10 +4,14 @@ import path from "node:path";
 import { CACHE_DIR } from "../common/cacheUtils.ts";
 import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
-import { MetadataGroups, type FileRecord } from "./fileRecord.type.ts";
+import { MetadataGroups, type FaceTag, type FileRecord } from "./fileRecord.type.ts";
 import { filterToSQL } from "./filterToSQL.ts";
 import type {
   DateHistogramResult,
+  FaceMatchItem,
+  FacePeopleItem,
+  FaceQueueResult,
+  FaceQueueStatus,
   FilterElement,
   GeoClusterResult,
   QueryOptions,
@@ -101,6 +105,7 @@ export class IndexDatabase {
     this.ensureFilesColumns([
       { name: "personInImage", type: "TEXT" },
       { name: "regions", type: "TEXT" },
+      { name: "faceMetadataProcessedAt", type: "TEXT" },
     ]);
 
     // Create indexes for common query patterns
@@ -995,6 +1000,614 @@ export class IndexDatabase {
       clusters: rows,
       total,
     };
+  }
+
+  queryFaceQueue(options: {
+    status?: FaceQueueStatus;
+    personId?: string;
+    minConfidence?: number;
+    page?: number;
+    pageSize?: number;
+    path?: string;
+    includeSubfolders?: boolean;
+  }): FaceQueueResult {
+    const status = options.status;
+    const personId = options.personId?.trim();
+    const isUnassignedFilter = personId === "__unassigned__";
+    const minConfidence = options.minConfidence;
+    const page = Math.max(1, options.page ?? 1);
+    const pageSize = Math.max(1, Math.min(500, options.pageSize ?? 100));
+    const normalizedPath = options.path ? normalizeFolderPath(options.path) : null;
+    const includeSubfolders = options.includeSubfolders !== false;
+
+    let sql = `SELECT folder, fileName, dateTaken, faceTags FROM files WHERE faceTags IS NOT NULL`;
+    const params: unknown[] = [];
+
+    if (normalizedPath) {
+      if (includeSubfolders) {
+        sql += ` AND folder LIKE ?`;
+        params.push(`${escapeLikeLiteral(normalizedPath)}%`);
+      } else {
+        sql += ` AND folder = ?`;
+        params.push(normalizedPath);
+      }
+    }
+
+    const rows = this.db
+      .prepare(sql)
+      .all(...params) as Array<{
+      folder: string;
+      fileName: string;
+      dateTaken: number | null;
+      faceTags: string | null;
+    }>;
+
+    const allItems = rows.flatMap((row) => {
+      const parsedFaceTags = this.parseFaceTags(row.faceTags);
+      return parsedFaceTags
+        .map((faceTag, index) => {
+          const faceId =
+            typeof faceTag.faceId === "string" && faceTag.faceId.trim().length > 0
+              ? faceTag.faceId
+              : `${row.folder}${row.fileName}#${index}`;
+          const statusValue = faceTag.status ?? "unverified";
+          const confidence = faceTag.suggestion?.confidence;
+          return {
+            faceId,
+            relativePath: `${row.folder}${row.fileName}`,
+            fileName: row.fileName,
+            dateTaken: row.dateTaken ?? undefined,
+            dimensions: faceTag.dimensions,
+            person: faceTag.person,
+            status: statusValue,
+            source: faceTag.source,
+            suggestion: faceTag.suggestion,
+            quality: faceTag.quality,
+            thumbnail: faceTag.thumbnail,
+            confidence,
+          };
+        })
+        .filter((item) => Boolean(item.dimensions));
+    });
+
+    const filteredItems = allItems
+      .filter((item) => (status ? item.status === status : true))
+      .filter((item) => {
+        if (!personId) {
+          return true;
+        }
+
+        if (isUnassignedFilter) {
+          return item.person == null;
+        }
+
+        return item.person?.id === personId;
+      })
+      .filter((item) =>
+        typeof minConfidence === "number" && Number.isFinite(minConfidence)
+          ? (item.confidence ?? -1) >= minConfidence
+          : true,
+      )
+      .sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1));
+
+    const offset = (page - 1) * pageSize;
+    const items = filteredItems.slice(offset, offset + pageSize).map(({ confidence, ...rest }) => rest);
+
+    return {
+      items,
+      total: filteredItems.length,
+      page,
+      pageSize,
+    };
+  }
+
+  acceptFaceSuggestion(options: {
+    faceId: string;
+    personId?: string;
+    personName?: string;
+    reviewer?: string;
+  }): boolean {
+    const { faceId, personId, personName, reviewer } = options;
+    const match = this.findFaceById(faceId);
+    if (!match) {
+      return false;
+    }
+
+    const { row, tags } = match;
+    const nextTags = tags.map((faceTag, index) => {
+      const computedFaceId = this.getFaceId(row.folder, row.fileName, faceTag, index);
+      if (computedFaceId !== faceId) {
+        return faceTag;
+      }
+
+      const resolvedPersonId = personId ?? faceTag.suggestion?.personId;
+      return {
+        ...faceTag,
+        faceId,
+        person:
+          resolvedPersonId || personName
+            ? { id: resolvedPersonId ?? `name:${personName}`, ...(personName ? { name: personName } : {}) }
+            : faceTag.person,
+        status: "confirmed" as const,
+        review: {
+          action: "accept" as const,
+          reviewedAt: new Date().toISOString(),
+          ...(reviewer ? { reviewer } : {}),
+        },
+      };
+    });
+
+    this.persistFaceTags(row.folder, row.fileName, nextTags);
+    return true;
+  }
+
+  rejectFaceSuggestion(options: {
+    faceId: string;
+    personId?: string;
+    reviewer?: string;
+  }): boolean {
+    const { faceId, personId, reviewer } = options;
+    const match = this.findFaceById(faceId);
+    if (!match) {
+      return false;
+    }
+
+    const { row, tags } = match;
+    const nextTags = tags.map((faceTag, index) => {
+      const computedFaceId = this.getFaceId(row.folder, row.fileName, faceTag, index);
+      if (computedFaceId !== faceId) {
+        return faceTag;
+      }
+
+      const shouldClearSuggestion =
+        !personId || personId === faceTag.suggestion?.personId;
+
+      return {
+        ...faceTag,
+        faceId,
+        status: "rejected" as const,
+        ...(shouldClearSuggestion ? { suggestion: undefined } : {}),
+        review: {
+          action: "reject" as const,
+          reviewedAt: new Date().toISOString(),
+          ...(reviewer ? { reviewer } : {}),
+        },
+      };
+    });
+
+    this.persistFaceTags(row.folder, row.fileName, nextTags);
+    return true;
+  }
+
+  queryFacePeople(options?: { path?: string; includeSubfolders?: boolean }): FacePeopleItem[] {
+    const startTime = Date.now();
+    const normalizedPath = options?.path ? normalizeFolderPath(options.path) : null;
+    const includeSubfolders = options?.includeSubfolders !== false;
+
+    let pathWhereClause = "";
+    const params: unknown[] = [];
+
+    if (normalizedPath) {
+      if (includeSubfolders) {
+        pathWhereClause = ` AND files.folder LIKE ?`;
+        params.push(`${escapeLikeLiteral(normalizedPath)}%`);
+      } else {
+        pathWhereClause = ` AND files.folder = ?`;
+        params.push(normalizedPath);
+      }
+    }
+
+    const rows = this.db
+      .prepare(
+        `WITH expanded AS (
+           SELECT
+             files.folder AS folder,
+             files.fileName AS fileName,
+             CAST(tags.key AS INTEGER) AS tagIndex,
+             json_extract(tags.value, '$.person.id') AS personIdRaw,
+             json_extract(tags.value, '$.person.name') AS personNameRaw,
+             json_extract(tags.value, '$.faceId') AS faceIdRaw,
+             json_extract(tags.value, '$.dimensions.x') AS dimX,
+             json_extract(tags.value, '$.dimensions.y') AS dimY,
+             json_extract(tags.value, '$.dimensions.width') AS dimWidth,
+             json_extract(tags.value, '$.dimensions.height') AS dimHeight,
+             json_extract(tags.value, '$.thumbnail.preferredHeight') AS thumbPreferredHeight,
+             json_extract(tags.value, '$.thumbnail.cropVersion') AS thumbCropVersion,
+             COALESCE(json_extract(tags.value, '$.quality.overall'), 0) * 10000
+               + COALESCE(json_extract(tags.value, '$.quality.effectiveResolution'), 0)
+               + MAX(
+                   0,
+                   COALESCE(json_extract(tags.value, '$.dimensions.width'), 0)
+                     * COALESCE(json_extract(tags.value, '$.dimensions.height'), 0)
+                 ) * 1000 AS representativeScore
+           FROM files, json_each(files.faceTags) AS tags
+           WHERE files.faceTags IS NOT NULL
+             AND json_type(tags.value, '$.dimensions') = 'object'
+             ${pathWhereClause}
+         ),
+         ranked AS (
+           SELECT
+             COALESCE(personIdRaw, '__unassigned__') AS personId,
+             COALESCE(
+               personNameRaw,
+               MAX(personNameRaw) OVER (
+                 PARTITION BY COALESCE(personIdRaw, '__unassigned__')
+               ),
+               CASE WHEN personIdRaw IS NULL THEN 'Unassigned' ELSE NULL END
+             ) AS personName,
+             folder,
+             fileName,
+             tagIndex,
+             faceIdRaw,
+             dimX,
+             dimY,
+             dimWidth,
+             dimHeight,
+             thumbPreferredHeight,
+             thumbCropVersion,
+             representativeScore,
+             COUNT(*) OVER (PARTITION BY COALESCE(personIdRaw, '__unassigned__')) AS personCount,
+             ROW_NUMBER() OVER (
+               PARTITION BY COALESCE(personIdRaw, '__unassigned__')
+               ORDER BY representativeScore DESC
+             ) AS representativeRank
+           FROM expanded
+         )
+         SELECT
+           personId,
+           personName,
+           personCount,
+           folder,
+           fileName,
+           tagIndex,
+           faceIdRaw,
+           dimX,
+           dimY,
+           dimWidth,
+           dimHeight,
+           thumbPreferredHeight,
+           thumbCropVersion
+         FROM ranked
+         WHERE representativeRank = 1
+         ORDER BY personCount DESC`,
+      )
+      .all(...params) as Array<{
+      personId: string;
+      personName: string | null;
+      personCount: number;
+      folder: string;
+      fileName: string;
+      tagIndex: number;
+      faceIdRaw: string | null;
+      dimX: number;
+      dimY: number;
+      dimWidth: number;
+      dimHeight: number;
+      thumbPreferredHeight: number | null;
+      thumbCropVersion: string | null;
+    }>;
+
+    const people = rows.map((row) => {
+      const faceId = row.faceIdRaw?.trim().length
+        ? row.faceIdRaw
+        : `${row.folder}${row.fileName}#${row.tagIndex}`;
+      const thumbnail =
+        row.thumbPreferredHeight == null && row.thumbCropVersion == null
+          ? undefined
+          : {
+              ...(row.thumbPreferredHeight == null
+                ? {}
+                : { preferredHeight: row.thumbPreferredHeight }),
+              ...(row.thumbCropVersion == null ? {} : { cropVersion: row.thumbCropVersion }),
+            };
+
+      return {
+        id: row.personId,
+        ...(row.personName ? { name: row.personName } : {}),
+        count: row.personCount,
+        representativeFace: {
+          faceId,
+          relativePath: `${row.folder}${row.fileName}`,
+          fileName: row.fileName,
+          dimensions: {
+            x: row.dimX,
+            y: row.dimY,
+            width: row.dimWidth,
+            height: row.dimHeight,
+          },
+          ...(thumbnail ? { thumbnail } : {}),
+        },
+      };
+    });
+
+    console.log(
+      `[faces] queryFacePeople returned ${people.length} buckets in ${Date.now() - startTime}ms`,
+    );
+    return people;
+  }
+
+  queryFaceMatches(options: { faceId: string; limit?: number }): FaceMatchItem[] {
+    const faceId = options.faceId.trim();
+    const limit = Math.max(1, Math.min(100, options.limit ?? 12));
+    if (!faceId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT folder, fileName, faceTags
+         FROM files
+         WHERE faceTags IS NOT NULL`,
+      )
+      .all() as Array<{ folder: string; fileName: string; faceTags: string | null }>;
+
+    const entries = rows.flatMap((row) => {
+      const tags = this.parseFaceTags(row.faceTags);
+      return tags
+        .map((tag, index) => {
+          const resolvedFaceId = this.getFaceId(row.folder, row.fileName, tag, index);
+          const embedding = this.getFaceEmbedding(tag);
+          if (!embedding) {
+            return null;
+          }
+
+          return {
+            faceId: resolvedFaceId,
+            relativePath: `${row.folder}${row.fileName}`,
+            fileName: row.fileName,
+            dimensions: tag.dimensions,
+            embedding,
+            thumbnail: tag.thumbnail,
+            person: tag.person,
+            status: tag.status ?? "unverified",
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    });
+
+    const target = entries.find((entry) => entry.faceId === faceId);
+    if (!target) {
+      return [];
+    }
+
+    return entries
+      .filter((entry) => entry.faceId !== faceId)
+      .filter((entry) => entry.status !== "rejected")
+      .map((entry) => ({
+        ...entry,
+        confidence: this.cosineSimilarity(target.embedding, entry.embedding),
+      }))
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, limit)
+      .map(({ embedding, ...rest }) => ({
+        ...rest,
+        confidence: Number(rest.confidence.toFixed(4)),
+      }));
+  }
+
+  queryPersonFaceSuggestions(options: { personId: string; limit?: number }): FaceMatchItem[] {
+    const personId = options.personId.trim();
+    const limit = Math.max(1, Math.min(200, options.limit ?? 200));
+    if (!personId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT folder, fileName, faceTags
+         FROM files
+         WHERE faceTags IS NOT NULL`,
+      )
+      .all() as Array<{ folder: string; fileName: string; faceTags: string | null }>;
+
+    const entries = rows.flatMap((row) => {
+      const tags = this.parseFaceTags(row.faceTags);
+      return tags
+        .map((tag, index) => {
+          const resolvedFaceId = this.getFaceId(row.folder, row.fileName, tag, index);
+          const embedding = this.getFaceEmbedding(tag);
+          if (!embedding) {
+            return null;
+          }
+
+          return {
+            faceId: resolvedFaceId,
+            relativePath: `${row.folder}${row.fileName}`,
+            fileName: row.fileName,
+            dimensions: tag.dimensions,
+            embedding,
+            thumbnail: tag.thumbnail,
+            person: tag.person,
+            status: tag.status ?? "unverified",
+            quality: tag.quality,
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    });
+
+    const profileFaces = entries.filter(
+      (entry) => entry.person?.id === personId && entry.status === "confirmed",
+    );
+
+    if (profileFaces.length === 0) {
+      return [];
+    }
+
+    const centroid = this.buildWeightedCentroid(
+      profileFaces.map((face) => ({
+        embedding: face.embedding,
+        weight: this.embeddingWeight(face.quality),
+      })),
+    );
+    if (!centroid) {
+      return [];
+    }
+
+    return entries
+      .filter((entry) => entry.person == null)
+      .filter((entry) => entry.status !== "rejected")
+      .map((entry) => ({
+        ...entry,
+        confidence: this.cosineSimilarity(centroid, entry.embedding),
+      }))
+      .sort((a, b) => b.confidence - a.confidence)
+
+    const topMatch = candidates.at(0);
+    if (!topMatch) {
+      return [];
+    }
+
+    if (topMatch.confidence < MIN_SIMILARITY) {
+      return [];
+    }
+
+    const secondMatch = candidates.at(1);
+    if (secondMatch && topMatch.confidence / (secondMatch.confidence + 0.001) < 1.12) {
+      return [];
+    }
+
+    return candidates
+      .slice(0, limit)
+      .map(({ embedding, quality, ...rest }) => ({
+        ...rest,
+        confidence: Number(rest.confidence.toFixed(4)),
+      }));
+  }
+
+  private getFaceEmbedding(tag: FaceTag): number[] | null {
+    if (!tag.featureDescription || typeof tag.featureDescription !== "object") {
+      return null;
+    }
+
+    const candidate = (tag.featureDescription as { embedding?: unknown }).embedding;
+    if (!Array.isArray(candidate) || candidate.length === 0) {
+      return null;
+    }
+
+    const values = candidate.filter(
+      (value): value is number => typeof value === "number" && Number.isFinite(value),
+    );
+    return values.length > 0 ? values : null;
+  }
+
+  private cosineSimilarity(left: number[], right: number[]): number {
+    const length = Math.min(left.length, right.length);
+    if (length === 0) {
+      return 0;
+    }
+
+    let dot = 0;
+    let leftMagnitude = 0;
+    let rightMagnitude = 0;
+
+    for (let index = 0; index < length; index += 1) {
+      const leftValue = left[index] ?? 0;
+      const rightValue = right[index] ?? 0;
+      dot += leftValue * rightValue;
+      leftMagnitude += leftValue * leftValue;
+      rightMagnitude += rightValue * rightValue;
+    }
+
+    const denominator = Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude);
+    if (!Number.isFinite(denominator) || denominator === 0) {
+      return 0;
+    }
+
+    return dot / denominator;
+  }
+
+  private embeddingWeight(quality?: { overall?: number; effectiveResolution?: number }): number {
+    const overall = quality?.overall ?? 0.2;
+    const effectiveResolution = quality?.effectiveResolution ?? 64;
+    const normalizedResolution = Math.max(0.1, Math.min(effectiveResolution / 256, 2));
+    return Math.max(0.1, overall * normalizedResolution);
+  }
+
+  private buildWeightedCentroid(
+    entries: Array<{ embedding: number[]; weight: number }>,
+  ): number[] | null {
+    if (entries.length === 0) {
+      return null;
+    }
+
+    const dimensions = Math.min(...entries.map((entry) => entry.embedding.length));
+    if (!Number.isFinite(dimensions) || dimensions <= 0) {
+      return null;
+    }
+
+    const sum = new Array(dimensions).fill(0);
+    let totalWeight = 0;
+
+    entries.forEach((entry) => {
+      const weight = Math.max(0.1, entry.weight);
+      totalWeight += weight;
+      for (let index = 0; index < dimensions; index += 1) {
+        sum[index] += (entry.embedding[index] ?? 0) * weight;
+      }
+    });
+
+    if (totalWeight <= 0) {
+      return null;
+    }
+
+    return sum.map((value) => value / totalWeight);
+  }
+
+  private findFaceById(faceId: string): {
+    row: { folder: string; fileName: string; faceTags: string | null };
+    tags: FaceTag[];
+  } | null {
+    const rows = this.db
+      .prepare(
+        `SELECT folder, fileName, faceTags
+         FROM files
+         WHERE faceTags IS NOT NULL`,
+      )
+      .all() as Array<{ folder: string; fileName: string; faceTags: string | null }>;
+
+    for (const row of rows) {
+      const tags = this.parseFaceTags(row.faceTags);
+      const found = tags.some(
+        (tag, index) => this.getFaceId(row.folder, row.fileName, tag, index) === faceId,
+      );
+      if (found) {
+        return { row, tags };
+      }
+    }
+
+    return null;
+  }
+
+  private getFaceId(folder: string, fileName: string, tag: FaceTag, index: number): string {
+    return typeof tag.faceId === "string" && tag.faceId.trim().length > 0
+      ? tag.faceId
+      : `${folder}${fileName}#${index}`;
+  }
+
+  private parseFaceTags(faceTags: string | null): FaceTag[] {
+    if (!faceTags) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(faceTags);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed as FaceTag[];
+    } catch {
+      return [];
+    }
+  }
+
+  private persistFaceTags(folder: string, fileName: string, faceTags: FaceTag[]): void {
+    this.db
+      .prepare(
+        `UPDATE files
+         SET faceTags = ?, faceMetadataProcessedAt = ?
+         WHERE folder = ? AND fileName = ?`,
+      )
+      .run(JSON.stringify(faceTags), new Date().toISOString(), folder, fileName);
   }
 
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(

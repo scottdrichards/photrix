@@ -7,15 +7,16 @@ import {
   DialogActions,
   Button,
   ProgressBar,
+  Switch,
   makeStyles,
   tokens,
   Text,
 } from "@fluentui/react-components";
 import { useEffect, useState } from "react";
 import {
+  setBackgroundTasksEnabled,
   subscribeStatusStream,
   type ProgressEntry,
-  type RemainingTotal,
   type ServerStatus,
 } from "../api";
 import { ProgressItem } from "./ProgressItem";
@@ -54,6 +55,14 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalM,
     flexWrap: "wrap",
   },
+  toggleRow: {
+    display: "flex",
+    flexDirection: "column",
+    gap: tokens.spacingVerticalXS,
+  },
+  errorText: {
+    color: tokens.colorPaletteRedForeground1,
+  },
 });
 
 interface StatusModalProps {
@@ -66,8 +75,11 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   const [statusHistory, setStatusHistory] = useState<
     Array<{ timestamp: number; status: ServerStatus }> | undefined
   >(undefined);
+  const [isTogglingBackgroundTasks, setIsTogglingBackgroundTasks] = useState(false);
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   const status = statusHistory?.at(-1)?.status;
+  const backgroundTasksEnabled = status?.maintenance.backgroundTasksEnabled ?? true;
 
   const calculateETA = (progress: ProgressEntry, completedKey: "exif"): string | null => {
     if (!statusHistory || statusHistory.length < 2 || progress.percent >= 1) {
@@ -93,20 +105,6 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     return `~${Math.round(etaSeconds / 3600)}h`;
   };
 
-  const formatMinutes = (value: number): string =>
-    value < 10 ? value.toFixed(1) : Math.round(value).toLocaleString();
-
-  const toRemainingProgress = (value: RemainingTotal): ProgressEntry => {
-    const total = Math.max(value.total, 0);
-    const remaining = Math.min(Math.max(value.remaining, 0), total);
-    const completed = Math.max(total - remaining, 0);
-    return {
-      completed,
-      total,
-      percent: total <= 0 ? 1 : completed / total,
-    };
-  };
-
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -130,8 +128,50 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     return () => {
       unsubscribe();
       setStatusHistory(undefined);
+      setIsTogglingBackgroundTasks(false);
+      setToggleError(null);
     };
   }, [isOpen]);
+
+  const onToggleBackgroundTasks = async (enabled: boolean) => {
+    setIsTogglingBackgroundTasks(true);
+    setToggleError(null);
+
+    try {
+      const response = await setBackgroundTasksEnabled(enabled);
+      setStatusHistory((prev) => {
+        if (!prev || prev.length === 0) {
+          return prev;
+        }
+
+        const next = [...prev];
+        const latestEntry = next[next.length - 1];
+
+        if (!latestEntry) {
+          return prev;
+        }
+
+        next[next.length - 1] = {
+          ...latestEntry,
+          status: {
+            ...latestEntry.status,
+            maintenance: {
+              ...latestEntry.status.maintenance,
+              backgroundTasksEnabled: response.enabled,
+            },
+          },
+        };
+
+        return next;
+      });
+    } catch (error) {
+      setToggleError(
+        error instanceof Error ? error.message : "Failed to update background task setting",
+      );
+    } finally {
+      setIsTogglingBackgroundTasks(false);
+    }
+  };
 
   return (
     <Dialog open={isOpen} onOpenChange={(_, data) => !data.open && onDismiss()}>
@@ -143,6 +183,19 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
             {!statusHistory && <ProgressBar />}
             {status && (
               <div className={styles.container}>
+                <div className={styles.toggleRow}>
+                  <Switch
+                    checked={backgroundTasksEnabled}
+                    disabled={isTogglingBackgroundTasks}
+                    label="Enable background tasks"
+                    onChange={(_, data) => onToggleBackgroundTasks(data.checked)}
+                  />
+                  <Text size={200}>
+                    When disabled, the server only runs user-blocking work.
+                  </Text>
+                  {toggleError ? <Text className={styles.errorText}>{toggleError}</Text> : null}
+                </div>
+
                 <div className={styles.statsRow}>
                   <Text>
                     <span className={styles.label}>Database Size:</span>
@@ -163,10 +216,43 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                     </span>
                   </Text>
                   <Text>
+                    <span className={styles.label}>Face worker:</span>
+                    <span className={styles.value}>
+                      {status.maintenance.faceActive ? "active" : "idle"}
+                    </span>
+                  </Text>
+                  <Text>
                     <span className={styles.label}>Queue:</span>
                     <span className={styles.value}>
                       {status.queues.pending.toLocaleString()} waiting / {" "}
                       {status.queues.processing.toLocaleString()} processing
+                    </span>
+                  </Text>
+                </div>
+
+                <div className={styles.statsRow}>
+                  <Text>
+                    <span className={styles.label}>Face processed:</span>
+                    <span className={styles.value}>
+                      {(status.faceProcessing?.processed ?? 0).toLocaleString()}
+                    </span>
+                  </Text>
+                  <Text>
+                    <span className={styles.label}>Worker success:</span>
+                    <span className={styles.value}>
+                      {(status.faceProcessing?.workerSuccess ?? 0).toLocaleString()}
+                    </span>
+                  </Text>
+                  <Text>
+                    <span className={styles.label}>Fallback used:</span>
+                    <span className={styles.value}>
+                      {(status.faceProcessing?.fallbackCount ?? 0).toLocaleString()}
+                    </span>
+                  </Text>
+                  <Text>
+                    <span className={styles.label}>Worker failures:</span>
+                    <span className={styles.value}>
+                      {(status.faceProcessing?.workerFailures ?? 0).toLocaleString()}
                     </span>
                   </Text>
                 </div>
@@ -192,25 +278,6 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                     progress={status.progress.exif}
                     detail={`${status.pending.exif.toLocaleString()} remaining`}
                     eta={calculateETA(status.progress.exif, "exif")}
-                  />
-                </div>
-
-                <Text size={400} weight="semibold">
-                  Conversion status
-                </Text>
-                <div className={styles.progressGrid}>
-                  <ProgressItem
-                    label="Video conversion"
-                    progress={toRemainingProgress(status.conversion.overall.videoMinutes)}
-                    summaryLabel="min processed"
-                    valueFormatter={formatMinutes}
-                    detail={`${formatMinutes(status.conversion.overall.videoMinutes.remaining)} min remaining`}
-                  />
-                  <ProgressItem
-                    label="Image conversion"
-                    progress={toRemainingProgress(status.conversion.overall.images)}
-                    summaryLabel="items processed"
-                    detail={`${status.conversion.overall.images.remaining.toLocaleString()} items remaining`}
                   />
                 </div>
 

@@ -39,7 +39,6 @@ describe("generateHLS", () => {
     jest.unstable_mockModule("../common/processingQueue.ts", () => ({
       mediaProcessingQueue: { enqueue },
     }));
-
     const spawnMock = jest.fn(() => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => proc.emit("close", 1));
@@ -66,8 +65,8 @@ describe("generateHLS", () => {
     const hlsDir = getMirroredHLSDirectory(source, "360");
     const playlistPath = path.join(hlsDir, "playlist.m3u8");
 
-    const enqueue = jest.fn(async (task: () => Promise<void>) => {
-      await task();
+    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
+      await task.fn();
     });
 
     const spawnMock = jest.fn((_command: string, args: string[]) => {
@@ -98,7 +97,7 @@ describe("generateHLS", () => {
 
     const result = await generateHLS(source, 360, {
       priority: "foreground",
-      estimatedDurationSeconds: 12,
+      contentDurationSeconds: 12,
     });
 
     expect(result).toBe(playlistPath);
@@ -116,8 +115,8 @@ describe("generateHLS", () => {
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const enqueue = jest.fn(async (task: () => Promise<void>) => {
-      await task();
+    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
+      await task.fn();
     });
 
     const spawnMock = jest.fn((_command: string, args: string[]) => {

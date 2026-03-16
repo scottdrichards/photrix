@@ -2,8 +2,10 @@ import http from "node:http";
 import { AuthService } from "./auth/authService.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { filesEndpointRequestHandler } from "./requestHandlers/files/filesRequestHandler.ts";
+import { facesRequestHandler } from "./requestHandlers/faces/facesRequestHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
 import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts";
+import { statusBackgroundTasksRequestHandler } from "./requestHandlers/statusBackgroundTasksRequestHandler.ts";
 import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
 import { writeJson } from "./utils.ts";
 
@@ -87,6 +89,11 @@ export const createServer = (
       return;
     }
 
+    if (req.url === "/api/status/background-tasks" && req.method === "POST") {
+      await statusBackgroundTasksRequestHandler(req, res);
+      return;
+    }
+
     if (req.url?.startsWith("/api/status") && req.method === "GET") {
       statusRequestHandler(req, res, { database, stream: false });
       return;
@@ -104,6 +111,15 @@ export const createServer = (
 
     if (req.url?.startsWith("/api/suggestions") && req.method === "GET") {
       suggestionsRequestHandler(
+        req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+        res,
+        { database },
+      );
+      return;
+    }
+
+    if (req.url?.startsWith("/api/faces/") && ["GET", "POST"].includes(req.method ?? "")) {
+      await facesRequestHandler(
         req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
         res,
         { database },

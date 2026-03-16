@@ -1,8 +1,9 @@
 import http from "node:http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { isExifMetadataProcessingActive } from "../indexDatabase/processExifMetadata.ts";
+import { getFaceMetadataProcessingStats } from "../indexDatabase/processFaceMetadata.ts";
 import { mediaProcessingQueue } from "../common/processingQueue.ts";
-import { getHLSEncodingStatus } from "../indexDatabase/processHLSEncoding.ts";
+import { isBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
 
 type StatusRequestHandlerProps = {
   database: IndexDatabase;
@@ -31,7 +32,6 @@ const toProgressEntry = (completed: number, total: number): ProgressEntry => {
 const getStatusPayload = (database: IndexDatabase) => {
   const databaseSize = database.countAllEntries();
   const mediaEntries = database.countMediaEntries();
-  const imageEntries = database.countImageEntries();
 
   const pendingInfo = database.countMissingInfo();
   const pendingExif = database.countMissingDateTaken();
@@ -44,28 +44,7 @@ const getStatusPayload = (database: IndexDatabase) => {
   const lastExif = database.getMostRecentExifProcessedEntry();
   const queueSize = mediaProcessingQueue.getQueueSize();
   const queueProcessing = mediaProcessingQueue.getProcessing();
-  const conversionStatus = mediaProcessingQueue.getConversionStatus();
-  const hlsEncodingStatus = getHLSEncodingStatus();
-
-  const imageConvertedInRun = Math.max(
-    conversionStatus.overall.images.total - conversionStatus.overall.images.remaining,
-    0,
-  );
-  const imageOverallTotal = imageEntries;
-  const imageOverallRemaining = Math.max(imageOverallTotal - imageConvertedInRun, 0);
-
-  const videoOverallRemainingSeconds =
-    conversionStatus.overall.videoSeconds.remaining +
-    hlsEncodingStatus.videoSeconds.remaining;
-  const videoOverallTotalSeconds =
-    conversionStatus.overall.videoSeconds.total + hlsEncodingStatus.videoSeconds.total;
-
-  const videoQueuedRemainingSeconds =
-    conversionStatus.queued.videoSeconds.remaining + hlsEncodingStatus.videoSeconds.queued;
-  const videoQueuedTotalSeconds =
-    conversionStatus.queued.videoSeconds.total + hlsEncodingStatus.videoSeconds.remaining;
-
-  const secondsToMinutes = (seconds: number) => seconds / 60;
+  const faceProcessingStatus = getFaceMetadataProcessingStats();
 
   return {
     databaseSize,
@@ -76,29 +55,18 @@ const getStatusPayload = (database: IndexDatabase) => {
     },
     maintenance: {
       exifActive: isExifMetadataProcessingActive() || pendingExif > 0,
+      faceActive: faceProcessingStatus.active,
+      backgroundTasksEnabled: isBackgroundTasksEnabled(),
+    },
+    faceProcessing: {
+      processed: faceProcessingStatus.processed,
+      workerSuccess: faceProcessingStatus.workerSuccess,
+      fallbackCount: faceProcessingStatus.fallbackCount,
+      workerFailures: faceProcessingStatus.workerFailures,
     },
     queues: {
       pending: queueSize,
       processing: queueProcessing,
-    },
-    conversion: {
-      overall: {
-        images: {
-          remaining: imageOverallRemaining,
-          total: imageOverallTotal,
-        },
-        videoMinutes: {
-          remaining: secondsToMinutes(videoOverallRemainingSeconds),
-          total: secondsToMinutes(videoOverallTotalSeconds),
-        },
-      },
-      queued: {
-        images: conversionStatus.queued.images,
-        videoMinutes: {
-          remaining: secondsToMinutes(videoQueuedRemainingSeconds),
-          total: secondsToMinutes(videoQueuedTotalSeconds),
-        },
-      },
     },
     progress: {
       overall: toProgressEntry(overallCompleted, overallTotal),

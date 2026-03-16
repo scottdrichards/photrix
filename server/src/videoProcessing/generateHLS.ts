@@ -91,8 +91,13 @@ const generateHLSWithFFMPEG = (
 export const generateHLS = async (
   filePath: string,
   height: StandardHeight = "original",
-  opts?: { priority?: QueuePriority; estimatedDurationSeconds?: number },
+  opts?: { priority?: QueuePriority; contentDurationSeconds?: number },
 ): Promise<string> => {
+  const fileStats = await stat(filePath);
+  const contentDurationMilliseconds = Math.max(
+    0,
+    Math.round((opts?.contentDurationSeconds ?? 0) * 1000),
+  );
   const { exists, playlistPath, hlsDir } = await getHLSInfo(filePath, height);
 
   if (exists) {
@@ -101,8 +106,8 @@ export const generateHLS = async (
 
   // Start transcoding in the background (don't await completion)
   // This allows the client to start playing as soon as first segments are ready
-  await mediaProcessingQueue.enqueue(
-    async () => {
+  await mediaProcessingQueue.enqueue({
+    fn: async () => {
       await mkdir(hlsDir, { recursive: true });
 
       const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
@@ -183,12 +188,11 @@ export const generateHLS = async (
         await generateHLSWithFFMPEG(softwareArgs, hlsDir, "software");
       }
     },
-    opts?.priority,
-    "video",
-    {
-      videoSeconds: opts?.estimatedDurationSeconds,
-    },
-  );
+    priority: opts?.priority ?? "background",
+    mediaType: "video",
+    sizeBytes: fileStats.size,
+    durationMilliseconds: contentDurationMilliseconds,
+  });
 
   return playlistPath;
 };

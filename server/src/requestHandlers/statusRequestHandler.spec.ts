@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
+import { setBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
 import { statusRequestHandler } from "./statusRequestHandler.ts";
 
 const createMockResponse = () => {
@@ -31,6 +32,7 @@ const createMockResponse = () => {
 
 afterEach(() => {
   jest.useRealTimers();
+  setBackgroundTasksEnabled(true);
 });
 
 describe("statusRequestHandler", () => {
@@ -67,6 +69,14 @@ describe("statusRequestHandler", () => {
       percent: 12 / 18,
     });
     expect(payload.recent.exif.fileName).toBe("img.jpg");
+    expect(payload.maintenance.faceActive).toBe(false);
+    expect(payload.maintenance.backgroundTasksEnabled).toBe(true);
+    expect(payload.faceProcessing).toEqual({
+      processed: 0,
+      workerSuccess: 0,
+      fallbackCount: 0,
+      workerFailures: 0,
+    });
   });
 
   it("streams SSE updates and closes on request close", () => {

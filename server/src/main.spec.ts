@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { walkFiles } from "./fileHandling/fileUtils.ts";
+import { setBackgroundTasksEnabled } from "./common/backgroundTasksControl.ts";
 
 const TEST_PORT = 3101;
 process.env.PORT = String(TEST_PORT);
@@ -13,6 +14,8 @@ const makeRequest = (
   port: number,
   requestPath: string,
   method = "GET",
+  body?: string,
+  headers: Record<string, string> = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> =>
   new Promise((resolve, reject) => {
     const req = http.request(
@@ -21,6 +24,7 @@ const makeRequest = (
         port,
         path: requestPath,
         method,
+        headers,
       },
       (res) => {
         let body = "";
@@ -33,6 +37,9 @@ const makeRequest = (
       },
     );
     req.on("error", reject);
+    if (body) {
+      req.write(body);
+    }
     req.end();
   });
 
@@ -46,6 +53,7 @@ describe("main.ts HTTP Server", () => {
   });
 
   beforeEach(async () => {
+    setBackgroundTasksEnabled(true);
     process.env.AUTH_REQUIRED = "false";
     storagePath = mkdtempSync(path.join(os.tmpdir(), "photrix-main-spec-root-"));
     process.env.INDEX_DB_LOCATION = mkdtempSync(path.join(os.tmpdir(), "photrix-main-spec-db-"));
@@ -71,6 +79,7 @@ describe("main.ts HTTP Server", () => {
       server.close(() => resolve());
     });
     rmSync(storagePath, { recursive: true, force: true });
+    setBackgroundTasksEnabled(true);
     delete process.env.AUTH_REQUIRED;
   });
 
@@ -139,5 +148,22 @@ describe("main.ts HTTP Server", () => {
     const response = await makeRequest(TEST_PORT, "/nope");
     expect(response.status).toBe(404);
     expect(JSON.parse(response.body)).toEqual({ error: "Not found" });
+  });
+
+  it("toggles background tasks via status endpoint", async () => {
+    const response = await makeRequest(
+      TEST_PORT,
+      "/api/status/background-tasks",
+      "POST",
+      JSON.stringify({ enabled: false }),
+      { "Content-Type": "application/json" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ enabled: false });
+
+    const statusResponse = await makeRequest(TEST_PORT, "/api/status");
+    expect(statusResponse.status).toBe(200);
+    expect(JSON.parse(statusResponse.body).maintenance.backgroundTasksEnabled).toBe(false);
   });
 });

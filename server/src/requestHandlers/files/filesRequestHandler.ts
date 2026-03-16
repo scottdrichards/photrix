@@ -331,7 +331,7 @@ const tryHLSStream = async (
     // Start HLS generation (returns immediately, transcoding happens in background)
     await generateHLS(normalizedPath, height, {
       priority: "userBlocked",
-      estimatedDurationSeconds:
+      contentDurationSeconds:
         typeof knownDuration === "number" && Number.isFinite(knownDuration)
           ? knownDuration
           : undefined,

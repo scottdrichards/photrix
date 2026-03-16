@@ -6,6 +6,7 @@ import { initializeCacheDirectories } from "./common/cacheUtils.ts";
 import { createServer } from "./createServer.ts";
 import { runAuthStartupChecks } from "./auth/authStartupChecks.ts";
 import { startBackgroundProcessExifMetadata } from "./indexDatabase/processExifMetadata.ts";
+import { startBackgroundProcessFaceMetadata } from "./indexDatabase/processFaceMetadata.ts";
 import { startBackgroundProcessFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
 import { startBackgroundHLSEncoding } from "./indexDatabase/processHLSEncoding.ts";
 
@@ -37,11 +38,25 @@ const startServer = async () => {
   };
 
   const startBackgroundMetadataProcessing = (db: IndexDatabase) => {
-    // Chain the metadata processors: file info → EXIF → HLS encoding
+    // Face metadata runs by default. Set PHOTRIX_ENABLE_FACE_METADATA=false to opt out.
+    const runFaceMetadataPipeline =
+      process.env.PHOTRIX_ENABLE_FACE_METADATA?.toLowerCase() !== "false";
+
+    // Chain the metadata processors: file info → EXIF → optional face metadata → HLS encoding
     const pauseFileInfo = startBackgroundProcessFileInfoMetadata(db, () => {
       console.log("[pipeline] metadata:file-info complete → metadata:exif start");
       // File info complete, start EXIF processing
       const pauseExif = startBackgroundProcessExifMetadata(db, () => {
+        if (runFaceMetadataPipeline) {
+          console.log("[pipeline] metadata:exif complete → metadata:face start");
+          const pauseFace = startBackgroundProcessFaceMetadata(db, () => {
+            console.log("[pipeline] metadata:face complete → hls-encoding start");
+            pauseBackgroundProcessMetadata = startBackgroundHLSEncoding(db);
+          });
+          pauseBackgroundProcessMetadata = pauseFace;
+          return;
+        }
+
         // EXIF complete, start HLS encoding for videos
         console.log("[pipeline] metadata:exif complete → hls-encoding start");
         pauseBackgroundProcessMetadata = startBackgroundHLSEncoding(db);

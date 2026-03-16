@@ -2,18 +2,22 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { StatusModal } from "./StatusModal";
 
 const subscribeStatusStreamMock = vi.fn();
+const setBackgroundTasksEnabledMock = vi.fn();
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
   return {
     ...actual,
     subscribeStatusStream: (...args: unknown[]) => subscribeStatusStreamMock(...args),
+    setBackgroundTasksEnabled: (...args: unknown[]) =>
+      setBackgroundTasksEnabledMock(...args),
   };
 });
 
 describe("StatusModal", () => {
   beforeEach(() => {
     subscribeStatusStreamMock.mockReset();
+    setBackgroundTasksEnabledMock.mockReset();
   });
 
   it("subscribes and renders streamed status data", async () => {
@@ -35,16 +39,12 @@ describe("StatusModal", () => {
         scannedFilesCount: 8,
         queues: { pending: 3, processing: 1 },
         pending: { info: 2, exif: 1 },
-        maintenance: { exifActive: true },
-        conversion: {
-          overall: {
-            videoMinutes: { remaining: 5, total: 20 },
-            images: { remaining: 30, total: 100 },
-          },
-          queued: {
-            videoMinutes: { remaining: 5, total: 20 },
-            images: { remaining: 30, total: 100 },
-          },
+        maintenance: { exifActive: true, faceActive: true },
+        faceProcessing: {
+          processed: 42,
+          workerSuccess: 40,
+          fallbackCount: 2,
+          workerFailures: 1,
         },
         progress: {
           overall: { completed: 7, total: 10, percent: 0.7 },
@@ -66,7 +66,9 @@ describe("StatusModal", () => {
     expect(screen.getByText(/10 files/)).toBeInTheDocument();
     expect(screen.getByText(/Queue:/)).toBeInTheDocument();
     expect(screen.getByText(/3 waiting/)).toBeInTheDocument();
-    expect(screen.getByText("Conversion status")).toBeInTheDocument();
+    expect(screen.getByText(/Face worker:/)).toBeInTheDocument();
+    expect(screen.getByText(/Worker success:/)).toBeInTheDocument();
+    expect(screen.getByText("40")).toBeInTheDocument();
     expect(screen.getByText("Recent activity")).toBeInTheDocument();
   });
 
@@ -78,6 +80,58 @@ describe("StatusModal", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles background tasks from the status modal", async () => {
+    const unsubscribe = vi.fn();
+    let onUpdate: ((status: unknown) => void) | undefined;
+
+    subscribeStatusStreamMock.mockImplementation((update) => {
+      onUpdate = update as (status: unknown) => void;
+      return unsubscribe;
+    });
+    setBackgroundTasksEnabledMock.mockResolvedValue({ enabled: false });
+
+    render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
+
+    await act(async () => {
+      onUpdate?.({
+        databaseSize: 10,
+        scannedFilesCount: 8,
+        queues: { pending: 3, processing: 1 },
+        pending: { info: 2, exif: 1 },
+        maintenance: {
+          exifActive: true,
+          faceActive: true,
+          backgroundTasksEnabled: true,
+        },
+        faceProcessing: {
+          processed: 42,
+          workerSuccess: 40,
+          fallbackCount: 2,
+          workerFailures: 1,
+        },
+        progress: {
+          overall: { completed: 7, total: 10, percent: 0.7 },
+          scanned: { completed: 8, total: 10, percent: 0.8 },
+          info: { completed: 8, total: 10, percent: 0.8 },
+          exif: { completed: 7, total: 10, percent: 0.7 },
+        },
+        recent: {
+          exif: {
+            folder: "trip/",
+            fileName: "a.jpg",
+            completedAt: "2026-03-05T12:00:00.000Z",
+          },
+        },
+      });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Enable background tasks" }));
+    });
+
+    expect(setBackgroundTasksEnabledMock).toHaveBeenCalledWith(false);
   });
 
   it("shows loading indicator before first status update", () => {
@@ -113,16 +167,12 @@ describe("StatusModal", () => {
         scannedFilesCount: 8,
         queues: { pending: 3, processing: 1 },
         pending: { info: 2, exif: 20 },
-        maintenance: { exifActive: false },
-        conversion: {
-          overall: {
-            videoMinutes: { remaining: 0, total: 0 },
-            images: { remaining: 30, total: 100 },
-          },
-          queued: {
-            videoMinutes: { remaining: 0, total: 0 },
-            images: { remaining: 30, total: 100 },
-          },
+        maintenance: { exifActive: false, faceActive: false },
+        faceProcessing: {
+          processed: 0,
+          workerSuccess: 0,
+          fallbackCount: 0,
+          workerFailures: 0,
         },
         progress: {
           overall: { completed: 10, total: 40, percent: 0.25 },
@@ -137,16 +187,12 @@ describe("StatusModal", () => {
         scannedFilesCount: 8,
         queues: { pending: 3, processing: 1 },
         pending: { info: 2, exif: 10 },
-        maintenance: { exifActive: false },
-        conversion: {
-          overall: {
-            videoMinutes: { remaining: 0, total: 0 },
-            images: { remaining: 30, total: 100 },
-          },
-          queued: {
-            videoMinutes: { remaining: 0, total: 0 },
-            images: { remaining: 30, total: 100 },
-          },
+        maintenance: { exifActive: false, faceActive: false },
+        faceProcessing: {
+          processed: 1,
+          workerSuccess: 1,
+          fallbackCount: 0,
+          workerFailures: 0,
         },
         progress: {
           overall: { completed: 20, total: 40, percent: 0.5 },
@@ -159,7 +205,7 @@ describe("StatusModal", () => {
     });
 
     expect(await screen.findByText(/EXIF worker:/)).toBeInTheDocument();
-    expect(screen.getByText("idle")).toBeInTheDocument();
+    expect(screen.getAllByText("idle").length).toBeGreaterThan(0);
     expect(screen.getByText("No activity yet")).toBeInTheDocument();
   });
 

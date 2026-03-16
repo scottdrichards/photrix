@@ -24,7 +24,7 @@ Ship an end-to-end vertical slice for face review without final ML quality:
 
 ### Task 1.1: Expand face metadata types
 
-Status: Not started
+Status: Completed (2026-03-09)
 
 Files:
 
@@ -50,7 +50,7 @@ Acceptance criteria:
 
 ### Task 1.2: Ensure DB serialization supports contract
 
-Status: Not started
+Status: Completed (2026-03-09)
 
 Files:
 
@@ -70,7 +70,7 @@ Acceptance criteria:
 
 ### Task 2.1: Add face request handler module
 
-Status: Not started
+Status: Completed (2026-03-09)
 
 Files:
 
@@ -96,7 +96,7 @@ Acceptance criteria:
 
 ### Task 2.2: Add database query/update surface for face review
 
-Status: Not started
+Status: Completed (2026-03-09)
 
 Files:
 
@@ -122,7 +122,7 @@ Acceptance criteria:
 
 ### Task 3.1: Add face API client functions
 
-Status: Not started
+Status: Completed (2026-03-09)
 
 Files:
 
@@ -145,7 +145,7 @@ Acceptance criteria:
 
 ### Task 3.2: Add Faces page component and basic interactions
 
-Status: Not started
+Status: Completed (2026-03-09)
 
 Files:
 
@@ -171,7 +171,7 @@ Acceptance criteria:
 
 ### Task 4.1: Add processor scaffolding and pipeline hook
 
-Status: Not started
+Status: Completed (2026-03-09)
 
 Files:
 
@@ -196,7 +196,7 @@ Acceptance criteria:
 
 ### Task 5.1: Lock endpoint contract examples in tests
 
-Status: Not started
+Status: Completed (2026-03-09)
 
 Files:
 

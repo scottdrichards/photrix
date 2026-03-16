@@ -1,246 +1,117 @@
+import { isBackgroundTasksEnabled } from "./backgroundTasksControl.ts";
+
 const priorityList = ["userBlocked", "userImplicit", "background"] as const;
 export type QueuePriority = (typeof priorityList)[number];
 
 const mediaTypeList = ["image", "video"] as const;
 export type MediaType = (typeof mediaTypeList)[number];
 
-type QueueTask = {
-  fn: () => Promise<void>;
+const concurrency = 4;
+
+export type QueueTask<TResult = void> = {
+  fn: () => Promise<TResult>;
   priority: QueuePriority;
   mediaType: MediaType;
-  conversionUnits: {
-    imageCount: number;
-    videoSeconds: number;
-  };
-};
-
-type ConversionUnitsInput = {
-  imageCount?: number;
-  videoSeconds?: number;
-};
-
-type ConversionUnits = {
-  imageCount: number;
-  videoSeconds: number;
-};
-
-const emptyConversionUnits = (): ConversionUnits => ({
-  imageCount: 0,
-  videoSeconds: 0,
-});
-
-const addConversionUnits = (
-  left: ConversionUnits,
-  right: ConversionUnits,
-): ConversionUnits => ({
-  imageCount: left.imageCount + right.imageCount,
-  videoSeconds: left.videoSeconds + right.videoSeconds,
-});
-
-const subtractConversionUnits = (
-  left: ConversionUnits,
-  right: ConversionUnits,
-): ConversionUnits => ({
-  imageCount: Math.max(0, left.imageCount - right.imageCount),
-  videoSeconds: Math.max(0, left.videoSeconds - right.videoSeconds),
-});
-
-const normalizeConversionUnits = (
-  mediaType: MediaType,
-  units?: ConversionUnitsInput,
-): ConversionUnits => ({
-  imageCount: Math.max(
-    0,
-    units?.imageCount ?? (mediaType === "image" ? 1 : 0),
-  ),
-  videoSeconds: Math.max(
-    0,
-    Number.isFinite(units?.videoSeconds) ? (units?.videoSeconds ?? 0) : 0,
-  ),
-});
-
-const sumConversionUnits = (tasks: Array<QueueTask>): ConversionUnits =>
-  tasks.reduce(
-    (acc, task) => addConversionUnits(acc, task.conversionUnits),
-    emptyConversionUnits(),
-  );
+  sizeBytes: number;
+} & ({ mediaType: "image" } | { mediaType: "video"; durationMilliseconds: number });
 
 /**
  * A queue that processes tasks sequentially with optional concurrency limit.
  * Each task is a function that returns a Promise.
  */
 export class ProcessingQueue {
-  private queue: Array<QueueTask> = [];
-  private activeTasks: Array<QueueTask> = [];
-  private processing = 0;
+  private queue: Array<QueueTask<unknown>> = [];
+  private activeTasks: Array<QueueTask<unknown>> = [];
+
   private readonly concurrency: number;
-  private paused = false;
-  private pauseUntil = 0;
-  private pauseTimer: NodeJS.Timeout | null = null;
-  private enqueuedTotals: ConversionUnits = emptyConversionUnits();
-  private completedTotals: ConversionUnits = emptyConversionUnits();
 
   constructor(concurrency = 2) {
     this.concurrency = concurrency;
   }
 
   /**
-   * Pause the queue for the specified duration in milliseconds.
-   * High priority tasks will still process during pause.
+   * Note: does not yet deduplicate the tasks. Might be useful in the future, but will require an observer/subscriber pattern to avoid duplicate work but allow
+   * multiple callers to await the same task result.
    */
-  pause(durationMs: number): void {
-    this.paused = true;
-    this.pauseUntil = Date.now() + durationMs;
-    if (this.pauseTimer) {
-      clearTimeout(this.pauseTimer);
-      this.pauseTimer = null;
-    }
-    console.log(`[ProcessingQueue] Paused for ${durationMs}ms`);
-  }
+  async enqueue<TResult = void>(task: QueueTask<TResult>): Promise<TResult> {
+    const priorityIndex = priorityList.indexOf(task.priority);
+    const mediaTypeIndex = mediaTypeList.indexOf(task.mediaType);
 
-  private isPausedForPriority(priority: QueuePriority): boolean {
-    if (!this.paused) {
-      return false;
-    }
+    // Keep queue ordered by priority/mediaType. Within a matching bucket,
+    // userBlocked tasks are true LIFO, others remain FIFO.
+    let insertIndex = 0;
+    for (; insertIndex < this.queue.length; insertIndex++) {
+      const currentTask = this.queue[insertIndex];
+      const currentPriorityIndex = priorityList.indexOf(currentTask.priority);
+      const currentMediaTypeIndex = mediaTypeList.indexOf(currentTask.mediaType);
 
-    if (Date.now() >= this.pauseUntil) {
-      this.paused = false;
-      if (this.pauseTimer) {
-        clearTimeout(this.pauseTimer);
-        this.pauseTimer = null;
+      if (currentPriorityIndex < priorityIndex) {
+        continue;
       }
-      console.log(`[ProcessingQueue] Resumed`);
-      return false;
+      if (currentPriorityIndex > priorityIndex) {
+        break;
+      }
+      if (task.priority === "userBlocked") {
+        // Always do LIFO for userBlocked, ignore media type
+        break;
+      }
+      // Otherwise let's look at media type
+      if (currentMediaTypeIndex < mediaTypeIndex) {
+        continue;
+      }
+      if (currentMediaTypeIndex > mediaTypeIndex) {
+        break;
+      }
     }
 
-    // During pause, allow higher priority work to keep the UI responsive.
-    return priority === "background";
-  }
-
-  private schedulePauseWake(): void {
-    if (this.pauseTimer) {
-      return;
-    }
-    this.pauseTimer = setTimeout(() => {
-      this.pauseTimer = null;
-      void this.processNext();
-    }, 100);
-  }
-
-  async enqueue<T>(
-    task: () => Promise<T>,
-    priority: QueuePriority = "background",
-    mediaType: MediaType = "image",
-    conversionUnits?: ConversionUnitsInput,
-  ): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const priorityIndex = priorityList.indexOf(priority);
-      const mediaTypeIndex = mediaTypeList.indexOf(mediaType);
-      const normalizedConversionUnits = normalizeConversionUnits(
-        mediaType,
-        conversionUnits,
-      );
-
-      // Keep queue ordered by priority/mediaType. Within a matching bucket,
-      // userBlocked tasks are true LIFO, others remain FIFO.
-      const insertIndex = (() => {
-        let bucketStart = -1;
-        let bucketEnd = -1;
-
-        for (let i = 0; i < this.queue.length; i++) {
-          const t = this.queue[i];
-          const tPriorityIndex = priorityList.indexOf(t.priority);
-          const tMediaTypeIndex = mediaTypeList.indexOf(t.mediaType);
-          if (tPriorityIndex === priorityIndex && tMediaTypeIndex === mediaTypeIndex) {
-            if (bucketStart === -1) {
-              bucketStart = i;
-            }
-            bucketEnd = i;
+    const result = new Promise<TResult>((resolve, reject) => {
+      const wrappedTask: QueueTask<unknown> = {
+        ...task,
+        fn: async () => {
+          try {
+            const result = await task.fn();
+            resolve(result);
+          } catch (error) {
+            reject(error);
           }
-        }
-
-        if (bucketStart !== -1 && bucketEnd !== -1) {
-          return priority === "userBlocked" ? bucketStart : bucketEnd + 1;
-        }
-
-        const firstLowerPrecedenceIndex = this.queue.findIndex((t) => {
-          const tPriorityIndex = priorityList.indexOf(t.priority);
-          const tMediaTypeIndex = mediaTypeList.indexOf(t.mediaType);
-          return (
-            tPriorityIndex > priorityIndex ||
-            (tPriorityIndex === priorityIndex && tMediaTypeIndex > mediaTypeIndex)
-          );
-        });
-
-        return firstLowerPrecedenceIndex === -1
-          ? this.queue.length
-          : firstLowerPrecedenceIndex;
-      })();
-
-      const fn = async () => {
-        try {
-          const result = await task();
-          resolve(result);
-        } catch (error) {
-          reject(error);
-        }
+        },
       };
 
-      this.queue.splice(insertIndex, 0, {
-        priority,
-        mediaType,
-        fn,
-        conversionUnits: normalizedConversionUnits,
-      });
-      this.enqueuedTotals = addConversionUnits(
-        this.enqueuedTotals,
-        normalizedConversionUnits,
-      );
-      this.processNext();
+      // Insert the task at the computed insertIndex
+      this.queue.splice(insertIndex, 0, wrappedTask);
     });
+
+    this.processNext();
+    // Might want to return the result promise as well as some queue estimation in the future
+    return result;
   }
 
   private async processNext(): Promise<void> {
-    if (this.processing >= this.concurrency || this.queue.length === 0) {
+    // Might want to exit a low-priority task in favor of a highpriority one someday. For example, if a
+    // video conversion is taking a long time, cancel it to free up resources for a userBlocked image task that just came in.
+
+    if (this.activeTasks.length >= this.concurrency) {
       return;
     }
 
-    const nextTask = this.queue[0];
-    if (nextTask && this.isPausedForPriority(nextTask.priority)) {
-      this.schedulePauseWake();
-      return;
+    if (!isBackgroundTasksEnabled()) {
+      this.queue = this.queue.filter((task) => task.priority !== "background");
     }
 
-    this.processing++;
     const task = this.queue.shift();
+    if (!task) {
+      return;
+    }
 
-    const queueStatus = this.queue.reduce(
-      (acc, task) => {
-        acc[task.priority] = (acc[task.priority] || 0) + 1;
-        return acc;
-      },
-      {} as Record<QueuePriority, number>,
-    );
-
-    console.log(
-      `[ProcessingQueue] Processing next task. Queue status: ${JSON.stringify(queueStatus)}, Currently processing: ${this.processing}`,
-    );
-
-    if (task) {
-      this.activeTasks.push(task);
-      try {
-        await task.fn();
-      } catch (error) {
-        console.error("[ProcessingQueue] Task failed:", error);
-      } finally {
-        this.activeTasks = this.activeTasks.filter((entry) => entry !== task);
-        this.completedTotals = addConversionUnits(
-          this.completedTotals,
-          task.conversionUnits,
-        );
-        this.processing--;
-        this.processNext(); // Process next task
-      }
+    this.activeTasks.push(task);
+    try {
+      await task.fn();
+    } catch (error) {
+      console.error("[ProcessingQueue] Task failed:", error);
+    } finally {
+      const taskIndex = this.activeTasks.indexOf(task);
+      this.activeTasks.splice(taskIndex, 1);
+      this.processNext(); // Process next task
     }
   }
 
@@ -249,50 +120,9 @@ export class ProcessingQueue {
   }
 
   getProcessing(): number {
-    return this.processing;
-  }
-
-  getConversionStatus(): {
-    overall: {
-      images: { remaining: number; total: number };
-      videoSeconds: { remaining: number; total: number };
-    };
-    queued: {
-      images: { remaining: number; total: number };
-      videoSeconds: { remaining: number; total: number };
-    };
-  } {
-    const queuedTotals = sumConversionUnits(this.queue);
-    const processingTotals = sumConversionUnits(this.activeTasks);
-    const remainingOverall = subtractConversionUnits(
-      this.enqueuedTotals,
-      this.completedTotals,
-    );
-
-    return {
-      overall: {
-        images: {
-          remaining: remainingOverall.imageCount,
-          total: this.enqueuedTotals.imageCount,
-        },
-        videoSeconds: {
-          remaining: remainingOverall.videoSeconds,
-          total: this.enqueuedTotals.videoSeconds,
-        },
-      },
-      queued: {
-        images: {
-          remaining: queuedTotals.imageCount,
-          total: queuedTotals.imageCount + processingTotals.imageCount,
-        },
-        videoSeconds: {
-          remaining: queuedTotals.videoSeconds,
-          total: queuedTotals.videoSeconds + processingTotals.videoSeconds,
-        },
-      },
-    };
+    return this.activeTasks.length;
   }
 }
 
 // Global queue for image/video processing
-export const mediaProcessingQueue = new ProcessingQueue(4);
+export const mediaProcessingQueue = new ProcessingQueue(concurrency);

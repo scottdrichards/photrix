@@ -1,5 +1,6 @@
 import path from "node:path";
 import { getExifMetadataFromFile } from "../fileHandling/fileUtils.ts";
+import { waitForBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 
 const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
@@ -34,6 +35,8 @@ export const startBackgroundProcessExifMetadata = (
 
   const processAll = async () => {
     while (true) {
+      await waitForBackgroundTasksEnabled();
+
       const batchSize = 200;
       const items = database.getFilesNeedingMetadataUpdate("exif", batchSize);
       if (items.length === 0) {
@@ -43,6 +46,8 @@ export const startBackgroundProcessExifMetadata = (
         return;
       }
       for (let i = 0; i < items.length; i += 4) {
+        await waitForBackgroundTasksEnabled();
+
         const chunk = items.slice(i, i + 4);
         await Promise.all(
           chunk.map(async (entry) => {

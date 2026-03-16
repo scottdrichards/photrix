@@ -58,12 +58,41 @@ type Person = {
   name?: string;
 };
 
+type FaceQuality = {
+  overall?: number;
+  sharpness?: number;
+  effectiveResolution?: number;
+};
+
+type FaceSuggestion = {
+  personId: string;
+  confidence: number;
+  modelVersion?: string;
+  suggestedAt?: string;
+};
+
+type FaceReview = {
+  action: "accept" | "reject" | "skip";
+  reviewedAt: string;
+  reviewer?: string;
+};
+
 export type FaceTag = {
+  faceId?: string;
   dimensions: { x: number; y: number; width: number; height: number };
   /** The output of a face detection algorithm */
   featureDescription: unknown;
   person: Person | null;
-  status?: "unverified" | "confirmed";
+  source?: "seed-known" | "auto-detected";
+  status?: "unverified" | "confirmed" | "rejected";
+  suggestion?: FaceSuggestion;
+  review?: FaceReview;
+  quality?: FaceQuality;
+  thumbnail?: {
+    preferredHeight?: number;
+    cropVersion?: string;
+  };
+  detectedAt?: string;
 };
 
 export type FaceMetadata = {

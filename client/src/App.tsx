@@ -15,6 +15,7 @@ import {
 import { Info24Regular, Person24Regular, SignOut24Regular } from "@fluentui/react-icons";
 import { useState } from "react";
 import { FullscreenViewer } from "./components/FullscreenViewer";
+import { FacesReviewPage } from "./components/faces";
 import { StatusModal } from "./components/StatusModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { AuthGate, useAuthSession } from "./auth/AuthGate";
@@ -24,7 +25,7 @@ import {
   SelectionProvider,
   useSelectionContext,
 } from "./components/selection/SelectionContext";
-import { useSyncUrlWithFilter } from "./hooks/useSyncUrlWithFilter";
+import { useSyncUrlWithFilter, type ViewMode } from "./hooks/useSyncUrlWithFilter";
 
 const useStyles = makeStyles({
   app: {
@@ -77,10 +78,13 @@ const AppContent = () => {
   const styles = useStyles();
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [view, setView] = useState<ViewMode>(
+    () => new URLSearchParams(window.location.search).get("view") === "faces" ? "faces" : "library",
+  );
   const { username, isSigningOut, signOut } = useAuthSession();
   const { clearSelection, selectedItems, selectionMode, setSelectionMode } =
     useSelectionContext();
-  useSyncUrlWithFilter();
+  useSyncUrlWithFilter(view, setView);
 
   const canUseNativeShare =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
@@ -164,34 +168,53 @@ const AppContent = () => {
         </div>
 
         <div className={styles.headerActions}>
+          <Button
+            appearance={view === "library" ? "primary" : "subtle"}
+            onClick={() => setView("library")}
+          >
+            Library
+          </Button>
+          <Button
+            appearance={view === "faces" ? "primary" : "subtle"}
+            onClick={() => setView("faces")}
+          >
+            Faces
+          </Button>
           <Filter />
-          {selectionMode ? (
+          {view === "library" ? (
             <>
-              <Caption1>{selectedItems.length} selected</Caption1>
-              <Button
-                onClick={handleShare}
-                appearance="primary"
-                disabled={
-                  !canUseNativeShare ||
-                  !supportsFileShare ||
-                  selectedItems.length === 0 ||
-                  isSharing
-                }
-              >
-                {isSharing ? "Preparing…" : "Share"}
-              </Button>
-              <Button
-                onClick={() => handleSelectionModeChange(false)}
-                appearance="subtle"
-              >
-                Done
-              </Button>
+              {selectionMode ? (
+                <>
+                  <Caption1>{selectedItems.length} selected</Caption1>
+                  <Button
+                    onClick={handleShare}
+                    appearance="primary"
+                    disabled={
+                      !canUseNativeShare ||
+                      !supportsFileShare ||
+                      selectedItems.length === 0 ||
+                      isSharing
+                    }
+                  >
+                    {isSharing ? "Preparing…" : "Share"}
+                  </Button>
+                  <Button
+                    onClick={() => handleSelectionModeChange(false)}
+                    appearance="subtle"
+                  >
+                    Done
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  onClick={() => handleSelectionModeChange(true)}
+                  appearance="subtle"
+                >
+                  Select
+                </Button>
+              )}
             </>
-          ) : (
-            <Button onClick={() => handleSelectionModeChange(true)} appearance="subtle">
-              Select
-            </Button>
-          )}
+          ) : null}
           <Tooltip content="Server Status" relationship="description">
             <Button
               icon={<Info24Regular />}
@@ -221,9 +244,14 @@ const AppContent = () => {
 
       <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
 
-      <ThumbnailGrid />
-
-      <FullscreenViewer />
+      {view === "library" ? (
+        <>
+          <ThumbnailGrid />
+          <FullscreenViewer />
+        </>
+      ) : (
+        <FacesReviewPage />
+      )}
     </div>
   );
 };

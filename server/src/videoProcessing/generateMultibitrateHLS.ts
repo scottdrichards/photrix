@@ -198,10 +198,14 @@ export const generateMultibitrateHLS = async (
   opts?: {
     priority?: QueuePriority;
     waitForCompletion?: boolean;
-    estimatedDurationSeconds?: number;
+    contentDurationSeconds?: number;
   },
 ): Promise<string> => {
-  await stat(filePath);
+  const fileStats = await stat(filePath);
+  const contentDurationMilliseconds = Math.max(
+    0,
+    Math.round((opts?.contentDurationSeconds ?? 0) * 1000),
+  );
   const hlsDir = getMultibitrateHLSDirectory(filePath);
   const masterPath = getMasterPlaylistPath(hlsDir);
 
@@ -235,12 +239,20 @@ export const generateMultibitrateHLS = async (
   };
 
   if (opts?.waitForCompletion) {
-    await mediaProcessingQueue.enqueue(doEncode, opts.priority, "video", {
-      videoSeconds: opts?.estimatedDurationSeconds,
+    await mediaProcessingQueue.enqueue({
+      fn: doEncode,
+      priority: opts.priority ?? "background",
+      mediaType: "video",
+      sizeBytes: fileStats.size,
+      durationMilliseconds: contentDurationMilliseconds,
     });
   } else {
-    void mediaProcessingQueue.enqueue(doEncode, opts?.priority, "video", {
-      videoSeconds: opts?.estimatedDurationSeconds,
+    void mediaProcessingQueue.enqueue({
+      fn: doEncode,
+      priority: opts?.priority ?? "background",
+      mediaType: "video",
+      sizeBytes: fileStats.size,
+      durationMilliseconds: contentDurationMilliseconds,
     });
   }
 
