@@ -1,6 +1,7 @@
 import type * as http from "http";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import type { FaceQueueStatus } from "../../indexDatabase/indexDatabase.type.ts";
+import { measureOperation } from "../../observability/requestTrace.ts";
 import { writeJson } from "../../utils.ts";
 
 type Options = {
@@ -50,17 +51,22 @@ export const facesRequestHandler = async (
         return;
       }
 
-      const queue = database.queryFaceQueue({
-        ...(statusParam ? { status: statusParam as FaceQueueStatus } : {}),
-        ...(personIdParam ? { personId: personIdParam } : {}),
-        ...(Number.isFinite(pageParam) ? { page: pageParam } : {}),
-        ...(Number.isFinite(pageSizeParam) ? { pageSize: pageSizeParam } : {}),
-        ...(Number.isFinite(minConfidenceParam)
-          ? { minConfidence: minConfidenceParam }
-          : {}),
-        ...(pathParam ? { path: pathParam } : {}),
-        ...(includeSubfolders !== undefined ? { includeSubfolders } : {}),
-      });
+      const queue = await measureOperation(
+        "queryFaceQueue",
+        () =>
+          database.queryFaceQueue({
+            ...(statusParam ? { status: statusParam as FaceQueueStatus } : {}),
+            ...(personIdParam ? { personId: personIdParam } : {}),
+            ...(Number.isFinite(pageParam) ? { page: pageParam } : {}),
+            ...(Number.isFinite(pageSizeParam) ? { pageSize: pageSizeParam } : {}),
+            ...(Number.isFinite(minConfidenceParam)
+              ? { minConfidence: minConfidenceParam }
+              : {}),
+            ...(pathParam ? { path: pathParam } : {}),
+            ...(includeSubfolders !== undefined ? { includeSubfolders } : {}),
+          }),
+        { category: "db", detail: statusParam ?? "all" },
+      );
 
       writeJson(res, 200, queue);
       return;
@@ -71,12 +77,16 @@ export const facesRequestHandler = async (
       const includeSubfoldersRaw = url.searchParams.get("includeSubfolders");
       const includeSubfolders =
         includeSubfoldersRaw === null ? undefined : includeSubfoldersRaw === "true";
-      writeJson(res, 200, {
-        people: database.queryFacePeople({
-          ...(pathParam ? { path: pathParam } : {}),
-          ...(includeSubfolders !== undefined ? { includeSubfolders } : {}),
-        }),
-      });
+      const people = await measureOperation(
+        "queryFacePeople",
+        () =>
+          database.queryFacePeople({
+            ...(pathParam ? { path: pathParam } : {}),
+            ...(includeSubfolders !== undefined ? { includeSubfolders } : {}),
+          }),
+        { category: "db", detail: pathParam ?? "root" },
+      );
+      writeJson(res, 200, { people });
       return;
     }
 
@@ -91,10 +101,15 @@ export const facesRequestHandler = async (
         return;
       }
 
-      const items = database.queryFaceMatches({
-        faceId,
-        ...(Number.isFinite(limitParam) ? { limit: limitParam } : {}),
-      });
+      const items = await measureOperation(
+        "queryFaceMatches",
+        () =>
+          database.queryFaceMatches({
+            faceId,
+            ...(Number.isFinite(limitParam) ? { limit: limitParam } : {}),
+          }),
+        { category: "db", detail: faceId },
+      );
       writeJson(res, 200, { items });
       return;
     }
@@ -112,10 +127,15 @@ export const facesRequestHandler = async (
         return;
       }
 
-      const items = database.queryPersonFaceSuggestions({
-        personId,
-        ...(Number.isFinite(limitParam) ? { limit: limitParam } : {}),
-      });
+      const items = await measureOperation(
+        "queryPersonFaceSuggestions",
+        () =>
+          database.queryPersonFaceSuggestions({
+            personId,
+            ...(Number.isFinite(limitParam) ? { limit: limitParam } : {}),
+          }),
+        { category: "db", detail: personId },
+      );
       writeJson(res, 200, { items });
       return;
     }
@@ -142,12 +162,17 @@ export const facesRequestHandler = async (
           return;
         }
 
-        const updated = database.acceptFaceSuggestion({
-          faceId,
-          personId: payload.personId,
-          personName: payload.personName,
-          reviewer: payload.reviewer,
-        });
+        const updated = await measureOperation(
+          "acceptFaceSuggestion",
+          () =>
+            database.acceptFaceSuggestion({
+              faceId,
+              personId: payload.personId,
+              personName: payload.personName,
+              reviewer: payload.reviewer,
+            }),
+          { category: "db", detail: faceId },
+        );
 
         if (!updated) {
           writeJson(res, 404, { error: "Face not found" });
@@ -158,11 +183,16 @@ export const facesRequestHandler = async (
         return;
       }
 
-      const updated = database.rejectFaceSuggestion({
-        faceId,
-        personId: payload.personId,
-        reviewer: payload.reviewer,
-      });
+      const updated = await measureOperation(
+        "rejectFaceSuggestion",
+        () =>
+          database.rejectFaceSuggestion({
+            faceId,
+            personId: payload.personId,
+            reviewer: payload.reviewer,
+          }),
+        { category: "db", detail: faceId },
+      );
 
       if (!updated) {
         writeJson(res, 404, { error: "Face not found" });

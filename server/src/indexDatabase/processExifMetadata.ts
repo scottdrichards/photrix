@@ -1,7 +1,9 @@
 import path from "node:path";
 import { getExifMetadataFromFile } from "../fileHandling/fileUtils.ts";
 import { waitForBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
+import { measureOperation } from "../observability/requestTrace.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
+import { ConversionTaskPriority } from "./indexDatabase.type.ts";
 
 const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
 
@@ -51,29 +53,42 @@ export const startBackgroundProcessExifMetadata = (
         const chunk = items.slice(i, i + 4);
         await Promise.all(
           chunk.map(async (entry) => {
-            const { relativePath } = entry;
-            const fullPath = path.join(
-              database.storagePath,
-              stripLeadingSlash(relativePath),
+            await measureOperation(
+              "metadata.exif.processEntry",
+              async () => {
+                const { relativePath } = entry;
+                const fullPath = path.join(
+                  database.storagePath,
+                  stripLeadingSlash(relativePath),
+                );
+                const now = new Date();
+                try {
+                  if (!entry.sizeInBytes) {
+                    throw new Error("zero-byte file");
+                  }
+                  const exif = await getExifMetadataFromFile(fullPath);
+                  await database.addOrUpdateFileData(entry.relativePath, {
+                    ...exif,
+                    exifProcessedAt: now.toISOString(),
+                  });
+                } catch (error) {
+                  const errorDate = new Date();
+                  await database.addOrUpdateFileData(entry.relativePath, {
+                    exifProcessedAt: errorDate.toISOString(),
+                  });
+                  console.log(`[metadata:exif] skipping file: ${relativePath}, ${error}`);
+                }
+                if (entry.mimeType?.startsWith("video/")) {
+                  database.setConversionPriority(
+                    entry.relativePath,
+                    "hls",
+                    ConversionTaskPriority.Background,
+                  );
+                }
+                processedCount++;
+              },
+              { category: "other", detail: entry.relativePath, logWithoutRequest: true },
             );
-            const now = new Date();
-            try {
-              if (!entry.sizeInBytes) {
-                throw new Error("zero-byte file");
-              }
-              const exif = await getExifMetadataFromFile(fullPath);
-              await database.addOrUpdateFileData(entry.relativePath, {
-                ...exif,
-                exifProcessedAt: now.toISOString(),
-              });
-            } catch (error) {
-              const errorDate = new Date();
-              await database.addOrUpdateFileData(entry.relativePath, {
-                exifProcessedAt: errorDate.toISOString(),
-              });
-              console.log(`[metadata:exif] skipping file: ${relativePath}, ${error}`);
-            }
-            processedCount++;
           }),
         );
 

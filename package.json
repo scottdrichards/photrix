@@ -8,6 +8,7 @@
     "build:client": "npm --prefix client run build",
     "deploy:client": "node scripts/deploy-client.mjs",
     "deploy:client:build": "npm run build:client && npm run deploy:client",
+    "trace:jaeger": "powershell -ExecutionPolicy Bypass -File ./scripts/start-jaeger.ps1",
     "tunnel:test": "powershell -ExecutionPolicy Bypass -File ./scripts/start-test-tunnels.ps1"
   },
   "repository": {

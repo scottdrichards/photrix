@@ -7,6 +7,10 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from "@simplewebauthn/server";
+import {
+  measureOperation,
+  setCurrentSpanAttributes,
+} from "../observability/requestTrace.ts";
 import { writeJson } from "../utils.ts";
 import { getAuthConfig } from "./authConfig.ts";
 import { AuthStore } from "./authStore.ts";
@@ -419,6 +423,7 @@ export class AuthService {
   }
 
   private async handleSessionRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+    setCurrentSpanAttributes({ "photrix.auth.route": "session" });
     const hasUsers = this.store.countUsers() > 0;
     const sessionUser = this.getSessionUser(req);
 
@@ -431,6 +436,7 @@ export class AuthService {
   }
 
   private async handleLogoutRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+    setCurrentSpanAttributes({ "photrix.auth.route": "logout" });
     const cookie = parseCookies(req.headers.cookie).get(this.config.cookieName);
     if (cookie) {
       this.store.deleteSession(hashToken(cookie));
@@ -444,6 +450,7 @@ export class AuthService {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ) {
+    setCurrentSpanAttributes({ "photrix.auth.route": "register.options" });
     if (this.store.countUsers() > 0) {
       writeJson(res, 403, { error: "Registration is disabled" });
       return;
@@ -462,9 +469,14 @@ export class AuthService {
       return;
     }
 
-    const body = await readJsonBody(req, this.config.maxJsonBodyBytes);
+    const body = await measureOperation(
+      "auth.readJsonBody",
+      () => readJsonBody(req, this.config.maxJsonBodyBytes),
+      { category: "other", detail: "register.options" },
+    );
     const username = safeString(body.username);
     const bootstrapToken = safeString(body.bootstrapToken);
+    setCurrentSpanAttributes({ "photrix.auth.username": username || "unknown" });
 
     if (!USERNAME_PATTERN.test(username)) {
       writeJson(res, 400, { error: "Username must be 3-64 chars of a-z A-Z 0-9 . _ -" });
@@ -476,20 +488,25 @@ export class AuthService {
       return;
     }
 
-    const options = await generateRegistrationOptions({
-      rpName: this.config.rpName,
-      rpID: this.config.rpId,
-      userName: username,
-      userDisplayName: username,
-      userID: textEncoder.encode(username),
-      timeout: this.config.challengeTtlMs,
-      authenticatorSelection: {
-        residentKey: "required",
-        userVerification: "required",
-      },
-      attestationType: "none",
-      excludeCredentials: [],
-    });
+    const options = await measureOperation(
+      "auth.generateRegistrationOptions",
+      () =>
+        generateRegistrationOptions({
+          rpName: this.config.rpName,
+          rpID: this.config.rpId,
+          userName: username,
+          userDisplayName: username,
+          userID: textEncoder.encode(username),
+          timeout: this.config.challengeTtlMs,
+          authenticatorSelection: {
+            residentKey: "required",
+            userVerification: "required",
+          },
+          attestationType: "none",
+          excludeCredentials: [],
+        }),
+      { category: "other", detail: username },
+    );
 
     this.registrationChallengesByUsername.set(username, {
       challenge: options.challenge,
@@ -500,6 +517,7 @@ export class AuthService {
   }
 
   private async handleRegistrationVerifyRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+    setCurrentSpanAttributes({ "photrix.auth.route": "register.verify" });
     if (this.store.countUsers() > 0) {
       writeJson(res, 403, { error: "Registration is disabled" });
       return;
@@ -510,8 +528,13 @@ export class AuthService {
       return;
     }
 
-    const body = await readJsonBody(req, this.config.maxJsonBodyBytes);
+    const body = await measureOperation(
+      "auth.readJsonBody",
+      () => readJsonBody(req, this.config.maxJsonBodyBytes),
+      { category: "other", detail: "register.verify" },
+    );
     const username = safeString(body.username);
+    setCurrentSpanAttributes({ "photrix.auth.username": username || "unknown" });
 
     if (!USERNAME_PATTERN.test(username)) {
       writeJson(res, 400, { error: "Invalid username" });
@@ -522,13 +545,18 @@ export class AuthService {
     const response = body.response as Parameters<typeof verifyRegistrationResponse>[0]["response"];
     const challenge = challengeState?.challenge ?? "";
 
-    const verification = await verifyRegistrationResponse({
-      response,
-      expectedChallenge: challenge,
-      expectedOrigin: this.config.expectedOrigin,
-      expectedRPID: this.config.rpId,
-      requireUserVerification: true,
-    });
+    const verification = await measureOperation(
+      "auth.verifyRegistrationResponse",
+      () =>
+        verifyRegistrationResponse({
+          response,
+          expectedChallenge: challenge,
+          expectedOrigin: this.config.expectedOrigin,
+          expectedRPID: this.config.rpId,
+          requireUserVerification: true,
+        }),
+      { category: "other", detail: username },
+    );
 
     const isValid = this.validateChallenge(challengeState, challenge);
     this.registrationChallengesByUsername.delete(username);
@@ -554,6 +582,7 @@ export class AuthService {
   }
 
   private async handleLoginOptionsRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+    setCurrentSpanAttributes({ "photrix.auth.route": "login.options" });
     if (this.store.countUsers() === 0) {
       writeJson(res, 400, { error: "No users exist yet" });
       return;
@@ -564,8 +593,16 @@ export class AuthService {
       return;
     }
 
-    const body = await readJsonBody(req, this.config.maxJsonBodyBytes);
+    const body = await measureOperation(
+      "auth.readJsonBody",
+      () => readJsonBody(req, this.config.maxJsonBodyBytes),
+      { category: "other", detail: "login.options" },
+    );
     const requestedUsername = safeString(body.username);
+        setCurrentSpanAttributes({
+          "photrix.auth.username": requestedUsername || user?.username || "unknown",
+        });
+
     const user = requestedUsername
       ? this.store.findUserByUsername(requestedUsername)
       : this.store.findOnlyUser();
@@ -581,12 +618,17 @@ export class AuthService {
       return;
     }
 
-    const options = await generateAuthenticationOptions({
-      rpID: this.config.rpId,
-      timeout: this.config.challengeTtlMs,
-      userVerification: "required",
-      allowCredentials: credentialIds.map((id) => ({ id, type: "public-key" })),
-    });
+    const options = await measureOperation(
+      "auth.generateAuthenticationOptions",
+      () =>
+        generateAuthenticationOptions({
+          rpID: this.config.rpId,
+          timeout: this.config.challengeTtlMs,
+          userVerification: "required",
+          allowCredentials: credentialIds.map((id) => ({ id, type: "public-key" })),
+        }),
+      { category: "other", detail: user.username },
+    );
 
     this.loginChallengesByUsername.set(user.username, {
       challenge: options.challenge,
@@ -600,13 +642,19 @@ export class AuthService {
   }
 
   private async handleLoginVerifyRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+    setCurrentSpanAttributes({ "photrix.auth.route": "login.verify" });
     if (this.isRateLimited(req, "login-verify", 20, 60_000)) {
       writeJson(res, 429, { error: "Too many requests" });
       return;
     }
 
-    const body = await readJsonBody(req, this.config.maxJsonBodyBytes);
+    const body = await measureOperation(
+      "auth.readJsonBody",
+      () => readJsonBody(req, this.config.maxJsonBodyBytes),
+      { category: "other", detail: "login.verify" },
+    );
     const username = safeString(body.username);
+    setCurrentSpanAttributes({ "photrix.auth.username": username || "unknown" });
     const challengeState = this.loginChallengesByUsername.get(username);
     const response = body.response as Parameters<typeof verifyAuthenticationResponse>[0]["response"];
     const credentialId = safeString(response.id);
@@ -627,19 +675,24 @@ export class AuthService {
     const transports =
       credential.transports as Parameters<typeof verifyAuthenticationResponse>[0]["credential"]["transports"];
 
-    const verification = await verifyAuthenticationResponse({
-      response,
-      expectedChallenge: challengeState.challenge,
-      expectedOrigin: this.config.expectedOrigin,
-      expectedRPID: this.config.rpId,
-      requireUserVerification: true,
-      credential: {
-        id: credential.credentialId,
-        publicKey: credentialPublicKey,
-        counter: credential.counter,
-        transports,
-      },
-    });
+    const verification = await measureOperation(
+      "auth.verifyAuthenticationResponse",
+      () =>
+        verifyAuthenticationResponse({
+          response,
+          expectedChallenge: challengeState.challenge,
+          expectedOrigin: this.config.expectedOrigin,
+          expectedRPID: this.config.rpId,
+          requireUserVerification: true,
+          credential: {
+            id: credential.credentialId,
+            publicKey: credentialPublicKey,
+            counter: credential.counter,
+            transports,
+          },
+        }),
+      { category: "other", detail: username },
+    );
 
     const isValid = this.validateChallenge(challengeState, challengeState.challenge);
     this.loginChallengesByUsername.delete(username);
@@ -672,40 +725,50 @@ export class AuthService {
 
     const url = this.resolveRequestUrl(req);
     const pathname = url.pathname;
+    setCurrentSpanAttributes({
+      "photrix.auth.path": pathname,
+      "photrix.auth.method": req.method ?? "UNKNOWN",
+    });
 
     try {
-      if (pathname === "/api/auth/session" && req.method === "GET") {
-        await this.handleSessionRequest(req, res);
-        return true;
-      }
+      return await measureOperation(
+        "auth.handleAuthRequest",
+        async () => {
+          if (pathname === "/api/auth/session" && req.method === "GET") {
+            await this.handleSessionRequest(req, res);
+            return true;
+          }
 
-      if (pathname === "/api/auth/logout" && req.method === "POST") {
-        await this.handleLogoutRequest(req, res);
-        return true;
-      }
+          if (pathname === "/api/auth/logout" && req.method === "POST") {
+            await this.handleLogoutRequest(req, res);
+            return true;
+          }
 
-      if (pathname === "/api/auth/register/options" && req.method === "POST") {
-        await this.handleRegistrationOptionsRequest(req, res);
-        return true;
-      }
+          if (pathname === "/api/auth/register/options" && req.method === "POST") {
+            await this.handleRegistrationOptionsRequest(req, res);
+            return true;
+          }
 
-      if (pathname === "/api/auth/register/verify" && req.method === "POST") {
-        await this.handleRegistrationVerifyRequest(req, res);
-        return true;
-      }
+          if (pathname === "/api/auth/register/verify" && req.method === "POST") {
+            await this.handleRegistrationVerifyRequest(req, res);
+            return true;
+          }
 
-      if (pathname === "/api/auth/login/options" && req.method === "POST") {
-        await this.handleLoginOptionsRequest(req, res);
-        return true;
-      }
+          if (pathname === "/api/auth/login/options" && req.method === "POST") {
+            await this.handleLoginOptionsRequest(req, res);
+            return true;
+          }
 
-      if (pathname === "/api/auth/login/verify" && req.method === "POST") {
-        await this.handleLoginVerifyRequest(req, res);
-        return true;
-      }
+          if (pathname === "/api/auth/login/verify" && req.method === "POST") {
+            await this.handleLoginVerifyRequest(req, res);
+            return true;
+          }
 
-      writeJson(res, 404, { error: "Not found" });
-      return true;
+          writeJson(res, 404, { error: "Not found" });
+          return true;
+        },
+        { category: "other", detail: pathname },
+      );
     } catch (error) {
       console.error("[auth] request failed", error);
       writeJson(res, 400, {

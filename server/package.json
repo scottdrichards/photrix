@@ -5,7 +5,7 @@
   "main": "dist/src/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "npx tsx src/main.ts",
+    "start": "npx tsx src/bootstrap.ts",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --selectProjects unit",
     "test:all": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js --selectProjects integration --runInBand",
@@ -20,6 +20,9 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",
+    "@opentelemetry/sdk-node": "^0.213.0",
     "@simplewebauthn/server": "^13.2.2",
     "better-sqlite3": "^12.5.0",
     "chokidar": "^3.6.0",

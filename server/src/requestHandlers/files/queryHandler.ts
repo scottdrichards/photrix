@@ -1,6 +1,7 @@
 import type * as http from "http";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "../../indexDatabase/indexDatabase.type.ts";
+import { measureOperation } from "../../observability/requestTrace.ts";
 import { writeJson } from "../../utils.ts";
 
 export const queryHandler = async (
@@ -62,7 +63,11 @@ export const queryHandler = async (
   };
 
   if (aggregate === "dateRange") {
-    const { minDate, maxDate } = database.getDateRange(filter);
+    const { minDate, maxDate } = await measureOperation(
+      "getDateRange",
+      () => database.getDateRange(filter),
+      { category: "db", detail: "aggregate=dateRange" },
+    );
     writeJson(res, 200, {
       minDate: minDate ? minDate.getTime() : null,
       maxDate: maxDate ? maxDate.getTime() : null,
@@ -71,7 +76,12 @@ export const queryHandler = async (
   }
 
   if (aggregate === "dateHistogram") {
-    writeJson(res, 200, database.getDateHistogram(filter));
+    const histogram = await measureOperation(
+      "getDateHistogram",
+      () => database.getDateHistogram(filter),
+      { category: "db", detail: "aggregate=dateHistogram" },
+    );
+    writeJson(res, 200, histogram);
     return;
   }
 
@@ -91,16 +101,25 @@ export const queryHandler = async (
           south: Number.parseFloat(southParam ?? ""),
         }
       : null;
-    const { clusters, total } = database.queryGeoClusters({
-      filter,
-      clusterSize,
-      bounds,
-    });
+    const { clusters, total } = await measureOperation(
+      "queryGeoClusters",
+      () =>
+        database.queryGeoClusters({
+          filter,
+          clusterSize,
+          bounds,
+        }),
+      { category: "db", detail: `clusterSize=${clusterSize}` },
+    );
     writeJson(res, 200, { clusters, total });
     return;
   }
 
-  const result = await database.queryFiles(queryOptions);
+  const result = await measureOperation(
+    "queryFiles",
+    () => database.queryFiles(queryOptions),
+    { category: "db", detail: countOnly ? "countOnly=true" : "countOnly=false" },
+  );
   const responseBody = countOnly ? { count: result.total } : result;
   try {
     writeJson(res, 200, responseBody);

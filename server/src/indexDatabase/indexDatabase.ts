@@ -2,20 +2,20 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { CACHE_DIR } from "../common/cacheUtils.ts";
-import { getExifMetadataFromFile, getFileInfo } from "../fileHandling/fileUtils.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { MetadataGroups, type FaceTag, type FileRecord } from "./fileRecord.type.ts";
 import { filterToSQL } from "./filterToSQL.ts";
-import type {
-  DateHistogramResult,
-  FaceMatchItem,
-  FacePeopleItem,
-  FaceQueueResult,
-  FaceQueueStatus,
-  FilterElement,
-  GeoClusterResult,
-  QueryOptions,
-  QueryResult,
+import {
+  ConversionTaskPriority,
+  type DateHistogramResult,
+  type FaceMatchItem,
+  type FacePeopleItem,
+  type FaceQueueResult,
+  type FaceQueueStatus,
+  type FilterElement,
+  type GeoClusterResult,
+  type QueryOptions,
+  type QueryResult,
 } from "./indexDatabase.type.ts";
 import {
   fileRecordToColumnNamesAndValues,
@@ -23,6 +23,7 @@ import {
 } from "./rowFileRecordConversionFunctions.ts";
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
+import { measureOperation } from "../observability/requestTrace.ts";
 
 export class IndexDatabase {
   public readonly storagePath: string;
@@ -106,6 +107,10 @@ export class IndexDatabase {
       { name: "personInImage", type: "TEXT" },
       { name: "regions", type: "TEXT" },
       { name: "faceMetadataProcessedAt", type: "TEXT" },
+      { name: "thumbnailConversionPriority", type: "INTEGER" },
+      { name: "hlsConversionPriority", type: "INTEGER" },
+      { name: "thumbnailConversionPrioritySetAt", type: "TEXT" },
+      { name: "hlsConversionPrioritySetAt", type: "TEXT" },
     ]);
 
     // Create indexes for common query patterns
@@ -124,9 +129,14 @@ export class IndexDatabase {
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS idx_files_thumbnailsProcessedAt ON files(thumbnailsProcessedAt)`,
     );
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_files_thumbnailConversionPriority ON files(thumbnailConversionPriority) WHERE thumbnailConversionPriority IS NOT NULL`,
+    );
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_files_hlsConversionPriority ON files(hlsConversionPriority) WHERE hlsConversionPriority IS NOT NULL`,
+    );
     console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
     this.ensureRootPath();
-    this.populateMissingMimeTypes();
 
     this.selectDataStmt = this.db.prepare(
       "SELECT * FROM files WHERE folder = ? AND fileName = ?",
@@ -165,41 +175,6 @@ export class IndexDatabase {
       }
       this.db.exec(`ALTER TABLE files ADD COLUMN ${name} ${type}`);
     }
-  }
-
-  /**
-   * One-time migration to populate mimeType for files that were added before
-   * mimeType was being stored during initial file discovery.
-   */
-  private populateMissingMimeTypes(): void {
-    const countResult = this.db
-      .prepare("SELECT COUNT(*) as count FROM files WHERE mimeType IS NULL")
-      .get() as { count: number };
-    if (countResult.count === 0) return;
-
-    console.log(`[IndexDatabase] Populating mimeType for ${countResult.count} files...`);
-    const startTime = Date.now();
-
-    const rows = this.db
-      .prepare("SELECT folder, fileName FROM files WHERE mimeType IS NULL")
-      .all() as Array<{ folder: string; fileName: string }>;
-    const updateStmt = this.db.prepare(
-      "UPDATE files SET mimeType = ? WHERE folder = ? AND fileName = ?",
-    );
-
-    const tx = this.db.transaction(() => {
-      for (const row of rows) {
-        const relativePath = joinPath(row.folder, row.fileName);
-        const mimeType = mimeTypeForFilename(relativePath);
-        updateStmt.run(mimeType, row.folder, row.fileName);
-      }
-    });
-    tx();
-
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(
-      `[IndexDatabase] Populated mimeType for ${countResult.count} files in ${elapsed}s`,
-    );
   }
 
   async addFile(fileData: FileRecord): Promise<void> {
@@ -291,12 +266,10 @@ export class IndexDatabase {
   /**
    *
    * @param relativePath
-   * @param requiredMetadata This is metadata that it will fetch if needed (i.e., with a filesystem write)
    * @returns
    */
   async getFileRecord(
     relativePath: string,
-    requiredMetadata?: Array<keyof FileRecord>,
   ): Promise<FileRecord | undefined> {
     const { folder, fileName } = splitPath(relativePath);
     const row = this.selectDataStmt.get(folder, fileName) as
@@ -306,15 +279,7 @@ export class IndexDatabase {
       return undefined;
     }
 
-    const record = rowToFileRecord(row as Record<string, string | number>);
-
-    const hasAllMetadata =
-      !requiredMetadata || requiredMetadata.every((key) => key in record);
-    if (hasAllMetadata) {
-      return record;
-    }
-    return record;
-    // return await this.hydrateMetadata(relativePath, requiredMetadata);
+    return rowToFileRecord(row as Record<string, string | number>);
   }
 
   countMissingInfo(): number {
@@ -339,15 +304,208 @@ export class IndexDatabase {
     return row.count;
   }
 
-  countNeedingThumbnails(): number {
-    const stmt = this.db.prepare(
-      `SELECT COUNT(*) as count FROM files
-       WHERE (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
-         AND COALESCE(thumbnailsReady, 0) = 0
-         AND thumbnailsProcessedAt IS NULL`,
-    );
-    const row = stmt.get() as { count: number };
-    return row.count;
+  countPendingConversions(): { thumbnail: number; hls: number } {
+    const row = this.db
+      .prepare(
+        `SELECT
+            SUM(CASE WHEN thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END) AS thumbnail,
+            SUM(CASE WHEN hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END) AS hls
+         FROM files`,
+      )
+      .get() as { thumbnail: number | null; hls: number | null };
+    return { thumbnail: row.thumbnail ?? 0, hls: row.hls ?? 0 };
+  }
+
+  getConversionQueueCounts(): { pending: number; processing: number } {
+    const row = this.db
+      .prepare(
+        `SELECT
+            SUM(CASE WHEN thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END)
+            + SUM(CASE WHEN hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN thumbnailConversionPriority = ${ConversionTaskPriority.InProgress} THEN 1 ELSE 0 END)
+            + SUM(CASE WHEN hlsConversionPriority = ${ConversionTaskPriority.InProgress} THEN 1 ELSE 0 END) AS processing
+         FROM files`,
+      )
+      .get() as { pending: number | null; processing: number | null };
+    return { pending: row.pending ?? 0, processing: row.processing ?? 0 };
+  }
+
+  getConversionQueueSummary(): {
+    completed: {
+      image: { count: number; sizeBytes: number };
+      video: { count: number; sizeBytes: number; durationMilliseconds: number };
+    };
+    active: {
+      image: { count: number; sizeBytes: number };
+      video: { count: number; sizeBytes: number; durationMilliseconds: number };
+    };
+    userBlocked: {
+      image: { count: number; sizeBytes: number };
+      video: { count: number; sizeBytes: number; durationMilliseconds: number };
+    };
+    userImplicit: {
+      image: { count: number; sizeBytes: number };
+      video: { count: number; sizeBytes: number; durationMilliseconds: number };
+    };
+    background: {
+      image: { count: number; sizeBytes: number };
+      video: { count: number; sizeBytes: number; durationMilliseconds: number };
+    };
+  } {
+    const makeBucket = () => ({
+      image: { count: 0, sizeBytes: 0 },
+      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+    });
+    const summary = {
+      completed: makeBucket(),
+      active: makeBucket(),
+      userBlocked: makeBucket(),
+      userImplicit: makeBucket(),
+      background: makeBucket(),
+    };
+
+    const rows = this.db
+      .prepare(
+        `SELECT mimeType, sizeInBytes, duration, thumbnailConversionPriority, hlsConversionPriority
+         FROM files
+         WHERE thumbnailConversionPriority IS NOT NULL OR hlsConversionPriority IS NOT NULL`,
+      )
+      .all() as Array<{
+      mimeType: string | null;
+      sizeInBytes: number | null;
+      duration: number | null;
+      thumbnailConversionPriority: ConversionTaskPriority | null;
+      hlsConversionPriority: ConversionTaskPriority | null;
+    }>;
+
+    const addTask = (
+      priority: ConversionTaskPriority | null,
+      mediaType: "image" | "video",
+      sizeBytes: number,
+      durationMilliseconds: number,
+    ) => {
+      if (priority === null) return;
+      const bucket =
+        priority === ConversionTaskPriority.InProgress
+          ? summary.active
+          : priority === ConversionTaskPriority.UserBlocked
+            ? summary.userBlocked
+            : priority === ConversionTaskPriority.UserImplicit
+              ? summary.userImplicit
+              : summary.background;
+      bucket[mediaType].count += 1;
+      bucket[mediaType].sizeBytes += sizeBytes;
+      if (mediaType === "video") {
+        bucket.video.durationMilliseconds += durationMilliseconds;
+      }
+    };
+
+    for (const row of rows) {
+      const mediaType = row.mimeType?.startsWith("video/") ? "video" : "image";
+      const sizeBytes = Math.max(0, row.sizeInBytes ?? 0);
+      const durationMilliseconds = Math.max(0, Math.round((row.duration ?? 0) * 1000));
+      addTask(row.thumbnailConversionPriority, mediaType, sizeBytes, durationMilliseconds);
+      if (row.mimeType?.startsWith("video/")) {
+        addTask(row.hlsConversionPriority, "video", sizeBytes, durationMilliseconds);
+      }
+    }
+
+    return summary;
+  }
+
+  /**
+   * null = done, enum value = queued or in-progress
+   */
+  setConversionPriority(
+    relativePath: string,
+    taskType: "thumbnail" | "hls",
+    priority: ConversionTaskPriority | null,
+  ): void {
+    const { folder, fileName } = splitPath(relativePath);
+    const column =
+      taskType === "thumbnail" ? "thumbnailConversionPriority" : "hlsConversionPriority";
+    const setAtColumn =
+      taskType === "thumbnail"
+        ? "thumbnailConversionPrioritySetAt"
+        : "hlsConversionPrioritySetAt";
+    this.db
+      .prepare(
+        `UPDATE files SET ${column} = ?, ${setAtColumn} = ? WHERE folder = ? AND fileName = ?`,
+      )
+      .run(priority, priority !== null ? new Date().toISOString() : null, folder, fileName);
+  }
+
+  /** Resets any in-progress conversions back to background on startup. */
+  resetInProgressConversions(taskType: "thumbnail" | "hls"): void {
+    const column =
+      taskType === "thumbnail" ? "thumbnailConversionPriority" : "hlsConversionPriority";
+    const setAtColumn =
+      taskType === "thumbnail"
+        ? "thumbnailConversionPrioritySetAt"
+        : "hlsConversionPrioritySetAt";
+    this.db
+      .prepare(
+        `UPDATE files SET ${column} = ?, ${setAtColumn} = ? WHERE ${column} = ?`,
+      )
+      .run(
+        ConversionTaskPriority.Background,
+        new Date().toISOString(),
+        ConversionTaskPriority.InProgress,
+      );
+  }
+
+  /**
+   * Returns the next pending conversion tasks ordered by priority (ASC), then by when the
+   * priority was set (FIFO), then thumbnails before HLS for equal priority and time.
+   * Excludes in-progress tasks.
+   */
+  getNextConversionTasks(count = 1): Array<{
+    relativePath: string;
+    taskType: "thumbnail" | "hls";
+  }> {
+    const sql = `SELECT * FROM (
+                   SELECT folder, fileName, 'thumbnail' AS taskType,
+                          thumbnailConversionPriority AS priority,
+                          thumbnailConversionPrioritySetAt AS prioritySetAt,
+                          0 AS taskOrder
+                   FROM files
+                   WHERE thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}
+                   UNION ALL
+                   SELECT folder, fileName, 'hls' AS taskType,
+                          hlsConversionPriority AS priority,
+                          hlsConversionPrioritySetAt AS prioritySetAt,
+                          1 AS taskOrder
+                   FROM files
+                   WHERE hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}
+                 )
+                 ORDER BY priority ASC, prioritySetAt ASC, taskOrder ASC
+                 LIMIT ?`;
+    const rows = this.db.prepare(sql).all(count) as Array<{
+      folder: string;
+      fileName: string;
+      taskType: "thumbnail" | "hls";
+    }>;
+    return rows.map((row) => ({
+      relativePath: joinPath(row.folder, row.fileName),
+      taskType: row.taskType,
+    }));
+  }
+
+  getConversionTaskInfo(
+    relativePath: string,
+    taskType: "thumbnail" | "hls",
+  ): { mimeType: string | null; duration: number | null; priority: ConversionTaskPriority | null } | null {
+    const { folder, fileName } = splitPath(relativePath);
+    const priorityColumn =
+      taskType === "thumbnail" ? "thumbnailConversionPriority" : "hlsConversionPriority";
+    const row = this.db
+      .prepare(
+        `SELECT mimeType, duration, ${priorityColumn} AS priority FROM files WHERE folder = ? AND fileName = ?`,
+      )
+      .get(folder, fileName) as
+      | { mimeType: string | null; duration: number | null; priority: ConversionTaskPriority | null }
+      | undefined;
+    return row ?? null;
   }
 
   countMediaEntries(): number {
@@ -373,6 +531,39 @@ export class IndexDatabase {
     const stmt = this.db.prepare(`SELECT COUNT(*) as count FROM files`);
     const row = stmt.get() as { count: number };
     return row.count;
+  }
+
+  getStatusCounts(): {
+    allEntries: number;
+    mediaEntries: number;
+    missingInfo: number;
+    missingDateTaken: number;
+  } {
+    const row = this.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS allEntries,
+           SUM(CASE WHEN mimeType LIKE 'image/%' OR mimeType LIKE 'video/%' THEN 1 ELSE 0 END) AS mediaEntries,
+           SUM(CASE WHEN sizeInBytes IS NULL OR created IS NULL OR modified IS NULL THEN 1 ELSE 0 END) AS missingInfo,
+           SUM(CASE WHEN (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
+                      AND dateTaken IS NULL
+                      AND exifProcessedAt IS NULL
+                    THEN 1 ELSE 0 END) AS missingDateTaken
+         FROM files`,
+      )
+      .get() as {
+      allEntries: number | null;
+      mediaEntries: number | null;
+      missingInfo: number | null;
+      missingDateTaken: number | null;
+    };
+
+    return {
+      allEntries: row.allEntries ?? 0,
+      mediaEntries: row.mediaEntries ?? 0,
+      missingInfo: row.missingInfo ?? 0,
+      missingDateTaken: row.missingDateTaken ?? 0,
+    };
   }
 
   getMostRecentExifProcessedEntry(): {
@@ -463,29 +654,27 @@ export class IndexDatabase {
     }
   }
 
-  getRecordsNeedingThumbnails(limit = 25): FileRecord[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM files
-       WHERE (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
-         AND COALESCE(thumbnailsReady, 0) = 0
-         AND thumbnailsProcessedAt IS NULL
-       LIMIT ?`,
-      )
-      .all(limit) as Array<Record<string, unknown>>;
-    return rows.map((row) => rowToFileRecord(row as Record<string, string | number>));
-  }
-
   addPaths(paths: string[]): void {
     if (!paths.length) return;
     const addPath = this.db.prepare(
-      "INSERT OR IGNORE INTO files (folder, fileName, mimeType) VALUES (?, ?, ?)",
+      `INSERT OR IGNORE INTO files (folder, fileName, mimeType, thumbnailConversionPriority, thumbnailConversionPrioritySetAt)
+       VALUES (?, ?, ?, ?, ?)`,
     );
     const tx = this.db.transaction((list: string[]) => {
       for (const relativePath of list) {
         const { folder, fileName } = splitPath(relativePath);
         const mimeType = mimeTypeForFilename(relativePath);
-        addPath.run(folder, fileName, mimeType);
+        const thumbnailPriority =
+          mimeType?.startsWith("image/") || mimeType?.startsWith("video/")
+            ? ConversionTaskPriority.Background
+            : null;
+        addPath.run(
+          folder,
+          fileName,
+          mimeType,
+          thumbnailPriority,
+          thumbnailPriority !== null ? new Date().toISOString() : null,
+        );
       }
     });
     tx(paths);
@@ -535,146 +724,6 @@ export class IndexDatabase {
             : undefined,
       };
     });
-  }
-
-  /**
-   * Gets the count of video files that have had EXIF processed (and thus are ready for HLS encoding).
-   */
-  countVideosReadyForHLS(): number {
-    const stmt = this.db.prepare(
-      `SELECT COUNT(*) as count FROM files WHERE mimeType LIKE 'video/%' AND exifProcessedAt IS NOT NULL`,
-    );
-    const row = stmt.get() as { count: number };
-    return row.count;
-  }
-
-  /**
-   * Gets video files that have been processed for EXIF (ready for HLS encoding).
-   */
-  getVideosReadyForHLS(limit = 50): Array<{
-    relativePath: string;
-    duration?: number;
-  }> {
-    const stmt = this.db.prepare(
-      `SELECT folder, fileName, duration FROM files
-       WHERE mimeType LIKE 'video/%' AND exifProcessedAt IS NOT NULL
-       ORDER BY created DESC, folder DESC, fileName DESC
-       LIMIT ?`,
-    );
-
-    const rows = stmt.all(limit) as Array<{
-      folder: string;
-      fileName: string;
-      duration: number | null;
-    }>;
-    return rows.map((row) => ({
-      relativePath: joinPath(row.folder, row.fileName),
-      duration: typeof row.duration === "number" ? row.duration : undefined,
-    }));
-  }
-
-  private async hydrateMetadata(
-    relativePath: string,
-    requiredMetadata: Array<keyof FileRecord>,
-  ) {
-    const { folder, fileName } = splitPath(relativePath);
-    const row = this.selectDataStmt.get(folder, fileName) as
-      | Record<string, unknown>
-      | undefined;
-    if (!row) {
-      throw new Error(
-        `hydrateMetadata: File at path "${relativePath}" does not exist in the database.`,
-      );
-    }
-    const originalDBEntry = rowToFileRecord(row as Record<string, string | number>);
-    return originalDBEntry;
-
-    // Map metadata group names to their "processed at" column names
-    const groupProcessedAtColumn: Record<keyof typeof MetadataGroups, string> = {
-      info: "infoProcessedAt",
-      exif: "exifProcessedAt",
-      aiMetadata: "aiProcessedAt",
-      faceMetadata: "faceProcessedAt",
-    };
-
-    // Determine which metadata groups need to be loaded (skip if already processed)
-    const groupsToLoad = requiredMetadata
-      .map(
-        (field) =>
-          Object.keys(MetadataGroups).find((groupKey) =>
-            (MetadataGroups as Record<string, readonly string[]>)[groupKey].includes(
-              field,
-            ),
-          ) as keyof typeof MetadataGroups,
-      )
-      .filter((group): group is keyof typeof MetadataGroups => group !== undefined)
-      .reduce(
-        (acc, group) => (acc.includes(group) ? acc : [...acc, group]),
-        [] as Array<keyof typeof MetadataGroups>,
-      )
-      .filter((groupName) => {
-        if (!row) return true; // If no row, we need to load
-        const processedAtColumn = groupProcessedAtColumn[groupName];
-        return !row[processedAtColumn]; // Skip if already processed
-      });
-
-    if (groupsToLoad.length === 0) {
-      return originalDBEntry;
-    }
-
-    const promises = groupsToLoad.map(async (groupName) => {
-      const relativeNoLeadingSlash = relativePath.replace(/^\/+/, "");
-      const fullPath = path.join(this.storagePath, relativeNoLeadingSlash);
-      try {
-        let extraData: Record<string, unknown> = {};
-        switch (groupName) {
-          case "info":
-            extraData = await getFileInfo(fullPath);
-            extraData.infoProcessedAt = new Date().toISOString();
-            break;
-          case "exif": {
-            // Only attempt EXIF parsing for media files
-            const mimeType =
-              originalDBEntry?.mimeType || mimeTypeForFilename(relativePath);
-            if (mimeType?.startsWith("image/") || mimeType?.startsWith("video/")) {
-              try {
-                extraData = await getExifMetadataFromFile(fullPath);
-              } catch (error) {
-                // File format doesn't support EXIF or parsing failed
-                console.warn(
-                  `[metadata] Could not read EXIF metadata for ${relativePath}:`,
-                  error instanceof Error ? error.message : String(error),
-                );
-                extraData = {};
-              }
-            } else {
-              // Non-media file, skip EXIF parsing
-              extraData = {};
-            }
-            extraData.exifProcessedAt = new Date().toISOString();
-            break;
-          }
-          case "aiMetadata":
-          case "faceMetadata":
-            // Not implemented yet
-            return;
-          default:
-            throw new Error(`Unhandled metadata group "${String(groupName)}"`);
-        }
-        await this.addOrUpdateFileData(relativePath, extraData);
-      } catch (error) {
-        console.warn(
-          `[metadata] Skipping group ${String(groupName)} for ${relativePath}:`,
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-    });
-
-    await Promise.all(promises);
-
-    // Re-fetch to get updated data
-    const updatedRow = this.selectDataStmt.get(relativePath) as Record<string, unknown>;
-    return rowToFileRecord(updatedRow as Record<string, string | number>);
   }
 
   *files(): IterableIterator<FileRecord> {
@@ -1091,7 +1140,7 @@ export class IndexDatabase {
       .sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1));
 
     const offset = (page - 1) * pageSize;
-    const items = filteredItems.slice(offset, offset + pageSize).map(({ confidence, ...rest }) => rest);
+    const items = filteredItems.slice(offset, offset + pageSize).map(({ confidence: _confidence, ...rest }) => rest);
 
     return {
       items,
@@ -1379,7 +1428,7 @@ export class IndexDatabase {
       }))
       .sort((a, b) => b.confidence - a.confidence)
       .slice(0, limit)
-      .map(({ embedding, ...rest }) => ({
+      .map(({ embedding: _embedding, ...rest }) => ({
         ...rest,
         confidence: Number(rest.confidence.toFixed(4)),
       }));
@@ -1443,14 +1492,16 @@ export class IndexDatabase {
       return [];
     }
 
-    return entries
+    const MIN_SIMILARITY = 0.4;
+
+    const candidates = entries
       .filter((entry) => entry.person == null)
       .filter((entry) => entry.status !== "rejected")
       .map((entry) => ({
         ...entry,
         confidence: this.cosineSimilarity(centroid, entry.embedding),
       }))
-      .sort((a, b) => b.confidence - a.confidence)
+      .sort((a, b) => b.confidence - a.confidence);
 
     const topMatch = candidates.at(0);
     if (!topMatch) {
@@ -1468,7 +1519,7 @@ export class IndexDatabase {
 
     return candidates
       .slice(0, limit)
-      .map(({ embedding, quality, ...rest }) => ({
+      .map(({ embedding: _embedding, quality: _quality, ...rest }) => ({
         ...rest,
         confidence: Number(rest.confidence.toFixed(4)),
       }));
@@ -1627,9 +1678,14 @@ export class IndexDatabase {
 
     // Build the count query
     const countSQL = `SELECT COUNT(*) as count FROM files ${whereClause ? `WHERE ${whereClause}` : ""}`;
-    const countResult = this.db.prepare(countSQL).get(...whereParams) as {
-      count: number;
-    };
+    const countResult = await measureOperation(
+      "queryFiles.count",
+      () =>
+        this.db.prepare(countSQL).get(...whereParams) as {
+          count: number;
+        },
+      { category: "db" },
+    );
     const total = countResult.count;
 
     // Build the main query with sorting and pagination
@@ -1641,9 +1697,14 @@ export class IndexDatabase {
       LIMIT ? OFFSET ?
     `;
 
-    const rows = this.db.prepare(mainSQL).all(...whereParams, pageSize, offset) as Array<
-      Record<string, unknown>
-    >;
+    const rows = await measureOperation(
+      "queryFiles.rows",
+      () =>
+        this.db.prepare(mainSQL).all(...whereParams, pageSize, offset) as Array<
+          Record<string, unknown>
+        >,
+      { category: "db", detail: `limit=${pageSize} offset=${offset}` },
+    );
     const matchedFiles = rows.map((v) =>
       rowToFileRecord(v as Record<string, string | number>, metadata),
     );

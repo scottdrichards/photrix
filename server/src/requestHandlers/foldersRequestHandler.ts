@@ -1,6 +1,7 @@
 import * as http from "http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { normalizeFolderPath } from "../indexDatabase/utils/pathUtils.ts";
+import { measureOperation } from "../observability/requestTrace.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -20,7 +21,11 @@ export const foldersRequestHandler = async (
     const normalizedPath = normalizeFolderPath(subPath || "/");
 
     console.log(`[folders] Getting folders for path: "${normalizedPath}"`);
-    const folders = database.getFolders(normalizedPath);
+    const folders = await measureOperation(
+      "getFolders",
+      () => database.getFolders(normalizedPath),
+      { category: "db", detail: normalizedPath },
+    );
     console.log(`[folders] Found ${folders.length} folders`);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ folders }));

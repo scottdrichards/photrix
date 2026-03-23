@@ -6,6 +6,7 @@ import {
 import { type FaceTag } from "./fileRecord.type.ts";
 import { type IndexDatabase } from "./indexDatabase.ts";
 import { waitForBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
+import { measureOperation } from "../observability/requestTrace.ts";
 
 let isProcessingFaceMetadata = false;
 
@@ -332,96 +333,97 @@ export const startBackgroundProcessFaceMetadata = (
 
       for (const item of batch) {
         await waitForBackgroundTasksEnabled();
+        await measureOperation(
+          "metadata.face.processEntry",
+          async () => {
+            const isImage = item.mimeType?.startsWith("image/") ?? false;
+            if (!isImage) {
+              const nowIso = new Date().toISOString();
+              await database.addOrUpdateFileData(item.relativePath, {
+                faceTags: [],
+                faceMetadataProcessedAt: nowIso,
+              });
 
-        const isImage = item.mimeType?.startsWith("image/") ?? false;
-        if (!isImage) {
-          const nowIso = new Date().toISOString();
-          await database.addOrUpdateFileData(item.relativePath, {
-            faceTags: [],
-            faceMetadataProcessedAt: nowIso,
-          });
+              processedCount++;
+              faceMetadataProcessingStats.processed++;
+              return;
+            }
 
-          processedCount++;
-          faceMetadataProcessingStats.processed++;
-          continue;
-        }
+            const fileRecord = await database.getFileRecord(item.relativePath);
+            const hasKnownTagging =
+              (fileRecord?.regions?.length ?? 0) > 0 ||
+              (fileRecord?.personInImage?.length ?? 0) > 0;
 
-        const fileRecord = await database.getFileRecord(item.relativePath, [
-          "regions",
-          "personInImage",
-          "dimensionWidth",
-          "dimensionHeight",
-        ]);
-        const hasKnownTagging =
-          (fileRecord?.regions?.length ?? 0) > 0 ||
-          (fileRecord?.personInImage?.length ?? 0) > 0;
+            const fullPath = path.join(
+              database.storagePath,
+              stripLeadingSlash(item.relativePath),
+            );
 
-        const fullPath = path.join(
-          database.storagePath,
-          stripLeadingSlash(item.relativePath),
-        );
+            let extractedFaces: FaceEmbeddingResult[] = [];
+            try {
+              extractedFaces = await extractFaceEmbeddingsFromImage({
+                imagePath: fullPath,
+                regions: fileRecord?.regions
+                  ?.map((region) => region.area)
+                  .filter(
+                    (
+                      area,
+                    ): area is { x: number; y: number; width: number; height: number } =>
+                      Boolean(area),
+                  ),
+              });
+              if (extractedFaces.length > 0) {
+                faceMetadataProcessingStats.workerSuccess++;
+              }
+            } catch (error) {
+              faceMetadataProcessingStats.workerFailures++;
+              console.warn(
+                `[metadata:face] worker extraction failed for ${item.relativePath}, falling back to deterministic embedding: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
 
-        let extractedFaces: FaceEmbeddingResult[] = [];
-        try {
-          extractedFaces = await extractFaceEmbeddingsFromImage({
-            imagePath: fullPath,
-            regions: fileRecord?.regions
-              ?.map((region) => region.area)
-              .filter(
-                (
-                  area,
-                ): area is { x: number; y: number; width: number; height: number } =>
-                  Boolean(area),
-              ),
-          });
-          if (extractedFaces.length > 0) {
-            faceMetadataProcessingStats.workerSuccess++;
-          }
-        } catch (error) {
-          faceMetadataProcessingStats.workerFailures++;
-          console.warn(
-            `[metadata:face] worker extraction failed for ${item.relativePath}, falling back to deterministic embedding: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
+            const seededTags =
+              extractedFaces.length > 0
+                ? toFaceTagsFromEmbeddings({
+                    relativePath: item.relativePath,
+                    faces: extractedFaces,
+                    regions: fileRecord?.regions,
+                    personInImage: fileRecord?.personInImage,
+                    defaultSource: hasKnownTagging ? "seed-known" : "auto-detected",
+                  })
+                : buildDeterministicFallbackTags({
+                    relativePath: item.relativePath,
+                    regions: fileRecord?.regions,
+                    personInImage: fileRecord?.personInImage,
+                    imageDimensions: {
+                      width: fileRecord?.dimensionWidth,
+                      height: fileRecord?.dimensionHeight,
+                    },
+                    defaultSource: hasKnownTagging ? "seed-known" : "auto-detected",
+                  });
 
-        const seededTags =
-          extractedFaces.length > 0
-            ? toFaceTagsFromEmbeddings({
-                relativePath: item.relativePath,
-                faces: extractedFaces,
-                regions: fileRecord?.regions,
-                personInImage: fileRecord?.personInImage,
-                defaultSource: hasKnownTagging ? "seed-known" : "auto-detected",
-              })
-            : buildDeterministicFallbackTags({
-          relativePath: item.relativePath,
-          regions: fileRecord?.regions,
-          personInImage: fileRecord?.personInImage,
-          imageDimensions: {
-            width: fileRecord?.dimensionWidth,
-            height: fileRecord?.dimensionHeight,
+            if (extractedFaces.length === 0) {
+              faceMetadataProcessingStats.fallbackCount++;
+            }
+
+            const nowIso = new Date().toISOString();
+            const suggestedTags = seededTags.map((tag) =>
+              applySuggestion(tag, confirmedProfiles, nowIso),
+            );
+
+            confirmedProfiles.push(...collectConfirmedProfiles(suggestedTags));
+
+            await database.addOrUpdateFileData(item.relativePath, {
+              faceTags: suggestedTags,
+              faceMetadataProcessedAt: nowIso,
+            });
+
+            processedCount++;
+            faceMetadataProcessingStats.processed++;
           },
-          defaultSource: hasKnownTagging ? "seed-known" : "auto-detected",
-        });
-
-        if (extractedFaces.length === 0) {
-          faceMetadataProcessingStats.fallbackCount++;
-        }
-
-        const nowIso = new Date().toISOString();
-        const suggestedTags = seededTags.map((tag) =>
-          applySuggestion(tag, confirmedProfiles, nowIso),
+          { category: "other", detail: item.relativePath, logWithoutRequest: true },
         );
 
-        confirmedProfiles.push(...collectConfirmedProfiles(suggestedTags));
-
-        await database.addOrUpdateFileData(item.relativePath, {
-          faceTags: suggestedTags,
-          faceMetadataProcessedAt: nowIso,
-        });
-
-        processedCount++;
-        faceMetadataProcessingStats.processed++;
         const now = Date.now();
         if (now - lastReportTime > 1000) {
           const percentComplete =

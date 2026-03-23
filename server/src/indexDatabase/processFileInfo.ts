@@ -1,6 +1,7 @@
 import path from "node:path";
 import { getFastMediaDimensions, getFileInfo } from "../fileHandling/fileUtils.ts";
 import { waitForBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
+import { measureOperation } from "../observability/requestTrace.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 
 const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
@@ -39,19 +40,26 @@ export const startBackgroundProcessFileInfoMetadata = (
         await waitForBackgroundTasksEnabled();
 
         const { relativePath } = entry;
-        const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
+        await measureOperation(
+          "metadata.fileInfo.processEntry",
+          async () => {
+            const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
 
-        const fileInfo = await getFileInfo(fullPath);
-        const fastDimensions = await getFastMediaDimensions(fullPath);
+            const fileInfo = await getFileInfo(fullPath);
+            const fastDimensions = await getFastMediaDimensions(fullPath);
+            const now = new Date();
+            const metadata = {
+              ...fileInfo,
+              ...fastDimensions,
+              infoProcessedAt: now.toISOString(),
+            };
+
+            await database.addOrUpdateFileData(relativePath, metadata);
+          },
+          { category: "other", detail: relativePath, logWithoutRequest: true },
+        );
+
         const now = new Date();
-        const metadata = {
-          ...fileInfo,
-          ...fastDimensions,
-          infoProcessedAt: now.toISOString(),
-        };
-
-        await database.addOrUpdateFileData(relativePath, metadata);
-
         processedCount++;
         if (now.getTime() - lastReportTime > 1000) {
           const percentComplete = ((processedCount / totalToProcess) * 100).toFixed(2);

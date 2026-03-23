@@ -25,7 +25,8 @@ import {
   standardHeights,
   parseToStandardHeight,
 } from "../../common/standardHeights.ts";
-import { mediaProcessingQueue } from "../../common/processingQueue.ts";
+import { measureOperation } from "../../observability/requestTrace.ts";
+import { scheduleWork } from "../../common/scheduleWork.ts";
 import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../utils.ts";
 
@@ -136,11 +137,7 @@ const streamCachedFile = (
 };
 
 const logQueueStatus = (label: string, subPath: string) => {
-  const queueSize = mediaProcessingQueue.getQueueSize();
-  const processing = mediaProcessingQueue.getProcessing();
-  console.log(
-    `[filesRequest] ${label}: ${subPath} (queue: ${queueSize}, processing: ${processing})`,
-  );
+  console.log(`[filesRequest] ${label}: ${subPath}`);
 };
 
 
@@ -165,10 +162,19 @@ const serveVideoThumb = async (
   const { normalizedPath, subPath, res } = ctx;
   try {
     logQueueStatus(label, subPath);
-    const cachedPath = await generateVideoThumbnail(normalizedPath, height, {
-      priority: "userBlocked",
-    });
-    const cachedStats = await stat(cachedPath);
+    const cachedPath = await measureOperation(
+      "generateVideoThumbnail",
+      () =>
+        scheduleWork(`videoThumb:${normalizedPath}:${height}`, () =>
+          generateVideoThumbnail(normalizedPath, height, { priority: "userBlocked" }),
+        ),
+      { category: "conversion", detail: String(height) },
+    );
+    const cachedStats = await measureOperation(
+      "statCachedVideoThumbnail",
+      () => stat(cachedPath),
+      { category: "file" },
+    );
     streamCachedFile(res, cachedPath, {
       contentType: "image/jpeg",
       size: cachedStats.size,
@@ -209,11 +215,19 @@ const tryHLSStream = async (
     );
 
     // Get duration from database for accurate playlist duration
-    const fileRecord = await database.getFileRecord(subPath, ["duration"]);
+    const fileRecord = await measureOperation(
+      "getFileRecord",
+      () => database.getFileRecord(subPath),
+      { category: "db", detail: "duration" },
+    );
     const knownDuration = fileRecord?.duration;
 
     // Check if multi-bitrate HLS is pre-encoded
-    const multibitrateInfo = await getMultibitrateHLSInfo(normalizedPath);
+    const multibitrateInfo = await measureOperation(
+      "getMultibitrateHLSInfo",
+      () => getMultibitrateHLSInfo(normalizedPath),
+      { category: "conversion" },
+    );
     const hasMultibitrate = multibitrateInfo.exists;
 
     // If we have multi-bitrate HLS, serve from that
@@ -232,7 +246,11 @@ const tryHLSStream = async (
           return true;
         }
 
-        const segmentStats = await stat(segmentPath);
+        const segmentStats = await measureOperation(
+          "statHlsVariantSegment",
+          () => stat(segmentPath),
+          { category: "file" },
+        );
         res.writeHead(200, {
           "Content-Type": "video/mp2t",
           "Content-Length": segmentStats.size,
@@ -255,7 +273,11 @@ const tryHLSStream = async (
           return true;
         }
 
-        const playlistContent = await readFile(variantPlaylistPath, "utf-8");
+        const playlistContent = await measureOperation(
+          "readHlsVariantPlaylist",
+          () => readFile(variantPlaylistPath, "utf-8"),
+          { category: "file" },
+        );
 
         // Rewrite segment paths to use API endpoint
         const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}&segment=`;
@@ -277,7 +299,11 @@ const tryHLSStream = async (
       }
 
       // Serve master playlist
-      let masterContent = await readFile(multibitrateInfo.masterPlaylistPath, "utf-8");
+      let masterContent = await measureOperation(
+        "readHlsMasterPlaylist",
+        () => readFile(multibitrateInfo.masterPlaylistPath, "utf-8"),
+        { category: "file" },
+      );
 
       // Rewrite variant playlist paths to use API endpoint
       const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=`;
@@ -299,7 +325,11 @@ const tryHLSStream = async (
     }
 
     // Fall back to on-demand single-stream HLS generation
-    const hlsInfo = await getHLSInfo(normalizedPath, height);
+    const hlsInfo = await measureOperation(
+      "getHLSInfo",
+      () => getHLSInfo(normalizedPath, height),
+      { category: "conversion", detail: String(height) },
+    );
 
     // If requesting a segment, serve it directly if it exists
     if (segment) {
@@ -318,7 +348,11 @@ const tryHLSStream = async (
         writeJson(res, 404, { error: "HLS segment not found or timed out" });
         return true;
       }
-      const segmentStats = await stat(segmentPath);
+      const segmentStats = await measureOperation(
+        "statHlsSegment",
+        () => stat(segmentPath),
+        { category: "file" },
+      );
       res.writeHead(200, {
         "Content-Type": "video/mp2t",
         "Content-Length": segmentStats.size,
@@ -328,14 +362,21 @@ const tryHLSStream = async (
       return true;
     }
 
-    // Start HLS generation (returns immediately, transcoding happens in background)
-    await generateHLS(normalizedPath, height, {
-      priority: "userBlocked",
-      contentDurationSeconds:
-        typeof knownDuration === "number" && Number.isFinite(knownDuration)
-          ? knownDuration
-          : undefined,
-    });
+    // Start HLS generation, deduplicated so concurrent requests share one encode
+    await measureOperation(
+      "generateHLS",
+      () =>
+        scheduleWork(`hls:${normalizedPath}:${height}`, () =>
+          generateHLS(normalizedPath, height, {
+            priority: "userBlocked",
+            contentDurationSeconds:
+              typeof knownDuration === "number" && Number.isFinite(knownDuration)
+                ? knownDuration
+                : undefined,
+          }),
+        ),
+      { category: "conversion", detail: String(height) },
+    );
 
     // Wait for playlist to have at least 3 segments for smooth initial playback
     const maxWaitMs = 30_000;
@@ -345,7 +386,11 @@ const tryHLSStream = async (
 
     const countSegments = async (): Promise<number> => {
       if (!existsSync(hlsInfo.playlistPath)) return 0;
-      const content = await readFile(hlsInfo.playlistPath, "utf-8");
+      const content = await measureOperation(
+        "readHlsPlaylist",
+        () => readFile(hlsInfo.playlistPath, "utf-8"),
+        { category: "file" },
+      );
       const matches = content.match(/segment_\d+\.ts/g);
       return matches?.length ?? 0;
     };
@@ -361,7 +406,11 @@ const tryHLSStream = async (
     }
 
     // Read and serve the playlist, modifying segment URLs to include proper path
-    let playlistContent = await readFile(hlsInfo.playlistPath, "utf-8");
+    let playlistContent = await measureOperation(
+      "readHlsPlaylist",
+      () => readFile(hlsInfo.playlistPath, "utf-8"),
+      { category: "file" },
+    );
 
     // Inject total duration into playlist if we know it from the database
     // This allows the player to show correct duration even during encoding
@@ -424,19 +473,29 @@ const tryImageVariant = async (ctx: FileHandlingContext) => {
     const allSizes = standardHeights.filter(
       (size): size is Exclude<StandardHeight, "original"> => typeof size !== "string",
     );
-    void convertImageToMultipleSizes(normalizedPath, allSizes, {
-      priority: "userImplicit",
-    }).catch((error) => {
+    void scheduleWork(
+      `thumbnail:${normalizedPath}:all`,
+      () => convertImageToMultipleSizes(normalizedPath, allSizes, { priority: "userImplicit" }),
+    ).catch((error) => {
       console.error(
         `[filesRequest] Background size generation failed for ${subPath}:`,
         error,
       );
     });
 
-    const cachedPath = await convertImage(normalizedPath, height, {
-      priority: "userBlocked",
-    });
-    const cachedStats = await stat(cachedPath);
+    const cachedPath = await measureOperation(
+      "convertImage",
+      () =>
+        scheduleWork(`thumbnail:${normalizedPath}:${height}`, () =>
+          convertImage(normalizedPath, height, { priority: "userBlocked" }),
+        ),
+      { category: "conversion", detail: String(height) },
+    );
+    const cachedStats = await measureOperation(
+      "statCachedImage",
+      () => stat(cachedPath),
+      { category: "file" },
+    );
     streamCachedFile(res, cachedPath, {
       contentType: "image/jpeg",
       size: cachedStats.size,
@@ -470,20 +529,24 @@ const fileHandler = async (
     return writeJson(res, 403, { error: "Access denied" });
   }
 
-  const fileStats: Stats | null = await (async () => {
-    try {
-      const stats = await stat(normalizedPath);
-      if (!stats.isFile()) {
-        return null;
+  const fileStats: Stats | null = await measureOperation(
+    "statRequestedFile",
+    async () => {
+      try {
+        const stats = await stat(normalizedPath);
+        if (!stats.isFile()) {
+          return null;
+        }
+        return stats;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return null;
+        }
+        throw error;
       }
-      return stats;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return null;
-      }
-      throw error;
-    }
-  })();
+    },
+    { category: "file" },
+  );
   if (!fileStats) {
     return writeJson(res, 404, { error: "File not found" });
   }

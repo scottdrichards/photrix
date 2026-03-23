@@ -3,7 +3,8 @@ import { existsSync } from "fs";
 import { mkdir, stat } from "fs/promises";
 import { join } from "path";
 import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
-import { type QueuePriority, mediaProcessingQueue } from "../common/processingQueue.ts";
+import { type ConversionPriority } from "../common/conversionPriority.ts";
+import { measureOperation } from "../observability/requestTrace.ts";
 import type { StandardHeight } from "../common/standardHeights.ts";
 import { appendWithLimit, pipeChildProcessLogs } from "./videoUtils.ts";
 
@@ -91,24 +92,17 @@ const generateHLSWithFFMPEG = (
 export const generateHLS = async (
   filePath: string,
   height: StandardHeight = "original",
-  opts?: { priority?: QueuePriority; contentDurationSeconds?: number },
+  opts?: { priority?: ConversionPriority; contentDurationSeconds?: number },
 ): Promise<string> => {
-  const fileStats = await stat(filePath);
-  const contentDurationMilliseconds = Math.max(
-    0,
-    Math.round((opts?.contentDurationSeconds ?? 0) * 1000),
-  );
+  void opts;
+  await stat(filePath);
   const { exists, playlistPath, hlsDir } = await getHLSInfo(filePath, height);
 
   if (exists) {
     return playlistPath;
   }
 
-  // Start transcoding in the background (don't await completion)
-  // This allows the client to start playing as soon as first segments are ready
-  await mediaProcessingQueue.enqueue({
-    fn: async () => {
-      await mkdir(hlsDir, { recursive: true });
+  await mkdir(hlsDir, { recursive: true });
 
       const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
       const maxBitrate =
@@ -142,7 +136,7 @@ export const generateHLS = async (
         playlistPath,
       ];
 
-      if (cudaAvailable) {
+  if (cudaAvailable) {
         // FFmpeg args for HLS with NVIDIA NVENC hardware acceleration
         const nvencArgs = [
           "-hwaccel",
@@ -167,8 +161,12 @@ export const generateHLS = async (
           ...outputArgs,
         ];
         console.log(`[HLS] Generating ${height}p HLS stream for ${filePath} using NVENC`);
-        await generateHLSWithFFMPEG(nvencArgs, hlsDir, "nvenc");
-      } else {
+        await measureOperation(
+          "generateHLSWithFFMPEG",
+          () => generateHLSWithFFMPEG(nvencArgs, hlsDir, "nvenc"),
+          { category: "conversion", detail: `nvenc:${String(height)}`, logWithoutRequest: true },
+        );
+  } else {
         // FFmpeg args for software encoding fallback
         const softwareArgs = [
           ...inputArgs,
@@ -185,14 +183,16 @@ export const generateHLS = async (
         console.log(
           `[HLS] Generating ${height}p HLS stream for ${filePath} using software encoding`,
         );
-        await generateHLSWithFFMPEG(softwareArgs, hlsDir, "software");
-      }
-    },
-    priority: opts?.priority ?? "background",
-    mediaType: "video",
-    sizeBytes: fileStats.size,
-    durationMilliseconds: contentDurationMilliseconds,
-  });
+        await measureOperation(
+          "generateHLSWithFFMPEG",
+          () => generateHLSWithFFMPEG(softwareArgs, hlsDir, "software"),
+          {
+            category: "conversion",
+            detail: `software:${String(height)}`,
+            logWithoutRequest: true,
+          },
+        );
+  }
 
   return playlistPath;
 };

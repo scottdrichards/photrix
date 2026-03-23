@@ -3,7 +3,8 @@ import { existsSync } from "fs";
 import { mkdir, stat, writeFile } from "fs/promises";
 import { join } from "path";
 import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
-import { type QueuePriority, mediaProcessingQueue } from "../common/processingQueue.ts";
+import { type ConversionPriority } from "../common/conversionPriority.ts";
+import { measureOperation } from "../observability/requestTrace.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
 
 /** HLS quality variants: 360p for fast start, 720p for quality */
@@ -196,16 +197,14 @@ const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
 export const generateMultibitrateHLS = async (
   filePath: string,
   opts?: {
-    priority?: QueuePriority;
+    priority?: ConversionPriority;
     waitForCompletion?: boolean;
     contentDurationSeconds?: number;
   },
 ): Promise<string> => {
-  const fileStats = await stat(filePath);
-  const contentDurationMilliseconds = Math.max(
-    0,
-    Math.round((opts?.contentDurationSeconds ?? 0) * 1000),
-  );
+  void opts?.priority;
+  void opts?.contentDurationSeconds;
+  await stat(filePath);
   const hlsDir = getMultibitrateHLSDirectory(filePath);
   const masterPath = getMasterPlaylistPath(hlsDir);
 
@@ -226,11 +225,22 @@ export const generateMultibitrateHLS = async (
 
     // Generate variants sequentially (NVENC can only do one encode at a time efficiently)
     for (const variant of HLS_VARIANTS) {
-      await generateVariant(filePath, hlsDir, variant);
+      await measureOperation(
+        "generateHlsVariant",
+        () => generateVariant(filePath, hlsDir, variant),
+        {
+          category: "conversion",
+          detail: `${variant.height}p`,
+          logWithoutRequest: true,
+        },
+      );
     }
 
     // Create master playlist
-    await createMasterPlaylist(hlsDir);
+    await measureOperation("createHlsMasterPlaylist", () => createMasterPlaylist(hlsDir), {
+      category: "conversion",
+      logWithoutRequest: true,
+    });
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     if (isVerboseHlsLoggingEnabled()) {
@@ -239,20 +249,10 @@ export const generateMultibitrateHLS = async (
   };
 
   if (opts?.waitForCompletion) {
-    await mediaProcessingQueue.enqueue({
-      fn: doEncode,
-      priority: opts.priority ?? "background",
-      mediaType: "video",
-      sizeBytes: fileStats.size,
-      durationMilliseconds: contentDurationMilliseconds,
-    });
+    await doEncode();
   } else {
-    void mediaProcessingQueue.enqueue({
-      fn: doEncode,
-      priority: opts?.priority ?? "background",
-      mediaType: "video",
-      sizeBytes: fileStats.size,
-      durationMilliseconds: contentDurationMilliseconds,
+    void doEncode().catch((error) => {
+      console.error(`[HLS-ABR] Async encode failed for ${filePath}:`, error);
     });
   }
 

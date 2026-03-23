@@ -4,7 +4,8 @@ import { mkdir, stat } from "fs/promises";
 import { dirname } from "path";
 import { StandardHeight } from "../common/standardHeights.ts";
 import { CACHE_DIR, getMirroredCachedFilePath } from "../common/cacheUtils.ts";
-import { mediaProcessingQueue, QueuePriority } from "../common/processingQueue.ts";
+import { type ConversionPriority } from "../common/conversionPriority.ts";
+import { measureOperation } from "../observability/requestTrace.ts";
 
 console.log(`[VideoCache] Initialized at ${CACHE_DIR}`);
 
@@ -106,9 +107,10 @@ export const generateVideoPreview = async (
   filePath: string,
   height: StandardHeight = 320,
   durationMS: number = 5_000,
-  opts?: { priority?: QueuePriority },
+  opts?: { priority?: ConversionPriority },
 ): Promise<string> => {
-  const fileStats = await stat(filePath);
+  void opts;
+  await stat(filePath);
   const durationSeconds = Math.round(durationMS / 1000);
   const cachedPath = getMirroredCachedFilePath(
     filePath,
@@ -120,11 +122,12 @@ export const generateVideoPreview = async (
     return cachedPath;
   }
 
-  await mediaProcessingQueue.enqueue({
-    fn: async () => {
-      console.log(`[VideoCache] Generating ${height}p preview for ${filePath}`);
-      await mkdir(dirname(cachedPath), { recursive: true });
-      await new Promise<void>((resolve, reject) => {
+  console.log(`[VideoCache] Generating ${height}p preview for ${filePath}`);
+  await mkdir(dirname(cachedPath), { recursive: true });
+  await measureOperation(
+    "generateVideoPreview",
+    () =>
+      new Promise<void>((resolve, reject) => {
         const args = [
           "-y", // Overwrite output file
           "-ss",
@@ -174,13 +177,13 @@ export const generateVideoPreview = async (
           console.error(`[VideoCache] Failed to start ffmpeg process: ${err.message}`);
           reject(err);
         });
-      });
+      }),
+    {
+      category: "conversion",
+      detail: `preview:${String(height)}:${durationSeconds}s`,
+      logWithoutRequest: true,
     },
-    priority: opts?.priority ?? "background",
-    mediaType: "video",
-    sizeBytes: fileStats.size,
-    durationMilliseconds: durationMS,
-  });
+  );
   return cachedPath;
 };
 
@@ -188,9 +191,10 @@ export const generateVideoPreview = async (
 export const generateVideoThumbnail = async (
   filePath: string,
   height: StandardHeight = 320,
-  opts?: { priority?: QueuePriority },
+  opts?: { priority?: ConversionPriority },
 ): Promise<string> => {
-  const fileStats = await stat(filePath);
+  void opts;
+  await stat(filePath);
   const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
 
   if (existsSync(cachedPath)) {
@@ -199,15 +203,16 @@ export const generateVideoThumbnail = async (
 
   const cudaAvailable = await determineIfCUDAAvailable();
 
-  await mediaProcessingQueue.enqueue({
-    fn: () => {
-      const generateWithMode = async (useHardware: boolean): Promise<void> => {
+  const generateWithMode = async (useHardware: boolean): Promise<void> => {
         const encoderType = useHardware ? "CUDA" : "software";
         console.log(
           `[VideoCache] Generating ${height}p thumbnail for ${filePath} (${encoderType})`,
         );
         await mkdir(dirname(cachedPath), { recursive: true });
-        await new Promise<void>((resolve, reject) => {
+        await measureOperation(
+          "generateVideoThumbnail",
+          () =>
+            new Promise<void>((resolve, reject) => {
           const args = [
             "-y",
             ...(useHardware ? ["-hwaccel", "cuda"] : []),
@@ -255,15 +260,15 @@ export const generateVideoThumbnail = async (
             console.error(`[VideoCache] Failed to start ffmpeg process: ${err.message}`);
             reject(err);
           });
-        });
+        }),
+          {
+            category: "conversion",
+            detail: `${encoderType}:${String(height)}`,
+            logWithoutRequest: true,
+          },
+        );
       };
 
-      return generateWithMode(cudaAvailable);
-    },
-    priority: opts?.priority ?? "background",
-    mediaType: "video",
-    sizeBytes: fileStats.size,
-    durationMilliseconds: 0,
-  });
+  await generateWithMode(cudaAvailable);
   return cachedPath;
 };
