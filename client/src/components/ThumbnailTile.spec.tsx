@@ -201,4 +201,5 @@ describe("ThumbnailTile", () => {
     expect(image).toHaveAttribute("fetchpriority", "low");
     expect(image).toHaveAttribute("src", "http://localhost/a/1.jpg");
   });
+
 });

@@ -37,17 +37,11 @@ describe("generateWebSafeVideo", () => {
     mkdirSync(path.dirname(cachedPath), { recursive: true });
     writeFileSync(cachedPath, "cached");
 
-    const enqueue = jest.fn();
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
-
     const { generateWebSafeVideo } = await import("./generateWebSafeVideo.ts");
 
     const out = await generateWebSafeVideo(source);
 
     expect(out).toBe(cachedPath);
-    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("enqueues ffmpeg conversion for uncached file", async () => {
@@ -65,20 +59,12 @@ describe("generateWebSafeVideo", () => {
       return proc;
     });
 
-    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
-      await task.fn();
-    });
-
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
 
     const { generateWebSafeVideo } = await import("./generateWebSafeVideo.ts");
-    const out = await generateWebSafeVideo(source, 720, { priority: "foreground" });
+    const out = await generateWebSafeVideo(source, 720, { priority: "background" });
 
     expect(out.endsWith(".720.mp4")).toBe(true);
-    expect(enqueue).toHaveBeenCalledTimes(1);
     const ffmpegArgs = spawnMock.mock.calls[0]?.[1] as string[];
     expect(ffmpegArgs).toContain("scale=-2:720");
     expect(ffmpegArgs).toContain("libx264");
@@ -100,14 +86,7 @@ describe("generateWebSafeVideo", () => {
       return proc;
     });
 
-    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
-      await task.fn();
-    });
-
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
 
     const { generateWebSafeVideo } = await import("./generateWebSafeVideo.ts");
 
@@ -131,14 +110,7 @@ describe("generateWebSafeVideo", () => {
       return proc;
     });
 
-    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
-      await task.fn();
-    });
-
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
 
     const { generateWebSafeVideo } = await import("./generateWebSafeVideo.ts");
 

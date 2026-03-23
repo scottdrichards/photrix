@@ -11,6 +11,7 @@ import {
   bindCurrentRequestTrace,
   finishRequestTrace,
   getCurrentRequestId,
+  measureOperation,
   runWithRequestTrace,
 } from "./observability/requestTrace.ts";
 import { writeJson } from "./utils.ts";
@@ -42,6 +43,7 @@ export const createServer = (
         ...(requestId ? { requestId } : {}),
       },
       async () => {
+
         let requestLogged = false;
         const logRequestCompletion = bindCurrentRequestTrace(() => {
           if (requestLogged) {
@@ -61,9 +63,17 @@ export const createServer = (
         }
 
         try {
-          authService.applyResponseHeaders(req, res);
+          await measureOperation(
+            "request.applyResponseHeaders",
+            async () => authService.applyResponseHeaders(req, res),
+            { category: "request" },
+          );
 
-          const requestRejection = authService.validateRequest(req);
+          const requestRejection = await measureOperation(
+            "request.validateRequest",
+            async () => authService.validateRequest(req),
+            { category: "request" },
+          );
           if (requestRejection) {
             writeJson(res, requestRejection.status, { error: requestRejection.error });
             return;
@@ -80,16 +90,25 @@ export const createServer = (
             return;
           }
 
-          const authHandled = await authService.handleAuthRequest(
-            req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-            res,
+          const authHandled = await measureOperation(
+            "request.auth.handleAuthRequest",
+            () =>
+              authService.handleAuthRequest(
+                req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                res,
+              ),
+            { category: "request" },
           );
 
           if (authHandled) {
             return;
           }
 
-          const session = authService.requireAuthenticated(req, res);
+          const session = await measureOperation(
+            "request.auth.requireAuthenticated",
+            async () => authService.requireAuthenticated(req, res),
+            { category: "request" },
+          );
           if (!session) {
             return;
           }
@@ -101,49 +120,80 @@ export const createServer = (
               ...(authService.enabled ? { user: session.username } : {}),
             };
 
-            writeJson(res, 200, payload);
+            await measureOperation(
+              "request.route.health",
+              async () => writeJson(res, 200, payload),
+              { category: "request", detail: "/api/health" },
+            );
             return;
           }
 
           if (req.url?.startsWith("/api/status/stream") && req.method === "GET") {
-            statusRequestHandler(req, res, { database, stream: true });
+            await measureOperation(
+              "request.route.status.stream",
+              async () => statusRequestHandler(req, res, { database, stream: true }),
+              { category: "request", detail: "/api/status/stream" },
+            );
             return;
           }
 
           if (req.url === "/api/status/background-tasks" && req.method === "POST") {
-            await statusBackgroundTasksRequestHandler(req, res);
+            await measureOperation(
+              "request.route.status.backgroundTasks",
+              () => statusBackgroundTasksRequestHandler(req, res),
+              { category: "request", detail: "/api/status/background-tasks" },
+            );
             return;
           }
 
           if (req.url?.startsWith("/api/status") && req.method === "GET") {
-            statusRequestHandler(req, res, { database, stream: false });
+            await measureOperation(
+              "request.route.status",
+              async () => statusRequestHandler(req, res, { database, stream: false }),
+              { category: "request", detail: "/api/status" },
+            );
             return;
           }
 
           // Get folders endpoint - list subfolders at a given path
           if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
-            foldersRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              { database },
+            await measureOperation(
+              "request.route.folders",
+              () =>
+                foldersRequestHandler(
+                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  res,
+                  { database },
+                ),
+              { category: "request", detail: "/api/folders/*" },
             );
             return;
           }
 
           if (req.url?.startsWith("/api/suggestions") && req.method === "GET") {
-            suggestionsRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              { database },
+            await measureOperation(
+              "request.route.suggestions",
+              () =>
+                suggestionsRequestHandler(
+                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  res,
+                  { database },
+                ),
+              { category: "request", detail: "/api/suggestions" },
             );
             return;
           }
 
           if (req.url?.startsWith("/api/faces/") && ["GET", "POST"].includes(req.method ?? "")) {
-            await facesRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              { database },
+            await measureOperation(
+              "request.route.faces",
+              () =>
+                facesRequestHandler(
+                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  res,
+                  { database },
+                ),
+              { category: "request", detail: "/api/faces/*" },
             );
             return;
           }
@@ -152,27 +202,43 @@ export const createServer = (
           // Query mode REQUIRES trailing slash: /api/files/ or /api/files/subfolder/
           // File serving has NO trailing slash: /api/files/image.jpg
           if (req.url?.startsWith("/api/files/") && req.method === "GET") {
-            filesEndpointRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              {
-                database,
-                storageRoot: storagePath,
-              },
+            await measureOperation(
+              "request.route.files",
+              () =>
+                filesEndpointRequestHandler(
+                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  res,
+                  {
+                    database,
+                    storageRoot: storagePath,
+                  },
+                ),
+              { category: "request", detail: "/api/files/*" },
             );
             return;
           }
 
           // Default 404
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Not found" }));
+          await measureOperation(
+            "request.route.notFound",
+            async () => {
+              res.writeHead(404, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Not found" }));
+            },
+            { category: "request", detail: "404" },
+          );
         } catch (error) {
           console.error("[server] Unhandled request error", error);
           if (!res.headersSent) {
-            writeJson(res, 500, {
-              error: "Internal server error",
-              message: error instanceof Error ? error.message : String(error),
-            });
+            await measureOperation(
+              "request.route.unhandledError",
+              async () =>
+                writeJson(res, 500, {
+                  error: "Internal server error",
+                  message: error instanceof Error ? error.message : String(error),
+                }),
+              { category: "request", detail: "500" },
+            );
             return;
           }
           res.destroy(error instanceof Error ? error : undefined);

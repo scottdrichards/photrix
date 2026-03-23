@@ -49,6 +49,10 @@ Thumbs.db
 # DB
 data-index.json
 
+# Tools (large binaries and downloads)
+tools/jaeger/
+tools/
+
 # Cache
 .cache/
 **/.cache/

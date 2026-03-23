@@ -240,6 +240,13 @@ export interface ServerStatus {
     pending: number;
     processing: number;
   };
+  queueSummary: {
+    completed: QueueSummaryByMedia;
+    active: QueueSummaryByMedia;
+    userBlocked: QueueSummaryByMedia;
+    userImplicit: QueueSummaryByMedia;
+    background: QueueSummaryByMedia;
+  };
   pending: {
     info: number;
     exif: number;
@@ -265,6 +272,18 @@ export interface ServerStatus {
     exif: RecentMaintenance | null;
   };
 }
+
+type QueueSummaryByMedia = {
+  image: {
+    count: number;
+    sizeBytes: number;
+  };
+  video: {
+    count: number;
+    sizeBytes: number;
+    durationMilliseconds: number;
+  };
+};
 
 export const subscribeStatusStream = (
   onUpdate: (status: ServerStatus) => void,
@@ -503,10 +522,11 @@ export const setBackgroundTasksEnabled = async (
   return await response.json();
 };
 
-export const fetchFolders = async (path: string = ""): Promise<string[]> => {
+export const fetchFolders = async (path: string = "", signal?: AbortSignal): Promise<string[]> => {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
   const response = await fetch(`/api/folders/${normalizedPath}`, {
     credentials: "include",
+    signal,
   });
 
   if (!response.ok) {

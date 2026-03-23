@@ -5,7 +5,8 @@ import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
-import { mediaProcessingQueue, QueuePriority } from "../common/processingQueue.ts";
+import { type ConversionPriority } from "../common/conversionPriority.ts";
+import { measureOperation } from "../observability/requestTrace.ts";
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 
@@ -154,80 +155,84 @@ const generateImage = async (
   inputPath: string,
   outputs: Array<{ path: string; height: StandardHeight }>,
 ): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const start = performance.now();
-    const args = [
-      scriptPath,
-      inputPath,
-      "--outputs",
-      JSON.stringify(
-        outputs.map((o) => ({
-          path: o.path,
-          height: o.height === "original" ? null : o.height,
-        })),
-      ),
-    ];
+  measureOperation(
+    "pythonImageProcess",
+    () =>
+      new Promise((resolve, reject) => {
+        const args = [
+          scriptPath,
+          inputPath,
+          "--outputs",
+          JSON.stringify(
+            outputs.map((o) => ({
+              path: o.path,
+              height: o.height === "original" ? null : o.height,
+            })),
+          ),
+        ];
 
-    // Resolve a real python executable (Windows Store shim `python.exe` will not work).
-    void resolvePythonInvocation()
-      .then(({ command, baseArgs }) => {
-        const process = spawn(command, [...baseArgs, ...args], { windowsHide: true });
+        // Resolve a real python executable (Windows Store shim `python.exe` will not work).
+        void resolvePythonInvocation()
+          .then(({ command, baseArgs }) => {
+            const process = spawn(command, [...baseArgs, ...args], { windowsHide: true });
 
-        let stderr = "";
+            let stderr = "";
 
-        process.stderr.on("data", (data) => {
-          stderr += data.toString();
-        });
+            process.stderr.on("data", (data) => {
+              stderr += data.toString();
+            });
 
-        process.on("close", (code) => {
-          const duration = performance.now() - start;
-          console.log(
-            `[ImageCache] Image processing completed in ${duration.toFixed(2)}ms for ${inputPath} and outputs: ${outputs.map((o) => o.height).join(", ")}`,
-          );
-          if (code === 0) {
-            resolve();
-            return;
-          }
+            process.on("close", (code) => {
+              if (code === 0) {
+                resolve();
+                return;
+              }
 
-          const normalizedError =
-            stderr.trim() || `Python exited with code ${code ?? "unknown"}`;
-          const isCorrupt =
-            /unexpected end of file/i.test(normalizedError) ||
-            /invalid input/i.test(normalizedError);
-          const isMissingDependency =
-            /modulenotfounderror/i.test(normalizedError) ||
-            /no module named/i.test(normalizedError);
+              const normalizedError =
+                stderr.trim() || `Python exited with code ${code ?? "unknown"}`;
+              const isCorrupt =
+                /unexpected end of file/i.test(normalizedError) ||
+                /invalid input/i.test(normalizedError);
+              const isMissingDependency =
+                /modulenotfounderror/i.test(normalizedError) ||
+                /no module named/i.test(normalizedError);
 
-          const baseMessage = isCorrupt
-            ? `Corrupt or unreadable image ${inputPath}: ${normalizedError}`
-            : `Image conversion failed for ${inputPath}: ${normalizedError}`;
+              const baseMessage = isCorrupt
+                ? `Corrupt or unreadable image ${inputPath}: ${normalizedError}`
+                : `Image conversion failed for ${inputPath}: ${normalizedError}`;
 
-          const message = isMissingDependency
-            ? `${baseMessage}\n\nPython dependencies may be missing. Try: pip install -r server/src/imageProcessing/requirements.txt`
-            : baseMessage;
+              const message = isMissingDependency
+                ? `${baseMessage}\n\nPython dependencies may be missing. Try: pip install -r server/src/imageProcessing/requirements.txt`
+                : baseMessage;
 
-          console.error(
-            `[ImageCache] Python script failed (${code ?? "unknown"}): ${baseMessage}`,
-          );
-          reject(
-            new ImageConversionError(
-              message,
-              inputPath,
-              normalizedError,
-              code ?? undefined,
-            ),
-          );
-        });
+              console.error(
+                `[ImageCache] Python script failed (${code ?? "unknown"}): ${baseMessage}`,
+              );
+              reject(
+                new ImageConversionError(
+                  message,
+                  inputPath,
+                  normalizedError,
+                  code ?? undefined,
+                ),
+              );
+            });
 
-        process.on("error", (err) => {
-          console.error(`[ImageCache] Failed to start python process: ${err.message}`);
-          reject(err);
-        });
-      })
-      .catch((error) => {
-        reject(error);
-      });
-  });
+            process.on("error", (err) => {
+              console.error(`[ImageCache] Failed to start python process: ${err.message}`);
+              reject(err);
+            });
+          })
+          .catch((error) => {
+            reject(error);
+          });
+      }),
+    {
+      category: "conversion",
+      detail: outputs.map((output) => String(output.height)).join(","),
+      logWithoutRequest: true,
+    },
+  );
 
 /**
  * Creates a converted image at the specified height, caching the result.
@@ -236,34 +241,33 @@ const generateImage = async (
 export const convertImage = async (
   filePath: string,
   height: StandardHeight = 2160,
-  opts?: { priority?: QueuePriority },
+  opts?: { priority?: ConversionPriority },
 ): Promise<string> => {
-  const fileStats = await stat(filePath);
+  void opts;
+  await stat(filePath);
   const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
 
   if (existsSync(cachedPath)) {
     return cachedPath;
   }
 
-  await mediaProcessingQueue.enqueue({
-    fn: async () => {
-      await ensureCacheDir(cachedPath);
-      console.log(`[ImageCache] Generating ${height} for ${filePath}`);
-      await generateImage(filePath, [{ path: cachedPath, height }]);
-    },
-    priority: opts?.priority ?? "background",
-    mediaType: "image",
-    sizeBytes: fileStats.size,
-  });
+  await ensureCacheDir(cachedPath);
+  console.log(`[ImageCache] Generating ${height} for ${filePath}`);
+  await measureOperation(
+    "convertImage",
+    () => generateImage(filePath, [{ path: cachedPath, height }]),
+    { category: "conversion", detail: String(height), logWithoutRequest: true },
+  );
   return cachedPath;
 };
 
 export const convertImageToMultipleSizes = async (
   filePath: string,
   heights: StandardHeight[],
-  opts?: { priority?: QueuePriority },
+  opts?: { priority?: ConversionPriority },
 ): Promise<void> => {
-  const fileStats = await stat(filePath);
+  void opts;
+  await stat(filePath);
 
   const outputs = heights
     .map((height) => ({
@@ -276,16 +280,17 @@ export const convertImageToMultipleSizes = async (
     return;
   }
 
-  await mediaProcessingQueue.enqueue({
-    fn: async () => {
-      await Promise.all(outputs.map((o) => ensureCacheDir(o.path)));
-      console.log(
-        `[ImageCache] Generating sizes ${outputs.map((o) => o.height).join(", ")} for ${filePath}`,
-      );
-      await generateImage(filePath, outputs);
+  await Promise.all(outputs.map((o) => ensureCacheDir(o.path)));
+  console.log(
+    `[ImageCache] Generating sizes ${outputs.map((o) => o.height).join(", ")} for ${filePath}`,
+  );
+  await measureOperation(
+    "convertImageToMultipleSizes",
+    () => generateImage(filePath, outputs),
+    {
+      category: "conversion",
+      detail: outputs.map((output) => String(output.height)).join(","),
+      logWithoutRequest: true,
     },
-    priority: opts?.priority ?? "background",
-    mediaType: "image",
-    sizeBytes: fileStats.size,
-  });
+  );
 };

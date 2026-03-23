@@ -66,6 +66,14 @@ describe("Filter", () => {
     window.history.pushState(null, "", "/");
   });
 
+  it("passes an abort signal to fetchFolders", async () => {
+    renderFilter();
+
+    await waitFor(() => {
+      expect(fetchFoldersMock).toHaveBeenCalledWith("", expect.any(AbortSignal));
+    });
+  });
+
   it("shows top people suggestions with counts before typing", async () => {
     fetchSuggestionsWithCountsMock.mockResolvedValue([
       { value: "Sam", count: 14 },

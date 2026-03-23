@@ -6,7 +6,6 @@ import { createReadStream, existsSync, type Stats } from "fs";
 import path from "path/win32";
 import {
   convertImage,
-  convertImageToMultipleSizes,
   ImageConversionError,
 } from "../../imageProcessing/convertImage.ts";
 import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
@@ -22,7 +21,6 @@ import {
 } from "../../videoProcessing/generateMultibitrateHLS.ts";
 import {
   StandardHeight,
-  standardHeights,
   parseToStandardHeight,
 } from "../../common/standardHeights.ts";
 import { measureOperation } from "../../observability/requestTrace.ts";
@@ -470,19 +468,6 @@ const tryImageVariant = async (ctx: FileHandlingContext) => {
 
   try {
     logQueueStatus(`Requesting ${height} image`, subPath);
-    const allSizes = standardHeights.filter(
-      (size): size is Exclude<StandardHeight, "original"> => typeof size !== "string",
-    );
-    void scheduleWork(
-      `thumbnail:${normalizedPath}:all`,
-      () => convertImageToMultipleSizes(normalizedPath, allSizes, { priority: "userImplicit" }),
-    ).catch((error) => {
-      console.error(
-        `[filesRequest] Background size generation failed for ${subPath}:`,
-        error,
-      );
-    });
-
     const cachedPath = await measureOperation(
       "convertImage",
       () =>

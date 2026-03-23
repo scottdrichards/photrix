@@ -39,6 +39,8 @@ const parseTransports = (value: string | null) => {
 
 export class AuthStore {
   private readonly db: Database.Database;
+  private lastExpiredSessionCleanupMs = 0;
+  private static readonly EXPIRED_SESSION_CLEANUP_INTERVAL_MS = 60_000;
 
   constructor() {
     const dbFilePath = this.resolveDbPath();
@@ -240,7 +242,7 @@ export class AuthStore {
     measureSyncOperation(
       "authStore.createSession",
       () => {
-        this.deleteExpiredSessions();
+        this.maybeDeleteExpiredSessions();
         const nowIso = new Date().toISOString();
         this.db
           .prepare(
@@ -257,7 +259,7 @@ export class AuthStore {
     return measureSyncOperation(
       "authStore.findSession",
       () => {
-        this.deleteExpiredSessions();
+        this.maybeDeleteExpiredSessions();
 
         const row = this.db
           .prepare(
@@ -286,6 +288,19 @@ export class AuthStore {
       },
       { category: "db", detail: "session" },
     );
+  }
+
+  private maybeDeleteExpiredSessions() {
+    const now = Date.now();
+    if (
+      now - this.lastExpiredSessionCleanupMs <
+      AuthStore.EXPIRED_SESSION_CLEANUP_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    this.lastExpiredSessionCleanupMs = now;
+    this.deleteExpiredSessions();
   }
 
   deleteSession(tokenHash: string) {

@@ -35,10 +35,6 @@ describe("generateHLS", () => {
     mkdirSync(hlsDir, { recursive: true });
     writeFileSync(playlistPath, "#EXTM3U");
 
-    const enqueue = jest.fn();
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
     const spawnMock = jest.fn(() => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => proc.emit("close", 1));
@@ -51,7 +47,6 @@ describe("generateHLS", () => {
     const result = await generateHLS(source, 720);
 
     expect(result).toBe(playlistPath);
-    expect(enqueue).not.toHaveBeenCalled();
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
@@ -64,10 +59,6 @@ describe("generateHLS", () => {
     const { getMirroredHLSDirectory } = await import("../common/cacheUtils.ts");
     const hlsDir = getMirroredHLSDirectory(source, "360");
     const playlistPath = path.join(hlsDir, "playlist.m3u8");
-
-    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
-      await task.fn();
-    });
 
     const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
@@ -88,20 +79,16 @@ describe("generateHLS", () => {
       return proc;
     });
 
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
 
     const { generateHLS } = await import("./generateHLS.ts");
 
     const result = await generateHLS(source, 360, {
-      priority: "foreground",
+      priority: "background",
       contentDurationSeconds: 12,
     });
 
     expect(result).toBe(playlistPath);
-    expect(enqueue).toHaveBeenCalledTimes(1);
     expect(spawnMock).toHaveBeenCalledTimes(2);
 
     const generationArgs = spawnMock.mock.calls[1]?.[1] as string[];
@@ -114,10 +101,6 @@ describe("generateHLS", () => {
     process.env.CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
-
-    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
-      await task.fn();
-    });
 
     const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
@@ -133,14 +116,10 @@ describe("generateHLS", () => {
       return proc;
     });
 
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
 
     const { generateHLS } = await import("./generateHLS.ts");
 
     await expect(generateHLS(source, "original")).rejects.toThrow(/ffmpeg encode boom/i);
-    expect(enqueue).toHaveBeenCalledTimes(1);
   });
 });

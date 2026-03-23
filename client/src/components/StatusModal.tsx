@@ -16,10 +16,8 @@ import { useEffect, useState } from "react";
 import {
   setBackgroundTasksEnabled,
   subscribeStatusStream,
-  type ProgressEntry,
   type ServerStatus,
 } from "../api";
-import { ProgressItem } from "./ProgressItem";
 import { RecentActivity } from "./RecentActivity";
 
 const useStyles = makeStyles({
@@ -33,11 +31,6 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalL,
     marginBottom: tokens.spacingVerticalM,
     flexWrap: "wrap",
-  },
-  progressGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-    gap: tokens.spacingHorizontalM,
   },
   recentRow: {
     display: "grid",
@@ -63,12 +56,185 @@ const useStyles = makeStyles({
   errorText: {
     color: tokens.colorPaletteRedForeground1,
   },
+  queueBarSection: {
+    display: "flex",
+    flexDirection: "column",
+    gap: tokens.spacingVerticalXS,
+  },
+  queueBarHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalM,
+  },
+  queueBarTrack: {
+    position: "relative",
+    display: "flex",
+    width: "100%",
+    height: "18px",
+    borderRadius: tokens.borderRadiusLarge,
+    overflow: "hidden",
+    backgroundColor: tokens.colorNeutralBackground3,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  queueSegment: {
+    height: "100%",
+  },
+  queueSeparator: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: "2px",
+    backgroundColor: tokens.colorNeutralStrokeAccessible,
+    transform: "translateX(-1px)",
+    pointerEvents: "none",
+  },
+  queueAxis: {
+    display: "flex",
+    justifyContent: "space-between",
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+  },
+  queueLegend: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: tokens.spacingHorizontalM,
+  },
+  queueLegendItem: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalXS,
+    color: tokens.colorNeutralForeground2,
+  },
+  queueLegendSwatch: {
+    width: "12px",
+    height: "12px",
+    borderRadius: tokens.borderRadiusSmall,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
 });
 
 interface StatusModalProps {
   isOpen: boolean;
   onDismiss: () => void;
 }
+
+const summaryGroups = [
+  "completed",
+  "active",
+  "userBlocked",
+  "userImplicit",
+  "background",
+] as const;
+
+type QueueGroup = (typeof summaryGroups)[number];
+type QueueSummaryByMedia = ServerStatus["queueSummary"][QueueGroup];
+
+type QueueSegment = {
+  key: string;
+  widthPercent: number;
+  color: string;
+};
+
+const formatBytes = (sizeBytes: number) => {
+  if (sizeBytes <= 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const unitIndex = Math.min(
+    Math.floor(Math.log(sizeBytes) / Math.log(1024)),
+    units.length - 1,
+  );
+  const value = sizeBytes / 1024 ** unitIndex;
+  const decimals = value < 10 && unitIndex > 0 ? 1 : 0;
+  return `${value.toFixed(decimals)} ${units[unitIndex]}`;
+};
+
+const getGroupLabel = (group: QueueGroup) => {
+  if (group === "userBlocked") {
+    return "userBlocked";
+  }
+  if (group === "userImplicit") {
+    return "userImplicit";
+  }
+  return group;
+};
+
+const getMediaColor = (group: QueueGroup, mediaType: "image" | "video") => {
+  const completedColors = {
+    image: "#2c7be5",
+    video: "#2e9d62",
+  };
+  const queuedColors = {
+    image: "#7fa6d8",
+    video: "#79b596",
+  };
+
+  if (group === "completed") {
+    return completedColors[mediaType];
+  }
+
+  return queuedColors[mediaType];
+};
+
+const getQueueSize = (summary: QueueSummaryByMedia) => {
+  return summary.image.sizeBytes + summary.video.sizeBytes;
+};
+
+const buildQueueVisualization = (summary: ServerStatus["queueSummary"]) => {
+  const totalBytes = summaryGroups.reduce(
+    (accumulator, group) => accumulator + getQueueSize(summary[group]),
+    0,
+  );
+
+  const separators = summaryGroups.slice(0, -1).reduce<number[]>((accumulator, group) => {
+    const nextValue = (accumulator.at(-1) ?? 0) + getQueueSize(summary[group]);
+    return [...accumulator, nextValue];
+  }, []);
+
+  if (totalBytes <= 0) {
+    return {
+      totalBytes,
+      segments: [] as QueueSegment[],
+      separatorsPercent: [] as number[],
+      groupBreakdown: summaryGroups.map((group) => ({
+        group,
+        sizeBytes: 0,
+      })),
+    };
+  }
+
+  const segments = summaryGroups.flatMap((group) => {
+    const imageBytes = summary[group].image.sizeBytes;
+    const videoBytes = summary[group].video.sizeBytes;
+
+    return [
+      {
+        key: `${group}-image`,
+        widthPercent: (imageBytes / totalBytes) * 100,
+        color: getMediaColor(group, "image"),
+      },
+      {
+        key: `${group}-video`,
+        widthPercent: (videoBytes / totalBytes) * 100,
+        color: getMediaColor(group, "video"),
+      },
+    ].filter((segment) => segment.widthPercent > 0);
+  });
+
+  return {
+    totalBytes,
+    segments,
+    separatorsPercent: separators
+      .map((boundaryBytes) => (boundaryBytes / totalBytes) * 100)
+      .filter((value) => value > 0 && value < 100),
+    groupBreakdown: summaryGroups.map((group) => ({
+      group,
+      sizeBytes: getQueueSize(summary[group]),
+    })),
+  };
+};
 
 export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   const styles = useStyles();
@@ -81,29 +247,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   const status = statusHistory?.at(-1)?.status;
   const backgroundTasksEnabled = status?.maintenance.backgroundTasksEnabled ?? true;
 
-  const calculateETA = (progress: ProgressEntry, completedKey: "exif"): string | null => {
-    if (!statusHistory || statusHistory.length < 2 || progress.percent >= 1) {
-      return null;
-    }
-
-    const oldestSample = statusHistory.at(0)!;
-    const latestSample = statusHistory.at(-1)!;
-
-    const completedDelta =
-      latestSample.status.progress[completedKey].completed -
-      oldestSample.status.progress[completedKey].completed;
-    const timeDeltaSecs = (latestSample.timestamp - oldestSample.timestamp) / 1000;
-
-    if (completedDelta <= 0 || timeDeltaSecs <= 0) return null;
-
-    const rate = completedDelta / timeDeltaSecs;
-    const remaining = progress.total - progress.completed;
-    const etaSeconds = remaining / rate;
-
-    if (etaSeconds < 60) return `~${Math.round(etaSeconds)}s`;
-    if (etaSeconds < 3600) return `~${Math.round(etaSeconds / 60)}m`;
-    return `~${Math.round(etaSeconds / 3600)}h`;
-  };
+  const queueVisualization = status ? buildQueueVisualization(status.queueSummary) : undefined;
 
   useEffect(() => {
     if (!isOpen) {
@@ -256,30 +400,50 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                     </span>
                   </Text>
                 </div>
-                <ProgressItem
-                  label="Overall progress"
-                  progress={status.progress.overall}
-                  detail="Includes file info and EXIF"
-                />
-
-                <div className={styles.progressGrid}>
-                  <ProgressItem
-                    label="Discovery"
-                    progress={status.progress.scanned}
-                    detail={`${status.scannedFilesCount.toLocaleString()} files scanned`}
-                  />
-                  <ProgressItem
-                    label="File info"
-                    progress={status.progress.info}
-                    detail={`${status.pending.info.toLocaleString()} remaining`}
-                  />
-                  <ProgressItem
-                    label="EXIF metadata"
-                    progress={status.progress.exif}
-                    detail={`${status.pending.exif.toLocaleString()} remaining`}
-                    eta={calculateETA(status.progress.exif, "exif")}
-                  />
-                </div>
+                {queueVisualization ? (
+                  <div className={styles.queueBarSection}>
+                    <div className={styles.queueBarHeader}>
+                      <Text weight="semibold">Queue by disk size</Text>
+                      <Text>{formatBytes(queueVisualization.totalBytes)} total</Text>
+                    </div>
+                    <div className={styles.queueBarTrack}>
+                      {queueVisualization.segments.map((segment) => (
+                        <div
+                          key={segment.key}
+                          className={styles.queueSegment}
+                          style={{
+                            width: `${segment.widthPercent}%`,
+                            backgroundColor: segment.color,
+                          }}
+                        />
+                      ))}
+                      {queueVisualization.separatorsPercent.map((separator, index) => (
+                        <div
+                          key={`separator-${index}`}
+                          className={styles.queueSeparator}
+                          style={{ left: `${separator}%` }}
+                        />
+                      ))}
+                    </div>
+                    <div className={styles.queueAxis}>
+                      <span>0</span>
+                      <span>{formatBytes(queueVisualization.totalBytes)}</span>
+                    </div>
+                    <div className={styles.queueLegend}>
+                      {queueVisualization.groupBreakdown.map((item) => (
+                        <span key={item.group} className={styles.queueLegendItem}>
+                          <span
+                            className={styles.queueLegendSwatch}
+                            style={{
+                              background: `linear-gradient(90deg, ${getMediaColor(item.group, "image")} 50%, ${getMediaColor(item.group, "video")} 50%)`,
+                            }}
+                          />
+                          <span>{getGroupLabel(item.group)}: {formatBytes(item.sizeBytes)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 <Text size={400} weight="semibold">
                   Recent activity

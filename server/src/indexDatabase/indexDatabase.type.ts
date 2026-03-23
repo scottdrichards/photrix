@@ -1,5 +1,17 @@
 import { FileRecord } from "./fileRecord.type.ts";
 
+export enum ConversionTaskPriority {
+  InProgress = -1,
+  UserBlocked = 0,
+  UserImplicit = 1,
+  Background = 2,
+}
+
+export type PendingConversionTaskPriority = Exclude<
+  ConversionTaskPriority,
+  ConversionTaskPriority.InProgress
+>;
+
 export type StringSearch =
   | string
   | string[]

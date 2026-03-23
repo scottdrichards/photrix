@@ -109,9 +109,27 @@ describe("requestTrace", () => {
       );
     });
 
-    const requestCall = calls.find(({ name }) => name === "http.request");
+    const requestCall = calls.find(({ name }) => name === "GET /api/health");
     expect(requestCall).toBeDefined();
     expect(trace.getSpan(requestCall?.context ?? otelContext.active())).toBeUndefined();
+  });
+
+  it("uses method and pathname for request root span names", async () => {
+    const { calls } = createSpanRecorder();
+
+    await runWithRequestTrace(
+      {
+        method: "GET",
+        url: "/api/files/?page=0&pageSize=10",
+        requestId: "name-trace-id",
+      },
+      async () => {
+        finishRequestTrace(200);
+      },
+    );
+
+    const requestCall = calls.find(({ name }) => name === "GET /api/files/");
+    expect(requestCall).toBeDefined();
   });
 
   it("starts standalone operations from the root context", async () => {

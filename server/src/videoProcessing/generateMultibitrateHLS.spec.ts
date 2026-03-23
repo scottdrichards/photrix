@@ -36,16 +36,10 @@ describe("generateMultibitrateHLS", () => {
     mkdirSync(path.dirname(masterPath), { recursive: true });
     writeFileSync(masterPath, "#EXTM3U");
 
-    const enqueue = jest.fn();
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
-
     const { generateMultibitrateHLS } = await import("./generateMultibitrateHLS.ts");
     const out = await generateMultibitrateHLS(source, { waitForCompletion: true });
 
     expect(out).toBe(masterPath);
-    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("enqueues and generates both variants plus master playlist", async () => {
@@ -56,10 +50,6 @@ describe("generateMultibitrateHLS", () => {
 
     const { getMirroredHLSDirectory } = await import("../common/cacheUtils.ts");
     const hlsDir = getMirroredHLSDirectory(source, "abr");
-
-    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
-      await task.fn();
-    });
 
     const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
@@ -75,9 +65,6 @@ describe("generateMultibitrateHLS", () => {
     });
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
 
     const { generateMultibitrateHLS, getMasterPlaylistPath } = await import(
       "./generateMultibitrateHLS.ts"
@@ -85,12 +72,11 @@ describe("generateMultibitrateHLS", () => {
 
     const masterPath = await generateMultibitrateHLS(source, {
       waitForCompletion: true,
-      priority: "foreground",
+      priority: "background",
       contentDurationSeconds: 14,
     });
 
     expect(masterPath).toBe(getMasterPlaylistPath(hlsDir));
-    expect(enqueue).toHaveBeenCalledTimes(1);
     expect(spawnMock).toHaveBeenCalledTimes(2);
 
     const firstArgs = spawnMock.mock.calls[0]?.[1] as string[];
@@ -107,10 +93,6 @@ describe("generateMultibitrateHLS", () => {
 
     const { getMirroredHLSDirectory } = await import("../common/cacheUtils.ts");
     const hlsDir = getMirroredHLSDirectory(source, "abr");
-
-    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
-      await task.fn();
-    });
 
     const spawnMock = jest
       .fn()
@@ -136,9 +118,6 @@ describe("generateMultibitrateHLS", () => {
       });
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
 
     const { generateMultibitrateHLS } = await import("./generateMultibitrateHLS.ts");
 
@@ -155,10 +134,6 @@ describe("generateMultibitrateHLS", () => {
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const enqueue = jest.fn(async (task: { fn: () => Promise<void> }) => {
-      await task.fn();
-    });
-
     const spawnMock = jest.fn((_command: string, _args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
@@ -169,9 +144,6 @@ describe("generateMultibitrateHLS", () => {
     });
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
 
     const { generateMultibitrateHLS } = await import("./generateMultibitrateHLS.ts");
 

@@ -35,19 +35,11 @@ describe("convertImage unit", () => {
     mkdirSync(path.dirname(cached), { recursive: true });
     writeFileSync(cached, "cached");
 
-    const enqueue = jest.fn(async (fn: () => Promise<void>) => {
-      await fn();
-    });
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
-
     const { convertImage } = await import("./convertImage.ts");
 
     const out = await convertImage(source, 320);
 
     expect(out).toBe(cached);
-    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("invokes python pipeline for uncached image conversion", async () => {
@@ -70,21 +62,13 @@ describe("convertImage unit", () => {
       return proc;
     });
 
-    const enqueue = jest.fn(async (fn: () => Promise<void>) => {
-      await fn();
-    });
-
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
 
     const { convertImage } = await import("./convertImage.ts");
 
     const out = await convertImage(source, 320);
     expect(out.endsWith("320.jpg")).toBe(true);
     expect(spawnMock).toHaveBeenCalled();
-    expect(enqueue).toHaveBeenCalled();
   });
 
   it("throws ImageConversionError with dependency guidance on module missing", async () => {
@@ -108,14 +92,7 @@ describe("convertImage unit", () => {
       return proc;
     });
 
-    const enqueue = jest.fn(async (fn: () => Promise<void>) => {
-      await fn();
-    });
-
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
 
     const { convertImage, ImageConversionError } = await import("./convertImage.ts");
 
@@ -139,20 +116,12 @@ describe("convertImage unit", () => {
     writeFileSync(cached640, "b");
 
     const spawnMock = jest.fn();
-    const enqueue = jest.fn(async (fn: () => Promise<void>) => {
-      await fn();
-    });
-
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
-    jest.unstable_mockModule("../common/processingQueue.ts", () => ({
-      mediaProcessingQueue: { enqueue },
-    }));
 
     const { convertImageToMultipleSizes } = await import("./convertImage.ts");
 
     await convertImageToMultipleSizes(source, [320, 640]);
 
-    expect(enqueue).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 });

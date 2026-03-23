@@ -48,6 +48,10 @@
         "/^npm --prefix client test$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^npm run -s build$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

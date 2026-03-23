@@ -1,7 +1,9 @@
 import * as http from "http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { normalizeFolderPath } from "../indexDatabase/utils/pathUtils.ts";
-import { measureOperation } from "../observability/requestTrace.ts";
+import {
+  measureOperation,
+} from "../observability/requestTrace.ts";
 
 type Options = {
   database: IndexDatabase;

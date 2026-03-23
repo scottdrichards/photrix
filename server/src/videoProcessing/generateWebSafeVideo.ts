@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { stat } from "fs/promises";
 import { getHash, getCachedFilePath } from "../common/cacheUtils.ts";
-import { type QueuePriority, mediaProcessingQueue } from "../common/processingQueue.ts";
+import { type ConversionPriority } from "../common/conversionPriority.ts";
 import type { StandardHeight } from "../common/standardHeights.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
 
@@ -10,8 +10,9 @@ import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
 export const generateWebSafeVideo = async (
   filePath: string,
   height: StandardHeight = "original",
-  opts?: { priority?: QueuePriority },
+  opts?: { priority?: ConversionPriority },
 ): Promise<string> => {
+  void opts;
   const fileStats = await stat(filePath);
   const modifiedTimeMs = fileStats.mtimeMs;
   const hash = getHash(filePath, modifiedTimeMs);
@@ -21,10 +22,8 @@ export const generateWebSafeVideo = async (
     return cachedPath;
   }
 
-  await mediaProcessingQueue.enqueue({
-    fn: () => {
-      console.log(`[VideoCache] Generating ${height}p web-safe video for ${filePath}`);
-      return new Promise<void>((resolve, reject) => {
+  console.log(`[VideoCache] Generating ${height}p web-safe video for ${filePath}`);
+  await new Promise<void>((resolve, reject) => {
         const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
         const args = [
           "-y", // Overwrite output file
@@ -72,11 +71,5 @@ export const generateWebSafeVideo = async (
           reject(err);
         });
       });
-    },
-    priority: opts?.priority ?? "background",
-    mediaType: "video",
-    sizeBytes: fileStats.size,
-    durationMilliseconds: 0,
-  });
   return cachedPath;
 };

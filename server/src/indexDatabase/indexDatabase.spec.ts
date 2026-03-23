@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { FileRecord } from "./fileRecord.type.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
+import { ConversionTaskPriority } from "./indexDatabase.type.ts";
 import { splitPath } from "./utils/pathUtils.ts";
 
 const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
@@ -96,7 +97,7 @@ describe("IndexDatabase", () => {
       expect(db.countImageEntries()).toBe(1);
       expect(db.countMissingInfo()).toBe(3);
       expect(db.countMissingDateTaken()).toBe(2);
-      expect(db.countNeedingThumbnails()).toBe(2);
+      expect(db.countPendingConversions().thumbnail).toBe(2);
     });
   });
 
@@ -111,6 +112,37 @@ describe("IndexDatabase", () => {
 
       expect(needingExif.map((f) => f.relativePath)).toContain("/b.mp4");
       expect(needingExif.map((f) => f.relativePath)).not.toContain("/a.jpg");
+    });
+  });
+
+  it("returns the highest-priority conversion task from thumbnail or HLS queues", async () => {
+    await withTempDb(async (db) => {
+      db.addPaths(["photo.jpg", "video.mp4"]);
+      await db.addOrUpdateFileData("video.mp4", {
+        duration: 12,
+      });
+      db.setConversionPriority(
+        "photo.jpg",
+        "thumbnail",
+        ConversionTaskPriority.UserImplicit,
+      );
+      db.setConversionPriority(
+        "video.mp4",
+        "thumbnail",
+        ConversionTaskPriority.Background,
+      );
+      db.setConversionPriority(
+        "video.mp4",
+        "hls",
+        ConversionTaskPriority.UserBlocked,
+      );
+
+      const [nextTask] = db.getNextConversionTasks();
+
+      expect(nextTask).toEqual({
+        relativePath: "/video.mp4",
+        taskType: "hls",
+      });
     });
   });
 

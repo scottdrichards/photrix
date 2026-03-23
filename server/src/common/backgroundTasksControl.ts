@@ -1,4 +1,4 @@
-let backgroundTasksEnabled = true;
+let backgroundTasksEnabled = false;
 let waitingResolvers: Array<() => void> = [];
 
 export const isBackgroundTasksEnabled = () => backgroundTasksEnabled;

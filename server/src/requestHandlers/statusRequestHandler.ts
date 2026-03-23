@@ -2,7 +2,6 @@ import http from "node:http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { isExifMetadataProcessingActive } from "../indexDatabase/processExifMetadata.ts";
 import { getFaceMetadataProcessingStats } from "../indexDatabase/processFaceMetadata.ts";
-import { mediaProcessingQueue } from "../common/processingQueue.ts";
 import { isBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
 
 type StatusRequestHandlerProps = {
@@ -30,11 +29,11 @@ const toProgressEntry = (completed: number, total: number): ProgressEntry => {
 };
 
 const getStatusPayload = (database: IndexDatabase) => {
-  const databaseSize = database.countAllEntries();
-  const mediaEntries = database.countMediaEntries();
-
-  const pendingInfo = database.countMissingInfo();
-  const pendingExif = database.countMissingDateTaken();
+  const statusCounts = database.getStatusCounts();
+  const databaseSize = statusCounts.allEntries;
+  const mediaEntries = statusCounts.mediaEntries;
+  const pendingInfo = statusCounts.missingInfo;
+  const pendingExif = statusCounts.missingDateTaken;
 
   const infoCompleted = Math.max(databaseSize - pendingInfo, 0);
   const exifCompleted = Math.max(mediaEntries - pendingExif, 0);
@@ -42,8 +41,8 @@ const getStatusPayload = (database: IndexDatabase) => {
   const overallTotal = databaseSize + mediaEntries;
 
   const lastExif = database.getMostRecentExifProcessedEntry();
-  const queueSize = mediaProcessingQueue.getQueueSize();
-  const queueProcessing = mediaProcessingQueue.getProcessing();
+  const queueCounts = database.getConversionQueueCounts();
+  const queueSummary = database.getConversionQueueSummary();
   const faceProcessingStatus = getFaceMetadataProcessingStats();
 
   return {
@@ -65,9 +64,10 @@ const getStatusPayload = (database: IndexDatabase) => {
       workerFailures: faceProcessingStatus.workerFailures,
     },
     queues: {
-      pending: queueSize,
-      processing: queueProcessing,
+      pending: queueCounts.pending,
+      processing: queueCounts.processing,
     },
+    queueSummary,
     progress: {
       overall: toProgressEntry(overallCompleted, overallTotal),
       scanned: toProgressEntry(databaseSize, databaseSize),
@@ -92,7 +92,12 @@ export const statusRequestHandler = (
   const { database, stream } = props;
 
   if (!stream) {
+    const statusStartTime = Date.now();
     const payload = getStatusPayload(database);
+    const elapsed = Date.now() - statusStartTime;
+    if (elapsed > 200) {
+      console.log(`[status] payload generation took ${elapsed}ms`);
+    }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(payload));
     return;
@@ -100,12 +105,22 @@ export const statusRequestHandler = (
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
+    "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
   });
 
+  if (typeof res.flushHeaders === "function") {
+    res.flushHeaders();
+  }
+
   const sendUpdate = () => {
+    const statusStartTime = Date.now();
     const payload = getStatusPayload(database);
+    const elapsed = Date.now() - statusStartTime;
+    if (elapsed > 200) {
+      console.log(`[status] stream payload generation took ${elapsed}ms`);
+    }
     writeSSE(res, payload);
   };
 

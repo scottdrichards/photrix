@@ -38,6 +38,28 @@ describe("StatusModal", () => {
         databaseSize: 10,
         scannedFilesCount: 8,
         queues: { pending: 3, processing: 1 },
+        queueSummary: {
+          completed: {
+            image: { count: 1, sizeBytes: 1024 * 1024 },
+            video: { count: 1, sizeBytes: 2 * 1024 * 1024, durationMilliseconds: 3000 },
+          },
+          active: {
+            image: { count: 1, sizeBytes: 512 * 1024 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          userBlocked: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 1, sizeBytes: 256 * 1024, durationMilliseconds: 1200 },
+          },
+          userImplicit: {
+            image: { count: 1, sizeBytes: 128 * 1024 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          background: {
+            image: { count: 1, sizeBytes: 64 * 1024 },
+            video: { count: 1, sizeBytes: 64 * 1024, durationMilliseconds: 900 },
+          },
+        },
         pending: { info: 2, exif: 1 },
         maintenance: { exifActive: true, faceActive: true },
         faceProcessing: {
@@ -69,6 +91,8 @@ describe("StatusModal", () => {
     expect(screen.getByText(/Face worker:/)).toBeInTheDocument();
     expect(screen.getByText(/Worker success:/)).toBeInTheDocument();
     expect(screen.getByText("40")).toBeInTheDocument();
+    expect(screen.getByText("Queue by disk size")).toBeInTheDocument();
+    expect(screen.getByText(/completed:/)).toBeInTheDocument();
     expect(screen.getByText("Recent activity")).toBeInTheDocument();
   });
 
@@ -99,6 +123,28 @@ describe("StatusModal", () => {
         databaseSize: 10,
         scannedFilesCount: 8,
         queues: { pending: 3, processing: 1 },
+        queueSummary: {
+          completed: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          active: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          userBlocked: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          userImplicit: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          background: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+        },
         pending: { info: 2, exif: 1 },
         maintenance: {
           exifActive: true,
@@ -166,6 +212,28 @@ describe("StatusModal", () => {
         databaseSize: 10,
         scannedFilesCount: 8,
         queues: { pending: 3, processing: 1 },
+        queueSummary: {
+          completed: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          active: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          userBlocked: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          userImplicit: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          background: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+        },
         pending: { info: 2, exif: 20 },
         maintenance: { exifActive: false, faceActive: false },
         faceProcessing: {
@@ -186,6 +254,28 @@ describe("StatusModal", () => {
         databaseSize: 10,
         scannedFilesCount: 8,
         queues: { pending: 3, processing: 1 },
+        queueSummary: {
+          completed: {
+            image: { count: 1, sizeBytes: 1024 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          active: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          userBlocked: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          userImplicit: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+          background: {
+            image: { count: 0, sizeBytes: 0 },
+            video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+          },
+        },
         pending: { info: 2, exif: 10 },
         maintenance: { exifActive: false, faceActive: false },
         faceProcessing: {

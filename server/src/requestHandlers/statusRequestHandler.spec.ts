@@ -30,6 +30,29 @@ const createMockResponse = () => {
   };
 };
 
+const queueSummaryFixture = {
+  completed: {
+    image: { count: 0, sizeBytes: 0 },
+    video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+  },
+  active: {
+    image: { count: 0, sizeBytes: 0 },
+    video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+  },
+  userBlocked: {
+    image: { count: 0, sizeBytes: 0 },
+    video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+  },
+  userImplicit: {
+    image: { count: 0, sizeBytes: 0 },
+    video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+  },
+  background: {
+    image: { count: 0, sizeBytes: 0 },
+    video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+  },
+};
+
 afterEach(() => {
   jest.useRealTimers();
   setBackgroundTasksEnabled(true);
@@ -40,11 +63,15 @@ describe("statusRequestHandler", () => {
     const { res, getBody } = createMockResponse();
 
     const database = {
-      countAllEntries: () => 10,
-      countMediaEntries: () => 8,
+      getStatusCounts: () => ({
+        allEntries: 10,
+        mediaEntries: 8,
+        missingInfo: 4,
+        missingDateTaken: 2,
+      }),
       countImageEntries: () => 6,
-      countMissingInfo: () => 4,
-      countMissingDateTaken: () => 2,
+      getConversionQueueCounts: () => ({ pending: 0, processing: 0 }),
+      getConversionQueueSummary: () => queueSummaryFixture,
       getMostRecentExifProcessedEntry: () => ({
         folder: "/",
         fileName: "img.jpg",
@@ -77,6 +104,16 @@ describe("statusRequestHandler", () => {
       fallbackCount: 0,
       workerFailures: 0,
     });
+    expect(payload.queueSummary).toBeDefined();
+    expect(payload.queueSummary).toEqual(
+      expect.objectContaining({
+        completed: expect.any(Object),
+        active: expect.any(Object),
+        userBlocked: expect.any(Object),
+        userImplicit: expect.any(Object),
+        background: expect.any(Object),
+      }),
+    );
   });
 
   it("streams SSE updates and closes on request close", () => {
@@ -86,11 +123,15 @@ describe("statusRequestHandler", () => {
     const { res, getWrites } = createMockResponse();
 
     const database = {
-      countAllEntries: () => 1,
-      countMediaEntries: () => 1,
+      getStatusCounts: () => ({
+        allEntries: 1,
+        mediaEntries: 1,
+        missingInfo: 0,
+        missingDateTaken: 0,
+      }),
       countImageEntries: () => 1,
-      countMissingInfo: () => 0,
-      countMissingDateTaken: () => 0,
+      getConversionQueueCounts: () => ({ pending: 0, processing: 0 }),
+      getConversionQueueSummary: () => queueSummaryFixture,
       getMostRecentExifProcessedEntry: () => null,
     } as unknown as IndexDatabase;
 

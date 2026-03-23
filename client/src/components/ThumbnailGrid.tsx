@@ -92,6 +92,7 @@ const ThumbnailGridComponent = () => {
       .finally(() => {
         setLoading(false);
       });
+
     return () => {
       abortController.abort(abortOnDisposed);
     };

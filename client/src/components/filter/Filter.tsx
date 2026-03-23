@@ -207,19 +207,25 @@ export const Filter = () => {
   );
 
   useEffect(() => {
+    const abortController = new AbortController();
+
     const loadFolders = async () => {
       setLoadingFolders(true);
       try {
-        const folderList = await fetchFolders(currentPath);
+        const folderList = await fetchFolders(currentPath, abortController.signal);
         setFolders(folderList);
       } catch (err) {
+        if ((err as Error).name === "AbortError") return;
         console.error("Failed to load folders:", err);
       } finally {
-        setLoadingFolders(false);
+        if (!abortController.signal.aborted) {
+          setLoadingFolders(false);
+        }
       }
     };
 
     void loadFolders();
+    return () => abortController.abort();
   }, [currentPath]);
 
   useEffect(() => {

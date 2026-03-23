@@ -92,6 +92,13 @@ describe("main.ts HTTP Server", () => {
     });
   });
 
+  it("returns request id header", async () => {
+    const response = await makeRequest(TEST_PORT, "/api/health");
+    expect(response.status).toBe(200);
+    expect(typeof response.headers["x-request-id"]).toBe("string");
+    expect((response.headers["x-request-id"] as string).length).toBeGreaterThan(0);
+  });
+
   it("returns CORS headers and handles OPTIONS", async () => {
     const response = await makeRequest(TEST_PORT, "/api/health", "OPTIONS");
     expect(response.status).toBe(204);

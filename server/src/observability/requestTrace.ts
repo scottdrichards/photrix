@@ -46,6 +46,20 @@ const requestTraceStorage = new AsyncLocalStorage<RequestTraceContext>();
 
 const getTracer = () => trace.getTracer("photrix-server");
 
+const getRequestPathname = (url: string): string => {
+  try {
+    return new URL(url, "http://localhost").pathname;
+  } catch {
+    const [pathname] = url.split("?");
+    return pathname || "/";
+  }
+};
+
+const getRequestRootSpanName = (method: string, url: string): string => {
+  const normalizedMethod = method.trim().toUpperCase() || "UNKNOWN";
+  return `${normalizedMethod} ${getRequestPathname(url)}`;
+};
+
 const nowMs = () => Number(process.hrtime.bigint()) / 1_000_000;
 
 const parsePositiveNumber = (value: string | undefined, fallback: number): number => {
@@ -118,12 +132,14 @@ export const runWithRequestTrace = async <T>(
   fn: () => Promise<T>,
 ): Promise<T> => {
   const requestId = meta.requestId?.trim() || randomUUID().slice(0, 8);
+  const requestPath = getRequestPathname(meta.url);
+  const rootSpanName = getRequestRootSpanName(meta.method, meta.url);
   const rootSpan = getTracer().startSpan(
-    "http.request",
+    rootSpanName,
     {
       attributes: {
         "http.request.method": meta.method,
-        "url.path": meta.url,
+        "url.path": requestPath,
         "photrix.request_id": requestId,
       },
     },

@@ -15,16 +15,8 @@ describe("processHLSEncoding", () => {
 
     expect(snapshot.active).toBe(false);
     expect(snapshot.videos).toEqual({
-      total: 0,
       completed: 0,
       remaining: 0,
-      queued: 0,
-    });
-    expect(snapshot.videoSeconds).toEqual({
-      total: 0,
-      completed: 0,
-      remaining: 0,
-      queued: 0,
     });
     expect(snapshot.failures).toBe(0);
   });
@@ -33,8 +25,9 @@ describe("processHLSEncoding", () => {
     let completed = false;
     const database = {
       storagePath: path.join(os.tmpdir(), "photrix-hls-empty"),
-      countVideosReadyForHLS: () => 0,
-      getVideosReadyForHLS: () => [],
+      resetInProgressConversions: () => {},
+      getNextConversionTasks: () => [],
+      countPendingConversions: () => ({ thumbnail: 0, hls: 0 }),
     } as unknown as IndexDatabase;
 
     const pause = startBackgroundHLSEncoding(database, () => {
@@ -47,8 +40,7 @@ describe("processHLSEncoding", () => {
     expect(completed).toBe(true);
     const snapshot = getHLSEncodingStatus();
     expect(snapshot.active).toBe(false);
-    expect(snapshot.videos.total).toBe(0);
-    expect(snapshot.videoSeconds.total).toBe(0);
+    expect(snapshot.videos.completed).toBe(0);
     expect(snapshot.failures).toBe(0);
   });
 });
