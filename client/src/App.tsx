@@ -13,7 +13,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { Info24Regular, Person24Regular, SignOut24Regular } from "@fluentui/react-icons";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FullscreenViewer } from "./components/FullscreenViewer";
 import { FacesReviewPage } from "./components/faces";
 import { StatusModal } from "./components/StatusModal";
@@ -26,6 +26,7 @@ import {
   useSelectionContext,
 } from "./components/selection/SelectionContext";
 import { useSyncUrlWithFilter, type ViewMode } from "./hooks/useSyncUrlWithFilter";
+import { probeVideoPlaybackProfile } from "./videoPlaybackProfile";
 
 const useStyles = makeStyles({
   app: {
@@ -85,6 +86,10 @@ const AppContent = () => {
   const { clearSelection, selectedItems, selectionMode, setSelectionMode } =
     useSelectionContext();
   useSyncUrlWithFilter(view, setView);
+
+  useEffect(() => {
+    void probeVideoPlaybackProfile();
+  }, []);
 
   const canUseNativeShare =
     typeof navigator !== "undefined" && typeof navigator.share === "function";

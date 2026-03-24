@@ -156,14 +156,18 @@ const hashToken = (token: string) => {
   return createHash("sha256").update(token).digest("hex");
 };
 
-const encodeCookie = (name: string, value: string, maxAgeSeconds: number, secure: boolean) => {
+const encodeCookie = (name: string, value: string, maxAgeSeconds: number, secure: boolean, domain?: string) => {
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
     "Path=/",
     "HttpOnly",
-    "SameSite=Strict",
+    "SameSite=Lax",
     `Max-Age=${maxAgeSeconds}`,
   ];
+
+  if (domain) {
+    parts.push(`Domain=${domain}`);
+  }
 
   if (secure) {
     parts.push("Secure");
@@ -172,15 +176,19 @@ const encodeCookie = (name: string, value: string, maxAgeSeconds: number, secure
   return parts.join("; ");
 };
 
-const clearCookie = (name: string, secure: boolean) => {
+const clearCookie = (name: string, secure: boolean, domain?: string) => {
   const parts = [
     `${name}=`,
     "Path=/",
     "HttpOnly",
-    "SameSite=Strict",
+    "SameSite=Lax",
     "Max-Age=0",
     "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
   ];
+
+  if (domain) {
+    parts.push(`Domain=${domain}`);
+  }
 
   if (secure) {
     parts.push("Secure");
@@ -359,6 +367,9 @@ export class AuthService {
     const tokenHash = hashToken(rawToken);
     const expiresAtMs = Date.now() + this.config.sessionTtlMs;
     this.store.createSession(tokenHash, userId, expiresAtMs);
+    const cookieDomain = this.config.cookieName.startsWith("__Host-")
+      ? undefined
+      : this.config.rpId;
 
     ensureSingleSetCookie(
       res,
@@ -367,12 +378,19 @@ export class AuthService {
         rawToken,
         Math.max(Math.floor(this.config.sessionTtlMs / 1_000), 1),
         this.config.secureCookies,
+        cookieDomain,
       ),
     );
   }
 
   private clearSessionCookie(res: http.ServerResponse) {
-    ensureSingleSetCookie(res, clearCookie(this.config.cookieName, this.config.secureCookies));
+    const cookieDomain = this.config.cookieName.startsWith("__Host-")
+      ? undefined
+      : this.config.rpId;
+    ensureSingleSetCookie(
+      res,
+      clearCookie(this.config.cookieName, this.config.secureCookies, cookieDomain),
+    );
   }
 
   private getSessionUser(req: http.IncomingMessage): SessionUser | null {
@@ -599,13 +617,14 @@ export class AuthService {
       { category: "other", detail: "login.options" },
     );
     const requestedUsername = safeString(body.username);
-        setCurrentSpanAttributes({
-          "photrix.auth.username": requestedUsername || user?.username || "unknown",
-        });
 
     const user = requestedUsername
       ? this.store.findUserByUsername(requestedUsername)
       : this.store.findOnlyUser();
+
+    setCurrentSpanAttributes({
+      "photrix.auth.username": requestedUsername || user?.username || "unknown",
+    });
 
     if (!user) {
       writeJson(res, 404, { error: "User not found" });

@@ -7,6 +7,7 @@ import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.t
 import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts";
 import { statusBackgroundTasksRequestHandler } from "./requestHandlers/statusBackgroundTasksRequestHandler.ts";
 import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
+import { networkProbeRequestHandler } from "./requestHandlers/networkProbeRequestHandler.ts";
 import {
   bindCurrentRequestTrace,
   finishRequestTrace,
@@ -151,6 +152,19 @@ export const createServer = (
               "request.route.status",
               async () => statusRequestHandler(req, res, { database, stream: false }),
               { category: "request", detail: "/api/status" },
+            );
+            return;
+          }
+
+          if (req.url?.startsWith("/api/network-probe") && req.method === "GET") {
+            await measureOperation(
+              "request.route.networkProbe",
+              () =>
+                networkProbeRequestHandler(
+                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  res,
+                ),
+              { category: "request", detail: "/api/network-probe" },
             );
             return;
           }

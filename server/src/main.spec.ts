@@ -105,6 +105,15 @@ describe("main.ts HTTP Server", () => {
     expect(response.headers["access-control-allow-methods"]).toBe("GET, POST, OPTIONS");
   });
 
+  it("returns a no-store payload for bandwidth probing", async () => {
+    const response = await makeRequest(TEST_PORT, "/api/network-probe?bytes=65536");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store, no-cache, must-revalidate");
+    expect(response.headers["content-type"]).toBe("application/octet-stream");
+    expect(response.body.length).toBe(64 * 1024);
+  });
+
   it("lists folders from root and nested paths", async () => {
     const rootResponse = await makeRequest(TEST_PORT, "/api/folders/");
     const nestedResponse = await makeRequest(TEST_PORT, "/api/folders/subFolder/");

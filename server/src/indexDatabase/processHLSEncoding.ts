@@ -102,7 +102,8 @@ export const startBackgroundConversionWorker = (
         typeof taskInfo?.duration === "number" && Number.isFinite(taskInfo.duration)
           ? Math.max(taskInfo.duration, 0)
           : 0;
-      const originalPriority = taskInfo?.priority ?? ConversionTaskPriority.Background;
+      const originalPriority: PendingConversionTaskPriority =
+        (taskInfo?.priority as PendingConversionTaskPriority) ?? ConversionTaskPriority.Background;
 
       database.setConversionPriority(
         task.relativePath,

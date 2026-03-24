@@ -1,6 +1,25 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { PhotoItem } from "../api";
 import { FullscreenViewer } from "./FullscreenViewer";
+
+const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
+  bandwidthMbps: 20,
+  hevcSupported: true,
+});
+
+const {
+  hlsIsSupportedMock,
+  hlsLoadSourceMock,
+  hlsAttachMediaMock,
+  hlsOnMock,
+  hlsDestroyMock,
+} = vi.hoisted(() => ({
+  hlsIsSupportedMock: vi.fn(() => false),
+  hlsLoadSourceMock: vi.fn(),
+  hlsAttachMediaMock: vi.fn(),
+  hlsOnMock: vi.fn(),
+  hlsDestroyMock: vi.fn(),
+}));
 
 const useSelectionContextMock = vi.fn();
 
@@ -8,9 +27,28 @@ vi.mock("./selection/SelectionContext", () => ({
   useSelectionContext: () => useSelectionContextMock(),
 }));
 
+vi.mock("../videoPlaybackProfile", () => ({
+  probeVideoPlaybackProfile: () => probeVideoPlaybackProfileMock(),
+}));
+
 vi.mock("hls.js", () => ({
-  default: {
-    isSupported: () => false,
+  default: class MockHls {
+    static isSupported = hlsIsSupportedMock;
+    static Events = {
+      MANIFEST_PARSED: "manifestParsed",
+      ERROR: "error",
+    };
+    static DefaultConfig = {
+      loader: class MockLoader {
+        load() {}
+      },
+    };
+
+    media = null;
+    loadSource = hlsLoadSourceMock;
+    attachMedia = hlsAttachMediaMock;
+    on = hlsOnMock;
+    destroy = hlsDestroyMock;
   },
 }));
 
@@ -37,6 +75,27 @@ describe("FullscreenViewer", () => {
 
   beforeEach(() => {
     useSelectionContextMock.mockReset();
+    vi.restoreAllMocks();
+    probeVideoPlaybackProfileMock.mockReset();
+    probeVideoPlaybackProfileMock.mockResolvedValue({
+      bandwidthMbps: 20,
+      hevcSupported: true,
+    });
+    hlsIsSupportedMock.mockReset();
+    hlsIsSupportedMock.mockReturnValue(false);
+    hlsLoadSourceMock.mockReset();
+    hlsAttachMediaMock.mockReset();
+    hlsOnMock.mockReset();
+    hlsDestroyMock.mockReset();
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob([new Uint8Array(2_000_000)]),
+    } as Response);
+
+    vi.spyOn(performance, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(1000);
   });
 
   it("renders selected image and closes via close button", () => {
@@ -168,5 +227,91 @@ describe("FullscreenViewer", () => {
     const video = container.querySelector("video");
 
     expect(video).not.toBeNull();
+  });
+
+  it("uses original video source when browser can decode HEVC", async () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/hevc.mov",
+        name: "hevc.mov",
+        mediaType: "video",
+        originalUrl: "http://localhost/a/hevc.mov",
+        hlsUrl: "http://localhost/a/hevc.m3u8",
+        metadata: {
+          sizeInBytes: 1_000_000,
+          duration: 2,
+          videoCodec: "hevc",
+        },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    const video = container.querySelector("video");
+
+    expect(video).not.toBeNull();
+    await waitFor(() => {
+      expect(probeVideoPlaybackProfileMock).toHaveBeenCalledTimes(1);
+      expect(globalThis.fetch).toHaveBeenCalledWith("http://localhost/a/hevc.mov", {
+        credentials: "include",
+        cache: "no-store",
+        headers: { Range: "bytes=0-11999999" },
+      });
+      expect(video?.getAttribute("src")).toBe("http://localhost/a/hevc.mov");
+    });
+  });
+
+  it("uses HLS when HEVC is unsupported and HLS.js is available", async () => {
+    hlsIsSupportedMock.mockReturnValue(true);
+    probeVideoPlaybackProfileMock.mockResolvedValue({
+      bandwidthMbps: 20,
+      hevcSupported: true,
+    });
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob([new Uint8Array(200_000)]),
+    } as Response);
+
+    vi.spyOn(performance, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(1000);
+
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/standard.mp4",
+        name: "standard.mp4",
+        mediaType: "video",
+        originalUrl: "http://localhost/a/standard.mp4",
+        hlsUrl: "http://localhost/a/standard.m3u8",
+        metadata: {
+          sizeInBytes: 2_000_000,
+          duration: 2,
+          videoCodec: "hevc",
+        },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    const video = container.querySelector("video");
+
+    expect(video).not.toBeNull();
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith("http://localhost/a/standard.mp4", {
+        credentials: "include",
+        cache: "no-store",
+        headers: { Range: "bytes=0-11999999" },
+      });
+      expect(hlsLoadSourceMock).toHaveBeenCalledWith("http://localhost/a/standard.m3u8");
+      expect(hlsAttachMediaMock).toHaveBeenCalledWith(video);
+      expect(video?.getAttribute("src")).toBeNull();
+    });
   });
 });

@@ -60,6 +60,9 @@ describe("api", () => {
             folder: "trip/",
             fileName: "clip.mp4",
             mimeType: null,
+            sizeInBytes: 1_250_000,
+            duration: 5,
+            videoCodec: "hevc",
             rating: 4,
           },
         ],
@@ -88,6 +91,9 @@ describe("api", () => {
     expect(url.searchParams.get("page")).toBe("2");
     expect(url.searchParams.get("pageSize")).toBe("5");
     expect(url.searchParams.get("includeSubfolders")).toBe("true");
+    expect(url.searchParams.get("metadata")?.split(",")).toEqual(
+      expect.arrayContaining(["sizeInBytes", "duration", "videoCodec"]),
+    );
 
     const filterRaw = url.searchParams.get("filter");
     expect(filterRaw).not.toBeNull();
@@ -112,6 +118,9 @@ describe("api", () => {
       mediaType: "video",
       metadata: {
         mimeType: null,
+        sizeInBytes: 1_250_000,
+        duration: 5,
+        videoCodec: "hevc",
         rating: 4,
       },
     });

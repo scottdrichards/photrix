@@ -23,6 +23,9 @@ export interface PhotoItem {
   hlsUrl?: string;
   metadata?: {
     mimeType?: string | null;
+    sizeInBytes?: number;
+    duration?: number;
+    videoCodec?: string;
     dateTaken?: string | null;
     dimensionWidth?: number;
     dimensionHeight?: number;
@@ -329,6 +332,7 @@ const DEFAULT_METADATA_KEYS = [
   "orientation",
   "duration",
   "framerate",
+  "videoCodec",
 ] as const;
 
 const clampNumber = (value: number, min: number, max: number) =>

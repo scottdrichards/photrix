@@ -5,6 +5,10 @@ import App from "./App";
 const useSelectionContextMock = vi.fn();
 const useSyncUrlWithFilterMock = vi.fn();
 const useAuthSessionMock = vi.fn();
+const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
+  bandwidthMbps: 20,
+  hevcSupported: true,
+});
 
 vi.mock("./components/filter/Filter", () => ({
   Filter: () => <div data-testid="filter">filter</div>,
@@ -46,11 +50,16 @@ vi.mock("./components/faces/FacesReviewPage", () => ({
   FacesReviewPage: () => <div data-testid="faces-review-page">faces</div>,
 }));
 
+vi.mock("./videoPlaybackProfile", () => ({
+  probeVideoPlaybackProfile: () => probeVideoPlaybackProfileMock(),
+}));
+
 describe("App", () => {
   beforeEach(() => {
     useSelectionContextMock.mockReset();
     useSyncUrlWithFilterMock.mockReset();
     useAuthSessionMock.mockReset();
+    probeVideoPlaybackProfileMock.mockClear();
     useAuthSessionMock.mockReturnValue({
       username: "scott",
       isSigningOut: false,
@@ -71,6 +80,7 @@ describe("App", () => {
     render(<App />);
 
     expect(useSyncUrlWithFilterMock).toHaveBeenCalled();
+    expect(probeVideoPlaybackProfileMock).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
 
     expect(setSelectionMode).toHaveBeenCalledWith(true);
