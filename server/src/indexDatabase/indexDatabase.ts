@@ -113,28 +113,7 @@ export class IndexDatabase {
       { name: "hlsConversionPrioritySetAt", type: "TEXT" },
     ]);
 
-    // Create indexes for common query patterns
-    this.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_files_dateTaken ON files(dateTaken DESC)`,
-    );
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_files_mimeType ON files(mimeType)`);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_files_rating ON files(rating)`);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder)`);
-    this.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_files_infoProcessedAt ON files(infoProcessedAt)`,
-    );
-    this.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_files_exifProcessedAt ON files(exifProcessedAt)`,
-    );
-    this.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_files_thumbnailsProcessedAt ON files(thumbnailsProcessedAt)`,
-    );
-    this.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_files_thumbnailConversionPriority ON files(thumbnailConversionPriority) WHERE thumbnailConversionPriority IS NOT NULL`,
-    );
-    this.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_files_hlsConversionPriority ON files(hlsConversionPriority) WHERE hlsConversionPriority IS NOT NULL`,
-    );
+    this.ensureIndexes();
     console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
     this.ensureRootPath();
 
@@ -177,19 +156,88 @@ export class IndexDatabase {
     }
   }
 
-  async addFile(fileData: FileRecord): Promise<void> {
-    const columns = fileRecordToColumnNamesAndValues(fileData);
+  private ensureIndexes(): void {
+    const indexDefinitions: Array<{
+      name: string;
+      expression: string;
+      where?: string;
+    }> = [
+      { name: "idx_files_dateTaken", expression: "dateTaken DESC" },
+      { name: "idx_files_mimeType", expression: "mimeType" },
+      { name: "idx_files_rating", expression: "rating" },
+      { name: "idx_files_folder", expression: "folder" },
+      { name: "idx_files_infoProcessedAt", expression: "infoProcessedAt" },
+      { name: "idx_files_exifProcessedAt", expression: "exifProcessedAt" },
+      {
+        name: "idx_files_thumbnailsProcessedAt",
+        expression: "thumbnailsProcessedAt",
+      },
+      {
+        name: "idx_files_thumbnailConversionPriority",
+        expression: "thumbnailConversionPriority",
+        where: "thumbnailConversionPriority IS NOT NULL",
+      },
+      {
+        name: "idx_files_hlsConversionPriority",
+        expression: "hlsConversionPriority",
+        where: "hlsConversionPriority IS NOT NULL",
+      },
+    ];
 
+    for (const { name, expression, where } of indexDefinitions) {
+      const whereClause = where ? ` WHERE ${where}` : "";
+      this.db.exec(
+        `CREATE INDEX IF NOT EXISTS ${name} ON files(${expression})${whereClause}`,
+      );
+    }
+  }
+
+  private runInsert(
+    columns: { names: string[]; values: unknown[] },
+    options: { mode: "insert" | "replace"; errorContext: string },
+  ): void {
+    const { mode, errorContext } = options;
     if (columns.names.length !== columns.values.length) {
       throw new Error(
-        `SQL parameter mismatch for ${fileData.folder}${fileData.fileName}: ${columns.names.length} column names but ${columns.values.length} values. ` +
+        `SQL parameter mismatch for ${errorContext}: ${columns.names.length} column names but ${columns.values.length} values. ` +
           `Columns: ${columns.names.join(", ")}. Values: ${JSON.stringify(columns.values)}`,
       );
     }
 
     const placeholders = columns.values.map(() => "?").join(", ");
-    const sql = `INSERT OR REPLACE INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`;
+    const verb = mode === "replace" ? "INSERT OR REPLACE" : "INSERT";
+    const sql = `${verb} INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`;
     this.db.prepare(sql).run(...columns.values);
+  }
+
+  private countEntries(whereClause?: string): number {
+    const sql = whereClause
+      ? `SELECT COUNT(*) as count FROM files WHERE ${whereClause}`
+      : "SELECT COUNT(*) as count FROM files";
+    const row = this.db.prepare(sql).get() as { count: number };
+    return row.count;
+  }
+
+  private getConversionColumns(taskType: "thumbnail" | "hls") {
+    if (taskType === "thumbnail") {
+      return {
+        priority: "thumbnailConversionPriority",
+        setAt: "thumbnailConversionPrioritySetAt",
+      } as const;
+    }
+
+    return {
+      priority: "hlsConversionPriority",
+      setAt: "hlsConversionPrioritySetAt",
+    } as const;
+  }
+
+  async addFile(fileData: FileRecord): Promise<void> {
+    const columns = fileRecordToColumnNamesAndValues(fileData);
+    this.runInsert(columns, {
+      mode: "replace",
+      errorContext: `${fileData.folder}${fileData.fileName}`,
+    });
   }
 
   async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
@@ -215,17 +263,10 @@ export class IndexDatabase {
         .prepare("DELETE FROM files WHERE folder = ? AND fileName = ?")
         .run(oldFolder, oldFile);
       const columns = fileRecordToColumnNamesAndValues(updated);
-
-      if (columns.names.length !== columns.values.length) {
-        throw new Error(
-          `SQL parameter mismatch for ${newRelativePath}: ${columns.names.length} column names but ${columns.values.length} values. ` +
-            `Columns: ${columns.names.join(", ")}. Values: ${JSON.stringify(columns.values)}`,
-        );
-      }
-
-      const placeholders = columns.values.map(() => "?").join(", ");
-      const sql = `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`;
-      this.db.prepare(sql).run(...columns.values);
+      this.runInsert(columns, {
+        mode: "insert",
+        errorContext: newRelativePath,
+      });
     });
     transaction();
   }
@@ -247,17 +288,10 @@ export class IndexDatabase {
         ...fileData,
       };
       const columns = fileRecordToColumnNamesAndValues(updatedEntry);
-
-      if (columns.names.length !== columns.values.length) {
-        throw new Error(
-          `SQL parameter mismatch for ${relativePath}: ${columns.names.length} column names but ${columns.values.length} values. ` +
-            `Columns: ${columns.names.join(", ")}. Values: ${JSON.stringify(columns.values)}`,
-        );
-      }
-
-      const placeholders = columns.values.map(() => "?").join(", ");
-      const sql = `INSERT OR REPLACE INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`;
-      this.db.prepare(sql).run(...columns.values);
+      this.runInsert(columns, {
+        mode: "replace",
+        errorContext: relativePath,
+      });
     };
 
     await this.runWithRetry(execute);
@@ -283,25 +317,13 @@ export class IndexDatabase {
   }
 
   countMissingInfo(): number {
-    const stmt = this.db.prepare(
-      `SELECT COUNT(*) as count FROM files
-       WHERE sizeInBytes IS NULL
-          OR created IS NULL
-          OR modified IS NULL`,
-    );
-    const row = stmt.get() as { count: number };
-    return row.count;
+    return this.countEntries("sizeInBytes IS NULL OR created IS NULL OR modified IS NULL");
   }
 
   countMissingDateTaken(): number {
-    const stmt = this.db.prepare(
-      `SELECT COUNT(*) as count FROM files
-       WHERE (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
-         AND dateTaken IS NULL
-         AND exifProcessedAt IS NULL`,
+    return this.countEntries(
+      "(mimeType LIKE 'image/%' OR mimeType LIKE 'video/%') AND dateTaken IS NULL AND exifProcessedAt IS NULL",
     );
-    const row = stmt.get() as { count: number };
-    return row.count;
   }
 
   countPendingConversions(): { thumbnail: number; hls: number } {
@@ -363,6 +385,12 @@ export class IndexDatabase {
       userImplicit: makeBucket(),
       background: makeBucket(),
     };
+    const bucketForPriority: Record<ConversionTaskPriority, typeof summary.background> = {
+      [ConversionTaskPriority.InProgress]: summary.active,
+      [ConversionTaskPriority.UserBlocked]: summary.userBlocked,
+      [ConversionTaskPriority.UserImplicit]: summary.userImplicit,
+      [ConversionTaskPriority.Background]: summary.background,
+    };
 
     const rows = this.db
       .prepare(
@@ -385,14 +413,7 @@ export class IndexDatabase {
       durationMilliseconds: number,
     ) => {
       if (priority === null) return;
-      const bucket =
-        priority === ConversionTaskPriority.InProgress
-          ? summary.active
-          : priority === ConversionTaskPriority.UserBlocked
-            ? summary.userBlocked
-            : priority === ConversionTaskPriority.UserImplicit
-              ? summary.userImplicit
-              : summary.background;
+      const bucket = bucketForPriority[priority] ?? summary.background;
       bucket[mediaType].count += 1;
       bucket[mediaType].sizeBytes += sizeBytes;
       if (mediaType === "video") {
@@ -422,30 +443,22 @@ export class IndexDatabase {
     priority: ConversionTaskPriority | null,
   ): void {
     const { folder, fileName } = splitPath(relativePath);
-    const column =
-      taskType === "thumbnail" ? "thumbnailConversionPriority" : "hlsConversionPriority";
-    const setAtColumn =
-      taskType === "thumbnail"
-        ? "thumbnailConversionPrioritySetAt"
-        : "hlsConversionPrioritySetAt";
+    const { priority: priorityColumn, setAt: setAtColumn } =
+      this.getConversionColumns(taskType);
     this.db
       .prepare(
-        `UPDATE files SET ${column} = ?, ${setAtColumn} = ? WHERE folder = ? AND fileName = ?`,
+        `UPDATE files SET ${priorityColumn} = ?, ${setAtColumn} = ? WHERE folder = ? AND fileName = ?`,
       )
       .run(priority, priority !== null ? new Date().toISOString() : null, folder, fileName);
   }
 
   /** Resets any in-progress conversions back to background on startup. */
   resetInProgressConversions(taskType: "thumbnail" | "hls"): void {
-    const column =
-      taskType === "thumbnail" ? "thumbnailConversionPriority" : "hlsConversionPriority";
-    const setAtColumn =
-      taskType === "thumbnail"
-        ? "thumbnailConversionPrioritySetAt"
-        : "hlsConversionPrioritySetAt";
+    const { priority: priorityColumn, setAt: setAtColumn } =
+      this.getConversionColumns(taskType);
     this.db
       .prepare(
-        `UPDATE files SET ${column} = ?, ${setAtColumn} = ? WHERE ${column} = ?`,
+        `UPDATE files SET ${priorityColumn} = ?, ${setAtColumn} = ? WHERE ${priorityColumn} = ?`,
       )
       .run(
         ConversionTaskPriority.Background,
@@ -496,8 +509,7 @@ export class IndexDatabase {
     taskType: "thumbnail" | "hls",
   ): { mimeType: string | null; duration: number | null; priority: ConversionTaskPriority | null } | null {
     const { folder, fileName } = splitPath(relativePath);
-    const priorityColumn =
-      taskType === "thumbnail" ? "thumbnailConversionPriority" : "hlsConversionPriority";
+    const { priority: priorityColumn } = this.getConversionColumns(taskType);
     const row = this.db
       .prepare(
         `SELECT mimeType, duration, ${priorityColumn} AS priority FROM files WHERE folder = ? AND fileName = ?`,
@@ -509,28 +521,15 @@ export class IndexDatabase {
   }
 
   countMediaEntries(): number {
-    const stmt = this.db.prepare(
-      `SELECT COUNT(*) as count FROM files
-       WHERE mimeType LIKE 'image/%'
-          OR mimeType LIKE 'video/%'`,
-    );
-    const row = stmt.get() as { count: number };
-    return row.count;
+    return this.countEntries("mimeType LIKE 'image/%' OR mimeType LIKE 'video/%'");
   }
 
   countImageEntries(): number {
-    const stmt = this.db.prepare(
-      `SELECT COUNT(*) as count FROM files
-       WHERE mimeType LIKE 'image/%'`,
-    );
-    const row = stmt.get() as { count: number };
-    return row.count;
+    return this.countEntries("mimeType LIKE 'image/%'");
   }
 
   countAllEntries(): number {
-    const stmt = this.db.prepare(`SELECT COUNT(*) as count FROM files`);
-    const row = stmt.get() as { count: number };
-    return row.count;
+    return this.countEntries();
   }
 
   getStatusCounts(): {

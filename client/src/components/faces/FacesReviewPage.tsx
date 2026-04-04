@@ -14,10 +14,14 @@ import { useFilterContext } from "../filter/FilterContext";
 
 type PreviewMode = "cropped" | "uncropped" | "zoomed";
 
+const flexColumnBase = {
+  display: "flex",
+  flexDirection: "column",
+} as const;
+
 const useStyles = makeStyles({
   root: {
-    display: "flex",
-    flexDirection: "column",
+    ...flexColumnBase,
     gap: tokens.spacingVerticalL,
   },
   peopleGrid: {
@@ -30,8 +34,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
     padding: tokens.spacingHorizontalM,
-    display: "flex",
-    flexDirection: "column",
+    ...flexColumnBase,
     gap: tokens.spacingVerticalS,
     textAlign: "left",
     cursor: "pointer",
@@ -42,8 +45,7 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalM,
   },
   card: {
-    display: "flex",
-    flexDirection: "column",
+    ...flexColumnBase,
     gap: tokens.spacingVerticalS,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
@@ -127,8 +129,7 @@ const useStyles = makeStyles({
     justifyContent: "space-between",
   },
   section: {
-    display: "flex",
-    flexDirection: "column",
+    ...flexColumnBase,
     gap: tokens.spacingVerticalXS,
   },
   matchesGrid: {
@@ -140,8 +141,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     padding: tokens.spacingHorizontalS,
-    display: "flex",
-    flexDirection: "column",
+    ...flexColumnBase,
     gap: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground2,
   },
@@ -152,7 +152,7 @@ const useStyles = makeStyles({
 
 const formatSuggestion = (item: FaceQueueItem) => {
   if (item.person?.id) {
-    const name = item.person.name ?? item.person.id.replace(/^name:/i, "");
+    const name = getPersonDisplayName(item.person, "Unknown");
     return `Assigned: ${name}`;
   }
 
@@ -165,9 +165,14 @@ const formatSuggestion = (item: FaceQueueItem) => {
 };
 
 const formatAssigned = (item: FaceQueueItem) => {
-  const name = item.person?.name ?? item.person?.id?.replace(/^name:/i, "") ?? "Unknown";
+  const name = getPersonDisplayName(item.person, "Unknown");
   return `Assigned: ${name}`;
 };
+
+const getPersonDisplayName = (
+  person: { id?: string; name?: string } | null | undefined,
+  fallback: string,
+) => person?.name ?? person?.id?.replace(/^name:/i, "") ?? fallback;
 
 const buildFacePreviewUrl = (relativePath: string, preferredHeight?: number) => {
   const normalizedPath = relativePath.startsWith("/")
@@ -255,7 +260,7 @@ const displayPersonName = (person: FacePerson) => {
   if (person.id === "__unassigned__") {
     return "Unassigned";
   }
-  return person.name ?? person.id.replace(/^name:/i, "");
+  return getPersonDisplayName(person, person.id);
 };
 
 export const FacesReviewPage = () => {

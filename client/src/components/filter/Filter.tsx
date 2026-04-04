@@ -137,17 +137,9 @@ export const Filter = () => {
     dateRange,
   } = filter;
 
-  const selectedPeople = useMemo(() => {
-    return peopleInImageFilter;
-  }, [peopleInImageFilter]);
-
-  const selectedCameraModels = useMemo(() => {
-    return cameraModelFilter;
-  }, [cameraModelFilter]);
-
-  const selectedLensModels = useMemo(() => {
-    return lensFilter;
-  }, [lensFilter]);
+  const selectedPeople = peopleInImageFilter;
+  const selectedCameraModels = cameraModelFilter;
+  const selectedLensModels = lensFilter;
 
   const ratingValue = ratingFilter?.rating ?? null;
   const ratingAtLeast = ratingFilter?.atLeast ?? true;
@@ -191,19 +183,23 @@ export const Filter = () => {
     setFilter({ mediaTypeFilter: type });
   };
 
-  const setPeopleFilterValues = useCallback(
-    (nextValues: string[]) => setFilter({ peopleInImageFilter: nextValues }),
+  const arrayFilterSetter = useCallback(
+    (key: "peopleInImageFilter" | "cameraModelFilter" | "lensFilter") =>
+      (nextValues: string[]) => setFilter({ [key]: nextValues }),
     [setFilter],
   );
 
-  const setCameraModelFilterValues = useCallback(
-    (nextValues: string[]) => setFilter({ cameraModelFilter: nextValues }),
-    [setFilter],
+  const setPeopleFilterValues = useMemo(
+    () => arrayFilterSetter("peopleInImageFilter"),
+    [arrayFilterSetter],
   );
-
-  const setLensFilterValues = useCallback(
-    (nextValues: string[]) => setFilter({ lensFilter: nextValues }),
-    [setFilter],
+  const setCameraModelFilterValues = useMemo(
+    () => arrayFilterSetter("cameraModelFilter"),
+    [arrayFilterSetter],
+  );
+  const setLensFilterValues = useMemo(
+    () => arrayFilterSetter("lensFilter"),
+    [arrayFilterSetter],
   );
 
   useEffect(() => {

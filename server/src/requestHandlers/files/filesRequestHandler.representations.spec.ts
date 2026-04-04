@@ -175,4 +175,50 @@ describe("filesRequestHandler representation paths", () => {
     expect(payload.error).toBe("HLS generation failed");
   });
 
+  it("returns 404 when multibitrate variant playlist is missing", async () => {
+    const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-hls-variant-"));
+    const sourceFile = path.join(storageRoot, "clip.mp4");
+    writeFileSync(sourceFile, "video");
+
+    const hlsDir = path.join(storageRoot, "cache", "hls", "abr");
+    const missingVariantPlaylistPath = path.join(hlsDir, "360p", "playlist.m3u8");
+
+    jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
+      getMultibitrateHLSInfo: jest.fn(async () => ({
+        exists: true,
+        hlsDir,
+        masterPlaylistPath: path.join(hlsDir, "master.m3u8"),
+      })),
+      getVariantPlaylistPath: jest.fn(() => missingVariantPlaylistPath),
+      getVariantSegmentPath: jest.fn(),
+    }));
+
+    jest.unstable_mockModule("../../videoProcessing/generateHLS.ts", () => ({
+      generateHLS: jest.fn(),
+      getHLSInfo: jest.fn(),
+      getHLSSegmentPath: jest.fn(),
+    }));
+
+    const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const { res, getBody } = createJsonResponse();
+
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/clip.mp4?representation=hls&variant=360",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      {
+        database: {
+          getFileRecord: jest.fn(async () => ({ duration: 30 })),
+        } as unknown as IndexDatabase,
+        storageRoot,
+      },
+    );
+
+    expect((res.writeHead as jest.Mock).mock.calls.at(-1)?.[0]).toBe(404);
+    const payload = JSON.parse(getBody());
+    expect(payload.error).toBe("HLS variant playlist not found");
+  });
+
 });

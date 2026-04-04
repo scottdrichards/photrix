@@ -114,12 +114,16 @@ const isPathInsideStorage = (storageRoot: string, targetPath: string) => {
   return !relativeToStorage.startsWith("..") && !path.isAbsolute(relativeToStorage);
 };
 
-const streamCachedFile = (
-  res: http.ServerResponse,
+const streamStaticFile = (
   filePath: string,
-  opts: { contentType: string; size: number; cacheControl?: string },
+  opts: {
+    res: http.ServerResponse;
+    contentType: string;
+    size: number;
+    cacheControl: string;
+  },
 ) => {
-  const { contentType, size, cacheControl = "public, max-age=31536000" } = opts;
+  const { res, contentType, size, cacheControl } = opts;
   res.writeHead(200, {
     "Content-Type": contentType,
     "Content-Length": size,
@@ -134,8 +138,73 @@ const streamCachedFile = (
   fileStream.pipe(res);
 };
 
+const streamCachedFile = (
+  res: http.ServerResponse,
+  filePath: string,
+  opts: { contentType: string; size: number; cacheControl?: string },
+) => {
+  const { contentType, size, cacheControl = "public, max-age=31536000" } = opts;
+  streamStaticFile(filePath, {
+    res,
+    contentType,
+    size,
+    cacheControl,
+  });
+};
+
 const logQueueStatus = (label: string, subPath: string) => {
   console.log(`[filesRequest] ${label}: ${subPath}`);
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const getDurationHeader = (knownDuration: number | null | undefined) =>
+  typeof knownDuration === "number" && Number.isFinite(knownDuration)
+    ? { "X-Content-Duration": String(knownDuration) }
+    : {};
+
+const writeHlsPlaylistResponse = (
+  res: http.ServerResponse,
+  playlistContent: string,
+  cacheControl: string,
+  knownDuration: number | null | undefined,
+) => {
+  res.writeHead(200, {
+    "Content-Type": "application/vnd.apple.mpegurl",
+    "Cache-Control": cacheControl,
+    "Content-Length": Buffer.byteLength(playlistContent, "utf-8"),
+    ...getDurationHeader(knownDuration),
+  });
+  res.end(playlistContent);
+};
+
+const streamHlsSegment = async (
+  res: http.ServerResponse,
+  segmentPath: string,
+  metricName: string,
+) => {
+  const segmentStats = await measureOperation(metricName, () => stat(segmentPath), {
+    category: "file",
+  });
+  streamStaticFile(segmentPath, {
+    res,
+    contentType: "video/mp2t",
+    size: segmentStats.size,
+    cacheControl: "public, max-age=31536000",
+  });
+};
+
+const waitForFile = async (
+  filePath: string,
+  maxWaitMs = 30_000,
+  pollIntervalMs = 200,
+): Promise<boolean> => {
+  let waited = 0;
+  while (!existsSync(filePath) && waited < maxWaitMs) {
+    await sleep(pollIntervalMs);
+    waited += pollIntervalMs;
+  }
+  return existsSync(filePath);
 };
 
 
@@ -243,18 +312,7 @@ const tryHLSStream = async (
           writeJson(res, 404, { error: "HLS segment not found" });
           return true;
         }
-
-        const segmentStats = await measureOperation(
-          "statHlsVariantSegment",
-          () => stat(segmentPath),
-          { category: "file" },
-        );
-        res.writeHead(200, {
-          "Content-Type": "video/mp2t",
-          "Content-Length": segmentStats.size,
-          "Cache-Control": "public, max-age=31536000",
-        });
-        createReadStream(segmentPath).pipe(res);
+        await streamHlsSegment(res, segmentPath, "statHlsVariantSegment");
         return true;
       }
 
@@ -283,16 +341,12 @@ const tryHLSStream = async (
           /^(segment_\d+\.ts)$/gm,
           (match) => `${baseUrl}${match}`,
         );
-
-        res.writeHead(200, {
-          "Content-Type": "application/vnd.apple.mpegurl",
-          "Cache-Control": "public, max-age=31536000", // Pre-encoded, can cache
-          "Content-Length": Buffer.byteLength(modifiedPlaylist, "utf-8"),
-          ...(knownDuration && Number.isFinite(knownDuration)
-            ? { "X-Content-Duration": String(knownDuration) }
-            : {}),
-        });
-        res.end(modifiedPlaylist);
+        writeHlsPlaylistResponse(
+          res,
+          modifiedPlaylist,
+          "public, max-age=31536000",
+          knownDuration,
+        );
         return true;
       }
 
@@ -309,16 +363,7 @@ const tryHLSStream = async (
         /^(\d+)p\/playlist\.m3u8$/gm,
         (_, variantHeight) => `${baseVariantUrl}${variantHeight}`,
       );
-
-      res.writeHead(200, {
-        "Content-Type": "application/vnd.apple.mpegurl",
-        "Cache-Control": "public, max-age=31536000", // Pre-encoded, can cache
-        "Content-Length": Buffer.byteLength(masterContent, "utf-8"),
-        ...(knownDuration && Number.isFinite(knownDuration)
-          ? { "X-Content-Duration": String(knownDuration) }
-          : {}),
-      });
-      res.end(masterContent);
+      writeHlsPlaylistResponse(res, masterContent, "public, max-age=31536000", knownDuration);
       return true;
     }
 
@@ -333,30 +378,11 @@ const tryHLSStream = async (
     if (segment) {
       const segmentPath = getHLSSegmentPath(hlsInfo.hlsDir, segment);
 
-      // Wait for segment to appear (it might still be encoding)
-      const maxWaitMs = 30_000;
-      const pollIntervalMs = 200;
-      let waited = 0;
-      while (!existsSync(segmentPath) && waited < maxWaitMs) {
-        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-        waited += pollIntervalMs;
-      }
-
-      if (!existsSync(segmentPath)) {
+      if (!(await waitForFile(segmentPath))) {
         writeJson(res, 404, { error: "HLS segment not found or timed out" });
         return true;
       }
-      const segmentStats = await measureOperation(
-        "statHlsSegment",
-        () => stat(segmentPath),
-        { category: "file" },
-      );
-      res.writeHead(200, {
-        "Content-Type": "video/mp2t",
-        "Content-Length": segmentStats.size,
-        "Cache-Control": "public, max-age=31536000",
-      });
-      createReadStream(segmentPath).pipe(res);
+      await streamHlsSegment(res, segmentPath, "statHlsSegment");
       return true;
     }
 
@@ -394,7 +420,7 @@ const tryHLSStream = async (
     };
 
     while ((await countSegments()) < minSegments && waited < maxWaitMs) {
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      await sleep(pollIntervalMs);
       waited += pollIntervalMs;
     }
 
@@ -432,17 +458,7 @@ const tryHLSStream = async (
       /^(segment_\d+\.ts)$/gm,
       (match) => `${baseUrl}${match}`,
     );
-
-    res.writeHead(200, {
-      "Content-Type": "application/vnd.apple.mpegurl",
-      "Cache-Control": "no-cache", // Don't cache since playlist updates during encoding
-      "Content-Length": Buffer.byteLength(modifiedPlaylist, "utf-8"),
-      // Send the known duration as a custom header the client can use
-      ...(knownDuration && Number.isFinite(knownDuration)
-        ? { "X-Content-Duration": String(knownDuration) }
-        : {}),
-    });
-    res.end(modifiedPlaylist);
+    writeHlsPlaylistResponse(res, modifiedPlaylist, "no-cache", knownDuration);
     return true;
   } catch (error) {
     console.error(`Error generating HLS stream for: ${subPath}`, error);

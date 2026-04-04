@@ -410,24 +410,38 @@ type BuildFiltersInput = {
 const normalizeDistinctNonEmpty = (values: string[]) =>
   Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)));
 
+const toStringIncludesFilter = (value: string) => {
+  const normalizedValue = value.trim();
+  return normalizedValue.length > 0 ? { includes: normalizedValue } : null;
+};
+
+const toStringArrayFilter = (value: string[] | string | undefined) => {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const normalizedValues = normalizeDistinctNonEmpty(value);
+  return normalizedValues.length > 0 ? normalizedValues : null;
+};
+
 const addStringFilter = (
   filters: Record<string, unknown>[],
   field: "cameraModel" | "lens",
   value: string[] | string | undefined,
 ) => {
-  if (Array.isArray(value)) {
-    const normalizedValues = normalizeDistinctNonEmpty(value);
-    if (normalizedValues.length > 0) {
-      filters.push({ [field]: normalizedValues });
-    }
+  const arrayFilter = toStringArrayFilter(value);
+  if (arrayFilter) {
+    filters.push({ [field]: arrayFilter });
     return;
   }
 
-  if (typeof value === "string") {
-    const normalizedValue = value.trim();
-    if (normalizedValue.length > 0) {
-      filters.push({ [field]: { includes: normalizedValue } });
-    }
+  if (typeof value !== "string") {
+    return;
+  }
+
+  const includesFilter = toStringIncludesFilter(value);
+  if (includesFilter) {
+    filters.push({ [field]: includesFilter });
   }
 };
 
@@ -479,15 +493,13 @@ const buildFilters = ({
     filters.push(dateFilter);
   }
 
-  if (Array.isArray(peopleInImageFilter)) {
-    const normalizedPeople = normalizeDistinctNonEmpty(peopleInImageFilter);
-    if (normalizedPeople.length > 0) {
-      filters.push({ personInImage: normalizedPeople });
-    }
+  const peopleFilter = toStringArrayFilter(peopleInImageFilter);
+  if (peopleFilter) {
+    filters.push({ personInImage: peopleFilter });
   } else if (typeof peopleInImageFilter === "string") {
-    const normalizedSearch = peopleInImageFilter.trim();
-    if (normalizedSearch.length > 0) {
-      filters.push({ personInImage: { includes: normalizedSearch } });
+    const includesFilter = toStringIncludesFilter(peopleInImageFilter);
+    if (includesFilter) {
+      filters.push({ personInImage: includesFilter });
     }
   }
 
@@ -497,47 +509,110 @@ const buildFilters = ({
   return filters;
 };
 
-export const fetchStatus = async (): Promise<ServerStatus> => {
-  const response = await fetch("/api/status", { credentials: "include" });
+const fetchJsonOrThrow = async <T>(
+  url: string,
+  errorLabel: string,
+  init?: RequestInit,
+): Promise<T> => {
+  const response = await fetch(url, { ...init, credentials: "include" });
   if (!response.ok) {
-    throw new Error(`Failed to fetch status (status ${response.status})`);
+    throw new Error(`Failed to ${errorLabel} (status ${response.status})`);
   }
-  return await response.json();
+  return (await response.json()) as T;
+};
+
+const buildFilesQueryUrl = (path: string, params: URLSearchParams) =>
+  path ? `/api/files/${path}?${params.toString()}` : `/api/files/?${params.toString()}`;
+
+const buildSuggestionParams = ({
+  field,
+  q,
+  includeCounts,
+  limit,
+  includeSubfolders,
+  path,
+  ratingFilter,
+  mediaTypeFilter,
+  locationBounds,
+  dateRange,
+  peopleInImageFilter,
+  cameraModelFilter,
+  lensFilter,
+}: {
+  field: SuggestionsField;
+  q: string;
+  includeCounts: boolean;
+  limit: number;
+  includeSubfolders: boolean;
+  path: string;
+  ratingFilter?: { rating: number; atLeast: boolean } | null;
+  mediaTypeFilter?: "all" | "photo" | "video" | "other";
+  locationBounds?: GeoBounds | null;
+  dateRange?: DateRangeFilter | null;
+  peopleInImageFilter?: string[];
+  cameraModelFilter?: string[] | string;
+  lensFilter?: string[] | string;
+}) => {
+  const params = new URLSearchParams();
+  params.set("field", field);
+  params.set("q", q.trim());
+  params.set("limit", String(limit));
+
+  if (includeCounts) {
+    params.set("includeCounts", "true");
+  }
+  if (includeSubfolders) {
+    params.set("includeSubfolders", "true");
+  }
+  if (path) {
+    params.set("path", path);
+  }
+
+  const filters = buildFilters({
+    ratingFilter,
+    mediaTypeFilter,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+    cameraModelFilter,
+    lensFilter,
+  });
+  if (filters.length > 0) {
+    const filterObj =
+      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    params.set("filter", JSON.stringify(filterObj));
+  }
+
+  return params;
+};
+
+export const fetchStatus = async (): Promise<ServerStatus> => {
+  return await fetchJsonOrThrow<ServerStatus>("/api/status", "fetch status");
 };
 
 export const setBackgroundTasksEnabled = async (
   enabled: boolean,
 ): Promise<{ enabled: boolean }> => {
-  const response = await fetch("/api/status/background-tasks", {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
+  return await fetchJsonOrThrow<{ enabled: boolean }>(
+    "/api/status/background-tasks",
+    "update background task setting",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ enabled }),
     },
-    body: JSON.stringify({ enabled }),
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to update background task setting (status ${response.status})`,
-    );
-  }
-
-  return await response.json();
+  );
 };
 
 export const fetchFolders = async (path: string = "", signal?: AbortSignal): Promise<string[]> => {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
-  const response = await fetch(`/api/folders/${normalizedPath}`, {
-    credentials: "include",
-    signal,
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch folders (status ${response.status})`);
-  }
-
-  const data = (await response.json()) as { folders: string[] };
+  const data = await fetchJsonOrThrow<{ folders: string[] }>(
+    `/api/folders/${normalizedPath}`,
+    "fetch folders",
+    { signal },
+  );
   return data.folders;
 };
 
@@ -659,16 +734,10 @@ export const fetchPhotos = async ({
   }
 
   // Use /api/files/ with trailing slash to query for multiple files
-  const url = path
-    ? `/api/files/${path}?${params.toString()}`
-    : `/api/files/?${params.toString()}`;
-  const response = await fetch(url, { signal, credentials: "include" });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch photos (status ${response.status})`);
-  }
-
-  const payload = (await response.json()) as ApiPhotoResponse;
+  const url = buildFilesQueryUrl(path, params);
+  const payload = await fetchJsonOrThrow<ApiPhotoResponse>(url, "fetch photos", {
+    signal,
+  });
   return {
     items: payload.items.map(createPhotoItem),
     total: payload.total,
@@ -732,16 +801,8 @@ export const fetchGeotaggedPhotos = async ({
     params.set("south", locationBounds.south.toString());
   }
 
-  const url = path
-    ? `/api/files/${path}?${params.toString()}`
-    : `/api/files/?${params.toString()}`;
-  const response = await fetch(url, { signal, credentials: "include" });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch geotagged photos (status ${response.status})`);
-  }
-
-  const payload = (await response.json()) as {
+  const url = buildFilesQueryUrl(path, params);
+  const payload = await fetchJsonOrThrow<{
     clusters: Array<{
       latitude: number;
       longitude: number;
@@ -750,7 +811,7 @@ export const fetchGeotaggedPhotos = async ({
       sampleName?: string;
     }>;
     total: number;
-  };
+  }>(url, "fetch geotagged photos", { signal });
 
   const coveredCount = payload.clusters.reduce(
     (sum, cluster) => sum + (cluster.count ?? 0),
@@ -805,16 +866,12 @@ export const fetchDateRange = async ({
     params.set("filter", JSON.stringify(filterObj));
   }
 
-  const url = path
-    ? `/api/files/${path}?${params.toString()}`
-    : `/api/files/?${params.toString()}`;
-  const response = await fetch(url, { signal, credentials: "include" });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch date range (status ${response.status})`);
-  }
-
-  return (await response.json()) as { minDate: number | null; maxDate: number | null };
+  const url = buildFilesQueryUrl(path, params);
+  return await fetchJsonOrThrow<{ minDate: number | null; maxDate: number | null }>(
+    url,
+    "fetch date range",
+    { signal },
+  );
 };
 
 export const fetchDateHistogram = async ({
@@ -851,16 +908,10 @@ export const fetchDateHistogram = async ({
     params.set("filter", JSON.stringify(filterObj));
   }
 
-  const url = path
-    ? `/api/files/${path}?${params.toString()}`
-    : `/api/files/?${params.toString()}`;
-  const response = await fetch(url, { signal, credentials: "include" });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch date histogram (status ${response.status})`);
-  }
-
-  return (await response.json()) as DateHistogramResult;
+  const url = buildFilesQueryUrl(path, params);
+  return await fetchJsonOrThrow<DateHistogramResult>(url, "fetch date histogram", {
+    signal,
+  });
 };
 
 export const createFallbackPhoto = (path: string): PhotoItem => {
@@ -897,24 +948,13 @@ export const fetchSuggestions = async ({
   if (!allowBlankQuery && normalizedQuery.length === 0) {
     return [];
   }
-
-  const params = new URLSearchParams();
-  params.set("field", field);
-  params.set("q", normalizedQuery);
-  if (includeCounts) {
-    params.set("includeCounts", "true");
-  }
-  params.set("limit", String(limit));
-
-  if (includeSubfolders) {
-    params.set("includeSubfolders", "true");
-  }
-
-  if (path) {
-    params.set("path", path);
-  }
-
-  const filters = buildFilters({
+  const params = buildSuggestionParams({
+    field,
+    q: normalizedQuery,
+    includeCounts,
+    limit,
+    includeSubfolders,
+    path,
     ratingFilter,
     mediaTypeFilter,
     locationBounds,
@@ -923,22 +963,12 @@ export const fetchSuggestions = async ({
     cameraModelFilter,
     lensFilter,
   });
-  if (filters.length > 0) {
-    const filterObj =
-      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
-    params.set("filter", JSON.stringify(filterObj));
-  }
 
-  const response = await fetch(`/api/suggestions?${params.toString()}`, {
-    signal,
-    credentials: "include",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch suggestions (status ${response.status})`);
-  }
-
-  const payload = (await response.json()) as { suggestions: string[] };
+  const payload = await fetchJsonOrThrow<{ suggestions: string[] }>(
+    `/api/suggestions?${params.toString()}`,
+    "fetch suggestions",
+    { signal },
+  );
   return payload.suggestions;
 };
 
@@ -963,24 +993,13 @@ export const fetchSuggestionsWithCounts = async ({
   if (!allowBlankQuery && normalizedQuery.length === 0) {
     return [];
   }
-
-  const params = new URLSearchParams();
-  params.set("field", field);
-  params.set("q", normalizedQuery);
-  params.set("limit", String(limit));
-  if (includeCounts) {
-    params.set("includeCounts", "true");
-  }
-
-  if (includeSubfolders) {
-    params.set("includeSubfolders", "true");
-  }
-
-  if (path) {
-    params.set("path", path);
-  }
-
-  const filters = buildFilters({
+  const params = buildSuggestionParams({
+    field,
+    q: normalizedQuery,
+    includeCounts,
+    limit,
+    includeSubfolders,
+    path,
     ratingFilter,
     mediaTypeFilter,
     locationBounds,
@@ -989,22 +1008,12 @@ export const fetchSuggestionsWithCounts = async ({
     cameraModelFilter,
     lensFilter,
   });
-  if (filters.length > 0) {
-    const filterObj =
-      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
-    params.set("filter", JSON.stringify(filterObj));
-  }
 
-  const response = await fetch(`/api/suggestions?${params.toString()}`, {
-    signal,
-    credentials: "include",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch suggestions (status ${response.status})`);
-  }
-
-  const payload = (await response.json()) as { suggestions: SuggestionWithCount[] };
+  const payload = await fetchJsonOrThrow<{ suggestions: SuggestionWithCount[] }>(
+    `/api/suggestions?${params.toString()}`,
+    "fetch suggestions",
+    { signal },
+  );
   return payload.suggestions;
 };
 
@@ -1037,16 +1046,11 @@ export const fetchFaceQueue = async ({
     params.set("includeSubfolders", includeSubfolders.toString());
   }
 
-  const response = await fetch(`/api/faces/queue?${params.toString()}`, {
-    signal,
-    credentials: "include",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch face queue (status ${response.status})`);
-  }
-
-  return (await response.json()) as FaceQueueResult;
+  return await fetchJsonOrThrow<FaceQueueResult>(
+    `/api/faces/queue?${params.toString()}`,
+    "fetch face queue",
+    { signal },
+  );
 };
 
 export const fetchFacePeople = async (options: {
@@ -1063,16 +1067,11 @@ export const fetchFacePeople = async (options: {
     params.set("includeSubfolders", includeSubfolders.toString());
   }
   const query = params.toString() ? `?${params.toString()}` : "";
-  const response = await fetch(`/api/faces/people${query}`, {
-    signal,
-    credentials: "include",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch face people (status ${response.status})`);
-  }
-
-  const payload = (await response.json()) as { people: FacePerson[] };
+  const payload = await fetchJsonOrThrow<{ people: FacePerson[] }>(
+    `/api/faces/people${query}`,
+    "fetch face people",
+    { signal },
+  );
   return payload.people;
 };
 
@@ -1084,19 +1083,11 @@ export const fetchFaceMatches = async (options: {
   const { faceId, limit = 8, signal } = options;
   const params = new URLSearchParams({ limit: String(limit) });
 
-  const response = await fetch(
+  const payload = await fetchJsonOrThrow<{ items: FaceMatchItem[] }>(
     `/api/faces/${encodeURIComponent(faceId)}/matches?${params.toString()}`,
-    {
-      signal,
-      credentials: "include",
-    },
+    "fetch face matches",
+    { signal },
   );
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch face matches (status ${response.status})`);
-  }
-
-  const payload = (await response.json()) as { items: FaceMatchItem[] };
   return payload.items;
 };
 
@@ -1108,19 +1099,11 @@ export const fetchFacePersonSuggestions = async (options: {
   const { personId, limit = 200, signal } = options;
   const params = new URLSearchParams({ limit: String(limit) });
 
-  const response = await fetch(
+  const payload = await fetchJsonOrThrow<{ items: FaceMatchItem[] }>(
     `/api/faces/people/${encodeURIComponent(personId)}/suggestions?${params.toString()}`,
-    {
-      signal,
-      credentials: "include",
-    },
+    "fetch person face suggestions",
+    { signal },
   );
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch person face suggestions (status ${response.status})`);
-  }
-
-  const payload = (await response.json()) as { items: FaceMatchItem[] };
   return payload.items;
 };
 
@@ -1133,23 +1116,20 @@ export const acceptFaceSuggestion = async (options: {
 }): Promise<{ ok: true; action: "accept"; faceId: string }> => {
   const { faceId, personId, personName, reviewer, signal } = options;
 
-  const response = await fetch(`/api/faces/${encodeURIComponent(faceId)}/accept`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ...(personId ? { personId } : {}),
-      ...(personName ? { personName } : {}),
-      ...(reviewer ? { reviewer } : {}),
-    }),
-    signal,
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to accept face suggestion (status ${response.status})`);
-  }
-
-  return (await response.json()) as { ok: true; action: "accept"; faceId: string };
+  return await fetchJsonOrThrow<{ ok: true; action: "accept"; faceId: string }>(
+    `/api/faces/${encodeURIComponent(faceId)}/accept`,
+    "accept face suggestion",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(personId ? { personId } : {}),
+        ...(personName ? { personName } : {}),
+        ...(reviewer ? { reviewer } : {}),
+      }),
+      signal,
+    },
+  );
 };
 
 export const rejectFaceSuggestion = async (options: {
@@ -1160,20 +1140,17 @@ export const rejectFaceSuggestion = async (options: {
 }): Promise<{ ok: true; action: "reject"; faceId: string }> => {
   const { faceId, personId, reviewer, signal } = options;
 
-  const response = await fetch(`/api/faces/${encodeURIComponent(faceId)}/reject`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ...(personId ? { personId } : {}),
-      ...(reviewer ? { reviewer } : {}),
-    }),
-    signal,
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to reject face suggestion (status ${response.status})`);
-  }
-
-  return (await response.json()) as { ok: true; action: "reject"; faceId: string };
+  return await fetchJsonOrThrow<{ ok: true; action: "reject"; faceId: string }>(
+    `/api/faces/${encodeURIComponent(faceId)}/reject`,
+    "reject face suggestion",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(personId ? { personId } : {}),
+        ...(reviewer ? { reviewer } : {}),
+      }),
+      signal,
+    },
+  );
 };

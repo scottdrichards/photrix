@@ -156,45 +156,41 @@ const hashToken = (token: string) => {
   return createHash("sha256").update(token).digest("hex");
 };
 
-const encodeCookie = (name: string, value: string, maxAgeSeconds: number, secure: boolean, domain?: string) => {
+const buildCookie = (
+  name: string,
+  value: string,
+  secure: boolean,
+  options: { maxAgeSeconds?: number; expires?: string; domain?: string } = {},
+) => {
+  const { maxAgeSeconds, expires, domain } = options;
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
-    `Max-Age=${maxAgeSeconds}`,
+    ...(typeof maxAgeSeconds === "number" ? [`Max-Age=${maxAgeSeconds}`] : []),
+    ...(expires ? [`Expires=${expires}`] : []),
+    ...(domain ? [`Domain=${domain}`] : []),
+    ...(secure ? ["Secure"] : []),
   ];
-
-  if (domain) {
-    parts.push(`Domain=${domain}`);
-  }
-
-  if (secure) {
-    parts.push("Secure");
-  }
 
   return parts.join("; ");
 };
 
+const encodeCookie = (
+  name: string,
+  value: string,
+  maxAgeSeconds: number,
+  secure: boolean,
+  domain?: string,
+) => buildCookie(name, value, secure, { maxAgeSeconds, domain });
+
 const clearCookie = (name: string, secure: boolean, domain?: string) => {
-  const parts = [
-    `${name}=`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    "Max-Age=0",
-    "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
-  ];
-
-  if (domain) {
-    parts.push(`Domain=${domain}`);
-  }
-
-  if (secure) {
-    parts.push("Secure");
-  }
-
-  return parts.join("; ");
+  return buildCookie(name, "", secure, {
+    maxAgeSeconds: 0,
+    expires: "Thu, 01 Jan 1970 00:00:00 GMT",
+    domain,
+  });
 };
 
 const safeString = (value: unknown) => {
@@ -306,12 +302,17 @@ export class AuthService {
   }
 
   applyResponseHeaders(req: http.IncomingMessage, res: http.ServerResponse) {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("Referrer-Policy", "no-referrer");
-    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-    res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+    const securityHeaders: Record<string, string> = {
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "Referrer-Policy": "no-referrer",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    };
+    for (const [name, value] of Object.entries(securityHeaders)) {
+      res.setHeader(name, value);
+    }
 
     if (this.config.requireHttps) {
       res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
@@ -323,9 +324,14 @@ export class AuthService {
       res.setHeader("Access-Control-Allow-Credentials", "true");
     }
 
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    const corsHeaders: Record<string, string> = {
+      Vary: "Origin",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    for (const [name, value] of Object.entries(corsHeaders)) {
+      res.setHeader(name, value);
+    }
   }
 
   isAllowedOrigin(req: http.IncomingMessage) {
