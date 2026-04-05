@@ -10,7 +10,12 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
-    allowedHosts: ["localhost", "photrix.scottdrichards.com", "local.photrix.scottdrichards.com"],
+    allowedHosts: [
+      "localhost",
+      "photrix.scottdrichards.com",
+      "local.photrix.scottdrichards.com",
+      "local.photrix.scottderichards.com",
+    ],
     proxy: {
       "/api": {
         target: "http://localhost:3000",

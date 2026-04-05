@@ -46,3 +46,34 @@ npm --prefix client run dev
 2. Register first user with bootstrap token
 3. Create/store passkey
 4. Rotate or remove bootstrap token after setup
+
+## 7) Local domain like localhost (no scripts)
+
+To make `local.photrix.scottderichards.com` behave like localhost on the current device:
+
+1. Add host entries (one-time, admin):
+
+```text
+127.0.0.1 local.photrix.scottderichards.com
+::1 local.photrix.scottderichards.com
+```
+
+2. In `server/.env`, set:
+
+```dotenv
+AUTH_ORIGIN=http://local.photrix.scottderichards.com:5173
+AUTH_ALLOWED_ORIGINS=http://local.photrix.scottderichards.com:5173,http://localhost:5173,http://localhost:3000
+AUTH_ALLOWED_HOSTS=local.photrix.scottderichards.com,localhost
+AUTH_RP_ID=local.photrix.scottderichards.com
+AUTH_REQUIRE_HTTPS=false
+AUTH_SECURE_COOKIES=false
+```
+
+3. Start normally:
+
+```powershell
+npm --prefix server run start
+npm --prefix client run dev
+```
+
+4. Open `http://local.photrix.scottderichards.com:5173`.

@@ -68,25 +68,41 @@ const parseList = (value: string | undefined, fallback: string[]) => {
 };
 
 export const getAuthConfig = (): AuthConfig => {
-  const expectedOrigin = process.env.AUTH_ORIGIN?.trim() || "http://localhost:5173";
-  const expectedOriginHost = new URL(expectedOrigin).hostname.toLowerCase();
-  const rpId = process.env.AUTH_RP_ID?.trim() || "localhost";
   const secureCookies = parseBoolean(
     process.env.AUTH_SECURE_COOKIES,
     process.env.NODE_ENV === "production",
   );
+
+  // Single source of truth for allowed hosts
+  const allowedHosts = parseList(process.env.AUTH_ALLOWED_HOSTS, ["localhost"]);
+  const primaryHost = Array.from(allowedHosts)[0] || "localhost";
+
+  // Derive origin and origins from allowed hosts
+  const expectedOrigin = process.env.AUTH_ORIGIN?.trim() || `https://${primaryHost}`;
+  const rpId = process.env.AUTH_RP_ID?.trim() || primaryHost;
+
+  // Generate allowed origins from hosts (both http and https)
+  const generateOrigins = (): string[] => {
+    const origins = new Set<string>();
+    for (const host of allowedHosts) {
+      origins.add(`https://${host}`);
+      if (!host.startsWith("localhost") || process.env.NODE_ENV !== "production") {
+        origins.add(`http://${host}`);
+      }
+    }
+    origins.add(expectedOrigin);
+    return Array.from(origins);
+  };
+
+  const allowedOrigins = parseOrigins(process.env.AUTH_ALLOWED_ORIGINS, generateOrigins());
 
   return {
     enabled: parseBoolean(process.env.AUTH_REQUIRED, true),
     rpName: process.env.AUTH_RP_NAME?.trim() || "Photrix",
     rpId,
     expectedOrigin,
-    allowedOrigins: parseOrigins(process.env.AUTH_ALLOWED_ORIGINS, [
-      expectedOrigin,
-      "http://localhost:5173",
-      "http://localhost:3000",
-    ]),
-    allowedHosts: parseList(process.env.AUTH_ALLOWED_HOSTS, [expectedOriginHost, "localhost"]),
+    allowedOrigins,
+    allowedHosts,
     trustedProxyIps: parseList(process.env.AUTH_TRUSTED_PROXY_IPS, []),
     requireHttps: parseBoolean(process.env.AUTH_REQUIRE_HTTPS, secureCookies),
     bootstrapToken: process.env.AUTH_BOOTSTRAP_TOKEN?.trim() || null,
