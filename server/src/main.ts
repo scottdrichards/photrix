@@ -38,55 +38,70 @@ const startServer = async () => {
       );
       console.log("[bootstrap] IndexDatabase done");
 
-      // Start file discovery in the background (non-blocking)
-      console.log("[bootstrap] Starting file discovery in background...");
-      measureOperation(
-        "pipeline.discoverFiles",
-        () => discoverFiles({ root: absolutePath, db: database }),
-        { category: "file", logWithoutRequest: true },
-      ).then(() => {
-        console.log("[pipeline] file-discovery complete → metadata:file-info start");
-        startBackgroundMetadataProcessing(database);
-      });
+      const metadataProcessingPriorities = [
+        {
+          name: "discover-files",
+          start: (db: IndexDatabase, onComplete?: () => void) => {
+            measureOperation(
+              "pipeline.discoverFiles",
+              () => discoverFiles({ root: absolutePath, db }),
+              { category: "file", logWithoutRequest: true },
+            ).then(() => {
+              onComplete?.();
+            });
+            // discoverFiles doesn't support pause, return no-op
+            return () => {};
+          },
+        },
+        {
+          name: "file-info",
+          start: startBackgroundProcessFileInfoMetadata,
+        },
+        {
+          name: "exif",
+          start: startBackgroundProcessExifMetadata,
+        },
+        ...(process.env.PHOTRIX_ENABLE_FACE_METADATA?.toLowerCase() !== "false"
+          ? [
+              {
+                name: "face",
+                start: startBackgroundProcessFaceMetadata,
+              },
+            ]
+          : []),
+        {
+          name: "conversion",
+          start: startBackgroundConversionWorker,
+        },
+      ];
 
-      let pauseBackgroundProcessMetadata = () => {
-        // No-op until metadata processing starts
-      };
+      // Execute metadata processors in sequence
+      let pauseBackgroundProcessMetadata: ReturnType<typeof startBackgroundProcessFileInfoMetadata> =
+        () => {
+          // No-op until metadata processing starts
+        };
 
-      const startBackgroundMetadataProcessing = (db: IndexDatabase) => {
-        // Face metadata runs by default. Set PHOTRIX_ENABLE_FACE_METADATA=false to opt out.
-        const runFaceMetadataPipeline =
-          process.env.PHOTRIX_ENABLE_FACE_METADATA?.toLowerCase() !== "false";
-
-        // Chain the metadata processors: file info → EXIF → optional face metadata → conversion worker
-        const pauseFileInfo = startBackgroundProcessFileInfoMetadata(db, () => {
-          console.log("[pipeline] metadata:file-info complete → metadata:exif start");
-          // File info complete, start EXIF processing
-          const pauseExif = startBackgroundProcessExifMetadata(db, () => {
-            if (runFaceMetadataPipeline) {
-              console.log("[pipeline] metadata:exif complete → metadata:face start");
-              const pauseFace = startBackgroundProcessFaceMetadata(db, () => {
-                console.log("[pipeline] metadata:face complete → conversion-worker start");
-                pauseBackgroundProcessMetadata = startBackgroundConversionWorker(db);
-              });
-              pauseBackgroundProcessMetadata = pauseFace;
-              return;
-            }
-
-            // EXIF complete, start conversion worker (thumbnails + HLS)
-            console.log("[pipeline] metadata:exif complete → conversion-worker start");
-            pauseBackgroundProcessMetadata = startBackgroundConversionWorker(db);
+      const startMetadataProcessingPipeline = async () => {
+        for (const metadataProcess of metadataProcessingPriorities) {
+          console.log(`[pipeline] Starting ${metadataProcess.name} processing`);
+          pauseBackgroundProcessMetadata = await new Promise((resolve) => {
+            const pauseFn = metadataProcess.start(database, () => {
+              console.log(`[pipeline] ${metadataProcess.name} complete`);
+              resolve(pauseFn);
+            });
           });
-          pauseBackgroundProcessMetadata = pauseExif;
-        });
-        pauseBackgroundProcessMetadata = pauseFileInfo;
+        }
+        console.log("[bootstrap] All metadata processing priorities scheduled");
       };
+
+      startMetadataProcessingPipeline();
 
       createServer(database, absolutePath, {
         onRequest: () => pauseBackgroundProcessMetadata(),
       });
 
       console.log("[bootstrap] Server started - metadata processing will run in background");
+      console.log("[bootstrap] Starting file discovery in background...");
     },
     { category: "other", detail: "server-bootstrap", logWithoutRequest: true },
   );

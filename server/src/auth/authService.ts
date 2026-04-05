@@ -575,7 +575,7 @@ export class AuthService {
         verifyRegistrationResponse({
           response,
           expectedChallenge: challenge,
-          expectedOrigin: this.config.expectedOrigin,
+          expectedOrigin: Array.from(this.config.allowedOrigins),
           expectedRPID: this.config.rpId,
           requireUserVerification: true,
         }),
@@ -706,7 +706,7 @@ export class AuthService {
         verifyAuthenticationResponse({
           response,
           expectedChallenge: challengeState.challenge,
-          expectedOrigin: this.config.expectedOrigin,
+          expectedOrigin: Array.from(this.config.allowedOrigins),
           expectedRPID: this.config.rpId,
           requireUserVerification: true,
           credential: {
