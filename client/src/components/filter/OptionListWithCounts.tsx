@@ -1,15 +1,13 @@
 import { Button, makeStyles, tokens } from "@fluentui/react-components";
 import { useMemo } from "react";
 
-type CountOption = {
-  key: string;
-  label: string;
-  count: number;
-  selected?: boolean;
-};
-
-type CountOptionListProps = {
-  options: CountOption[];
+type OptionListWithCountsProps = {
+    options: {
+    key: string;
+    label: string;
+    count: number;
+    selected?: boolean;
+  }[];
   onSelect: (optionKey: string) => void;
 };
 
@@ -28,7 +26,8 @@ const useStyles = makeStyles({
   },
 });
 
-export const CountOptionList = ({ options, onSelect }: CountOptionListProps) => {
+export const OptionListWithCounts = ({ options, onSelect }: OptionListWithCountsProps) => {
+
   const styles = useStyles();
   const formatNumber = useMemo(() => new Intl.NumberFormat(), []);
 

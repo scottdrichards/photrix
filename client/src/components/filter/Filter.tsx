@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchFolders, fetchSuggestionsWithCounts } from "../../api";
 import { DateHistogram } from "../DateHistogram";
 import { MapFilter } from "../MapFilter";
-import { CountOptionList } from "./CountOptionList";
+import { OptionListWithCounts } from "./OptionListWithCounts";
 import { MediaTypeFilter, useFilterContext } from "./FilterContext";
 import { SuggestionFilterField } from "./SuggestionFilterField";
 
@@ -601,7 +601,7 @@ export const Filter = () => {
             {loadingRatingCounts ? (
               <Spinner size="tiny" label="Loading rating counts..." />
             ) : null}
-            <CountOptionList
+            <OptionListWithCounts
               options={ratingOptions}
               onSelect={(optionKey) => {
                 const selectedStar = Number.parseInt(optionKey, 10);

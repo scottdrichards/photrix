@@ -15,7 +15,7 @@ import {
   SuggestionWithCount,
 } from "../../api";
 import { MediaTypeFilter } from "./FilterContext";
-import { CountOptionList } from "./CountOptionList";
+import { OptionListWithCounts } from "./OptionListWithCounts";
 
 type SuggestionFilterFieldProps = {
   title: string;
@@ -214,7 +214,7 @@ export const SuggestionFilterField = ({
         placeholder={placeholder}
       />
       {loading ? <Spinner size="tiny" label={loadingLabel} /> : null}
-      <CountOptionList
+      <OptionListWithCounts
         options={suggestions.map((suggestion) => ({
           key: suggestion.value,
           label: suggestion.value,
