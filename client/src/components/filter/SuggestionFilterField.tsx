@@ -8,13 +8,17 @@ import {
 } from "@fluentui/react-components";
 import { useEffect, useMemo, useState } from "react";
 import {
-  DateRangeFilter,
   fetchSuggestionsWithCounts,
-  GeoBounds,
   SuggestionsField,
   SuggestionWithCount,
 } from "../../api";
-import { MediaTypeFilter } from "./FilterContext";
+import type {
+  ApiFilterOptions,
+  DateRangeFilter,
+  GeoBoundsLike as GeoBounds,
+  MediaTypeFilter,
+  RatingFilter,
+} from "../../../../shared/filter-contract/src";
 import { OptionListWithCounts } from "./OptionListWithCounts";
 
 type SuggestionFilterFieldProps = {
@@ -27,13 +31,13 @@ type SuggestionFilterFieldProps = {
   isActive: boolean;
   includeSubfolders?: boolean;
   path?: string;
-  ratingFilter?: { rating: number; atLeast: boolean } | null;
+  ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
-  peopleInImageFilter?: string[];
-  cameraModelFilter?: string[];
-  lensFilter?: string[];
+  peopleInImageFilter?: Exclude<ApiFilterOptions["peopleInImageFilter"], string | null>;
+  cameraModelFilter?: Exclude<ApiFilterOptions["cameraModelFilter"], string | null>;
+  lensFilter?: Exclude<ApiFilterOptions["lensFilter"], string | null>;
 };
 
 const useStyles = makeStyles({

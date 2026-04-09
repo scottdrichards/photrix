@@ -4,31 +4,15 @@ import {
   useState,
   useMemo,
   useCallback,
-  ReactNode,
+  type ReactNode,
 } from "react";
-import { GeoBounds } from "../../api";
+import type { ClientFilterState } from "../../../../shared/filter-contract/src";
+export type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
 
-export type MediaTypeFilter = "all" | "photo" | "video" | "other";
-
-/** null means filtering for items without that property */
-type NullableFilter = {
-  ratingFilter: { rating: number; atLeast: boolean };
-  locationBounds: GeoBounds | undefined;
-  dateRange: { start: number; end: number };
-};
-
-export type FilterState = Partial<
-  {
-    includeSubfolders: boolean;
-    path: string;
-    mediaTypeFilter: MediaTypeFilter;
-    peopleInImageFilter: string[];
-    cameraModelFilter: string[];
-    lensFilter: string[];
-  } & {
-    [K in keyof NullableFilter]: NullableFilter[K] | null;
-  }
->;
+/**
+ * null values means "find items with no value for this field".
+ */
+export type FilterState = ClientFilterState;
 
 type FilterContextValue = {
   filter: FilterState;
@@ -47,22 +31,14 @@ export const useFilterContext = () => {
   return context;
 };
 
-const createInitialFilter = (): FilterState => {
+const createInitialFilterFromURL = (): FilterState => {
   const pathFromLocation = decodeURIComponent(window.location.pathname.slice(1));
   const path = pathFromLocation ? pathFromLocation + "/" : "";
 
-  const includeSubfolders =
-    new URLSearchParams(window.location.search).get("includeSubfolders") !== "false";
   return {
-    includeSubfolders,
+    includeSubfolders:
+      new URLSearchParams(window.location.search).get("includeSubfolders") !== "false",
     path,
-    ratingFilter: null,
-    mediaTypeFilter: "all",
-    peopleInImageFilter: [],
-    cameraModelFilter: [],
-    lensFilter: [],
-    locationBounds: undefined,
-    dateRange: null,
   };
 };
 
@@ -71,16 +47,14 @@ type FilterProviderProps = {
 };
 
 export const FilterProvider = ({ children }: FilterProviderProps) => {
-  const [filter, setFilterState] = useState<FilterState>(createInitialFilter);
+  const [filter, setFilterState] = useState<FilterState>(createInitialFilterFromURL);
 
-  const setFilter = useCallback(
-    (update: Partial<FilterState> | ((prev: FilterState) => FilterState)) => {
-      setFilterState((prev) =>
-        typeof update === "function" ? update(prev) : { ...prev, ...update },
-      );
-    },
-    [],
-  );
+  type SetFilterUpdate = Partial<FilterState> | ((prev: FilterState) => FilterState);
+  const setFilter = useCallback((update: SetFilterUpdate) => {
+    setFilterState((prev) =>
+      typeof update === "function" ? update(prev) : { ...prev, ...update },
+    );
+  }, []);
 
   const value = useMemo(() => ({ filter, setFilter }), [filter, setFilter]);
 

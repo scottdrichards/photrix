@@ -19,7 +19,8 @@ import OSM from "ol/source/OSM";
 import VectorSource from "ol/source/Vector";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchGeotaggedPhotos } from "../api";
-import type { GeoBounds, GeoPoint } from "../api";
+import type { GeoPoint } from "../api";
+import type { GeoBoundsLike as GeoBounds } from "../../../shared/filter-contract/src";
 import { markerStyle, useMapFilterStyles } from "./MapFilter.styles";
 import { useFilterContext } from "./filter/FilterContext";
 

@@ -1,4 +1,9 @@
 import { FileRecord } from "./fileRecord.type.ts";
+import type {
+  RecordFilterCondition,
+  RecordFilterElement,
+} from "../../../shared/filter-contract/src/index.ts";
+export type { Range, StringSearch } from "../../../shared/filter-contract/src/index.ts";
 
 export enum ConversionTaskPriority {
   InProgress = -1,
@@ -12,60 +17,13 @@ export type PendingConversionTaskPriority = Exclude<
   ConversionTaskPriority.InProgress
 >;
 
-export type StringSearch =
-  | string
-  | string[]
-  | {
-      includes?: string;
-      glob?: string;
-      regex?: string;
-      /** Index-friendly prefix match. Use `folder` for folder matches */
-      startsWith?: string;
-      /** Index-friendly prefix negation match */
-      notStartsWith?: string;
-    };
-
-/**
- * Inclusive of min/max
- */
-export type Range<T extends Date | number> = { min?: T; max?: T };
-
 export type FilterField = keyof FileRecord | "relativePath";
 
-export type FilterCondition = {
-  [K in FilterField]?:
-    | null
-    | (K extends "relativePath"
-        ? StringSearch
-        : K extends "folder"
-        ?
-            | StringSearch
-            | {
-                /** `true` to grab grandchildren as well */
-                recursive?: boolean;
-                folder: string;
-              }
-        : K extends keyof FileRecord
-          ? NonNullable<FileRecord[K]> extends number
-            ? number | number[] | Range<number>
-          : NonNullable<FileRecord[K]> extends Record<string, number>
-            ? { [P in keyof NonNullable<FileRecord[K]>]?: number[] | Range<number> }
-            : NonNullable<FileRecord[K]> extends string | string[]
-              ? StringSearch
-              : NonNullable<FileRecord[K]> extends Date
-                ? Range<Date>
-                : NonNullable<FileRecord[K]> extends boolean
-                  ? NonNullable<FileRecord[K]>
-                  : FileRecord[K]
-          : never);
-};
+export type FilterCondition = RecordFilterCondition<FileRecord, "relativePath">;
 
-export type LogicalFilter = {
-  operation: "and" | "or";
-  conditions: FilterElement[];
-};
+export type LogicalFilter = Extract<RecordFilterElement<FileRecord, "relativePath">, { operation: "and" | "or" }>;
 
-export type FilterElement = FilterCondition | LogicalFilter;
+export type FilterElement = RecordFilterElement<FileRecord, "relativePath">;
 
 export type QueryOptions = {
   filter: FilterElement;

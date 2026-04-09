@@ -1,3 +1,12 @@
+import type {
+  ApiFilterOptions,
+  DateRangeFilter,
+  GeoBoundsLike as GeoBounds,
+  MediaTypeFilter,
+  RatingFilter,
+} from "../../shared/filter-contract/src";
+export type { DateRangeFilter, GeoBounds };
+
 export interface ApiPhotoItem {
   folder: string;
   fileName: string;
@@ -35,24 +44,12 @@ export interface PhotoItem {
   };
 }
 
-export type GeoBounds = {
-  west: number;
-  south: number;
-  east: number;
-  north: number;
-};
-
 export type GeoPoint = {
   path: string;
   name: string;
   latitude: number;
   longitude: number;
   count?: number;
-};
-
-export type DateRangeFilter = {
-  start?: number;
-  end?: number;
 };
 
 export type DateHistogramBucket = {
@@ -83,13 +80,13 @@ export interface FetchPhotosOptions {
   includeSubfolders?: boolean;
   path?: string;
   signal?: AbortSignal;
-  ratingFilter?: { rating: number; atLeast: boolean } | null;
-  mediaTypeFilter?: "all" | "photo" | "video" | "other";
+  ratingFilter?: RatingFilter | null;
+  mediaTypeFilter?: MediaTypeFilter;
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
-  peopleInImageFilter?: string[];
-  cameraModelFilter?: string[] | string;
-  lensFilter?: string[] | string;
+  peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
+  cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
+  lensFilter?: ApiFilterOptions["lensFilter"];
 }
 
 export type SuggestionsField =
@@ -109,13 +106,13 @@ export type FetchSuggestionsOptions = {
   limit?: number;
   includeSubfolders?: boolean;
   path?: string;
-  ratingFilter?: { rating: number; atLeast: boolean } | null;
-  mediaTypeFilter?: "all" | "photo" | "video" | "other";
+  ratingFilter?: RatingFilter | null;
+  mediaTypeFilter?: MediaTypeFilter;
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
-  peopleInImageFilter?: string[];
-  cameraModelFilter?: string[] | string;
-  lensFilter?: string[] | string;
+  peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
+  cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
+  lensFilter?: ApiFilterOptions["lensFilter"];
   signal?: AbortSignal;
 };
 
@@ -398,13 +395,13 @@ const dateRangeToFilter = (dateRange?: DateRangeFilter | null) => {
 };
 
 type BuildFiltersInput = {
-  ratingFilter?: { rating: number; atLeast: boolean } | null;
-  mediaTypeFilter?: "all" | "photo" | "video" | "other";
+  ratingFilter?: RatingFilter | null;
+  mediaTypeFilter?: MediaTypeFilter;
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
-  peopleInImageFilter?: string[] | string;
-  cameraModelFilter?: string[] | string;
-  lensFilter?: string[] | string;
+  peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
+  cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
+  lensFilter?: ApiFilterOptions["lensFilter"];
 };
 
 const normalizeDistinctNonEmpty = (values: string[]) =>
@@ -415,7 +412,7 @@ const toStringIncludesFilter = (value: string) => {
   return normalizedValue.length > 0 ? { includes: normalizedValue } : null;
 };
 
-const toStringArrayFilter = (value: string[] | string | undefined) => {
+const toStringArrayFilter = (value: string[] | string | null | undefined) => {
   if (!Array.isArray(value)) {
     return null;
   }
@@ -427,7 +424,7 @@ const toStringArrayFilter = (value: string[] | string | undefined) => {
 const addStringFilter = (
   filters: Record<string, unknown>[],
   field: "cameraModel" | "lens",
-  value: string[] | string | undefined,
+  value: string[] | string | null | undefined,
 ) => {
   const arrayFilter = toStringArrayFilter(value);
   if (arrayFilter) {
@@ -545,13 +542,13 @@ const buildSuggestionParams = ({
   limit: number;
   includeSubfolders: boolean;
   path: string;
-  ratingFilter?: { rating: number; atLeast: boolean } | null;
-  mediaTypeFilter?: "all" | "photo" | "video" | "other";
+  ratingFilter?: RatingFilter | null;
+  mediaTypeFilter?: MediaTypeFilter;
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
-  peopleInImageFilter?: string[];
-  cameraModelFilter?: string[] | string;
-  lensFilter?: string[] | string;
+  peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
+  cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
+  lensFilter?: ApiFilterOptions["lensFilter"];
 }) => {
   const params = new URLSearchParams();
   params.set("field", field);

@@ -1,5 +1,5 @@
 import { Button, Caption1 } from "@fluentui/react-components";
-import type { MediaTypeFilter } from "./FilterContext";
+import type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
 
 type FileTypeFilterProps = {
   mediaTypeFilter: MediaTypeFilter;

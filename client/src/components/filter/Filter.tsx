@@ -23,10 +23,11 @@ import {
 } from "@fluentui/react-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchFolders, fetchSuggestionsWithCounts } from "../../api";
+import type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
 import { DateHistogram } from "../DateHistogram";
 import { MapFilter } from "../MapFilter";
 import { OptionListWithCounts } from "./OptionListWithCounts";
-import { MediaTypeFilter, useFilterContext } from "./FilterContext";
+import { useFilterContext } from "./FilterContext";
 import { SuggestionFilterField } from "./SuggestionFilterField";
 
 type FilterPanel =
@@ -130,16 +131,16 @@ export const Filter = () => {
     ratingFilter,
     mediaTypeFilter,
     path,
-    peopleInImageFilter = [],
-    cameraModelFilter = [],
-    lensFilter = [],
+    peopleInImageFilter,
+    cameraModelFilter,
+    lensFilter,
     locationBounds,
     dateRange,
   } = filter;
 
-  const selectedPeople = peopleInImageFilter;
-  const selectedCameraModels = cameraModelFilter;
-  const selectedLensModels = lensFilter;
+  const selectedPeople = peopleInImageFilter ?? [];
+  const selectedCameraModels = cameraModelFilter ?? [];
+  const selectedLensModels = lensFilter ?? [];
 
   const ratingValue = ratingFilter?.rating ?? null;
   const ratingAtLeast = ratingFilter?.atLeast ?? true;
@@ -156,13 +157,16 @@ export const Filter = () => {
   const isPeopleFilterActive = selectedPeople.length > 0;
   const isGearFilterActive =
     selectedCameraModels.length > 0 || selectedLensModels.length > 0;
-  const isRatingFilterActive = ratingFilter !== null && ratingFilter !== undefined;
-  const isDateFilterActive = dateRange !== null && dateRange !== undefined;
+  const isRatingFilterActive = ratingFilter !== undefined;
+  const isDateFilterActive = dateRange !== undefined;
   const isMapFilterActive = locationBounds !== undefined;
 
   const handleRatingClick = (star: number) => {
     if (ratingValue === star) {
-      setFilter({ ratingFilter: null });
+      setFilter((prev) => {
+        const { ratingFilter, ...rest } = prev;
+        return rest;
+      });
       return;
     }
 
@@ -176,7 +180,10 @@ export const Filter = () => {
   };
 
   const handleClearRating = () => {
-    setFilter({ ratingFilter: null });
+    setFilter((prev) => {
+      const { ratingFilter, ...rest } = prev;
+      return rest;
+    });
   };
 
   const handleMediaTypeChange = (type: MediaTypeFilter) => {
@@ -577,7 +584,7 @@ export const Filter = () => {
                   )}
                 </button>
               ))}
-              {ratingFilter !== null ? (
+              {ratingFilter ? (
                 <Tooltip
                   content={ratingAtLeast ? "At least this rating" : "Exactly this rating"}
                   relationship="label"
@@ -592,7 +599,7 @@ export const Filter = () => {
                   </Button>
                 </Tooltip>
               ) : null}
-              {ratingFilter !== null ? (
+              {ratingFilter ? (
                 <Button size="small" appearance="subtle" onClick={handleClearRating}>
                   Clear
                 </Button>

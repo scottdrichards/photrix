@@ -52,6 +52,22 @@
         "/^npm run -s build$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^npm --prefix server run build$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^npm --prefix client run build$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^npm --prefix server run build 2>&1 \\| Select-Object -Last 10$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^npm --prefix client run test -- api\\.spec\\.ts 2>&1 \\| Select-Object -Last 40$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

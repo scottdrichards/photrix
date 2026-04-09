@@ -14,6 +14,7 @@ import {
   rejectFaceSuggestion,
   subscribeStatusStream,
 } from "./api";
+import { filterFieldCapabilities, FIELD_METADATA } from "../../shared/filter-contract/src";
 
 describe("api", () => {
   beforeEach(() => {
@@ -158,6 +159,65 @@ describe("api", () => {
         longitude: 20,
         count: 2,
       },
+    ]);
+  });
+
+  it("does not serialize nullable array UI state as API filter conditions", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 200,
+      }),
+    } as Response);
+
+    await fetchPhotos({
+      peopleInImageFilter: null,
+      cameraModelFilter: null,
+      lensFilter: null,
+    });
+
+    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const url = new URL(calledUrl, window.location.origin);
+
+    expect(url.searchParams.get("filter")).toBeNull();
+  });
+
+  it("exposes shared filter field capabilities for nullable and array-backed fields", () => {
+    expect(filterFieldCapabilities.peopleInImageFilter).toEqual({
+      supportsArray: true,
+      allowsNullState: true,
+    });
+    expect(filterFieldCapabilities.cameraModelFilter).toEqual({
+      supportsArray: true,
+      allowsNullState: true,
+    });
+    expect(filterFieldCapabilities.mediaTypeFilter).toEqual({
+      supportsArray: false,
+      allowsNullState: false,
+    });
+
+    const nullableFields = Object.entries(FIELD_METADATA)
+      .filter(([, { nullable }]) => nullable)
+      .map(([field]) => field);
+    expect(nullableFields).toEqual([
+      "peopleInImageFilter",
+      "cameraModelFilter",
+      "lensFilter",
+      "ratingFilter",
+      "locationBounds",
+      "dateRange",
+    ]);
+
+    const arrayFields = Object.entries(FIELD_METADATA)
+      .filter(([, { supportsArray }]) => supportsArray)
+      .map(([field]) => field);
+    expect(arrayFields).toEqual([
+      "peopleInImageFilter",
+      "cameraModelFilter",
+      "lensFilter",
     ]);
   });
 
