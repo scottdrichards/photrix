@@ -1,8 +1,8 @@
 import * as http from "http";
 import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
-import { stat, readFile } from "fs/promises";
+import { stat, readFile, access } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
-import { createReadStream, existsSync, type Stats } from "fs";
+import { createReadStream, type Stats } from "fs";
 import path from "path/win32";
 import {
   convertImage,
@@ -194,17 +194,19 @@ const streamHlsSegment = async (
   });
 };
 
+const fileExists = (p: string) => access(p).then(() => true, () => false);
+
 const waitForFile = async (
   filePath: string,
   maxWaitMs = 30_000,
   pollIntervalMs = 200,
 ): Promise<boolean> => {
   let waited = 0;
-  while (!existsSync(filePath) && waited < maxWaitMs) {
+  while (!(await fileExists(filePath)) && waited < maxWaitMs) {
     await sleep(pollIntervalMs);
     waited += pollIntervalMs;
   }
-  return existsSync(filePath);
+  return fileExists(filePath);
 };
 
 
@@ -308,7 +310,7 @@ const tryHLSStream = async (
           segment,
         );
 
-        if (!existsSync(segmentPath)) {
+        if (!(await fileExists(segmentPath))) {
           writeJson(res, 404, { error: "HLS segment not found" });
           return true;
         }
@@ -324,7 +326,7 @@ const tryHLSStream = async (
           variantHeight,
         );
 
-        if (!existsSync(variantPlaylistPath)) {
+        if (!(await fileExists(variantPlaylistPath))) {
           writeJson(res, 404, { error: "HLS variant playlist not found" });
           return true;
         }
@@ -409,7 +411,7 @@ const tryHLSStream = async (
     const minSegments = 3;
 
     const countSegments = async (): Promise<number> => {
-      if (!existsSync(hlsInfo.playlistPath)) return 0;
+      if (!(await fileExists(hlsInfo.playlistPath))) return 0;
       const content = await measureOperation(
         "readHlsPlaylist",
         () => readFile(hlsInfo.playlistPath, "utf-8"),
@@ -424,7 +426,7 @@ const tryHLSStream = async (
       waited += pollIntervalMs;
     }
 
-    if (!existsSync(hlsInfo.playlistPath)) {
+    if (!(await fileExists(hlsInfo.playlistPath))) {
       writeJson(res, 500, { error: "HLS playlist generation timed out" });
       return true;
     }

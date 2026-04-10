@@ -1,8 +1,8 @@
-import Database from "better-sqlite3";
-import { mkdirSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { CACHE_DIR } from "../common/cacheUtils.ts";
-import { measureSyncOperation } from "../observability/requestTrace.ts";
+import { AsyncSqlite } from "../common/asyncSqlite.ts";
+import { measureOperation } from "../observability/requestTrace.ts";
 
 type AuthUser = {
   id: number;
@@ -38,18 +38,23 @@ const parseTransports = (value: string | null) => {
 };
 
 export class AuthStore {
-  private readonly db: Database.Database;
   private lastExpiredSessionCleanupMs = 0;
   private static readonly EXPIRED_SESSION_CLEANUP_INTERVAL_MS = 60_000;
 
-  constructor() {
-    const dbFilePath = this.resolveDbPath();
-    mkdirSync(path.dirname(dbFilePath), { recursive: true });
+  private constructor(private readonly db: AsyncSqlite) {}
 
-    this.db = new Database(dbFilePath);
-    this.db.pragma("journal_mode = WAL");
+  static async create(): Promise<AuthStore> {
+    const configuredPath = process.env.AUTH_DB_LOCATION?.trim();
+    const directoryPath = configuredPath ? path.resolve(configuredPath) : path.resolve(CACHE_DIR);
+    const dbFilePath = path.join(directoryPath, "auth.db");
 
-    this.db.exec(`
+    await mkdir(path.dirname(dbFilePath), { recursive: true });
+
+    const db = await AsyncSqlite.open(dbFilePath, {
+      pragmas: ["journal_mode = WAL"],
+    });
+
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS auth_users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT NOT NULL UNIQUE,
@@ -78,136 +83,125 @@ export class AuthStore {
       CREATE INDEX IF NOT EXISTS idx_auth_sessions_userId ON auth_sessions(userId);
       CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiresAt ON auth_sessions(expiresAtMs);
     `);
+
+    return new AuthStore(db);
   }
 
-  private resolveDbPath() {
-    const configuredPath = process.env.AUTH_DB_LOCATION?.trim();
-    const directoryPath = configuredPath ? path.resolve(configuredPath) : path.resolve(CACHE_DIR);
-    return path.join(directoryPath, "auth.db");
-  }
-
-  countUsers() {
-    return measureSyncOperation(
+  async countUsers(): Promise<number> {
+    return measureOperation(
       "authStore.countUsers",
-      () => {
-        const row = this.db.prepare("SELECT COUNT(*) AS count FROM auth_users").get() as {
-          count: number;
-        };
-        return row.count;
+      async () => {
+        const row = await this.db.get<{ count: number }>("SELECT COUNT(*) AS count FROM auth_users");
+        return row?.count ?? 0;
       },
       { category: "db", detail: "auth_users" },
     );
   }
 
-  findUserByUsername(username: string) {
-    return measureSyncOperation(
+  async findUserByUsername(username: string): Promise<AuthUser | null> {
+    return measureOperation(
       "authStore.findUserByUsername",
-      () => {
-        const row = this.db
-          .prepare("SELECT id, username FROM auth_users WHERE username = ?")
-          .get(username) as AuthUser | undefined;
-
+      async () => {
+        const row = await this.db.get<AuthUser>(
+          "SELECT id, username FROM auth_users WHERE username = ?",
+          username,
+        );
         return row ?? null;
       },
       { category: "db", detail: username },
     );
   }
 
-  findOnlyUser() {
-    return measureSyncOperation(
+  async findOnlyUser(): Promise<AuthUser | null> {
+    return measureOperation(
       "authStore.findOnlyUser",
-      () => {
-        const row = this.db
-          .prepare("SELECT id, username FROM auth_users ORDER BY id ASC LIMIT 1")
-          .get() as AuthUser | undefined;
-
+      async () => {
+        const row = await this.db.get<AuthUser>(
+          "SELECT id, username FROM auth_users ORDER BY id ASC LIMIT 1",
+        );
         return row ?? null;
       },
       { category: "db", detail: "auth_users" },
     );
   }
 
-  createUser(username: string) {
-    return measureSyncOperation(
+  async createUser(username: string): Promise<AuthUser> {
+    return measureOperation(
       "authStore.createUser",
-      () => {
+      async () => {
         const nowIso = new Date().toISOString();
-        this.db.prepare("INSERT INTO auth_users (username, createdAt) VALUES (?, ?)").run(username, nowIso);
-        const user = this.findUserByUsername(username);
+        await this.db.run(
+          "INSERT INTO auth_users (username, createdAt) VALUES (?, ?)",
+          username, nowIso,
+        );
+        const user = await this.findUserByUsername(username);
         if (!user) {
           throw new Error("Unable to create auth user");
         }
-
         return user;
       },
       { category: "db", detail: username },
     );
   }
 
-  saveCredential(params: {
+  async saveCredential(params: {
     credentialId: string;
     userId: number;
     publicKey: Uint8Array;
     counter: number;
     transports: string[];
-  }) {
-    measureSyncOperation(
+  }): Promise<void> {
+    await measureOperation(
       "authStore.saveCredential",
-      () => {
+      async () => {
         const nowIso = new Date().toISOString();
-        this.db
-          .prepare(
-            `INSERT INTO auth_credentials (credentialId, userId, publicKey, counter, transports, createdAt)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            params.credentialId,
-            params.userId,
-            Buffer.from(params.publicKey),
-            params.counter,
-            JSON.stringify(params.transports),
-            nowIso,
-          );
+        await this.db.run(
+          `INSERT INTO auth_credentials (credentialId, userId, publicKey, counter, transports, createdAt)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          params.credentialId,
+          params.userId,
+          Buffer.from(params.publicKey),
+          params.counter,
+          JSON.stringify(params.transports),
+          nowIso,
+        );
       },
       { category: "db", detail: params.credentialId },
     );
   }
 
-  listCredentialIdsByUserId(userId: number) {
-    return measureSyncOperation(
+  async listCredentialIdsByUserId(userId: number): Promise<string[]> {
+    return measureOperation(
       "authStore.listCredentialIdsByUserId",
-      () => {
-        const rows = this.db
-          .prepare("SELECT credentialId FROM auth_credentials WHERE userId = ?")
-          .all(userId) as Array<{ credentialId: string }>;
-
+      async () => {
+        const rows = await this.db.all<{ credentialId: string }>(
+          "SELECT credentialId FROM auth_credentials WHERE userId = ?",
+          userId,
+        );
         return rows.map(({ credentialId }) => credentialId);
       },
       { category: "db", detail: String(userId) },
     );
   }
 
-  findCredential(credentialId: string) {
-    return measureSyncOperation(
+  async findCredential(credentialId: string): Promise<AuthCredential | null> {
+    return measureOperation(
       "authStore.findCredential",
-      () => {
-        const row = this.db
-          .prepare(
-            `SELECT c.credentialId, c.userId, c.publicKey, c.counter, c.transports, u.username
-             FROM auth_credentials c
-             INNER JOIN auth_users u ON c.userId = u.id
-             WHERE c.credentialId = ?`,
-          )
-          .get(credentialId) as
-          | {
-              credentialId: string;
-              userId: number;
-              username: string;
-              publicKey: Buffer;
-              counter: number;
-              transports: string | null;
-            }
-          | undefined;
+      async () => {
+        const row = await this.db.get<{
+          credentialId: string;
+          userId: number;
+          username: string;
+          publicKey: Buffer;
+          counter: number;
+          transports: string | null;
+        }>(
+          `SELECT c.credentialId, c.userId, c.publicKey, c.counter, c.transports, u.username
+           FROM auth_credentials c
+           INNER JOIN auth_users u ON c.userId = u.id
+           WHERE c.credentialId = ?`,
+          credentialId,
+        );
 
         if (!row) {
           return null;
@@ -226,55 +220,52 @@ export class AuthStore {
     );
   }
 
-  updateCredentialCounter(credentialId: string, nextCounter: number) {
-    measureSyncOperation(
+  async updateCredentialCounter(credentialId: string, nextCounter: number): Promise<void> {
+    await measureOperation(
       "authStore.updateCredentialCounter",
-      () => {
-        this.db
-          .prepare("UPDATE auth_credentials SET counter = ? WHERE credentialId = ?")
-          .run(nextCounter, credentialId);
+      async () => {
+        await this.db.run(
+          "UPDATE auth_credentials SET counter = ? WHERE credentialId = ?",
+          nextCounter, credentialId,
+        );
       },
       { category: "db", detail: credentialId },
     );
   }
 
-  createSession(tokenHash: string, userId: number, expiresAtMs: number) {
-    measureSyncOperation(
+  async createSession(tokenHash: string, userId: number, expiresAtMs: number): Promise<void> {
+    await measureOperation(
       "authStore.createSession",
-      () => {
-        this.maybeDeleteExpiredSessions();
+      async () => {
+        await this.maybeDeleteExpiredSessions();
         const nowIso = new Date().toISOString();
-        this.db
-          .prepare(
-            `INSERT OR REPLACE INTO auth_sessions (tokenHash, userId, expiresAtMs, createdAt)
-             VALUES (?, ?, ?, ?)`,
-          )
-          .run(tokenHash, userId, expiresAtMs, nowIso);
+        await this.db.run(
+          `INSERT OR REPLACE INTO auth_sessions (tokenHash, userId, expiresAtMs, createdAt)
+           VALUES (?, ?, ?, ?)`,
+          tokenHash, userId, expiresAtMs, nowIso,
+        );
       },
       { category: "db", detail: String(userId) },
     );
   }
 
-  findSession(tokenHash: string) {
-    return measureSyncOperation(
+  async findSession(tokenHash: string): Promise<AuthSession | null> {
+    return measureOperation(
       "authStore.findSession",
-      () => {
-        this.maybeDeleteExpiredSessions();
+      async () => {
+        await this.maybeDeleteExpiredSessions();
 
-        const row = this.db
-          .prepare(
-            `SELECT s.userId, s.expiresAtMs, u.username
-             FROM auth_sessions s
-             INNER JOIN auth_users u ON s.userId = u.id
-             WHERE s.tokenHash = ?`,
-          )
-          .get(tokenHash) as
-          | {
-              userId: number;
-              username: string;
-              expiresAtMs: number;
-            }
-          | undefined;
+        const row = await this.db.get<{
+          userId: number;
+          username: string;
+          expiresAtMs: number;
+        }>(
+          `SELECT s.userId, s.expiresAtMs, u.username
+           FROM auth_sessions s
+           INNER JOIN auth_users u ON s.userId = u.id
+           WHERE s.tokenHash = ?`,
+          tokenHash,
+        );
 
         if (!row) {
           return null;
@@ -290,7 +281,7 @@ export class AuthStore {
     );
   }
 
-  private maybeDeleteExpiredSessions() {
+  private async maybeDeleteExpiredSessions(): Promise<void> {
     const now = Date.now();
     if (
       now - this.lastExpiredSessionCleanupMs <
@@ -300,32 +291,30 @@ export class AuthStore {
     }
 
     this.lastExpiredSessionCleanupMs = now;
-    this.deleteExpiredSessions();
+    await this.deleteExpiredSessions();
   }
 
-  deleteSession(tokenHash: string) {
-    measureSyncOperation(
+  async deleteSession(tokenHash: string): Promise<void> {
+    await measureOperation(
       "authStore.deleteSession",
-      () => {
-        this.db.prepare("DELETE FROM auth_sessions WHERE tokenHash = ?").run(tokenHash);
+      async () => {
+        await this.db.run("DELETE FROM auth_sessions WHERE tokenHash = ?", tokenHash);
       },
       { category: "db", detail: "session" },
     );
   }
 
-  deleteExpiredSessions() {
-    measureSyncOperation(
+  async deleteExpiredSessions(): Promise<void> {
+    await measureOperation(
       "authStore.deleteExpiredSessions",
-      () => {
-        this.db
-          .prepare("DELETE FROM auth_sessions WHERE expiresAtMs <= ?")
-          .run(Date.now());
+      async () => {
+        await this.db.run("DELETE FROM auth_sessions WHERE expiresAtMs <= ?", Date.now());
       },
       { category: "db", detail: "auth_sessions" },
     );
   }
 
-  close() {
-    this.db.close();
+  async close(): Promise<void> {
+    await this.db.close();
   }
 }

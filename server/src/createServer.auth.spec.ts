@@ -65,11 +65,11 @@ describe("createServer auth gate", () => {
 
     writeFileSync(path.join(storagePath, "root.jpg"), "root");
 
-    const db = new IndexDatabase(storagePath);
+    const db = await IndexDatabase.create(storagePath);
     await db.addPaths(["root.jpg"]);
 
     const { createServer } = await import("./createServer.ts");
-    server = createServer(db, storagePath);
+    server = await createServer(db, storagePath);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
   });

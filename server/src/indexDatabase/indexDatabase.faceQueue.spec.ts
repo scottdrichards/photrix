@@ -10,12 +10,12 @@ describe("IndexDatabase face queue", () => {
   let dbPath: string;
   let database: IndexDatabase;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     storagePath = mkdtempSync(path.join(os.tmpdir(), "photrix-face-storage-"));
     dbPath = mkdtempSync(path.join(os.tmpdir(), "photrix-face-db-"));
     process.env.INDEX_DB_LOCATION = dbPath;
 
-    database = new IndexDatabase(storagePath);
+    database = await IndexDatabase.create(storagePath);
   });
 
   afterEach(() => {
@@ -52,7 +52,7 @@ describe("IndexDatabase face queue", () => {
       faceMetadataProcessedAt: new Date().toISOString(),
     });
 
-    const all = database.queryFaceQueue({ page: 1, pageSize: 10 });
+    const all = await database.queryFaceQueue({ page: 1, pageSize: 10 });
     expect(all.total).toBe(2);
     expect(all.items[0]).toMatchObject({
       faceId: "f-unverified",
@@ -62,15 +62,15 @@ describe("IndexDatabase face queue", () => {
       thumbnail: { preferredHeight: 320 },
     });
 
-    const confirmedOnly = database.queryFaceQueue({ status: "confirmed" });
+    const confirmedOnly = await database.queryFaceQueue({ status: "confirmed" });
     expect(confirmedOnly.total).toBe(1);
     expect(confirmedOnly.items[0]?.faceId).toBe("f-confirmed");
 
-    const confidentOnly = database.queryFaceQueue({ minConfidence: 0.8 });
+    const confidentOnly = await database.queryFaceQueue({ minConfidence: 0.8 });
     expect(confidentOnly.total).toBe(1);
     expect(confidentOnly.items[0]?.faceId).toBe("f-unverified");
 
-    const byPerson = database.queryFaceQueue({ personId: "name:sam" });
+    const byPerson = await database.queryFaceQueue({ personId: "name:sam" });
     expect(byPerson.total).toBe(1);
     expect(byPerson.items[0]?.faceId).toBe("f-confirmed");
   });
@@ -98,11 +98,11 @@ describe("IndexDatabase face queue", () => {
       faceMetadataProcessedAt: new Date().toISOString(),
     });
 
-    const exactOnly = database.queryFaceQueue({ path: "family", includeSubfolders: false });
+    const exactOnly = await database.queryFaceQueue({ path: "family", includeSubfolders: false });
     expect(exactOnly.total).toBe(1);
     expect(exactOnly.items[0]?.faceId).toBe("f-family");
 
-    const withSubfolders = database.queryFaceQueue({ path: "family", includeSubfolders: true });
+    const withSubfolders = await database.queryFaceQueue({ path: "family", includeSubfolders: true });
     expect(withSubfolders.total).toBe(2);
     const faceIds = withSubfolders.items.map((i) => i.faceId);
     expect(faceIds).toContain("f-family");
@@ -128,10 +128,10 @@ describe("IndexDatabase face queue", () => {
       faceMetadataProcessedAt: new Date().toISOString(),
     });
 
-    const familyOnly = database.queryFacePeople({ path: "family", includeSubfolders: false });
+    const familyOnly = await database.queryFacePeople({ path: "family", includeSubfolders: false });
     expect(familyOnly.map((p) => p.id)).toEqual(["name:alice"]);
 
-    const all = database.queryFacePeople();
+    const all = await database.queryFacePeople();
     expect(all.map((p) => p.id)).toContain("name:alice");
     expect(all.map((p) => p.id)).toContain("name:bob");
   });
@@ -151,14 +151,14 @@ describe("IndexDatabase face queue", () => {
       faceMetadataProcessedAt: new Date().toISOString(),
     });
 
-    const accepted = database.acceptFaceSuggestion({
+    const accepted = await database.acceptFaceSuggestion({
       faceId: "f-action",
       personId: "name:sam",
       reviewer: "tester",
     });
     expect(accepted).toBe(true);
 
-    const afterAccept = database.queryFaceQueue({ status: "confirmed" });
+    const afterAccept = await database.queryFaceQueue({ status: "confirmed" });
     expect(afterAccept.total).toBe(1);
     expect(afterAccept.items[0]).toMatchObject({
       faceId: "f-action",
@@ -166,14 +166,14 @@ describe("IndexDatabase face queue", () => {
       person: { id: "name:sam" },
     });
 
-    const rejected = database.rejectFaceSuggestion({
+    const rejected = await database.rejectFaceSuggestion({
       faceId: "f-action",
       personId: "name:sam",
       reviewer: "tester",
     });
     expect(rejected).toBe(true);
 
-    const afterReject = database.queryFaceQueue({ status: "rejected" });
+    const afterReject = await database.queryFaceQueue({ status: "rejected" });
     expect(afterReject.total).toBe(1);
     expect(afterReject.items[0]).toMatchObject({
       faceId: "f-action",
@@ -212,7 +212,7 @@ describe("IndexDatabase face queue", () => {
       faceMetadataProcessedAt: new Date().toISOString(),
     });
 
-    const people = database.queryFacePeople();
+    const people = await database.queryFacePeople();
 
     expect(people).toEqual([
       {
@@ -264,7 +264,7 @@ describe("IndexDatabase face queue", () => {
       faceMetadataProcessedAt: new Date().toISOString(),
     });
 
-    const matches = database.queryFaceMatches({ faceId: "seed-face", limit: 2 });
+    const matches = await database.queryFaceMatches({ faceId: "seed-face", limit: 2 });
 
     expect(matches).toHaveLength(2);
     expect(matches[0]?.faceId).toBe("match-high");
@@ -320,7 +320,7 @@ describe("IndexDatabase face queue", () => {
       faceMetadataProcessedAt: new Date().toISOString(),
     });
 
-    const suggestions = database.queryPersonFaceSuggestions({ personId: "name:sam", limit: 10 });
+    const suggestions = await database.queryPersonFaceSuggestions({ personId: "name:sam", limit: 10 });
 
     expect(suggestions.length).toBeGreaterThanOrEqual(2);
     expect(suggestions[0]?.faceId).toBe("c-high");

@@ -23,7 +23,7 @@ describe("discoverFiles", () => {
       await fs.writeFile(path.join(rootDir, "a.jpg"), "a");
       await fs.writeFile(path.join(rootDir, "nested", "b.mp4"), "b");
 
-      const db = new IndexDatabase(rootDir);
+      const db = await IndexDatabase.create(rootDir);
       await discoverFiles({ root: rootDir, db });
 
       const a = await db.getFileRecord("a.jpg");
@@ -31,7 +31,7 @@ describe("discoverFiles", () => {
 
       expect(a?.mimeType).toBe("image/jpeg");
       expect(b?.mimeType).toBe("video/mp4");
-      expect(db.countAllEntries()).toBe(2);
+      expect(await db.countAllEntries()).toBe(2);
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
@@ -44,7 +44,7 @@ describe("discoverFiles", () => {
     process.env.INDEX_DB_LOCATION = dbDir;
 
     try {
-      const db = new IndexDatabase(rootDir);
+      const db = await IndexDatabase.create(rootDir);
       await expect(
         discoverFiles({
           root: rootDir,

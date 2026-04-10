@@ -1,6 +1,5 @@
 import { spawn } from "child_process";
-import { existsSync } from "fs";
-import { mkdir, stat } from "fs/promises";
+import { access, mkdir, stat } from "fs/promises";
 import { dirname } from "path";
 import { StandardHeight } from "../common/standardHeights.ts";
 import { CACHE_DIR, getMirroredCachedFilePath } from "../common/cacheUtils.ts";
@@ -118,7 +117,12 @@ export const generateVideoPreview = async (
     "mp4",
   );
 
-  if (existsSync(cachedPath)) {
+  if (
+    await access(cachedPath).then(
+      () => true,
+      () => false,
+    )
+  ) {
     return cachedPath;
   }
 
@@ -197,7 +201,12 @@ export const generateVideoThumbnail = async (
   await stat(filePath);
   const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
 
-  if (existsSync(cachedPath)) {
+  if (
+    await access(cachedPath).then(
+      () => true,
+      () => false,
+    )
+  ) {
     return cachedPath;
   }
 

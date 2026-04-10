@@ -31,7 +31,7 @@ export const discoverFiles = async (props: DiscoverFilesProps): Promise<void> =>
       const relativePath = path.relative(root, absolutePath);
       batch.push(relativePath);
       if (batch.length >= batchSize) {
-        db.addPaths(batch);
+        await db.addPaths(batch);
         batch = [];
       }
     } catch (error) {
@@ -55,7 +55,7 @@ export const discoverFiles = async (props: DiscoverFilesProps): Promise<void> =>
 
   // Add any remaining files in the batch
   if (batch.length) {
-    db.addPaths(batch);
+    await db.addPaths(batch);
   }
 
   console.log(`[fileWatcher] Completed discovering ${scannedFilesCount} files`);

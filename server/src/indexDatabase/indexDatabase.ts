@@ -1,7 +1,7 @@
-import Database from "better-sqlite3";
-import { mkdirSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { CACHE_DIR } from "../common/cacheUtils.ts";
+import { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { MetadataGroups, type FaceTag, type FileRecord } from "./fileRecord.type.ts";
 import { filterToSQL } from "./filterToSQL.ts";
@@ -25,43 +25,117 @@ import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 import { measureOperation } from "../observability/requestTrace.ts";
 
+const embeddingToBlob = (embedding: number[]): Buffer => {
+  const arr = new Float64Array(embedding);
+  return Buffer.from(arr.buffer);
+};
+
+const blobToEmbedding = (blob: Buffer | Uint8Array): number[] => {
+  const arr = new Float64Array(blob.buffer, blob.byteOffset, blob.byteLength / 8);
+  return Array.from(arr);
+};
+
+const getFaceId = (folder: string, fileName: string, tag: FaceTag, index: number): string =>
+  typeof tag.faceId === "string" && tag.faceId.trim().length > 0
+    ? tag.faceId
+    : `${folder}${fileName}#${index}`;
+
+const parseFaceTags = (faceTags: string | null): FaceTag[] => {
+  if (!faceTags) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(faceTags);
+    return Array.isArray(parsed) ? (parsed as FaceTag[]) : [];
+  } catch {
+    return [];
+  }
+};
+
+const getFaceEmbedding = (tag: FaceTag): number[] | null => {
+  if (!tag.featureDescription || typeof tag.featureDescription !== "object") {
+    return null;
+  }
+  const candidate = (tag.featureDescription as { embedding?: unknown }).embedding;
+  if (!Array.isArray(candidate) || candidate.length === 0) {
+    return null;
+  }
+  const values = candidate.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+  return values.length > 0 ? values : null;
+};
+
+const embeddingWeight = (quality?: { overall?: number; effectiveResolution?: number }): number => {
+  const overall = quality?.overall ?? 0.2;
+  const effectiveResolution = quality?.effectiveResolution ?? 64;
+  const normalizedResolution = Math.max(0.1, Math.min(effectiveResolution / 256, 2));
+  return Math.max(0.1, overall * normalizedResolution);
+};
+
+const buildWeightedCentroid = (
+  entries: Array<{ embedding: number[]; weight: number }>,
+): number[] | null => {
+  if (entries.length === 0) {
+    return null;
+  }
+  const dimensions = Math.min(...entries.map((entry) => entry.embedding.length));
+  if (!Number.isFinite(dimensions) || dimensions <= 0) {
+    return null;
+  }
+  const sum = new Array(dimensions).fill(0) as number[];
+  let totalWeight = 0;
+  for (const entry of entries) {
+    const weight = Math.max(0.1, entry.weight);
+    totalWeight += weight;
+    for (let index = 0; index < dimensions; index += 1) {
+      sum[index] += (entry.embedding[index] ?? 0) * weight;
+    }
+  }
+  if (totalWeight <= 0) {
+    return null;
+  }
+  return sum.map((value) => value / totalWeight);
+};
+
 export class IndexDatabase {
   public readonly storagePath: string;
-  private db: Database.Database;
+  private db: AsyncSqlite;
   private readonly dbFilePath: string;
-  private selectDataStmt: Database.Statement;
 
-  constructor(storagePath: string) {
+  private constructor(storagePath: string, db: AsyncSqlite, dbFilePath: string) {
     this.storagePath = storagePath;
-    this.dbFilePath = this.resolveDatabaseFilePath();
-    this.ensureDatabaseDirectory();
+    this.db = db;
+    this.dbFilePath = dbFilePath;
+  }
 
-    this.db = new Database(this.dbFilePath);
-    this.db.pragma("journal_mode = WAL");
+  static async create(storagePath: string): Promise<IndexDatabase> {
+    const envDbLocation = process.env.INDEX_DB_LOCATION?.trim();
+    const databaseDirectory = envDbLocation || CACHE_DIR;
+    const dbFilePath = path.join(path.resolve(databaseDirectory), "index.db");
 
-    // Add custom REGEXP function for filtering
-    this.db.function(
-      "REGEXP",
-      { deterministic: true },
-      (pattern: string, text: string) => {
-        try {
-          return new RegExp(pattern).test(text) ? 1 : 0;
-        } catch {
-          return 0;
-        }
-      },
-    );
+    const directoryPath = path.dirname(dbFilePath);
+    const rootPath = path.parse(directoryPath).root;
+    if (directoryPath !== rootPath) {
+      await mkdir(directoryPath, { recursive: true });
+    }
 
-    this.db.exec(`
+    const db = await AsyncSqlite.open(dbFilePath, {
+      pragmas: ["journal_mode = WAL"],
+      customFunctions: [
+        { name: "REGEXP", options: { deterministic: true }, type: "regexp" },
+        { name: "cosine_similarity", options: { deterministic: true }, type: "cosine_similarity" },
+      ],
+    });
+
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS files (
         folder TEXT NOT NULL,
         fileName TEXT NOT NULL,
         mimeType TEXT,
-        -- File Info
         sizeInBytes INTEGER,
         created TEXT,
         modified TEXT,
-        -- EXIF Metadata
         dateTaken TEXT,
         dimensionsWidth INTEGER,
         dimensionsHeight INTEGER,
@@ -83,12 +157,9 @@ export class IndexDatabase {
         personInImage TEXT,
         regions TEXT,
         orientation INTEGER,
-        -- AI Metadata
         aiDescription TEXT,
         aiTags TEXT,
-        -- Face Metadata
         faceTags TEXT,
-        -- Processing status
         thumbnailsReady INTEGER DEFAULT 0,
         fileHash TEXT,
         infoProcessedAt TEXT,
@@ -97,13 +168,39 @@ export class IndexDatabase {
         PRIMARY KEY (folder, fileName)
       )
     `);
-    this.db.exec(`
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       )
     `);
-    this.ensureFilesColumns([
+
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS face_embeddings (
+        faceId TEXT PRIMARY KEY,
+        folder TEXT NOT NULL,
+        fileName TEXT NOT NULL,
+        tagIndex INTEGER NOT NULL,
+        embedding BLOB NOT NULL,
+        personId TEXT,
+        personName TEXT,
+        status TEXT DEFAULT 'unverified',
+        dimensionsX REAL,
+        dimensionsY REAL,
+        dimensionsWidth REAL,
+        dimensionsHeight REAL,
+        qualityOverall REAL,
+        qualityEffectiveResolution REAL,
+        thumbnailPreferredHeight INTEGER,
+        thumbnailCropVersion TEXT
+      )
+    `);
+    await db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_file ON face_embeddings(folder, fileName)`);
+    await db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_person ON face_embeddings(personId)`);
+    await db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_status ON face_embeddings(status)`);
+
+    const instance = new IndexDatabase(storagePath, db, dbFilePath);
+    await instance.ensureFilesColumns([
       { name: "personInImage", type: "TEXT" },
       { name: "regions", type: "TEXT" },
       { name: "faceMetadataProcessedAt", type: "TEXT" },
@@ -113,50 +210,29 @@ export class IndexDatabase {
       { name: "hlsConversionPrioritySetAt", type: "TEXT" },
     ]);
 
-    this.ensureIndexes();
-    console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
-    this.ensureRootPath();
+    await instance.ensureIndexes();
+    console.log(`[IndexDatabase] Database opened at ${dbFilePath}`);
+    await instance.ensureRootPath();
 
-    this.selectDataStmt = this.db.prepare(
-      "SELECT * FROM files WHERE folder = ? AND fileName = ?",
-    );
-    const count = this.db.prepare("SELECT COUNT(*) as count FROM files").get() as {
-      count: number;
-    };
-    console.log(`[IndexDatabase] Contains ${count.count} entries`);
+    const count = await db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
+    console.log(`[IndexDatabase] Contains ${count?.count ?? 0} entries`);
+
+    return instance;
   }
 
-  private resolveDatabaseFilePath(): string {
-    const envDbLocation = process.env.INDEX_DB_LOCATION?.trim();
-    const databaseDirectory = envDbLocation || CACHE_DIR;
-    return path.join(path.resolve(databaseDirectory), "index.db");
-  }
-
-  private ensureDatabaseDirectory(): void {
-    const directoryPath = path.dirname(this.dbFilePath);
-    const rootPath = path.parse(directoryPath).root;
-    if (directoryPath === rootPath) {
-      return;
-    }
-    mkdirSync(directoryPath, { recursive: true });
-  }
-
-  private ensureFilesColumns(columns: Array<{ name: string; type: string }>): void {
-    const existingColumns = new Set(
-      (this.db.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>).map(
-        ({ name }) => name,
-      ),
-    );
+  private async ensureFilesColumns(columns: Array<{ name: string; type: string }>): Promise<void> {
+    const existingColumnsRaw = await this.db.all<{ name: string }>("PRAGMA table_info(files)");
+    const existingColumns = new Set(existingColumnsRaw.map(({ name }) => name));
 
     for (const { name, type } of columns) {
       if (existingColumns.has(name)) {
         continue;
       }
-      this.db.exec(`ALTER TABLE files ADD COLUMN ${name} ${type}`);
+      await this.db.exec(`ALTER TABLE files ADD COLUMN ${name} ${type}`);
     }
   }
 
-  private ensureIndexes(): void {
+  private async ensureIndexes(): Promise<void> {
     const indexDefinitions: Array<{
       name: string;
       expression: string;
@@ -186,24 +262,23 @@ export class IndexDatabase {
 
     for (const { name, expression, where } of indexDefinitions) {
       const whereClause = where ? ` WHERE ${where}` : "";
-      this.db.exec(
+      await this.db.exec(
         `CREATE INDEX IF NOT EXISTS ${name} ON files(${expression})${whereClause}`,
       );
     }
 
-    // Drop superseded indexes
     for (const old of [
       "idx_files_thumbnailConversionPriority",
       "idx_files_hlsConversionPriority",
     ]) {
-      this.db.exec(`DROP INDEX IF EXISTS ${old}`);
+      await this.db.exec(`DROP INDEX IF EXISTS ${old}`);
     }
   }
 
-  private runInsert(
+  private async runInsert(
     columns: { names: string[]; values: unknown[] },
     options: { mode: "insert" | "replace"; errorContext: string },
-  ): void {
+  ): Promise<void> {
     const { mode, errorContext } = options;
     if (columns.names.length !== columns.values.length) {
       throw new Error(
@@ -215,15 +290,15 @@ export class IndexDatabase {
     const placeholders = columns.values.map(() => "?").join(", ");
     const verb = mode === "replace" ? "INSERT OR REPLACE" : "INSERT";
     const sql = `${verb} INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`;
-    this.db.prepare(sql).run(...columns.values);
+    await this.db.run(sql, ...columns.values);
   }
 
-  private countEntries(whereClause?: string): number {
+  private async countEntries(whereClause?: string): Promise<number> {
     const sql = whereClause
       ? `SELECT COUNT(*) as count FROM files WHERE ${whereClause}`
       : "SELECT COUNT(*) as count FROM files";
-    const row = this.db.prepare(sql).get() as { count: number };
-    return row.count;
+    const row = await this.db.get<{ count: number }>(sql);
+    return row?.count ?? 0;
   }
 
   private getConversionColumns(taskType: "thumbnail" | "hls") {
@@ -242,7 +317,7 @@ export class IndexDatabase {
 
   async addFile(fileData: FileRecord): Promise<void> {
     const columns = fileRecordToColumnNamesAndValues(fileData);
-    this.runInsert(columns, {
+    await this.runInsert(columns, {
       mode: "replace",
       errorContext: `${fileData.folder}${fileData.fileName}`,
     });
@@ -250,9 +325,10 @@ export class IndexDatabase {
 
   async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
     const { folder: oldFolder, fileName: oldFile } = splitPath(oldRelativePath);
-    const row = this.db
-      .prepare("SELECT * FROM files WHERE folder = ? AND fileName = ?")
-      .get(oldFolder, oldFile) as FileRecord | undefined;
+    const row = await this.db.get<FileRecord>(
+      "SELECT * FROM files WHERE folder = ? AND fileName = ?",
+      oldFolder, oldFile,
+    );
     if (!row) {
       throw new Error(
         `moveFile: File at path "${oldRelativePath}" does not exist in the database.`,
@@ -266,17 +342,12 @@ export class IndexDatabase {
       fileName: newFile,
     };
 
-    const transaction = this.db.transaction(() => {
-      this.db
-        .prepare("DELETE FROM files WHERE folder = ? AND fileName = ?")
-        .run(oldFolder, oldFile);
-      const columns = fileRecordToColumnNamesAndValues(updated);
-      this.runInsert(columns, {
-        mode: "insert",
-        errorContext: newRelativePath,
-      });
-    });
-    transaction();
+    const columns = fileRecordToColumnNamesAndValues(updated);
+    const placeholders = columns.values.map(() => "?").join(", ");
+    await this.db.transaction([
+      { sql: "DELETE FROM files WHERE folder = ? AND fileName = ?", params: [oldFolder, oldFile] },
+      { sql: `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`, params: columns.values },
+    ]);
   }
 
   async addOrUpdateFileData(
@@ -284,11 +355,13 @@ export class IndexDatabase {
     fileData: Partial<FileRecord>,
   ): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
-    const execute = () => {
-      const row = this.selectDataStmt.get(folder, fileName) as FileRecord | undefined;
-      const existingEntry = row;
+    const execute = async () => {
+      const row = await this.db.get<FileRecord>(
+        "SELECT * FROM files WHERE folder = ? AND fileName = ?",
+        folder, fileName,
+      );
       const updatedEntry = {
-        ...(existingEntry ?? {
+        ...(row ?? {
           folder,
           fileName,
           mimeType: mimeTypeForFilename(relativePath),
@@ -296,73 +369,67 @@ export class IndexDatabase {
         ...fileData,
       };
       const columns = fileRecordToColumnNamesAndValues(updatedEntry);
-      this.runInsert(columns, {
+      await this.runInsert(columns, {
         mode: "replace",
         errorContext: relativePath,
       });
     };
 
     await this.runWithRetry(execute);
+
+    if (fileData.faceTags !== undefined) {
+      await this.syncFaceEmbeddings(folder, fileName, fileData.faceTags as FaceTag[]);
+    }
   }
 
-  /**
-   *
-   * @param relativePath
-   * @returns
-   */
   async getFileRecord(
     relativePath: string,
   ): Promise<FileRecord | undefined> {
     const { folder, fileName } = splitPath(relativePath);
-    const row = this.selectDataStmt.get(folder, fileName) as
-      | Record<string, unknown>
-      | undefined;
+    const row = await this.db.get<Record<string, string | number>>(
+      "SELECT * FROM files WHERE folder = ? AND fileName = ?",
+      folder, fileName,
+    );
     if (!row) {
       return undefined;
     }
 
-    return rowToFileRecord(row as Record<string, string | number>);
+    return rowToFileRecord(row);
   }
 
-  countMissingInfo(): number {
+  async countMissingInfo(): Promise<number> {
     return this.countEntries("sizeInBytes IS NULL OR created IS NULL OR modified IS NULL");
   }
 
-  countMissingDateTaken(): number {
+  async countMissingDateTaken(): Promise<number> {
     return this.countEntries(
       "(mimeType LIKE 'image/%' OR mimeType LIKE 'video/%') AND dateTaken IS NULL AND exifProcessedAt IS NULL",
     );
   }
 
-  countPendingConversions(): { thumbnail: number; hls: number } {
-    const t = this.db
-      .prepare(
-        `SELECT COUNT(*) AS c FROM files WHERE thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
-      )
-      .get() as { c: number };
-    const h = this.db
-      .prepare(
-        `SELECT COUNT(*) AS c FROM files WHERE hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
-      )
-      .get() as { c: number };
-    return { thumbnail: t.c, hls: h.c };
+  async countPendingConversions(): Promise<{ thumbnail: number; hls: number }> {
+    const t = await this.db.get<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM files WHERE thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
+    );
+    const h = await this.db.get<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM files WHERE hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
+    );
+    return { thumbnail: t?.c ?? 0, hls: h?.c ?? 0 };
   }
 
-  getConversionQueueCounts(): { pending: number; processing: number } {
-    const row = this.db
-      .prepare(
-        `SELECT
-            SUM(CASE WHEN thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END)
-            + SUM(CASE WHEN hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END) AS pending,
-            SUM(CASE WHEN thumbnailConversionPriority = ${ConversionTaskPriority.InProgress} THEN 1 ELSE 0 END)
-            + SUM(CASE WHEN hlsConversionPriority = ${ConversionTaskPriority.InProgress} THEN 1 ELSE 0 END) AS processing
-         FROM files`,
-      )
-      .get() as { pending: number | null; processing: number | null };
-    return { pending: row.pending ?? 0, processing: row.processing ?? 0 };
+  async getConversionQueueCounts(): Promise<{ pending: number; processing: number }> {
+    const row = await this.db.get<{ pending: number | null; processing: number | null }>(
+      `SELECT
+          SUM(CASE WHEN thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END)
+          + SUM(CASE WHEN hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END) AS pending,
+          SUM(CASE WHEN thumbnailConversionPriority = ${ConversionTaskPriority.InProgress} THEN 1 ELSE 0 END)
+          + SUM(CASE WHEN hlsConversionPriority = ${ConversionTaskPriority.InProgress} THEN 1 ELSE 0 END) AS processing
+       FROM files`,
+    );
+    return { pending: row?.pending ?? 0, processing: row?.processing ?? 0 };
   }
 
-  getConversionQueueSummary(): {
+  async getConversionQueueSummary(): Promise<{
     completed: {
       image: { count: number; sizeBytes: number };
       video: { count: number; sizeBytes: number; durationMilliseconds: number };
@@ -383,7 +450,7 @@ export class IndexDatabase {
       image: { count: number; sizeBytes: number };
       video: { count: number; sizeBytes: number; durationMilliseconds: number };
     };
-  } {
+  }> {
     const makeBucket = () => ({
       image: { count: 0, sizeBytes: 0 },
       video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
@@ -402,19 +469,17 @@ export class IndexDatabase {
       [ConversionTaskPriority.Background]: summary.background,
     };
 
-    const rows = this.db
-      .prepare(
-        `SELECT mimeType, sizeInBytes, duration, thumbnailConversionPriority, hlsConversionPriority
-         FROM files
-         WHERE thumbnailConversionPriority IS NOT NULL OR hlsConversionPriority IS NOT NULL`,
-      )
-      .all() as Array<{
+    const rows = await this.db.all<{
       mimeType: string | null;
       sizeInBytes: number | null;
       duration: number | null;
       thumbnailConversionPriority: ConversionTaskPriority | null;
       hlsConversionPriority: ConversionTaskPriority | null;
-    }>;
+    }>(
+      `SELECT mimeType, sizeInBytes, duration, thumbnailConversionPriority, hlsConversionPriority
+       FROM files
+       WHERE thumbnailConversionPriority IS NOT NULL OR hlsConversionPriority IS NOT NULL`,
+    );
 
     const addTask = (
       priority: ConversionTaskPriority | null,
@@ -447,34 +512,29 @@ export class IndexDatabase {
   /**
    * null = done, enum value = queued or in-progress
    */
-  setConversionPriority(
+  async setConversionPriority(
     relativePath: string,
     taskType: "thumbnail" | "hls",
     priority: ConversionTaskPriority | null,
-  ): void {
+  ): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
     const { priority: priorityColumn, setAt: setAtColumn } =
       this.getConversionColumns(taskType);
-    this.db
-      .prepare(
-        `UPDATE files SET ${priorityColumn} = ?, ${setAtColumn} = ? WHERE folder = ? AND fileName = ?`,
-      )
-      .run(priority, priority !== null ? new Date().toISOString() : null, folder, fileName);
+    await this.db.run(
+      `UPDATE files SET ${priorityColumn} = ?, ${setAtColumn} = ? WHERE folder = ? AND fileName = ?`,
+      priority, priority !== null ? new Date().toISOString() : null, folder, fileName,
+    );
   }
 
-  /** Resets any in-progress conversions back to background on startup. */
-  resetInProgressConversions(taskType: "thumbnail" | "hls"): void {
+  async resetInProgressConversions(taskType: "thumbnail" | "hls"): Promise<void> {
     const { priority: priorityColumn, setAt: setAtColumn } =
       this.getConversionColumns(taskType);
-    this.db
-      .prepare(
-        `UPDATE files SET ${priorityColumn} = ?, ${setAtColumn} = ? WHERE ${priorityColumn} = ?`,
-      )
-      .run(
-        ConversionTaskPriority.Background,
-        new Date().toISOString(),
-        ConversionTaskPriority.InProgress,
-      );
+    await this.db.run(
+      `UPDATE files SET ${priorityColumn} = ?, ${setAtColumn} = ? WHERE ${priorityColumn} = ?`,
+      ConversionTaskPriority.Background,
+      new Date().toISOString(),
+      ConversionTaskPriority.InProgress,
+    );
   }
 
   /**
@@ -485,31 +545,29 @@ export class IndexDatabase {
    * Uses two separate indexed queries instead of UNION ALL so SQLite can satisfy
    * the WHERE + ORDER BY + LIMIT 1 directly from the partial composite index.
    */
-  getNextConversionTasks(count = 1): Array<{
+  async getNextConversionTasks(count = 1): Promise<Array<{
     relativePath: string;
     taskType: "thumbnail" | "hls";
-  }> {
+  }>> {
     type CandidateRow = { folder: string; fileName: string; priority: number; prioritySetAt: string };
 
-    const thumbnailRows = this.db
-      .prepare(
-        `SELECT folder, fileName, thumbnailConversionPriority AS priority, thumbnailConversionPrioritySetAt AS prioritySetAt
-         FROM files
-         WHERE thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}
-         ORDER BY thumbnailConversionPriority ASC, thumbnailConversionPrioritySetAt ASC
-         LIMIT ?`,
-      )
-      .all(count) as CandidateRow[];
+    const thumbnailRows = await this.db.all<CandidateRow>(
+      `SELECT folder, fileName, thumbnailConversionPriority AS priority, thumbnailConversionPrioritySetAt AS prioritySetAt
+       FROM files
+       WHERE thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}
+       ORDER BY thumbnailConversionPriority ASC, thumbnailConversionPrioritySetAt ASC
+       LIMIT ?`,
+      count,
+    );
 
-    const hlsRows = this.db
-      .prepare(
-        `SELECT folder, fileName, hlsConversionPriority AS priority, hlsConversionPrioritySetAt AS prioritySetAt
-         FROM files
-         WHERE hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}
-         ORDER BY hlsConversionPriority ASC, hlsConversionPrioritySetAt ASC
-         LIMIT ?`,
-      )
-      .all(count) as CandidateRow[];
+    const hlsRows = await this.db.all<CandidateRow>(
+      `SELECT folder, fileName, hlsConversionPriority AS priority, hlsConversionPrioritySetAt AS prioritySetAt
+       FROM files
+       WHERE hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}
+       ORDER BY hlsConversionPriority ASC, hlsConversionPrioritySetAt ASC
+       LIMIT ?`,
+      count,
+    );
 
     const tagged = [
       ...thumbnailRows.map((r) => ({ ...r, taskType: "thumbnail" as const, taskOrder: 0 })),
@@ -528,81 +586,74 @@ export class IndexDatabase {
     }));
   }
 
-  getConversionTaskInfo(
+  async getConversionTaskInfo(
     relativePath: string,
     taskType: "thumbnail" | "hls",
-  ): { mimeType: string | null; duration: number | null; priority: ConversionTaskPriority | null } | null {
+  ): Promise<{ mimeType: string | null; duration: number | null; priority: ConversionTaskPriority | null } | null> {
     const { folder, fileName } = splitPath(relativePath);
     const { priority: priorityColumn } = this.getConversionColumns(taskType);
-    const row = this.db
-      .prepare(
-        `SELECT mimeType, duration, ${priorityColumn} AS priority FROM files WHERE folder = ? AND fileName = ?`,
-      )
-      .get(folder, fileName) as
-      | { mimeType: string | null; duration: number | null; priority: ConversionTaskPriority | null }
-      | undefined;
+    const row = await this.db.get<{ mimeType: string | null; duration: number | null; priority: ConversionTaskPriority | null }>(
+      `SELECT mimeType, duration, ${priorityColumn} AS priority FROM files WHERE folder = ? AND fileName = ?`,
+      folder, fileName,
+    );
     return row ?? null;
   }
 
-  countMediaEntries(): number {
+  async countMediaEntries(): Promise<number> {
     return this.countEntries("mimeType LIKE 'image/%' OR mimeType LIKE 'video/%'");
   }
 
-  countImageEntries(): number {
+  async countImageEntries(): Promise<number> {
     return this.countEntries("mimeType LIKE 'image/%'");
   }
 
-  countAllEntries(): number {
+  async countAllEntries(): Promise<number> {
     return this.countEntries();
   }
 
-  getStatusCounts(): {
+  async getStatusCounts(): Promise<{
     allEntries: number;
     mediaEntries: number;
     missingInfo: number;
     missingDateTaken: number;
-  } {
-    const row = this.db
-      .prepare(
-        `SELECT
-           COUNT(*) AS allEntries,
-           SUM(CASE WHEN mimeType LIKE 'image/%' OR mimeType LIKE 'video/%' THEN 1 ELSE 0 END) AS mediaEntries,
-           SUM(CASE WHEN sizeInBytes IS NULL OR created IS NULL OR modified IS NULL THEN 1 ELSE 0 END) AS missingInfo,
-           SUM(CASE WHEN (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
-                      AND dateTaken IS NULL
-                      AND exifProcessedAt IS NULL
-                    THEN 1 ELSE 0 END) AS missingDateTaken
-         FROM files`,
-      )
-      .get() as {
+  }> {
+    const row = await this.db.get<{
       allEntries: number | null;
       mediaEntries: number | null;
       missingInfo: number | null;
       missingDateTaken: number | null;
-    };
+    }>(
+      `SELECT
+         COUNT(*) AS allEntries,
+         SUM(CASE WHEN mimeType LIKE 'image/%' OR mimeType LIKE 'video/%' THEN 1 ELSE 0 END) AS mediaEntries,
+         SUM(CASE WHEN sizeInBytes IS NULL OR created IS NULL OR modified IS NULL THEN 1 ELSE 0 END) AS missingInfo,
+         SUM(CASE WHEN (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
+                    AND dateTaken IS NULL
+                    AND exifProcessedAt IS NULL
+                  THEN 1 ELSE 0 END) AS missingDateTaken
+       FROM files`,
+    );
 
     return {
-      allEntries: row.allEntries ?? 0,
-      mediaEntries: row.mediaEntries ?? 0,
-      missingInfo: row.missingInfo ?? 0,
-      missingDateTaken: row.missingDateTaken ?? 0,
+      allEntries: row?.allEntries ?? 0,
+      mediaEntries: row?.mediaEntries ?? 0,
+      missingInfo: row?.missingInfo ?? 0,
+      missingDateTaken: row?.missingDateTaken ?? 0,
     };
   }
 
-  getMostRecentExifProcessedEntry(): {
+  async getMostRecentExifProcessedEntry(): Promise<{
     folder: string;
     fileName: string;
     completedAt: string;
-  } | null {
-    const row = this.db
-      .prepare(
-        `SELECT folder, fileName, exifProcessedAt
-         FROM files
-         WHERE exifProcessedAt IS NOT NULL
-         ORDER BY exifProcessedAt DESC
-         LIMIT 1`,
-      )
-      .get() as { folder: string; fileName: string; exifProcessedAt: string } | undefined;
+  } | null> {
+    const row = await this.db.get<{ folder: string; fileName: string; exifProcessedAt: string }>(
+      `SELECT folder, fileName, exifProcessedAt
+       FROM files
+       WHERE exifProcessedAt IS NOT NULL
+       ORDER BY exifProcessedAt DESC
+       LIMIT 1`,
+    );
 
     if (!row) {
       return null;
@@ -615,20 +666,18 @@ export class IndexDatabase {
     };
   }
 
-  getRatingStats(): {
+  async getRatingStats(): Promise<{
     total: number;
     rated: number;
     unrated: number;
     distribution: Record<string, number>;
-  } {
-    const rows = this.db
-      .prepare(
-        `SELECT rating, COUNT(*) as count
-         FROM files
-         WHERE mimeType LIKE 'image/%' OR mimeType LIKE 'video/%'
-         GROUP BY rating`,
-      )
-      .all() as Array<{ rating: number | null; count: number }>;
+  }> {
+    const rows = await this.db.all<{ rating: number | null; count: number }>(
+      `SELECT rating, COUNT(*) as count
+       FROM files
+       WHERE mimeType LIKE 'image/%' OR mimeType LIKE 'video/%'
+       GROUP BY rating`,
+    );
 
     const distribution: Record<string, number> = {};
     let rated = 0;
@@ -651,15 +700,16 @@ export class IndexDatabase {
     };
   }
 
-  private ensureRootPath(): void {
-    const existing = this.db
-      .prepare("SELECT value FROM meta WHERE key = 'rootPath'")
-      .get() as { value: string } | undefined;
+  private async ensureRootPath(): Promise<void> {
+    const existing = await this.db.get<{ value: string }>(
+      "SELECT value FROM meta WHERE key = 'rootPath'",
+    );
 
     if (!existing) {
-      this.db
-        .prepare("INSERT INTO meta (key, value) VALUES ('rootPath', ?)")
-        .run(this.storagePath);
+      await this.db.run(
+        "INSERT INTO meta (key, value) VALUES ('rootPath', ?)",
+        this.storagePath,
+      );
       return;
     }
 
@@ -667,70 +717,63 @@ export class IndexDatabase {
       console.warn(
         `[IndexDatabase] Media root changed from ${existing.value} to ${this.storagePath}. Resetting index.`,
       );
-      const reset = this.db.transaction(() => {
-        this.db.prepare("DELETE FROM files").run();
-        this.db
-          .prepare("UPDATE meta SET value = ? WHERE key = 'rootPath'")
-          .run(this.storagePath);
-      });
-      reset();
+      await this.db.transaction([
+        { sql: "DELETE FROM files", params: [] },
+        { sql: "UPDATE meta SET value = ? WHERE key = 'rootPath'", params: [this.storagePath] },
+      ]);
     }
   }
 
-  addPaths(paths: string[]): void {
+  async addPaths(paths: string[]): Promise<void> {
     if (!paths.length) return;
-    const addPath = this.db.prepare(
-      `INSERT OR IGNORE INTO files (folder, fileName, mimeType, thumbnailConversionPriority, thumbnailConversionPrioritySetAt)
-       VALUES (?, ?, ?, ?, ?)`,
-    );
-    const tx = this.db.transaction((list: string[]) => {
-      for (const relativePath of list) {
-        const { folder, fileName } = splitPath(relativePath);
-        const mimeType = mimeTypeForFilename(relativePath);
-        const thumbnailPriority =
-          mimeType?.startsWith("image/") || mimeType?.startsWith("video/")
-            ? ConversionTaskPriority.Background
-            : null;
-        addPath.run(
+    const statements = paths.map((relativePath) => {
+      const { folder, fileName } = splitPath(relativePath);
+      const mimeType = mimeTypeForFilename(relativePath);
+      const thumbnailPriority =
+        mimeType?.startsWith("image/") || mimeType?.startsWith("video/")
+          ? ConversionTaskPriority.Background
+          : null;
+      return {
+        sql: `INSERT OR IGNORE INTO files (folder, fileName, mimeType, thumbnailConversionPriority, thumbnailConversionPrioritySetAt)
+              VALUES (?, ?, ?, ?, ?)`,
+        params: [
           folder,
           fileName,
           mimeType,
           thumbnailPriority,
           thumbnailPriority !== null ? new Date().toISOString() : null,
-        );
-      }
+        ] as unknown[],
+      };
     });
-    tx(paths);
+    await this.db.transaction(statements);
   }
 
-  countFilesNeedingMetadataUpdate(
+  async countFilesNeedingMetadataUpdate(
     metadataGroupName: keyof typeof MetadataGroups,
-  ): number {
-    const stmt = this.db.prepare(
+  ): Promise<number> {
+    const row = await this.db.get<{ count: number }>(
       `SELECT COUNT(*) as count FROM files WHERE ${metadataGroupName}ProcessedAt IS NULL`,
     );
-    const row = stmt.get() as { count: number };
-    return row.count;
+    return row?.count ?? 0;
   }
 
-  getFilesNeedingMetadataUpdate(
+  async getFilesNeedingMetadataUpdate(
     metadataGroupName: keyof typeof MetadataGroups,
     limit = 200,
-  ): Array<
+  ): Promise<Array<
     {
       relativePath: string;
       mimeType: string | null;
       sizeInBytes?: number;
     } & { [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null }
-  > {
-    const stmt = this.db.prepare(
+  >> {
+    const rows = await this.db.all<Record<string, unknown>>(
       `SELECT folder, fileName, mimeType, sizeInBytes, ${metadataGroupName}ProcessedAt FROM files
        WHERE ${metadataGroupName}ProcessedAt IS NULL
        ORDER BY created DESC, folder DESC, fileName DESC
        LIMIT ?`,
+      limit,
     );
-
-    const rows = stmt.all(limit) as Array<Record<string, unknown>>;
     return rows.map((row) => {
       const relativePath = joinPath(row.folder as string, row.fileName as string);
       const mimeType =
@@ -749,31 +792,26 @@ export class IndexDatabase {
     });
   }
 
-  *files(): IterableIterator<FileRecord> {
-    const stmt = this.db.prepare("SELECT * FROM files");
-    for (const row of stmt.iterate()) {
-      yield rowToFileRecord(row as Record<string, string | number>);
-    }
+  async allFiles(): Promise<FileRecord[]> {
+    const rows = await this.db.all<Record<string, string | number>>("SELECT * FROM files");
+    return rows.map((row) => rowToFileRecord(row));
   }
 
-  getFolders(relativePath: string): Array<string> {
+  async getFolders(relativePath: string): Promise<Array<string>> {
     const base = normalizeFolderPath(relativePath);
 
     if (base === "/") {
-      const stmt = this.db.prepare(
+      const rows = await this.db.all<{ folderName: string | null }>(
         `SELECT DISTINCT 
          CASE 
          WHEN instr(substr(folder, 2), '/') > 0 
-         -- If there are multiple "/", take everything between leading "/" and that "/"
          THEN substr(folder, 2, instr(substr(folder, 2), '/') - 1)
-         -- Otherwise, take everything after the leading "/"
          ELSE substr(folder, 2)
          END AS folderName
        FROM files
        WHERE folder LIKE '/%' AND length(folder) > 1
        ORDER BY folderName`,
       );
-      const rows = stmt.all() as Array<{ folderName: string | null }>;
       return rows
         .map((row) => row.folderName)
         .filter((v): v is string => Boolean(v))
@@ -782,7 +820,7 @@ export class IndexDatabase {
 
     const escapedPrefix = escapeLikeLiteral(base);
     const prefixLen = base.length;
-    const stmt = this.db.prepare(
+    const rows = await this.db.all<{ folderName: string | null }>(
       `SELECT DISTINCT 
          substr(folder, ?, instr(substr(folder, ?), '/') - 1) AS folderName
        FROM files
@@ -790,22 +828,19 @@ export class IndexDatabase {
          AND length(folder) > ?
          AND instr(substr(folder, ?), '/') > 0
        ORDER BY folderName`,
-    );
-
-    const rows = stmt.all(
       prefixLen + 1,
       prefixLen + 1,
       `${escapedPrefix}%`,
       prefixLen,
       prefixLen + 1,
-    ) as Array<{ folderName: string | null }>;
+    );
     return rows
       .map((row) => row.folderName)
       .filter((v): v is string => Boolean(v))
       .sort((a, b) => a.localeCompare(b));
   }
 
-  queryFieldSuggestions(options: {
+  async queryFieldSuggestions(options: {
     field:
       | "personInImage"
       | "tags"
@@ -817,7 +852,7 @@ export class IndexDatabase {
     search: string;
     filter: FilterElement;
     limit?: number;
-  }): string[] {
+  }): Promise<string[]> {
     const { field, search, filter } = options;
     const limit = Math.max(1, Math.min(100, options.limit ?? 8));
     const normalizedSearch = search.trim();
@@ -830,8 +865,7 @@ export class IndexDatabase {
     const whereFragment = whereClause ? `AND (${whereClause})` : "";
 
     if (field === "personInImage" || field === "tags" || field === "aiTags") {
-      const rows = this.db
-        .prepare(
+      const rows = await this.db.all<{ suggestion: string }>(
           `SELECT DISTINCT json_each.value AS suggestion
          FROM files, json_each(${field})
          WHERE files.${field} IS NOT NULL
@@ -841,8 +875,7 @@ export class IndexDatabase {
            ${whereFragment}
          ORDER BY suggestion COLLATE NOCASE ASC
          LIMIT ?`,
-        )
-        .all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string }>;
+        likeQuery, ...whereParams, limit);
 
       return rows
         .map((row) => row.suggestion)
@@ -850,8 +883,7 @@ export class IndexDatabase {
     }
 
     if (field === "rating") {
-      const rows = this.db
-        .prepare(
+      const rows = await this.db.all<{ suggestion: string }>(
           `SELECT DISTINCT CAST(rating AS TEXT) AS suggestion
          FROM files
          WHERE rating IS NOT NULL
@@ -859,16 +891,14 @@ export class IndexDatabase {
            ${whereFragment}
          ORDER BY CAST(suggestion AS INTEGER) DESC
          LIMIT ?`,
-        )
-        .all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string }>;
+        likeQuery, ...whereParams, limit);
 
       return rows
         .map((row) => row.suggestion)
         .filter((value) => typeof value === "string" && value.length > 0);
     }
 
-    const rows = this.db
-      .prepare(
+    const rows = await this.db.all<{ suggestion: string }>(
         `SELECT DISTINCT ${field} AS suggestion
        FROM files
        WHERE ${field} IS NOT NULL
@@ -877,15 +907,14 @@ export class IndexDatabase {
          ${whereFragment}
        ORDER BY suggestion COLLATE NOCASE ASC
        LIMIT ?`,
-      )
-      .all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string }>;
+      likeQuery, ...whereParams, limit);
 
     return rows
       .map((row) => row.suggestion)
       .filter((value) => typeof value === "string" && value.length > 0);
   }
 
-  queryFieldSuggestionsWithCounts(options: {
+  async queryFieldSuggestionsWithCounts(options: {
     field:
       | "personInImage"
       | "tags"
@@ -897,7 +926,7 @@ export class IndexDatabase {
     search: string;
     filter: FilterElement;
     limit?: number;
-  }): Array<{ value: string; count: number }> {
+  }): Promise<Array<{ value: string; count: number }>> {
     const { field, search, filter } = options;
     const limit = Math.max(1, Math.min(100, options.limit ?? 8));
     const normalizedSearch = search.trim();
@@ -910,8 +939,10 @@ export class IndexDatabase {
     const whereFragment = whereClause ? `AND (${whereClause})` : "";
 
     if (field === "personInImage" || field === "tags" || field === "aiTags") {
-      const rows = this.db
-        .prepare(
+      const rows = await this.db.all<{
+        suggestion: string;
+        count: number;
+      }>(
           `SELECT
              json_each.value AS suggestion,
              COUNT(DISTINCT files.folder || files.fileName) AS count
@@ -924,11 +955,7 @@ export class IndexDatabase {
            GROUP BY json_each.value
            ORDER BY count DESC, suggestion COLLATE NOCASE ASC
            LIMIT ?`,
-        )
-        .all(likeQuery, ...whereParams, limit) as Array<{
-        suggestion: string;
-        count: number;
-      }>;
+        likeQuery, ...whereParams, limit);
 
       return rows
         .filter(
@@ -941,8 +968,7 @@ export class IndexDatabase {
     }
 
     if (field === "rating") {
-      const rows = this.db
-        .prepare(
+      const rows = await this.db.all<{ suggestion: string; count: number }>(
           `SELECT
              CAST(rating AS TEXT) AS suggestion,
              COUNT(*) AS count
@@ -953,8 +979,7 @@ export class IndexDatabase {
            GROUP BY rating
            ORDER BY CAST(suggestion AS INTEGER) DESC
            LIMIT ?`,
-        )
-        .all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string; count: number }>;
+        likeQuery, ...whereParams, limit);
 
       return rows
         .filter(
@@ -966,8 +991,7 @@ export class IndexDatabase {
         .map((row) => ({ value: row.suggestion, count: row.count }));
     }
 
-    const rows = this.db
-      .prepare(
+    const rows = await this.db.all<{ suggestion: string; count: number }>(
         `SELECT
            ${field} AS suggestion,
            COUNT(*) AS count
@@ -979,8 +1003,7 @@ export class IndexDatabase {
          GROUP BY ${field}
          ORDER BY count DESC, suggestion COLLATE NOCASE ASC
          LIMIT ?`,
-      )
-      .all(likeQuery, ...whereParams, limit) as Array<{ suggestion: string; count: number }>;
+      likeQuery, ...whereParams, limit);
 
     return rows
       .filter(
@@ -992,19 +1015,24 @@ export class IndexDatabase {
       .map((row) => ({ value: row.suggestion, count: row.count }));
   }
 
-  queryGeoClusters(options: {
+  async queryGeoClusters(options: {
     filter: QueryOptions["filter"];
     clusterSize: number;
     bounds?: { west: number; east: number; north: number; south: number } | null;
-  }): GeoClusterResult {
+  }): Promise<GeoClusterResult> {
     const { filter, clusterSize, bounds } = options;
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
     const bucket = Math.max(clusterSize, 0.00000001);
     const latOrigin = Math.floor((bounds?.south ?? 0) / bucket) * bucket;
     const lonOrigin = Math.floor((bounds?.west ?? 0) / bucket) * bucket;
 
-    const rows = this.db
-      .prepare(
+    const rows = await this.db.all<{
+      latitude: number;
+      longitude: number;
+      count: number;
+      samplePath: string | null;
+      sampleName: string | null;
+    }>(
         `WITH buckets AS (
          SELECT
            CAST(FLOOR((locationLatitude - ?) / ?) AS INTEGER) AS latBucket,
@@ -1047,24 +1075,16 @@ export class IndexDatabase {
        JOIN ranked r ON r.latBucket = a.latBucket AND r.lonBucket = a.lonBucket
        GROUP BY a.latBucket, a.lonBucket
        ORDER BY count DESC`,
-      )
-      .all(
-        latOrigin,
-        bucket,
-        lonOrigin,
-        bucket,
-        ...whereParams,
-        bucket,
-        latOrigin,
-        bucket,
-        lonOrigin,
-      ) as Array<{
-      latitude: number;
-      longitude: number;
-      count: number;
-      samplePath: string | null;
-      sampleName: string | null;
-    }>;
+      latOrigin,
+      bucket,
+      lonOrigin,
+      bucket,
+      ...whereParams,
+      bucket,
+      latOrigin,
+      bucket,
+      lonOrigin,
+    );
 
     const total = rows.reduce((sum, row) => sum + (row.count ?? 0), 0);
 
@@ -1074,7 +1094,7 @@ export class IndexDatabase {
     };
   }
 
-  queryFaceQueue(options: {
+  async queryFaceQueue(options: {
     status?: FaceQueueStatus;
     personId?: string;
     minConfidence?: number;
@@ -1082,7 +1102,7 @@ export class IndexDatabase {
     pageSize?: number;
     path?: string;
     includeSubfolders?: boolean;
-  }): FaceQueueResult {
+  }): Promise<FaceQueueResult> {
     const status = options.status;
     const personId = options.personId?.trim();
     const isUnassignedFilter = personId === "__unassigned__";
@@ -1105,17 +1125,15 @@ export class IndexDatabase {
       }
     }
 
-    const rows = this.db
-      .prepare(sql)
-      .all(...params) as Array<{
+    const rows = await this.db.all<{
       folder: string;
       fileName: string;
       dateTaken: number | null;
       faceTags: string | null;
-    }>;
+    }>(sql, ...params);
 
     const allItems = rows.flatMap((row) => {
-      const parsedFaceTags = this.parseFaceTags(row.faceTags);
+      const parsedFaceTags = parseFaceTags(row.faceTags);
       return parsedFaceTags
         .map((faceTag, index) => {
           const faceId =
@@ -1173,21 +1191,21 @@ export class IndexDatabase {
     };
   }
 
-  acceptFaceSuggestion(options: {
+  async acceptFaceSuggestion(options: {
     faceId: string;
     personId?: string;
     personName?: string;
     reviewer?: string;
-  }): boolean {
+  }): Promise<boolean> {
     const { faceId, personId, personName, reviewer } = options;
-    const match = this.findFaceById(faceId);
+    const match = await this.findFaceById(faceId);
     if (!match) {
       return false;
     }
 
     const { row, tags } = match;
     const nextTags = tags.map((faceTag, index) => {
-      const computedFaceId = this.getFaceId(row.folder, row.fileName, faceTag, index);
+      const computedFaceId = getFaceId(row.folder, row.fileName, faceTag, index);
       if (computedFaceId !== faceId) {
         return faceTag;
       }
@@ -1209,24 +1227,24 @@ export class IndexDatabase {
       };
     });
 
-    this.persistFaceTags(row.folder, row.fileName, nextTags);
+    await this.persistFaceTags(row.folder, row.fileName, nextTags);
     return true;
   }
 
-  rejectFaceSuggestion(options: {
+  async rejectFaceSuggestion(options: {
     faceId: string;
     personId?: string;
     reviewer?: string;
-  }): boolean {
+  }): Promise<boolean> {
     const { faceId, personId, reviewer } = options;
-    const match = this.findFaceById(faceId);
+    const match = await this.findFaceById(faceId);
     if (!match) {
       return false;
     }
 
     const { row, tags } = match;
     const nextTags = tags.map((faceTag, index) => {
-      const computedFaceId = this.getFaceId(row.folder, row.fileName, faceTag, index);
+      const computedFaceId = getFaceId(row.folder, row.fileName, faceTag, index);
       if (computedFaceId !== faceId) {
         return faceTag;
       }
@@ -1247,11 +1265,11 @@ export class IndexDatabase {
       };
     });
 
-    this.persistFaceTags(row.folder, row.fileName, nextTags);
+    await this.persistFaceTags(row.folder, row.fileName, nextTags);
     return true;
   }
 
-  queryFacePeople(options?: { path?: string; includeSubfolders?: boolean }): FacePeopleItem[] {
+  async queryFacePeople(options?: { path?: string; includeSubfolders?: boolean }): Promise<FacePeopleItem[]> {
     const startTime = Date.now();
     const normalizedPath = options?.path ? normalizeFolderPath(options.path) : null;
     const includeSubfolders = options?.includeSubfolders !== false;
@@ -1269,8 +1287,21 @@ export class IndexDatabase {
       }
     }
 
-    const rows = this.db
-      .prepare(
+    const rows = await this.db.all<{
+      personId: string;
+      personName: string | null;
+      personCount: number;
+      folder: string;
+      fileName: string;
+      tagIndex: number;
+      faceIdRaw: string | null;
+      dimX: number;
+      dimY: number;
+      dimWidth: number;
+      dimHeight: number;
+      thumbPreferredHeight: number | null;
+      thumbCropVersion: string | null;
+    }>(
         `WITH expanded AS (
            SELECT
              files.folder AS folder,
@@ -1342,22 +1373,8 @@ export class IndexDatabase {
          FROM ranked
          WHERE representativeRank = 1
          ORDER BY personCount DESC`,
-      )
-      .all(...params) as Array<{
-      personId: string;
-      personName: string | null;
-      personCount: number;
-      folder: string;
-      fileName: string;
-      tagIndex: number;
-      faceIdRaw: string | null;
-      dimX: number;
-      dimY: number;
-      dimWidth: number;
-      dimHeight: number;
-      thumbPreferredHeight: number | null;
-      thumbCropVersion: string | null;
-    }>;
+      ...params,
+    );
 
     const people = rows.map((row) => {
       const faceId = row.faceIdRaw?.trim().length
@@ -1398,251 +1415,204 @@ export class IndexDatabase {
     return people;
   }
 
-  queryFaceMatches(options: { faceId: string; limit?: number }): FaceMatchItem[] {
+  async queryFaceMatches(options: { faceId: string; limit?: number }): Promise<FaceMatchItem[]> {
     const faceId = options.faceId.trim();
     const limit = Math.max(1, Math.min(100, options.limit ?? 12));
     if (!faceId) {
       return [];
     }
 
-    const rows = this.db
-      .prepare(
-        `SELECT folder, fileName, faceTags
-         FROM files
-         WHERE faceTags IS NOT NULL`,
-      )
-      .all() as Array<{ folder: string; fileName: string; faceTags: string | null }>;
-
-    const entries = rows.flatMap((row) => {
-      const tags = this.parseFaceTags(row.faceTags);
-      return tags
-        .map((tag, index) => {
-          const resolvedFaceId = this.getFaceId(row.folder, row.fileName, tag, index);
-          const embedding = this.getFaceEmbedding(tag);
-          if (!embedding) {
-            return null;
-          }
-
-          return {
-            faceId: resolvedFaceId,
-            relativePath: `${row.folder}${row.fileName}`,
-            fileName: row.fileName,
-            dimensions: tag.dimensions,
-            embedding,
-            thumbnail: tag.thumbnail,
-            person: tag.person,
-            status: tag.status ?? "unverified",
-          };
-        })
-        .filter((item): item is NonNullable<typeof item> => Boolean(item));
-    });
-
-    const target = entries.find((entry) => entry.faceId === faceId);
-    if (!target) {
+    const target = await this.db.get<{ embedding: Buffer }>(
+      `SELECT embedding FROM face_embeddings WHERE faceId = ?`,
+      faceId,
+    );
+    if (!target?.embedding) {
       return [];
     }
 
-    return entries
-      .filter((entry) => entry.faceId !== faceId)
-      .filter((entry) => entry.status !== "rejected")
-      .map((entry) => ({
-        ...entry,
-        confidence: this.cosineSimilarity(target.embedding, entry.embedding),
-      }))
-      .sort((a, b) => b.confidence - a.confidence)
-      .slice(0, limit)
-      .map(({ embedding: _embedding, ...rest }) => ({
-        ...rest,
-        confidence: Number(rest.confidence.toFixed(4)),
-      }));
+    const rows = await this.db.all<{
+      faceId: string;
+      folder: string;
+      fileName: string;
+      personId: string | null;
+      personName: string | null;
+      status: string;
+      dimensionsX: number | null;
+      dimensionsY: number | null;
+      dimensionsWidth: number | null;
+      dimensionsHeight: number | null;
+      thumbnailPreferredHeight: number | null;
+      thumbnailCropVersion: string | null;
+      confidence: number;
+    }>(
+      `SELECT
+         faceId, folder, fileName, personId, personName, status,
+         dimensionsX, dimensionsY, dimensionsWidth, dimensionsHeight,
+         thumbnailPreferredHeight, thumbnailCropVersion,
+         cosine_similarity(?, embedding) AS confidence
+       FROM face_embeddings
+       WHERE faceId != ? AND status != 'rejected'
+       ORDER BY confidence DESC
+       LIMIT ?`,
+      target.embedding, faceId, limit,
+    );
+
+    return rows.map((row) => ({
+      faceId: row.faceId,
+      relativePath: `${row.folder}${row.fileName}`,
+      fileName: row.fileName,
+      dimensions: {
+        x: row.dimensionsX ?? 0,
+        y: row.dimensionsY ?? 0,
+        width: row.dimensionsWidth ?? 0,
+        height: row.dimensionsHeight ?? 0,
+      },
+      ...(row.personId ? { person: { id: row.personId, ...(row.personName ? { name: row.personName } : {}) } } : {}),
+      status: row.status ?? "unverified",
+      ...(row.thumbnailPreferredHeight != null || row.thumbnailCropVersion != null
+        ? {
+            thumbnail: {
+              ...(row.thumbnailPreferredHeight != null ? { preferredHeight: row.thumbnailPreferredHeight } : {}),
+              ...(row.thumbnailCropVersion != null ? { cropVersion: row.thumbnailCropVersion } : {}),
+            },
+          }
+        : {}),
+      confidence: Number(row.confidence.toFixed(4)),
+    }));
   }
 
-  queryPersonFaceSuggestions(options: { personId: string; limit?: number }): FaceMatchItem[] {
+  async queryPersonFaceSuggestions(options: { personId: string; limit?: number }): Promise<FaceMatchItem[]> {
     const personId = options.personId.trim();
     const limit = Math.max(1, Math.min(200, options.limit ?? 200));
     if (!personId) {
       return [];
     }
 
-    const rows = this.db
-      .prepare(
-        `SELECT folder, fileName, faceTags
-         FROM files
-         WHERE faceTags IS NOT NULL`,
-      )
-      .all() as Array<{ folder: string; fileName: string; faceTags: string | null }>;
-
-    const entries = rows.flatMap((row) => {
-      const tags = this.parseFaceTags(row.faceTags);
-      return tags
-        .map((tag, index) => {
-          const resolvedFaceId = this.getFaceId(row.folder, row.fileName, tag, index);
-          const embedding = this.getFaceEmbedding(tag);
-          if (!embedding) {
-            return null;
-          }
-
-          return {
-            faceId: resolvedFaceId,
-            relativePath: `${row.folder}${row.fileName}`,
-            fileName: row.fileName,
-            dimensions: tag.dimensions,
-            embedding,
-            thumbnail: tag.thumbnail,
-            person: tag.person,
-            status: tag.status ?? "unverified",
-            quality: tag.quality,
-          };
-        })
-        .filter((item): item is NonNullable<typeof item> => Boolean(item));
-    });
-
-    const profileFaces = entries.filter(
-      (entry) => entry.person?.id === personId && entry.status === "confirmed",
+    const profileFaces = await this.db.all<{
+      embedding: Buffer;
+      qualityOverall: number | null;
+      qualityEffectiveResolution: number | null;
+    }>(
+      `SELECT embedding, qualityOverall, qualityEffectiveResolution
+       FROM face_embeddings
+       WHERE personId = ? AND status = 'confirmed'`,
+      personId,
     );
 
     if (profileFaces.length === 0) {
       return [];
     }
 
-    const centroid = this.buildWeightedCentroid(
-      profileFaces.map((face) => ({
-        embedding: face.embedding,
-        weight: this.embeddingWeight(face.quality),
+    const centroid = buildWeightedCentroid(
+      profileFaces.map((row) => ({
+        embedding: blobToEmbedding(row.embedding),
+        weight: embeddingWeight({
+          overall: row.qualityOverall ?? undefined,
+          effectiveResolution: row.qualityEffectiveResolution ?? undefined,
+        }),
       })),
     );
     if (!centroid) {
       return [];
     }
 
+    const centroidBlob = embeddingToBlob(centroid);
     const MIN_SIMILARITY = 0.4;
 
-    const candidates = entries
-      .filter((entry) => entry.person == null)
-      .filter((entry) => entry.status !== "rejected")
-      .map((entry) => ({
-        ...entry,
-        confidence: this.cosineSimilarity(centroid, entry.embedding),
-      }))
-      .sort((a, b) => b.confidence - a.confidence);
+    const rows = await this.db.all<{
+      faceId: string;
+      folder: string;
+      fileName: string;
+      personId: string | null;
+      personName: string | null;
+      status: string;
+      dimensionsX: number | null;
+      dimensionsY: number | null;
+      dimensionsWidth: number | null;
+      dimensionsHeight: number | null;
+      thumbnailPreferredHeight: number | null;
+      thumbnailCropVersion: string | null;
+      confidence: number;
+    }>(
+      `SELECT
+         faceId, folder, fileName, personId, personName, status,
+         dimensionsX, dimensionsY, dimensionsWidth, dimensionsHeight,
+         thumbnailPreferredHeight, thumbnailCropVersion,
+         cosine_similarity(?, embedding) AS confidence
+       FROM face_embeddings
+       WHERE personId IS NULL AND status != 'rejected'
+       ORDER BY confidence DESC
+       LIMIT ?`,
+      centroidBlob, limit,
+    );
 
-    const topMatch = candidates.at(0);
-    if (!topMatch) {
+    const topMatch = rows.at(0);
+    if (!topMatch || topMatch.confidence < MIN_SIMILARITY) {
       return [];
     }
 
-    if (topMatch.confidence < MIN_SIMILARITY) {
-      return [];
-    }
-
-    const secondMatch = candidates.at(1);
+    const secondMatch = rows.at(1);
     if (secondMatch && topMatch.confidence / (secondMatch.confidence + 0.001) < 1.12) {
       return [];
     }
 
-    return candidates
-      .slice(0, limit)
-      .map(({ embedding: _embedding, quality: _quality, ...rest }) => ({
-        ...rest,
-        confidence: Number(rest.confidence.toFixed(4)),
-      }));
+    return rows.map((row) => ({
+      faceId: row.faceId,
+      relativePath: `${row.folder}${row.fileName}`,
+      fileName: row.fileName,
+      dimensions: {
+        x: row.dimensionsX ?? 0,
+        y: row.dimensionsY ?? 0,
+        width: row.dimensionsWidth ?? 0,
+        height: row.dimensionsHeight ?? 0,
+      },
+      ...(row.personId ? { person: { id: row.personId, ...(row.personName ? { name: row.personName } : {}) } } : {}),
+      status: row.status ?? "unverified",
+      ...(row.thumbnailPreferredHeight != null || row.thumbnailCropVersion != null
+        ? {
+            thumbnail: {
+              ...(row.thumbnailPreferredHeight != null ? { preferredHeight: row.thumbnailPreferredHeight } : {}),
+              ...(row.thumbnailCropVersion != null ? { cropVersion: row.thumbnailCropVersion } : {}),
+            },
+          }
+        : {}),
+      confidence: Number(row.confidence.toFixed(4)),
+    }));
   }
 
-  private getFaceEmbedding(tag: FaceTag): number[] | null {
-    if (!tag.featureDescription || typeof tag.featureDescription !== "object") {
-      return null;
-    }
-
-    const candidate = (tag.featureDescription as { embedding?: unknown }).embedding;
-    if (!Array.isArray(candidate) || candidate.length === 0) {
-      return null;
-    }
-
-    const values = candidate.filter(
-      (value): value is number => typeof value === "number" && Number.isFinite(value),
-    );
-    return values.length > 0 ? values : null;
-  }
-
-  private cosineSimilarity(left: number[], right: number[]): number {
-    const length = Math.min(left.length, right.length);
-    if (length === 0) {
-      return 0;
-    }
-
-    let dot = 0;
-    let leftMagnitude = 0;
-    let rightMagnitude = 0;
-
-    for (let index = 0; index < length; index += 1) {
-      const leftValue = left[index] ?? 0;
-      const rightValue = right[index] ?? 0;
-      dot += leftValue * rightValue;
-      leftMagnitude += leftValue * leftValue;
-      rightMagnitude += rightValue * rightValue;
-    }
-
-    const denominator = Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude);
-    if (!Number.isFinite(denominator) || denominator === 0) {
-      return 0;
-    }
-
-    return dot / denominator;
-  }
-
-  private embeddingWeight(quality?: { overall?: number; effectiveResolution?: number }): number {
-    const overall = quality?.overall ?? 0.2;
-    const effectiveResolution = quality?.effectiveResolution ?? 64;
-    const normalizedResolution = Math.max(0.1, Math.min(effectiveResolution / 256, 2));
-    return Math.max(0.1, overall * normalizedResolution);
-  }
-
-  private buildWeightedCentroid(
-    entries: Array<{ embedding: number[]; weight: number }>,
-  ): number[] | null {
-    if (entries.length === 0) {
-      return null;
-    }
-
-    const dimensions = Math.min(...entries.map((entry) => entry.embedding.length));
-    if (!Number.isFinite(dimensions) || dimensions <= 0) {
-      return null;
-    }
-
-    const sum = new Array(dimensions).fill(0);
-    let totalWeight = 0;
-
-    entries.forEach((entry) => {
-      const weight = Math.max(0.1, entry.weight);
-      totalWeight += weight;
-      for (let index = 0; index < dimensions; index += 1) {
-        sum[index] += (entry.embedding[index] ?? 0) * weight;
-      }
-    });
-
-    if (totalWeight <= 0) {
-      return null;
-    }
-
-    return sum.map((value) => value / totalWeight);
-  }
-
-  private findFaceById(faceId: string): {
+  private async findFaceById(faceId: string): Promise<{
     row: { folder: string; fileName: string; faceTags: string | null };
     tags: FaceTag[];
-  } | null {
-    const rows = this.db
-      .prepare(
-        `SELECT folder, fileName, faceTags
-         FROM files
-         WHERE faceTags IS NOT NULL`,
-      )
-      .all() as Array<{ folder: string; fileName: string; faceTags: string | null }>;
+  } | null> {
+    const embeddingRow = await this.db.get<{ folder: string; fileName: string }>(
+      `SELECT folder, fileName FROM face_embeddings WHERE faceId = ?`,
+      faceId,
+    );
+
+    if (embeddingRow) {
+      const fileRow = await this.db.get<{ folder: string; fileName: string; faceTags: string | null }>(
+        `SELECT folder, fileName, faceTags FROM files WHERE folder = ? AND fileName = ?`,
+        embeddingRow.folder, embeddingRow.fileName,
+      );
+      if (fileRow) {
+        const tags = parseFaceTags(fileRow.faceTags);
+        const found = tags.some(
+          (tag, index) => getFaceId(fileRow.folder, fileRow.fileName, tag, index) === faceId,
+        );
+        if (found) {
+          return { row: fileRow, tags };
+        }
+      }
+    }
+
+    const rows = await this.db.all<{ folder: string; fileName: string; faceTags: string | null }>(
+      `SELECT folder, fileName, faceTags FROM files WHERE faceTags IS NOT NULL`,
+    );
 
     for (const row of rows) {
-      const tags = this.parseFaceTags(row.faceTags);
+      const tags = parseFaceTags(row.faceTags);
       const found = tags.some(
-        (tag, index) => this.getFaceId(row.folder, row.fileName, tag, index) === faceId,
+        (tag, index) => getFaceId(row.folder, row.fileName, tag, index) === faceId,
       );
       if (found) {
         return { row, tags };
@@ -1652,36 +1622,58 @@ export class IndexDatabase {
     return null;
   }
 
-  private getFaceId(folder: string, fileName: string, tag: FaceTag, index: number): string {
-    return typeof tag.faceId === "string" && tag.faceId.trim().length > 0
-      ? tag.faceId
-      : `${folder}${fileName}#${index}`;
+  private async persistFaceTags(folder: string, fileName: string, faceTags: FaceTag[]): Promise<void> {
+    await this.db.run(
+      `UPDATE files
+       SET faceTags = ?, faceMetadataProcessedAt = ?
+       WHERE folder = ? AND fileName = ?`,
+      JSON.stringify(faceTags), new Date().toISOString(), folder, fileName,
+    );
+    await this.syncFaceEmbeddings(folder, fileName, faceTags);
   }
 
-  private parseFaceTags(faceTags: string | null): FaceTag[] {
-    if (!faceTags) {
-      return [];
-    }
+  async syncFaceEmbeddings(folder: string, fileName: string, faceTags: FaceTag[]): Promise<void> {
+    await this.db.run(
+      `DELETE FROM face_embeddings WHERE folder = ? AND fileName = ?`,
+      folder, fileName,
+    );
 
-    try {
-      const parsed = JSON.parse(faceTags);
-      if (!Array.isArray(parsed)) {
-        return [];
-      }
-      return parsed as FaceTag[];
-    } catch {
-      return [];
-    }
-  }
+    const statements = faceTags
+      .map((tag, index) => {
+        const embedding = getFaceEmbedding(tag);
+        if (!embedding || !tag.dimensions) {
+          return null;
+        }
+        const faceId = getFaceId(folder, fileName, tag, index);
+        return {
+          sql: `INSERT OR REPLACE INTO face_embeddings
+                (faceId, folder, fileName, tagIndex, embedding, personId, personName, status,
+                 dimensionsX, dimensionsY, dimensionsWidth, dimensionsHeight,
+                 qualityOverall, qualityEffectiveResolution,
+                 thumbnailPreferredHeight, thumbnailCropVersion)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          params: [
+            faceId, folder, fileName, index,
+            embeddingToBlob(embedding),
+            tag.person?.id ?? null,
+            tag.person?.name ?? null,
+            tag.status ?? "unverified",
+            tag.dimensions.x ?? null,
+            tag.dimensions.y ?? null,
+            tag.dimensions.width ?? null,
+            tag.dimensions.height ?? null,
+            tag.quality?.overall ?? null,
+            tag.quality?.effectiveResolution ?? null,
+            tag.thumbnail?.preferredHeight ?? null,
+            tag.thumbnail?.cropVersion ?? null,
+          ] as unknown[],
+        };
+      })
+      .filter((stmt): stmt is NonNullable<typeof stmt> => stmt !== null);
 
-  private persistFaceTags(folder: string, fileName: string, faceTags: FaceTag[]): void {
-    this.db
-      .prepare(
-        `UPDATE files
-         SET faceTags = ?, faceMetadataProcessedAt = ?
-         WHERE folder = ? AND fileName = ?`,
-      )
-      .run(JSON.stringify(faceTags), new Date().toISOString(), folder, fileName);
+    if (statements.length > 0) {
+      await this.db.transaction(statements);
+    }
   }
 
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(
@@ -1703,13 +1695,10 @@ export class IndexDatabase {
     const countSQL = `SELECT COUNT(*) as count FROM files ${whereClause ? `WHERE ${whereClause}` : ""}`;
     const countResult = await measureOperation(
       "queryFiles.count",
-      () =>
-        this.db.prepare(countSQL).get(...whereParams) as {
-          count: number;
-        },
+      () => this.db.get<{ count: number }>(countSQL, ...whereParams),
       { category: "db" },
     );
-    const total = countResult.count;
+    const total = countResult?.count ?? 0;
 
     // Build the main query with sorting and pagination
     const offset = (page - 1) * pageSize;
@@ -1722,10 +1711,7 @@ export class IndexDatabase {
 
     const rows = await measureOperation(
       "queryFiles.rows",
-      () =>
-        this.db.prepare(mainSQL).all(...whereParams, pageSize, offset) as Array<
-          Record<string, unknown>
-        >,
+      () => this.db.all<Record<string, unknown>>(mainSQL, ...whereParams, pageSize, offset),
       { category: "db", detail: `limit=${pageSize} offset=${offset}` },
     );
     const matchedFiles = rows.map((v) =>
@@ -1747,7 +1733,7 @@ export class IndexDatabase {
     return result;
   }
 
-  getDateRange(filter: FilterElement): { minDate: Date | null; maxDate: Date | null } {
+  async getDateRange(filter: FilterElement): Promise<{ minDate: Date | null; maxDate: Date | null }> {
     const { where: whereClause, params } = filterToSQL(filter);
     const sql = `
       SELECT
@@ -1758,10 +1744,10 @@ export class IndexDatabase {
       ${whereClause ? `AND ${whereClause}` : ""}
     `;
 
-    const result = this.db.prepare(sql).get(...params) as {
+    const result = await this.db.get<{
       minDate: number | null;
       maxDate: number | null;
-    };
+    }>(sql, ...params);
 
     return {
       minDate:
@@ -1775,8 +1761,8 @@ export class IndexDatabase {
     };
   }
 
-  getDateHistogram(filter: FilterElement): DateHistogramResult {
-    const range = this.getDateRange(filter);
+  async getDateHistogram(filter: FilterElement): Promise<DateHistogramResult> {
+    const range = await this.getDateRange(filter);
     const minDate = range.minDate?.getTime() ?? null;
     const maxDate = range.maxDate?.getTime() ?? null;
 
@@ -1799,8 +1785,7 @@ export class IndexDatabase {
     const bucketFormat = grouping === "day" ? "%Y-%m-%d" : "%Y-%m-01";
 
     const { where: whereClause, params } = filterToSQL(filter);
-    const rows = this.db
-      .prepare(
+    const rows = await this.db.all<{ bucket: string; count: number }>(
         `SELECT
             strftime('${bucketFormat}', datetime(dateTaken / 1000, 'unixepoch')) AS bucket,
             COUNT(*) AS count
@@ -1809,8 +1794,7 @@ export class IndexDatabase {
           ${whereClause ? `AND ${whereClause}` : ""}
           GROUP BY bucket
           ORDER BY bucket`,
-      )
-      .all(...params) as Array<{ bucket: string; count: number }>;
+      ...params);
 
     const buckets = rows.map(({ bucket, count }) => {
       const start =
@@ -1836,18 +1820,16 @@ export class IndexDatabase {
     return { buckets, bucketSizeMs, minDate, maxDate, grouping };
   }
 
-  getSize(): number {
-    const result = this.db.prepare("SELECT COUNT(*) as count FROM files").get() as {
-      count: number;
-    };
-    return result.count;
+  async getSize(): Promise<number> {
+    const result = await this.db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
+    return result?.count ?? 0;
   }
 
-  private async runWithRetry<T>(fn: () => T, attempts = 5): Promise<T> {
+  private async runWithRetry<T>(fn: () => T | Promise<T>, attempts = 5): Promise<T> {
     let lastError: unknown;
     for (let i = 0; i < attempts; i++) {
       try {
-        return fn();
+        return await fn();
       } catch (error) {
         lastError = error;
         const message = error instanceof Error ? error.message : String(error);

@@ -20,7 +20,7 @@ let isProcessingExif = false;
 
 export const isExifMetadataProcessingActive = () => isProcessingExif;
 
-export const startBackgroundProcessExifMetadata = (
+export const startBackgroundProcessExifMetadata = async (
   database: IndexDatabase,
   onComplete?: () => void,
 ) => {
@@ -29,7 +29,7 @@ export const startBackgroundProcessExifMetadata = (
     throw new Error("EXIF processing is already running");
   }
   isProcessingExif = true;
-  const totalToProcess = database.countFilesNeedingMetadataUpdate("exif");
+  const totalToProcess = await database.countFilesNeedingMetadataUpdate("exif");
   let processedCount = 0;
   let restartAtMS: number = 0;
   let lastReportTime = Date.now();
@@ -40,7 +40,7 @@ export const startBackgroundProcessExifMetadata = (
       await waitForBackgroundTasksEnabled();
 
       const batchSize = 200;
-      const items = database.getFilesNeedingMetadataUpdate("exif", batchSize);
+      const items = await database.getFilesNeedingMetadataUpdate("exif", batchSize);
       if (items.length === 0) {
         console.log("[metadata:exif] processing complete");
         isProcessingExif = false;
@@ -79,7 +79,7 @@ export const startBackgroundProcessExifMetadata = (
                   console.log(`[metadata:exif] skipping file: ${relativePath}, ${error}`);
                 }
                 if (entry.mimeType?.startsWith("video/")) {
-                  database.setConversionPriority(
+                  await database.setConversionPriority(
                     entry.relativePath,
                     "hls",
                     ConversionTaskPriority.Background,

@@ -208,11 +208,20 @@ const compareSecrets = (provided: string, expected: string) => {
 };
 
 export class AuthService {
-  private readonly config = getAuthConfig();
-  private readonly store = new AuthStore();
   private readonly registrationChallengesByUsername = new Map<string, ChallengeState>();
   private readonly loginChallengesByUsername = new Map<string, ChallengeState>();
   private readonly rateLimitByKey = new Map<string, RateLimitState>();
+
+  private constructor(
+    private readonly config: ReturnType<typeof getAuthConfig>,
+    private readonly store: AuthStore,
+  ) {}
+
+  static async create(): Promise<AuthService> {
+    const config = getAuthConfig();
+    const store = await AuthStore.create();
+    return new AuthService(config, store);
+  }
 
   get enabled() {
     return this.config.enabled;
@@ -368,11 +377,11 @@ export class AuthService {
     return false;
   }
 
-  private createSessionCookieForUser(userId: number, res: http.ServerResponse) {
+  private async createSessionCookieForUser(userId: number, res: http.ServerResponse) {
     const rawToken = randomBytes(32).toString("base64url");
     const tokenHash = hashToken(rawToken);
     const expiresAtMs = Date.now() + this.config.sessionTtlMs;
-    this.store.createSession(tokenHash, userId, expiresAtMs);
+    await this.store.createSession(tokenHash, userId, expiresAtMs);
     const cookieDomain = this.config.cookieName.startsWith("__Host-")
       ? undefined
       : this.config.rpId;
@@ -399,13 +408,13 @@ export class AuthService {
     );
   }
 
-  private getSessionUser(req: http.IncomingMessage): SessionUser | null {
+  private async getSessionUser(req: http.IncomingMessage): Promise<SessionUser | null> {
     const cookie = parseCookies(req.headers.cookie).get(this.config.cookieName);
     if (!cookie) {
       return null;
     }
 
-    const session = this.store.findSession(hashToken(cookie));
+    const session = await this.store.findSession(hashToken(cookie));
     if (!session) {
       return null;
     }
@@ -416,7 +425,7 @@ export class AuthService {
     };
   }
 
-  requireAuthenticated(req: http.IncomingMessage, res: http.ServerResponse) {
+  async requireAuthenticated(req: http.IncomingMessage, res: http.ServerResponse) {
     if (!this.enabled) {
       return {
         userId: 0,
@@ -424,7 +433,7 @@ export class AuthService {
       } as SessionUser;
     }
 
-    const sessionUser = this.getSessionUser(req);
+    const sessionUser = await this.getSessionUser(req);
     if (!sessionUser) {
       writeJson(res, 401, { error: "Authentication required" });
       return null;
@@ -448,8 +457,8 @@ export class AuthService {
 
   private async handleSessionRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     setCurrentSpanAttributes({ "photrix.auth.route": "session" });
-    const hasUsers = this.store.countUsers() > 0;
-    const sessionUser = this.getSessionUser(req);
+    const hasUsers = await this.store.countUsers() > 0;
+    const sessionUser = await this.getSessionUser(req);
 
     writeJson(res, 200, {
       authEnabled: this.enabled,
@@ -463,7 +472,7 @@ export class AuthService {
     setCurrentSpanAttributes({ "photrix.auth.route": "logout" });
     const cookie = parseCookies(req.headers.cookie).get(this.config.cookieName);
     if (cookie) {
-      this.store.deleteSession(hashToken(cookie));
+      await this.store.deleteSession(hashToken(cookie));
     }
 
     this.clearSessionCookie(res);
@@ -475,7 +484,7 @@ export class AuthService {
     res: http.ServerResponse,
   ) {
     setCurrentSpanAttributes({ "photrix.auth.route": "register.options" });
-    if (this.store.countUsers() > 0) {
+    if (await this.store.countUsers() > 0) {
       writeJson(res, 403, { error: "Registration is disabled" });
       return;
     }
@@ -542,7 +551,7 @@ export class AuthService {
 
   private async handleRegistrationVerifyRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     setCurrentSpanAttributes({ "photrix.auth.route": "register.verify" });
-    if (this.store.countUsers() > 0) {
+    if (await this.store.countUsers() > 0) {
       writeJson(res, 403, { error: "Registration is disabled" });
       return;
     }
@@ -590,10 +599,10 @@ export class AuthService {
       return;
     }
 
-    const user = this.store.createUser(username);
+    const user = await this.store.createUser(username);
     const { credential } = verification.registrationInfo;
 
-    this.store.saveCredential({
+    await this.store.saveCredential({
       credentialId: credential.id,
       userId: user.id,
       publicKey: credential.publicKey,
@@ -601,13 +610,13 @@ export class AuthService {
       transports: credential.transports ?? [],
     });
 
-    this.createSessionCookieForUser(user.id, res);
+    await this.createSessionCookieForUser(user.id, res);
     writeJson(res, 200, { ok: true, username: user.username });
   }
 
   private async handleLoginOptionsRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     setCurrentSpanAttributes({ "photrix.auth.route": "login.options" });
-    if (this.store.countUsers() === 0) {
+    if (await this.store.countUsers() === 0) {
       writeJson(res, 400, { error: "No users exist yet" });
       return;
     }
@@ -625,8 +634,8 @@ export class AuthService {
     const requestedUsername = safeString(body.username);
 
     const user = requestedUsername
-      ? this.store.findUserByUsername(requestedUsername)
-      : this.store.findOnlyUser();
+      ? await this.store.findUserByUsername(requestedUsername)
+      : await this.store.findOnlyUser();
 
     setCurrentSpanAttributes({
       "photrix.auth.username": requestedUsername || user?.username || "unknown",
@@ -637,7 +646,7 @@ export class AuthService {
       return;
     }
 
-    const credentialIds = this.store.listCredentialIdsByUserId(user.id);
+    const credentialIds = await this.store.listCredentialIdsByUserId(user.id);
     if (credentialIds.length === 0) {
       writeJson(res, 400, { error: "No passkeys registered for this user" });
       return;
@@ -689,7 +698,7 @@ export class AuthService {
       return;
     }
 
-    const credential = this.store.findCredential(credentialId);
+    const credential = await this.store.findCredential(credentialId);
     if (!credential || credential.username !== username) {
       this.loginChallengesByUsername.delete(username);
       writeJson(res, 401, { error: "Invalid credential" });
@@ -727,8 +736,8 @@ export class AuthService {
       return;
     }
 
-    this.store.updateCredentialCounter(credential.credentialId, verification.authenticationInfo.newCounter);
-    this.createSessionCookieForUser(credential.userId, res);
+    await this.store.updateCredentialCounter(credential.credentialId, verification.authenticationInfo.newCounter);
+    await this.createSessionCookieForUser(credential.userId, res);
     writeJson(res, 200, { ok: true, username: credential.username });
   }
 
@@ -804,7 +813,7 @@ export class AuthService {
     }
   }
 
-  close() {
-    this.store.close();
+  async close() {
+    await this.store.close();
   }
 }

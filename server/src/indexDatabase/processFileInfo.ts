@@ -8,7 +8,7 @@ const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
 
 let isProcessingFileInfo = false;
 
-export const startBackgroundProcessFileInfoMetadata = (
+export const startBackgroundProcessFileInfoMetadata = async (
   database: IndexDatabase,
   onComplete?: () => void,
 ) => {
@@ -18,7 +18,7 @@ export const startBackgroundProcessFileInfoMetadata = (
   }
 
   isProcessingFileInfo = true;
-  const totalToProcess = database.countFilesNeedingMetadataUpdate("info");
+  const totalToProcess = await database.countFilesNeedingMetadataUpdate("info");
   let processedCount = 0;
   let restartAtMS = 0;
   let lastReportTime = Date.now();
@@ -29,7 +29,7 @@ export const startBackgroundProcessFileInfoMetadata = (
       await waitForBackgroundTasksEnabled();
 
       const batchSize = 200;
-      const items = database.getFilesNeedingMetadataUpdate("info", batchSize);
+      const items = await database.getFilesNeedingMetadataUpdate("info", batchSize);
       if (!items.length) {
         console.log("[metadata:file-info] processing complete");
         onComplete?.();

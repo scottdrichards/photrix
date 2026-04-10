@@ -28,8 +28,8 @@ const toProgressEntry = (completed: number, total: number): ProgressEntry => {
   };
 };
 
-const getStatusPayload = (database: IndexDatabase) => {
-  const statusCounts = database.getStatusCounts();
+const getStatusPayload = async (database: IndexDatabase) => {
+  const statusCounts = await database.getStatusCounts();
   const databaseSize = statusCounts.allEntries;
   const mediaEntries = statusCounts.mediaEntries;
   const pendingInfo = statusCounts.missingInfo;
@@ -40,9 +40,9 @@ const getStatusPayload = (database: IndexDatabase) => {
   const overallCompleted = infoCompleted + exifCompleted;
   const overallTotal = databaseSize + mediaEntries;
 
-  const lastExif = database.getMostRecentExifProcessedEntry();
-  const queueCounts = database.getConversionQueueCounts();
-  const queueSummary = database.getConversionQueueSummary();
+  const lastExif = await database.getMostRecentExifProcessedEntry();
+  const queueCounts = await database.getConversionQueueCounts();
+  const queueSummary = await database.getConversionQueueSummary();
   const faceProcessingStatus = getFaceMetadataProcessingStats();
 
   return {
@@ -84,7 +84,7 @@ const writeSSE = (res: http.ServerResponse, payload: unknown) => {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 };
 
-export const statusRequestHandler = (
+export const statusRequestHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
   props: StatusRequestHandlerProps,
@@ -93,7 +93,7 @@ export const statusRequestHandler = (
 
   if (!stream) {
     const statusStartTime = Date.now();
-    const payload = getStatusPayload(database);
+    const payload = await getStatusPayload(database);
     const elapsed = Date.now() - statusStartTime;
     if (elapsed > 200) {
       console.log(`[status] payload generation took ${elapsed}ms`);
@@ -114,9 +114,9 @@ export const statusRequestHandler = (
     res.flushHeaders();
   }
 
-  const sendUpdate = () => {
+  const sendUpdate = async () => {
     const statusStartTime = Date.now();
-    const payload = getStatusPayload(database);
+    const payload = await getStatusPayload(database);
     const elapsed = Date.now() - statusStartTime;
     if (elapsed > 200) {
       console.log(`[status] stream payload generation took ${elapsed}ms`);

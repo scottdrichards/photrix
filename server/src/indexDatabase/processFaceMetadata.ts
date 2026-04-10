@@ -298,7 +298,7 @@ const collectConfirmedProfiles = (tags: FaceTag[]): PersonProfile[] =>
       ];
     });
 
-export const startBackgroundProcessFaceMetadata = (
+export const startBackgroundProcessFaceMetadata = async (
   database: IndexDatabase,
   onComplete?: () => void,
 ) => {
@@ -313,7 +313,7 @@ export const startBackgroundProcessFaceMetadata = (
     fallbackCount: 0,
     workerFailures: 0,
   };
-  const totalToProcess = database.countFilesNeedingMetadataUpdate("faceMetadata");
+  const totalToProcess = await database.countFilesNeedingMetadataUpdate("faceMetadata");
   let processedCount = 0;
   let restartAtMS = 0;
   let lastReportTime = Date.now();
@@ -323,7 +323,7 @@ export const startBackgroundProcessFaceMetadata = (
     while (true) {
       await waitForBackgroundTasksEnabled();
 
-      const batch = database.getFilesNeedingMetadataUpdate("faceMetadata", 100);
+      const batch = await database.getFilesNeedingMetadataUpdate("faceMetadata", 100);
       if (batch.length === 0) {
         console.log("[metadata:face] processing complete");
         isProcessingFaceMetadata = false;

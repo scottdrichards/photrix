@@ -1,6 +1,5 @@
 import { spawn } from "child_process";
-import { existsSync } from "fs";
-import { stat } from "fs/promises";
+import { stat, access } from "fs/promises";
 import { getHash, getCachedFilePath } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
 import type { StandardHeight } from "../common/standardHeights.ts";
@@ -18,7 +17,8 @@ export const generateWebSafeVideo = async (
   const hash = getHash(filePath, modifiedTimeMs);
   const cachedPath = getCachedFilePath(hash, height, "mp4");
 
-  if (existsSync(cachedPath)) {
+  const cachedExists = await access(cachedPath).then(() => true, () => false);
+  if (cachedExists) {
     return cachedPath;
   }
 

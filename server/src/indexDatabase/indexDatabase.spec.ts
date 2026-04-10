@@ -13,7 +13,7 @@ const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
   process.env.INDEX_DB_LOCATION = dbRoot;
 
   try {
-    const db = new IndexDatabase(mediaRoot);
+    const db = await IndexDatabase.create(mediaRoot);
     await testFn(db);
   } finally {
     rmSync(mediaRoot, { recursive: true, force: true });
@@ -90,25 +90,25 @@ describe("IndexDatabase", () => {
 
   it("tracks missing metadata counters", async () => {
     await withTempDb(async (db) => {
-      db.addPaths(["a.jpg", "b.mp4", "doc.txt"]);
+      await db.addPaths(["a.jpg", "b.mp4", "doc.txt"]);
 
-      expect(db.countAllEntries()).toBe(3);
-      expect(db.countMediaEntries()).toBe(2);
-      expect(db.countImageEntries()).toBe(1);
-      expect(db.countMissingInfo()).toBe(3);
-      expect(db.countMissingDateTaken()).toBe(2);
-      expect(db.countPendingConversions().thumbnail).toBe(2);
+      expect(await db.countAllEntries()).toBe(3);
+      expect(await db.countMediaEntries()).toBe(2);
+      expect(await db.countImageEntries()).toBe(1);
+      expect(await db.countMissingInfo()).toBe(3);
+      expect(await db.countMissingDateTaken()).toBe(2);
+      expect((await db.countPendingConversions()).thumbnail).toBe(2);
     });
   });
 
   it("returns records needing metadata updates", async () => {
     await withTempDb(async (db) => {
-      db.addPaths(["a.jpg", "b.mp4"]);
+      await db.addPaths(["a.jpg", "b.mp4"]);
       await db.addOrUpdateFileData("a.jpg", {
         exifProcessedAt: "2026-01-01T00:00:00.000Z",
       });
 
-      const needingExif = db.getFilesNeedingMetadataUpdate("exif", 10);
+      const needingExif = await db.getFilesNeedingMetadataUpdate("exif", 10);
 
       expect(needingExif.map((f) => f.relativePath)).toContain("/b.mp4");
       expect(needingExif.map((f) => f.relativePath)).not.toContain("/a.jpg");
@@ -117,27 +117,27 @@ describe("IndexDatabase", () => {
 
   it("returns the highest-priority conversion task from thumbnail or HLS queues", async () => {
     await withTempDb(async (db) => {
-      db.addPaths(["photo.jpg", "video.mp4"]);
+      await db.addPaths(["photo.jpg", "video.mp4"]);
       await db.addOrUpdateFileData("video.mp4", {
         duration: 12,
       });
-      db.setConversionPriority(
+      await db.setConversionPriority(
         "photo.jpg",
         "thumbnail",
         ConversionTaskPriority.UserImplicit,
       );
-      db.setConversionPriority(
+      await db.setConversionPriority(
         "video.mp4",
         "thumbnail",
         ConversionTaskPriority.Background,
       );
-      db.setConversionPriority(
+      await db.setConversionPriority(
         "video.mp4",
         "hls",
         ConversionTaskPriority.UserBlocked,
       );
 
-      const [nextTask] = db.getNextConversionTasks();
+      const [nextTask] = await db.getNextConversionTasks();
 
       expect(nextTask).toEqual({
         relativePath: "/video.mp4",
@@ -155,7 +155,7 @@ describe("IndexDatabase", () => {
         createRecord("newer.jpg", { exifProcessedAt: "2026-01-03T00:00:00.000Z" }),
       );
 
-      const latest = db.getMostRecentExifProcessedEntry();
+      const latest = await db.getMostRecentExifProcessedEntry();
 
       expect(latest?.folder).toBe("/");
       expect(latest?.fileName).toBe("newer.jpg");

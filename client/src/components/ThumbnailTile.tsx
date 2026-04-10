@@ -229,7 +229,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   };
 
   const loading = isNearViewport ? "eager" : "lazy";
-  const fetchPriority = isNearViewport ? "high" : "low";
+  const fetchpriority = isNearViewport ? "high" : "low";
   const thumbnailUrl = canRequestThumbnail ? photo.thumbnailUrl : undefined;
 
   return (
@@ -262,7 +262,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
             src={thumbnailUrl}
             alt={photo.name}
             loading={loading}
-            fetchPriority={fetchPriority}
+            fetchpriority={fetchpriority}
             className={styles.image}
             style={{ opacity: isImageLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
             onLoad={handleImageLoad}
@@ -284,7 +284,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           src={thumbnailUrl}
           alt={photo.name}
           loading={loading}
-          fetchPriority={fetchPriority}
+          fetchpriority={fetchpriority}
           className={styles.image}
           style={{ opacity: isImageLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
           onLoad={handleImageLoad}

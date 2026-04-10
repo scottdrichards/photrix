@@ -1,6 +1,5 @@
 import { spawn } from "child_process";
-import { existsSync } from "fs";
-import { mkdir, stat } from "fs/promises";
+import { access, mkdir, stat } from "fs/promises";
 import { join } from "path";
 import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
@@ -215,6 +214,9 @@ export const getHLSInfo = async (
   return {
     hlsDir,
     playlistPath,
-    exists: existsSync(playlistPath),
+    exists: await access(playlistPath).then(
+      () => true,
+      () => false,
+    ),
   };
 };

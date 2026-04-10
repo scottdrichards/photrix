@@ -33,7 +33,7 @@ const startServer = async () => {
       console.log("[bootstrap] IndexDatabase starting...");
       const database = await measureOperation(
         "bootstrap.indexDatabase",
-        () => new IndexDatabase(absolutePath),
+        () => IndexDatabase.create(absolutePath),
         { category: "db", logWithoutRequest: true },
       );
       console.log("[bootstrap] IndexDatabase done");
@@ -41,7 +41,7 @@ const startServer = async () => {
       const metadataProcessingPriorities = [
         {
           name: "discover-files",
-          start: (db: IndexDatabase, onComplete?: () => void) => {
+          start: async (db: IndexDatabase, onComplete?: () => void) => {
             measureOperation(
               "pipeline.discoverFiles",
               () => discoverFiles({ root: absolutePath, db }),
@@ -76,7 +76,7 @@ const startServer = async () => {
       ];
 
       // Execute metadata processors in sequence
-      let pauseBackgroundProcessMetadata: ReturnType<typeof startBackgroundProcessFileInfoMetadata> =
+      let pauseBackgroundProcessMetadata: (() => void) =
         () => {
           // No-op until metadata processing starts
         };
@@ -84,19 +84,27 @@ const startServer = async () => {
       const startMetadataProcessingPipeline = async () => {
         for (const metadataProcess of metadataProcessingPriorities) {
           console.log(`[pipeline] Starting ${metadataProcess.name} processing`);
-          pauseBackgroundProcessMetadata = await new Promise((resolve) => {
-            const pauseFn = metadataProcess.start(database, () => {
-              console.log(`[pipeline] ${metadataProcess.name} complete`);
-              resolve(pauseFn);
-            });
-          });
+          pauseBackgroundProcessMetadata = await new Promise<() => void>(
+            (resolve, reject) => {
+              let pauseFn: () => void = () => {};
+              metadataProcess
+                .start(database, () => {
+                  console.log(`[pipeline] ${metadataProcess.name} complete`);
+                  resolve(pauseFn);
+                })
+                .then((fn) => {
+                  pauseFn = fn;
+                })
+                .catch(reject);
+            },
+          );
         }
         console.log("[bootstrap] All metadata processing priorities scheduled");
       };
 
       startMetadataProcessingPipeline();
 
-      createServer(database, absolutePath, {
+      await createServer(database, absolutePath, {
         onRequest: () => pauseBackgroundProcessMetadata(),
       });
 

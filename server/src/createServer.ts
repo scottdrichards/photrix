@@ -38,13 +38,13 @@ const startEventLoopLagMonitor = () => {
   setInterval(check, 500).unref();
 };
 
-export const createServer = (
+export const createServer = async (
   database: IndexDatabase,
   storagePath: string,
   options: ServerOptions = { onRequest: () => {} },
 ) => {
   const { onRequest } = options;
-  const authService = new AuthService();
+  const authService = await AuthService.create();
   startEventLoopLagMonitor();
 
   const server = http.createServer(async (req, res) => {

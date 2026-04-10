@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { access } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -97,7 +97,8 @@ const resolvePythonInvocation = async (): Promise<PythonInvocation> => {
           ];
 
     for (const candidatePath of localVenvCandidates) {
-      if (existsSync(candidatePath)) {
+      const candidateExists = await access(candidatePath).then(() => true, () => false);
+      if (candidateExists) {
         const probe = await runProbe(candidatePath, ["-c", "import sys; print(sys.executable)"]);
         if (probe.ok) {
           return { command: candidatePath, baseArgs: [] };

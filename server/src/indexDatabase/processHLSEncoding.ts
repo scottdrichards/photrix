@@ -52,7 +52,7 @@ export const getHLSEncodingStatus = (): HLSEncodingSnapshot => ({
   failures: hlsEncodingStatus.failures,
 });
 
-export const startBackgroundConversionWorker = (
+export const startBackgroundConversionWorker = async (
   database: IndexDatabase,
   onComplete?: () => void,
 ) => {
@@ -62,15 +62,15 @@ export const startBackgroundConversionWorker = (
   isProcessingHLS = true;
 
   // Reset any tasks that were in-progress when the server last shut down
-  database.resetInProgressConversions("thumbnail");
-  database.resetInProgressConversions("hls");
+  await database.resetInProgressConversions("thumbnail");
+  await database.resetInProgressConversions("hls");
 
   let restartAtMS = 0;
   let lastReportTime = Date.now();
   let lastReportCount = 0;
   let processedCount = 0;
   let failedCount = 0;
-  let remainingCount = database.countPendingConversions().hls;
+  let remainingCount = (await database.countPendingConversions()).hls;
 
   // Yield to the event loop so HTTP requests aren't starved by sync DB operations
   const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -91,7 +91,7 @@ export const startBackgroundConversionWorker = (
         await new Promise((resolve) => setTimeout(resolve, restartAtMS - Date.now()));
       }
 
-      const [task] = database.getNextConversionTasks();
+      const [task] = await database.getNextConversionTasks();
       await yieldToEventLoop();
 
       if (!task) {
@@ -102,7 +102,7 @@ export const startBackgroundConversionWorker = (
         return;
       }
 
-      const taskInfo = database.getConversionTaskInfo(task.relativePath, task.taskType);
+      const taskInfo = await database.getConversionTaskInfo(task.relativePath, task.taskType);
 
       const mimeType = taskInfo?.mimeType ?? null;
       const durationSeconds =
@@ -112,7 +112,7 @@ export const startBackgroundConversionWorker = (
       const originalPriority: PendingConversionTaskPriority =
         (taskInfo?.priority as PendingConversionTaskPriority) ?? ConversionTaskPriority.Background;
 
-      database.setConversionPriority(
+      await database.setConversionPriority(
         task.relativePath,
         task.taskType,
         ConversionTaskPriority.InProgress,
@@ -154,13 +154,13 @@ export const startBackgroundConversionWorker = (
             logWithoutRequest: true,
           },
         );
-        database.setConversionPriority(task.relativePath, task.taskType, null);
+        await database.setConversionPriority(task.relativePath, task.taskType, null);
         remainingCount = Math.max(0, remainingCount - 1);
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         console.log(`[conversion-worker] Completed: ${task.relativePath} (${elapsed}s)`);
       } catch (error) {
         failedCount++;
-        database.setConversionPriority(task.relativePath, task.taskType, originalPriority);
+        await database.setConversionPriority(task.relativePath, task.taskType, originalPriority);
         console.error(`[conversion-worker] Failed: ${task.relativePath}:`, error);
       }
 

@@ -1,6 +1,5 @@
 import { spawn } from "child_process";
-import { existsSync } from "fs";
-import { stat, mkdir } from "fs/promises";
+import { stat, mkdir, access } from "fs/promises";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
@@ -247,7 +246,8 @@ export const convertImage = async (
   await stat(filePath);
   const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
 
-  if (existsSync(cachedPath)) {
+  const cachedExists = await access(cachedPath).then(() => true, () => false);
+  if (cachedExists) {
     return cachedPath;
   }
 
@@ -269,12 +269,14 @@ export const convertImageToMultipleSizes = async (
   void opts;
   await stat(filePath);
 
-  const outputs = heights
-    .map((height) => ({
-      height,
-      path: getMirroredCachedFilePath(filePath, height, "jpg"),
-    }))
-    .filter((o) => !existsSync(o.path));
+  const existChecks = await Promise.all(
+    heights.map(async (height) => {
+      const p = getMirroredCachedFilePath(filePath, height, "jpg");
+      const exists = await access(p).then(() => true, () => false);
+      return { height, path: p, exists };
+    }),
+  );
+  const outputs = existChecks.filter((o) => !o.exists);
 
   if (outputs.length === 0) {
     return;

@@ -1,6 +1,5 @@
 import { spawn } from "child_process";
-import { existsSync } from "fs";
-import { mkdir, stat, writeFile } from "fs/promises";
+import { mkdir, stat, writeFile, access } from "fs/promises";
 import { join } from "path";
 import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
@@ -46,8 +45,8 @@ export const getVariantSegmentPath = (
 /**
  * Checks if multi-bitrate HLS exists for a video.
  */
-export const multibitrateHLSExists = (hlsDir: string): boolean =>
-  existsSync(getMasterPlaylistPath(hlsDir));
+export const multibitrateHLSExists = async (hlsDir: string): Promise<boolean> =>
+  access(getMasterPlaylistPath(hlsDir)).then(() => true, () => false);
 
 /**
  * Get HLS info for a video file.
@@ -65,7 +64,7 @@ export const getMultibitrateHLSInfo = async (
   return {
     hlsDir,
     masterPlaylistPath,
-    exists: multibitrateHLSExists(hlsDir),
+    exists: await multibitrateHLSExists(hlsDir),
   };
 };
 
@@ -208,7 +207,8 @@ export const generateMultibitrateHLS = async (
   const hlsDir = getMultibitrateHLSDirectory(filePath);
   const masterPath = getMasterPlaylistPath(hlsDir);
 
-  if (existsSync(masterPath)) {
+  const masterExists = await access(masterPath).then(() => true, () => false);
+  if (masterExists) {
     return masterPath;
   }
 

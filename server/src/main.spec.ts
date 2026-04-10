@@ -62,14 +62,14 @@ describe("main.ts HTTP Server", () => {
     writeFileSync(path.join(storagePath, "root.jpg"), "root");
     writeFileSync(path.join(storagePath, "subFolder", "child.jpg"), "child");
 
-    database = new IndexDatabase(storagePath);
+    database = await IndexDatabase.create(storagePath);
     const relativePaths = [...walkFiles(storagePath)].map((filePath) =>
       path.relative(storagePath, filePath).replace(/\\/g, "/"),
     );
-    database.addPaths(relativePaths);
+    await database.addPaths(relativePaths);
 
     const { createServer } = await import("./createServer.ts");
-    server = createServer(database, storagePath);
+    server = await createServer(database, storagePath);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
   });
