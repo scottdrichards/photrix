@@ -333,6 +333,7 @@ export const startBackgroundProcessFaceMetadata = (
 
       for (const item of batch) {
         await waitForBackgroundTasksEnabled();
+        try {
         await measureOperation(
           "metadata.face.processEntry",
           async () => {
@@ -423,6 +424,14 @@ export const startBackgroundProcessFaceMetadata = (
           },
           { category: "other", detail: item.relativePath, logWithoutRequest: true },
         );
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          console.error(`[metadata:face] failed to process ${item.relativePath}: ${msg}`);
+          await database.addOrUpdateFileData(item.relativePath, {
+            faceTags: [],
+            faceMetadataProcessedAt: new Date().toISOString(),
+          });
+        }
 
         const now = Date.now();
         if (now - lastReportTime > 1000) {

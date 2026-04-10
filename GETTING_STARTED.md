@@ -47,9 +47,18 @@ npm --prefix client run dev
 3. Create/store passkey
 4. Rotate or remove bootstrap token after setup
 
-## 7) Local domain like localhost (no scripts)
+## 7) Local development
 
-To make `local.photrix.scottderichards.com` behave like localhost on the current device:
+Auth is disabled by default when `NODE_ENV` is not `production`, and localhost origins (ports 3000, 5173) are auto-allowed. Just start both services:
+
+```powershell
+npm --prefix server run start
+npm --prefix client run dev
+```
+
+Open `http://localhost:5173`. No passkey or env overrides needed.
+
+To test with auth enabled locally, set `AUTH_REQUIRED=true` in `server/.env` and follow the passkey setup with a custom local domain:
 
 1. Add host entries (one-time, admin):
 

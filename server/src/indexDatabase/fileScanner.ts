@@ -27,11 +27,16 @@ export const discoverFiles = async (props: DiscoverFilesProps): Promise<void> =>
   for (const absolutePath of walkFiles(directory)) {
     await waitForBackgroundTasksEnabled();
 
-    const relativePath = path.relative(root, absolutePath);
-    batch.push(relativePath);
-    if (batch.length >= batchSize) {
-      db.addPaths(batch);
-      batch = [];
+    try {
+      const relativePath = path.relative(root, absolutePath);
+      batch.push(relativePath);
+      if (batch.length >= batchSize) {
+        db.addPaths(batch);
+        batch = [];
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`[fileWatcher] failed to process ${absolutePath}: ${msg}`);
     }
 
     scannedFilesCount++;
@@ -43,7 +48,7 @@ export const discoverFiles = async (props: DiscoverFilesProps): Promise<void> =>
 
     if (scannedFilesCount % 10000 === 0) {
       console.log(
-        `[fileWatcher] Discovered ${scannedFilesCount} files... Current: ${relativePath}`,
+        `[fileWatcher] Discovered ${scannedFilesCount} files... Current: ${absolutePath}`,
       );
     }
   }

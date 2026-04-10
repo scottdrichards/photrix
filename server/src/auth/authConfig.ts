@@ -89,6 +89,11 @@ export const getAuthConfig = (): AuthConfig => {
       if (!host.startsWith("localhost") || process.env.NODE_ENV !== "production") {
         origins.add(`http://${host}`);
       }
+      if (host === "localhost" && process.env.NODE_ENV !== "production") {
+        const serverPort = process.env.PORT || "3000";
+        origins.add(`http://localhost:${serverPort}`);
+        origins.add(`http://localhost:5173`);
+      }
     }
     origins.add(expectedOrigin);
     return Array.from(origins);
@@ -97,7 +102,7 @@ export const getAuthConfig = (): AuthConfig => {
   const allowedOrigins = parseOrigins(process.env.AUTH_ALLOWED_ORIGINS, generateOrigins());
 
   return {
-    enabled: parseBoolean(process.env.AUTH_REQUIRED, true),
+    enabled: parseBoolean(process.env.AUTH_REQUIRED, process.env.NODE_ENV === "production"),
     rpName: process.env.AUTH_RP_NAME?.trim() || "Photrix",
     rpId,
     expectedOrigin,

@@ -78,9 +78,9 @@ export const AuthGate = ({ children }: AuthGateProps) => {
     const session = await getAuthSession();
     setState({
       loading: false,
-      authenticated: session.authenticated,
+      authenticated: !session.authEnabled || session.authenticated,
       setupRequired: session.setupRequired,
-      username: session.username ?? "",
+      username: session.username ?? (!session.authEnabled ? "auth-disabled" : ""),
     });
   };
 

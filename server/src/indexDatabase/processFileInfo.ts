@@ -40,24 +40,32 @@ export const startBackgroundProcessFileInfoMetadata = (
         await waitForBackgroundTasksEnabled();
 
         const { relativePath } = entry;
-        await measureOperation(
-          "metadata.fileInfo.processEntry",
-          async () => {
-            const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
+        try {
+          await measureOperation(
+            "metadata.fileInfo.processEntry",
+            async () => {
+              const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
 
-            const fileInfo = await getFileInfo(fullPath);
-            const fastDimensions = await getFastMediaDimensions(fullPath);
-            const now = new Date();
-            const metadata = {
-              ...fileInfo,
-              ...fastDimensions,
-              infoProcessedAt: now.toISOString(),
-            };
+              const fileInfo = await getFileInfo(fullPath);
+              const fastDimensions = await getFastMediaDimensions(fullPath);
+              const now = new Date();
+              const metadata = {
+                ...fileInfo,
+                ...fastDimensions,
+                infoProcessedAt: now.toISOString(),
+              };
 
-            await database.addOrUpdateFileData(relativePath, metadata);
-          },
-          { category: "other", detail: relativePath, logWithoutRequest: true },
-        );
+              await database.addOrUpdateFileData(relativePath, metadata);
+            },
+            { category: "other", detail: relativePath, logWithoutRequest: true },
+          );
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          console.error(`[metadata:file-info] failed to process ${relativePath}: ${msg}`);
+          await database.addOrUpdateFileData(relativePath, {
+            infoProcessedAt: new Date().toISOString(),
+          });
+        }
 
         const now = new Date();
         processedCount++;
