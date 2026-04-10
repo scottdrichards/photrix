@@ -23,6 +23,21 @@ type ServerOptions = {
   onRequest: () => void;
 };
 
+// Monitors event-loop lag by scheduling a timer and measuring actual delay
+const startEventLoopLagMonitor = () => {
+  if (process.env.VITEST_WORKER_ID || process.env.JEST_WORKER_ID) return;
+  let lastCheck = process.hrtime.bigint();
+  const check = () => {
+    const now = process.hrtime.bigint();
+    const lagMs = Number(now - lastCheck) / 1_000_000 - 500; // subtract the interval
+    if (lagMs > 50) {
+      console.warn(`[event-loop] lag: ${lagMs.toFixed(0)}ms`);
+    }
+    lastCheck = now;
+  };
+  setInterval(check, 500).unref();
+};
+
 export const createServer = (
   database: IndexDatabase,
   storagePath: string,
@@ -30,8 +45,10 @@ export const createServer = (
 ) => {
   const { onRequest } = options;
   const authService = new AuthService();
+  startEventLoopLagMonitor();
 
   const server = http.createServer(async (req, res) => {
+    const arrivalTime = process.hrtime.bigint();
     const requestIdHeader = req.headers["x-request-id"];
     const requestId = Array.isArray(requestIdHeader)
       ? requestIdHeader[0]
@@ -44,6 +61,11 @@ export const createServer = (
         ...(requestId ? { requestId } : {}),
       },
       async () => {
+        const handlerStartTime = process.hrtime.bigint();
+        const queueMs = Number(handlerStartTime - arrivalTime) / 1_000_000;
+        if (queueMs > 20) {
+          console.warn(`[event-loop] request queued ${queueMs.toFixed(0)}ms before handler: ${req.method} ${req.url}`);
+        }
 
         let requestLogged = false;
         const logRequestCompletion = bindCurrentRequestTrace(() => {

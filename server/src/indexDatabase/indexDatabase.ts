@@ -173,14 +173,14 @@ export class IndexDatabase {
         expression: "thumbnailsProcessedAt",
       },
       {
-        name: "idx_files_thumbnailConversionPriority",
-        expression: "thumbnailConversionPriority",
-        where: "thumbnailConversionPriority IS NOT NULL",
+        name: "idx_files_thumbnailConversionQueue",
+        expression: "thumbnailConversionPriority ASC, thumbnailConversionPrioritySetAt ASC, folder, fileName",
+        where: `thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
       },
       {
-        name: "idx_files_hlsConversionPriority",
-        expression: "hlsConversionPriority",
-        where: "hlsConversionPriority IS NOT NULL",
+        name: "idx_files_hlsConversionQueue",
+        expression: "hlsConversionPriority ASC, hlsConversionPrioritySetAt ASC, folder, fileName",
+        where: `hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
       },
     ];
 
@@ -189,6 +189,14 @@ export class IndexDatabase {
       this.db.exec(
         `CREATE INDEX IF NOT EXISTS ${name} ON files(${expression})${whereClause}`,
       );
+    }
+
+    // Drop superseded indexes
+    for (const old of [
+      "idx_files_thumbnailConversionPriority",
+      "idx_files_hlsConversionPriority",
+    ]) {
+      this.db.exec(`DROP INDEX IF EXISTS ${old}`);
     }
   }
 
@@ -327,15 +335,17 @@ export class IndexDatabase {
   }
 
   countPendingConversions(): { thumbnail: number; hls: number } {
-    const row = this.db
+    const t = this.db
       .prepare(
-        `SELECT
-            SUM(CASE WHEN thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END) AS thumbnail,
-            SUM(CASE WHEN hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END) AS hls
-         FROM files`,
+        `SELECT COUNT(*) AS c FROM files WHERE thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
       )
-      .get() as { thumbnail: number | null; hls: number | null };
-    return { thumbnail: row.thumbnail ?? 0, hls: row.hls ?? 0 };
+      .get() as { c: number };
+    const h = this.db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM files WHERE hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
+      )
+      .get() as { c: number };
+    return { thumbnail: t.c, hls: h.c };
   }
 
   getConversionQueueCounts(): { pending: number; processing: number } {
@@ -468,37 +478,51 @@ export class IndexDatabase {
   }
 
   /**
-   * Returns the next pending conversion tasks ordered by priority (ASC), then by when the
+   * Returns the next pending conversion task ordered by priority (ASC), then by when the
    * priority was set (FIFO), then thumbnails before HLS for equal priority and time.
    * Excludes in-progress tasks.
+   *
+   * Uses two separate indexed queries instead of UNION ALL so SQLite can satisfy
+   * the WHERE + ORDER BY + LIMIT 1 directly from the partial composite index.
    */
   getNextConversionTasks(count = 1): Array<{
     relativePath: string;
     taskType: "thumbnail" | "hls";
   }> {
-    const sql = `SELECT * FROM (
-                   SELECT folder, fileName, 'thumbnail' AS taskType,
-                          thumbnailConversionPriority AS priority,
-                          thumbnailConversionPrioritySetAt AS prioritySetAt,
-                          0 AS taskOrder
-                   FROM files
-                   WHERE thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}
-                   UNION ALL
-                   SELECT folder, fileName, 'hls' AS taskType,
-                          hlsConversionPriority AS priority,
-                          hlsConversionPrioritySetAt AS prioritySetAt,
-                          1 AS taskOrder
-                   FROM files
-                   WHERE hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}
-                 )
-                 ORDER BY priority ASC, prioritySetAt ASC, taskOrder ASC
-                 LIMIT ?`;
-    const rows = this.db.prepare(sql).all(count) as Array<{
-      folder: string;
-      fileName: string;
-      taskType: "thumbnail" | "hls";
-    }>;
-    return rows.map((row) => ({
+    type CandidateRow = { folder: string; fileName: string; priority: number; prioritySetAt: string };
+
+    const thumbnailRows = this.db
+      .prepare(
+        `SELECT folder, fileName, thumbnailConversionPriority AS priority, thumbnailConversionPrioritySetAt AS prioritySetAt
+         FROM files
+         WHERE thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}
+         ORDER BY thumbnailConversionPriority ASC, thumbnailConversionPrioritySetAt ASC
+         LIMIT ?`,
+      )
+      .all(count) as CandidateRow[];
+
+    const hlsRows = this.db
+      .prepare(
+        `SELECT folder, fileName, hlsConversionPriority AS priority, hlsConversionPrioritySetAt AS prioritySetAt
+         FROM files
+         WHERE hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}
+         ORDER BY hlsConversionPriority ASC, hlsConversionPrioritySetAt ASC
+         LIMIT ?`,
+      )
+      .all(count) as CandidateRow[];
+
+    const tagged = [
+      ...thumbnailRows.map((r) => ({ ...r, taskType: "thumbnail" as const, taskOrder: 0 })),
+      ...hlsRows.map((r) => ({ ...r, taskType: "hls" as const, taskOrder: 1 })),
+    ];
+
+    tagged.sort((a, b) =>
+      a.priority !== b.priority ? a.priority - b.priority
+        : a.prioritySetAt !== b.prioritySetAt ? (a.prioritySetAt < b.prioritySetAt ? -1 : 1)
+        : a.taskOrder - b.taskOrder,
+    );
+
+    return tagged.slice(0, count).map((row) => ({
       relativePath: joinPath(row.folder, row.fileName),
       taskType: row.taskType,
     }));

@@ -70,11 +70,15 @@ export const startBackgroundConversionWorker = (
   let lastReportCount = 0;
   let processedCount = 0;
   let failedCount = 0;
+  let remainingCount = database.countPendingConversions().hls;
+
+  // Yield to the event loop so HTTP requests aren't starved by sync DB operations
+  const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
   const markSnapshot = () => {
     hlsEncodingStatus.active = isProcessingHLS;
     hlsEncodingStatus.videos.completed = processedCount;
-    hlsEncodingStatus.videos.remaining = database.countPendingConversions().hls;
+    hlsEncodingStatus.videos.remaining = remainingCount;
     hlsEncodingStatus.failures = failedCount;
   };
 
@@ -88,6 +92,8 @@ export const startBackgroundConversionWorker = (
       }
 
       const [task] = database.getNextConversionTasks();
+      await yieldToEventLoop();
+
       if (!task) {
         console.log("[conversion-worker] All conversion tasks complete");
         isProcessingHLS = false;
@@ -97,6 +103,7 @@ export const startBackgroundConversionWorker = (
       }
 
       const taskInfo = database.getConversionTaskInfo(task.relativePath, task.taskType);
+
       const mimeType = taskInfo?.mimeType ?? null;
       const durationSeconds =
         typeof taskInfo?.duration === "number" && Number.isFinite(taskInfo.duration)
@@ -110,6 +117,7 @@ export const startBackgroundConversionWorker = (
         task.taskType,
         ConversionTaskPriority.InProgress,
       );
+      await yieldToEventLoop();
 
       const fullPath = path.join(database.storagePath, stripLeadingSlash(task.relativePath));
 
@@ -147,6 +155,7 @@ export const startBackgroundConversionWorker = (
           },
         );
         database.setConversionPriority(task.relativePath, task.taskType, null);
+        remainingCount = Math.max(0, remainingCount - 1);
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         console.log(`[conversion-worker] Completed: ${task.relativePath} (${elapsed}s)`);
       } catch (error) {
