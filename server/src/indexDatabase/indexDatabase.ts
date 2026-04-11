@@ -100,27 +100,25 @@ const buildWeightedCentroid = (
 
 export class IndexDatabase {
   public readonly storagePath: string;
-  private db: AsyncSqlite;
-  private readonly dbFilePath: string;
+  private db!: AsyncSqlite;
+  private dbFilePath!: string;
 
-  private constructor(storagePath: string, db: AsyncSqlite, dbFilePath: string) {
+  constructor(storagePath: string) {
     this.storagePath = storagePath;
-    this.db = db;
-    this.dbFilePath = dbFilePath;
   }
 
-  static async create(storagePath: string): Promise<IndexDatabase> {
+  async init(): Promise<void> {
     const envDbLocation = process.env.INDEX_DB_LOCATION?.trim();
     const databaseDirectory = envDbLocation || CACHE_DIR;
-    const dbFilePath = path.join(path.resolve(databaseDirectory), "index.db");
+    this.dbFilePath = path.join(path.resolve(databaseDirectory), "index.db");
 
-    const directoryPath = path.dirname(dbFilePath);
+    const directoryPath = path.dirname(this.dbFilePath);
     const rootPath = path.parse(directoryPath).root;
     if (directoryPath !== rootPath) {
       await mkdir(directoryPath, { recursive: true });
     }
 
-    const db = await AsyncSqlite.open(dbFilePath, {
+    this.db = await AsyncSqlite.open(this.dbFilePath, {
       pragmas: ["journal_mode = WAL"],
       customFunctions: [
         { name: "REGEXP", options: { deterministic: true }, type: "regexp" },
@@ -128,7 +126,7 @@ export class IndexDatabase {
       ],
     });
 
-    await db.exec(`
+    await this.db.exec(`
       CREATE TABLE IF NOT EXISTS files (
         folder TEXT NOT NULL,
         fileName TEXT NOT NULL,
@@ -168,14 +166,14 @@ export class IndexDatabase {
         PRIMARY KEY (folder, fileName)
       )
     `);
-    await db.exec(`
+    await this.db.exec(`
       CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       )
     `);
 
-    await db.exec(`
+    await this.db.exec(`
       CREATE TABLE IF NOT EXISTS face_embeddings (
         faceId TEXT PRIMARY KEY,
         folder TEXT NOT NULL,
@@ -195,12 +193,11 @@ export class IndexDatabase {
         thumbnailCropVersion TEXT
       )
     `);
-    await db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_file ON face_embeddings(folder, fileName)`);
-    await db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_person ON face_embeddings(personId)`);
-    await db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_status ON face_embeddings(status)`);
+    await this.db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_file ON face_embeddings(folder, fileName)`);
+    await this.db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_person ON face_embeddings(personId)`);
+    await this.db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_status ON face_embeddings(status)`);
 
-    const instance = new IndexDatabase(storagePath, db, dbFilePath);
-    await instance.ensureFilesColumns([
+    await this.ensureFilesColumns([
       { name: "personInImage", type: "TEXT" },
       { name: "regions", type: "TEXT" },
       { name: "faceMetadataProcessedAt", type: "TEXT" },
@@ -210,14 +207,12 @@ export class IndexDatabase {
       { name: "hlsConversionPrioritySetAt", type: "TEXT" },
     ]);
 
-    await instance.ensureIndexes();
-    console.log(`[IndexDatabase] Database opened at ${dbFilePath}`);
-    await instance.ensureRootPath();
+    await this.ensureIndexes();
+    console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
+    await this.ensureRootPath();
 
-    const count = await db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
+    const count = await this.db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
     console.log(`[IndexDatabase] Contains ${count?.count ?? 0} entries`);
-
-    return instance;
   }
 
   private async ensureFilesColumns(columns: Array<{ name: string; type: string }>): Promise<void> {

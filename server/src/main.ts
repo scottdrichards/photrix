@@ -24,9 +24,10 @@ const startServer = async () => {
       const absolutePath = path.resolve(mediaRoot);
 
       console.log("[bootstrap] IndexDatabase starting...");
-      const database = await measureOperation(
+      const database = new IndexDatabase(absolutePath);
+      await measureOperation(
         "bootstrap.indexDatabase",
-        () => IndexDatabase.create(absolutePath),
+        () => database.init(),
         { category: "db", logWithoutRequest: true },
       );
       console.log("[bootstrap] IndexDatabase done");

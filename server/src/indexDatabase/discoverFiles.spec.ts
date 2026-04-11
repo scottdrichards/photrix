@@ -23,7 +23,8 @@ describe("discoverFiles", () => {
       await fs.writeFile(path.join(rootDir, "a.jpg"), "a");
       await fs.writeFile(path.join(rootDir, "nested", "b.mp4"), "b");
 
-      const db = await IndexDatabase.create(rootDir);
+      const db = new IndexDatabase(rootDir);
+      await db.init();
       await new Promise<void>((resolve) => {
         fileScanner(db, resolve);
       });
