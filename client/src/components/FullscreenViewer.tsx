@@ -3,6 +3,7 @@ import { Button, makeStyles, tokens } from "@fluentui/react-components";
 import { Dismiss24Regular } from "@fluentui/react-icons";
 import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
+import { negotiateVideoPlayback } from "../api";
 import { useSelectionContext } from "./selection/SelectionContext";
 
 const SWIPE_THRESHOLD_PX = 60;
@@ -16,69 +17,6 @@ type HlsNetworkDetails = {
 
 type HlsMediaWithSource = HTMLMediaElement & {
   mediaSource?: MediaSource & { updating?: boolean };
-};
-
-const PRELIMINARY_RAW_TEST_BYTES = 12_000_000;
-
-const isHevcCodec = (codec: unknown): boolean => {
-  if (typeof codec !== "string") {
-    return false;
-  }
-
-  const normalizedCodec = codec.toLowerCase();
-  return normalizedCodec === "hevc" || normalizedCodec === "h265" || normalizedCodec === "x265";
-};
-
-const estimateBitrateMbps = (sizeInBytes: unknown, durationSeconds: unknown): number | null => {
-  if (
-    typeof sizeInBytes !== "number" ||
-    !Number.isFinite(sizeInBytes) ||
-    sizeInBytes <= 0 ||
-    typeof durationSeconds !== "number" ||
-    !Number.isFinite(durationSeconds) ||
-    durationSeconds <= 0
-  ) {
-    return null;
-  }
-
-  return (sizeInBytes * 8) / durationSeconds / 1_000_000;
-};
-
-const measureRawFileBandwidthMbps = async (
-  rawVideoUrl: string,
-): Promise<number | null> => {
-  if (typeof fetch !== "function") {
-    return null;
-  }
-
-  const startTime = performance.now();
-  const response = await fetch(rawVideoUrl, {
-    credentials: "include",
-    cache: "no-store",
-    headers: {
-      Range: `bytes=0-${PRELIMINARY_RAW_TEST_BYTES - 1}`,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Raw bandwidth test failed (status ${response.status})`);
-  }
-
-  const payload = await response.blob();
-  const elapsedMilliseconds = performance.now() - startTime;
-  if (payload.size <= 0 || elapsedMilliseconds <= 0) {
-    return null;
-  }
-
-  const bandwidthMbps = (payload.size * 8) / (elapsedMilliseconds / 1000) / 1_000_000;
-  console.info("[Video] Preliminary raw-file bandwidth test", {
-    rawVideoUrl,
-    bandwidthMbps,
-    bytesTransferred: payload.size,
-    elapsedMilliseconds,
-  });
-
-  return bandwidthMbps;
 };
 
 const safePlay = (video: HTMLVideoElement, logPrefix: string) => {
@@ -132,7 +70,27 @@ const useStyles = makeStyles({
       backgroundColor: "rgba(255, 255, 255, 0.1)",
     },
   },
+  videoBadge: {
+    position: "absolute",
+    bottom: tokens.spacingVerticalXXL,
+    left: tokens.spacingHorizontalM,
+    fontSize: "12px",
+    padding: "2px 8px",
+    borderRadius: "4px",
+    color: "rgba(255, 255, 255, 0.85)",
+    backgroundColor: "rgba(0, 0, 0, 0.55)",
+    pointerEvents: "none",
+    zIndex: 100,
+  },
 });
+
+type VideoStatus = "hls" | "direct" | "incompatible" | null;
+
+const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
+  hls: "HLS",
+  direct: "Raw Video",
+  incompatible: "No Compatible Stream",
+};
 
 export function FullscreenViewer() {
   const styles = useStyles();
@@ -149,6 +107,7 @@ export function FullscreenViewer() {
   const hlsRef = useRef<Hls | null>(null);
   const durationIntervalRef = useRef<number | null>(null);
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
+  const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
 
   // HLS setup effect
   useEffect(() => {
@@ -170,61 +129,42 @@ export function FullscreenViewer() {
 
     // Clean up previous HLS instance
     destroyHls();
+    setVideoStatus(null);
 
     const loadSelectedPlayback = async () => {
       try {
         const playbackProfile = await probeVideoPlaybackProfile();
-        if (cancelled) {
+        if (cancelled) return;
+
+        const negotiation = await negotiateVideoPlayback({
+          path: photo.path,
+          bandwidthMbps: playbackProfile.bandwidthMbps,
+          hevcSupported: playbackProfile.hevcSupported,
+        });
+        if (cancelled) return;
+
+        console.info("[Video] Server negotiation result", {
+          path: photo.path,
+          ...negotiation,
+        });
+
+        if (negotiation.mode === "error") {
+          console.error("[Video] No compatible playback format", negotiation.reason);
+          if (!cancelled) setVideoStatus("incompatible");
+          // Fall back to full-res web-safe MP4 as last resort
+          video.src = photo.fullUrl;
           return;
         }
 
-        const estimatedBitrateMbps = estimateBitrateMbps(
-          photo.metadata?.sizeInBytes,
-          photo.metadata?.duration,
-        );
-        const codec = photo.metadata?.videoCodec;
-        const isDirectPlaybackCandidate =
-          playbackProfile.hevcSupported &&
-          isHevcCodec(codec) &&
-          typeof estimatedBitrateMbps === "number" &&
-          Number.isFinite(estimatedBitrateMbps) &&
-          photo.originalUrl.length > 0;
-
-        let measuredRawBandwidthMbps: number | null = null;
-        if (isDirectPlaybackCandidate) {
-          measuredRawBandwidthMbps = await measureRawFileBandwidthMbps(photo.originalUrl);
-          if (cancelled) {
-            return;
-          }
-        }
-
-        const shouldUseDirectPlayback =
-          isDirectPlaybackCandidate &&
-          typeof measuredRawBandwidthMbps === "number" &&
-          Number.isFinite(measuredRawBandwidthMbps) &&
-          typeof estimatedBitrateMbps === "number" &&
-          estimatedBitrateMbps <= measuredRawBandwidthMbps * 0.75;
-
-        console.info("[Video] Client playback decision", {
-          path: photo.path,
-          playbackProfile,
-          estimatedBitrateMbps,
-          codec,
-          measuredRawBandwidthMbps,
-          isDirectPlaybackCandidate,
-          shouldUseDirectPlayback,
-        });
-
-        if (shouldUseDirectPlayback) {
-          video.src = photo.originalUrl;
+        if (negotiation.mode === "direct") {
+          if (!cancelled) setVideoStatus("direct");
+          video.src = negotiation.url;
           safePlay(video, "[Video] Autoplay prevented (direct):");
           return;
         }
 
-        if (!photo.hlsUrl) {
-          video.src = photo.fullUrl;
-          return;
-        }
+        // mode === "hls"
+        const hlsUrl = negotiation.url;
 
         const nativeHlsSupport = video.canPlayType("application/vnd.apple.mpegurl");
         const hlsJsSupported = Hls.isSupported();
@@ -283,8 +223,9 @@ export function FullscreenViewer() {
             levelLoadingRetryDelay: 1000,
           });
 
-          hls.loadSource(photo.hlsUrl);
+          hls.loadSource(hlsUrl);
           hls.attachMedia(video);
+          if (!cancelled) setVideoStatus("hls");
 
           const getDuration = () => serverDuration ?? knownDuration ?? video.duration;
 
@@ -328,7 +269,8 @@ export function FullscreenViewer() {
         }
 
         if (nativeHlsSupport) {
-          video.src = photo.hlsUrl;
+          if (!cancelled) setVideoStatus("hls");
+          video.src = hlsUrl;
           safePlay(video, "[HLS] Autoplay prevented (native):");
           return;
         }
@@ -456,17 +398,24 @@ export function FullscreenViewer() {
             onTouchEnd={handleTouchEnd}
           >
             {photo.mediaType === "video" ? (
-              <video
-                ref={videoRef}
-                key={photo.path}
-                controls
-                className={styles.media}
-                poster={photo.previewUrl}
-                preload="metadata"
-              >
-                <track kind="captions" src="data:," label="Captions not provided" />
-                Your browser does not support HTML video playback.
-              </video>
+              <>
+                <video
+                  ref={videoRef}
+                  key={photo.path}
+                  controls
+                  className={styles.media}
+                  poster={photo.previewUrl}
+                  preload="metadata"
+                >
+                  <track kind="captions" src="data:," label="Captions not provided" />
+                  Your browser does not support HTML video playback.
+                </video>
+                {videoStatus && (
+                  <span className={styles.videoBadge} data-testid="video-status">
+                    {videoStatusLabel[videoStatus]}
+                  </span>
+                )}
+              </>
             ) : (
               <img src={photo.fullUrl} alt={photo.name} className={styles.media} />
             )}

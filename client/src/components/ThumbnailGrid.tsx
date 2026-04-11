@@ -38,7 +38,7 @@ const ThumbnailGridComponent = () => {
   const styles = useStyles();
   const { filter } = useFilterContext();
   const { setItems } = useSelectionContext();
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(1);
   const [data, setData] = useState<{
     items: PhotoItem[];
     total: number;
@@ -49,7 +49,7 @@ const ThumbnailGridComponent = () => {
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    setPage(0);
+    setPage(1);
     setData(null);
   }, [filter]);
 
@@ -66,7 +66,7 @@ const ThumbnailGridComponent = () => {
     })
       .then((result) => {
         setData((previousData) => {
-          if (page === 0 || !previousData) {
+          if (page === 1 || !previousData) {
             return { ...result, filterUsed: filter };
           }
 

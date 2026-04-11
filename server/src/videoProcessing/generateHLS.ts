@@ -6,43 +6,9 @@ import { type ConversionPriority } from "../common/conversionPriority.ts";
 import { measureOperation } from "../observability/requestTrace.ts";
 import type { StandardHeight } from "../common/standardHeights.ts";
 import { appendWithLimit, pipeChildProcessLogs } from "./videoUtils.ts";
+import { isCudaAvailable } from "./cudaAvailability.ts";
 
-const determineIfCUDAAvailable = async () =>
-  new Promise<boolean>((resolve) => {
-    const process = spawn("ffmpeg", [
-      "-hide_banner",
-      "-init_hw_device",
-      "cuda",
-      "-f",
-      "lavfi",
-      "-i",
-      "nullsrc",
-      "-t",
-      "0",
-      "-f",
-      "null",
-      "-",
-    ]);
-
-    let stderr = "";
-    process.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    process.on("close", (code) => {
-      const available =
-        code === 0 &&
-        !stderr.includes("Cannot load nvcuda.dll") &&
-        !stderr.includes("Could not dynamically load CUDA");
-      resolve(available);
-    });
-
-    process.on("error", () => {
-      resolve(false);
-    });
-  });
-
-const cudaAvailable = await determineIfCUDAAvailable();
+const cudaAvailable = await isCudaAvailable();
 
 const getHLSDirectory = (filePath: string, height: StandardHeight): string =>
   getMirroredHLSDirectory(filePath, String(height));

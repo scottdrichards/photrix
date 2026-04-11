@@ -133,6 +133,10 @@ describe("filesRequestHandler representation paths", () => {
       throw new Error("hls boom");
     });
 
+    jest.unstable_mockModule("../../videoProcessing/cudaAvailability.ts", () => ({
+      isCudaAvailable: jest.fn(async () => true),
+    }));
+
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       getMultibitrateHLSInfo: jest.fn(async () => ({
         exists: false,
@@ -219,6 +223,57 @@ describe("filesRequestHandler representation paths", () => {
     expect((res.writeHead as jest.Mock).mock.calls.at(-1)?.[0]).toBe(404);
     const payload = JSON.parse(getBody());
     expect(payload.error).toBe("HLS variant playlist not found");
+  });
+
+  it("returns 422 when HLS requested without CUDA and no cached HLS", async () => {
+    const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-hls-nocuda-"));
+    const sourceFile = path.join(storageRoot, "clip.mp4");
+    writeFileSync(sourceFile, "video");
+
+    jest.unstable_mockModule("../../videoProcessing/cudaAvailability.ts", () => ({
+      isCudaAvailable: jest.fn(async () => false),
+    }));
+
+    jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
+      getMultibitrateHLSInfo: jest.fn(async () => ({
+        exists: false,
+        hlsDir: "",
+        masterPlaylistPath: "",
+      })),
+      getVariantPlaylistPath: jest.fn(),
+      getVariantSegmentPath: jest.fn(),
+    }));
+
+    jest.unstable_mockModule("../../videoProcessing/generateHLS.ts", () => ({
+      generateHLS: jest.fn(),
+      getHLSInfo: jest.fn(async () => ({
+        hlsDir: path.join(storageRoot, "hls"),
+        playlistPath: path.join(storageRoot, "hls", "playlist.m3u8"),
+        exists: false,
+      })),
+      getHLSSegmentPath: jest.fn(),
+    }));
+
+    const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const { res, getBody } = createJsonResponse();
+
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/clip.mp4?representation=hls",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      {
+        database: {
+          getFileRecord: jest.fn(async () => ({ duration: 30 })),
+        } as unknown as IndexDatabase,
+        storageRoot,
+      },
+    );
+
+    expect((res.writeHead as jest.Mock).mock.calls.at(-1)?.[0]).toBe(422);
+    const payload = JSON.parse(getBody());
+    expect(payload.error).toBe("HLS not available");
   });
 
 });

@@ -8,6 +8,7 @@ import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts"
 import { statusBackgroundTasksRequestHandler } from "./requestHandlers/statusBackgroundTasksRequestHandler.ts";
 import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
 import { networkProbeRequestHandler } from "./requestHandlers/networkProbeRequestHandler.ts";
+import { videoNegotiationRequestHandler } from "./requestHandlers/video/videoNegotiation.ts";
 import {
   bindCurrentRequestTrace,
   finishRequestTrace,
@@ -216,6 +217,20 @@ export const createServer = async (
                   { database },
                 ),
               { category: "request", detail: "/api/suggestions" },
+            );
+            return;
+          }
+
+          if (req.url?.startsWith("/api/video/negotiate") && req.method === "GET") {
+            await measureOperation(
+              "request.route.video.negotiate",
+              () =>
+                videoNegotiationRequestHandler(
+                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  res,
+                  { database, storageRoot: storagePath },
+                ),
+              { category: "request", detail: "/api/video/negotiate" },
             );
             return;
           }

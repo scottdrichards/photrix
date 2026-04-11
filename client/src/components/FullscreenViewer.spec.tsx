@@ -7,6 +7,8 @@ const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
   hevcSupported: true,
 });
 
+const negotiateVideoPlaybackMock = vi.fn();
+
 const {
   hlsIsSupportedMock,
   hlsLoadSourceMock,
@@ -29,6 +31,10 @@ vi.mock("./selection/SelectionContext", () => ({
 
 vi.mock("../videoPlaybackProfile", () => ({
   probeVideoPlaybackProfile: () => probeVideoPlaybackProfileMock(),
+}));
+
+vi.mock("../api", () => ({
+  negotiateVideoPlayback: (...args: unknown[]) => negotiateVideoPlaybackMock(...args),
 }));
 
 vi.mock("hls.js", () => ({
@@ -81,21 +87,18 @@ describe("FullscreenViewer", () => {
       bandwidthMbps: 20,
       hevcSupported: true,
     });
+    negotiateVideoPlaybackMock.mockReset();
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "direct",
+      url: "/api/files/video.mp4",
+      reason: "Direct playback",
+    });
     hlsIsSupportedMock.mockReset();
     hlsIsSupportedMock.mockReturnValue(false);
     hlsLoadSourceMock.mockReset();
     hlsAttachMediaMock.mockReset();
     hlsOnMock.mockReset();
     hlsDestroyMock.mockReset();
-
-    vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      blob: async () => new Blob([new Uint8Array(2_000_000)]),
-    } as Response);
-
-    vi.spyOn(performance, "now")
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(1000);
   });
 
   it("renders selected image and closes via close button", () => {
@@ -229,7 +232,13 @@ describe("FullscreenViewer", () => {
     expect(video).not.toBeNull();
   });
 
-  it("uses original video source when browser can decode HEVC", async () => {
+  it("uses direct video source when server negotiates direct mode", async () => {
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "direct",
+      url: "http://localhost/a/hevc.mov",
+      reason: "Direct playback",
+    });
+
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto({
         path: "a/hevc.mov",
@@ -254,31 +263,23 @@ describe("FullscreenViewer", () => {
 
     expect(video).not.toBeNull();
     await waitFor(() => {
-      expect(probeVideoPlaybackProfileMock).toHaveBeenCalledTimes(1);
-      expect(globalThis.fetch).toHaveBeenCalledWith("http://localhost/a/hevc.mov", {
-        credentials: "include",
-        cache: "no-store",
-        headers: { Range: "bytes=0-11999999" },
+      expect(negotiateVideoPlaybackMock).toHaveBeenCalledWith({
+        path: "a/hevc.mov",
+        bandwidthMbps: 20,
+        hevcSupported: true,
       });
       expect(video?.getAttribute("src")).toBe("http://localhost/a/hevc.mov");
+      expect(screen.getByTestId("video-status")).toHaveTextContent("Raw Video");
     });
   });
 
-  it("uses HLS when HEVC is unsupported and HLS.js is available", async () => {
+  it("uses HLS when server negotiates HLS mode and HLS.js is available", async () => {
     hlsIsSupportedMock.mockReturnValue(true);
-    probeVideoPlaybackProfileMock.mockResolvedValue({
-      bandwidthMbps: 20,
-      hevcSupported: true,
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "hls",
+      url: "http://localhost/a/standard.m3u8",
+      reason: "Cached HLS available",
     });
-
-    vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      blob: async () => new Blob([new Uint8Array(200_000)]),
-    } as Response);
-
-    vi.spyOn(performance, "now")
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(1000);
 
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto({
@@ -304,14 +305,45 @@ describe("FullscreenViewer", () => {
 
     expect(video).not.toBeNull();
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("http://localhost/a/standard.mp4", {
-        credentials: "include",
-        cache: "no-store",
-        headers: { Range: "bytes=0-11999999" },
-      });
       expect(hlsLoadSourceMock).toHaveBeenCalledWith("http://localhost/a/standard.m3u8");
       expect(hlsAttachMediaMock).toHaveBeenCalledWith(video);
       expect(video?.getAttribute("src")).toBeNull();
+      expect(screen.getByTestId("video-status")).toHaveTextContent("HLS");
+    });
+  });
+
+  it("falls back to fullUrl when server negotiates error mode", async () => {
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "error",
+      reason: "No compatible format",
+    });
+
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/weird.mkv",
+        name: "weird.mkv",
+        mediaType: "video",
+        originalUrl: "http://localhost/a/weird.mkv",
+        fullUrl: "http://localhost/a/weird-websafe.mp4",
+        metadata: {
+          sizeInBytes: 2_000_000,
+          duration: 2,
+          videoCodec: "vp9",
+        },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    const video = container.querySelector("video");
+
+    expect(video).not.toBeNull();
+    await waitFor(() => {
+      expect(video?.getAttribute("src")).toBe("http://localhost/a/weird-websafe.mp4");
+      expect(screen.getByTestId("video-status")).toHaveTextContent("No Compatible Stream");
     });
   });
 });

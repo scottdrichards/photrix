@@ -5,53 +5,11 @@ import { StandardHeight } from "../common/standardHeights.ts";
 import { CACHE_DIR, getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
 import { measureOperation } from "../observability/requestTrace.ts";
+import { isCudaAvailable } from "./cudaAvailability.ts";
 
 console.log(`[VideoCache] Initialized at ${CACHE_DIR}`);
 
 const MAX_CAPTURED_LOG_CHARS = 64_000;
-
-let cudaAvailabilityPromise: Promise<boolean> | null = null;
-
-const determineIfCUDAAvailable = async (): Promise<boolean> => {
-  if (!cudaAvailabilityPromise) {
-    cudaAvailabilityPromise = new Promise<boolean>((resolve) => {
-      const process = spawn("ffmpeg", [
-        "-hide_banner",
-        "-init_hw_device",
-        "cuda",
-        "-f",
-        "lavfi",
-        "-i",
-        "nullsrc",
-        "-t",
-        "0",
-        "-f",
-        "null",
-        "-",
-      ]);
-
-      let stderr = "";
-
-      process.stderr?.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-
-      process.on("close", (code) => {
-        const available =
-          code === 0 &&
-          !stderr.includes("Cannot load nvcuda.dll") &&
-          !stderr.includes("Could not dynamically load CUDA");
-        resolve(available);
-      });
-
-      process.on("error", () => {
-        resolve(false);
-      });
-    });
-  }
-
-  return await cudaAvailabilityPromise;
-};
 
 const isCUDAFailure = (stderr: string): boolean => {
   const normalized = stderr.toLowerCase();
@@ -210,7 +168,7 @@ export const generateVideoThumbnail = async (
     return cachedPath;
   }
 
-  const cudaAvailable = await determineIfCUDAAvailable();
+  const cudaAvailable = await isCudaAvailable();
 
   const generateWithMode = async (useHardware: boolean): Promise<void> => {
         const encoderType = useHardware ? "CUDA" : "software";

@@ -1151,3 +1151,28 @@ export const rejectFaceSuggestion = async (options: {
     },
   );
 };
+
+export type VideoNegotiationResult =
+  | { mode: "hls"; url: string; reason: string }
+  | { mode: "direct"; url: string; reason: string }
+  | { mode: "error"; reason: string };
+
+export const negotiateVideoPlayback = async (options: {
+  path: string;
+  bandwidthMbps: number | null;
+  hevcSupported: boolean;
+}): Promise<VideoNegotiationResult> => {
+  const { path, bandwidthMbps, hevcSupported } = options;
+  const params = new URLSearchParams();
+  params.set("path", path);
+  if (bandwidthMbps !== null && Number.isFinite(bandwidthMbps)) {
+    params.set("bandwidthMbps", bandwidthMbps.toString());
+  }
+  params.set("hevcSupported", String(hevcSupported));
+
+  const response = await fetch(`/api/video/negotiate?${params.toString()}`, {
+    credentials: "include",
+  });
+
+  return (await response.json()) as VideoNegotiationResult;
+};

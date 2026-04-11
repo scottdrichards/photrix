@@ -19,6 +19,7 @@ import {
   getVariantPlaylistPath,
   getVariantSegmentPath,
 } from "../../videoProcessing/generateMultibitrateHLS.ts";
+import { isCudaAvailable } from "../../videoProcessing/cudaAvailability.ts";
 import {
   StandardHeight,
   parseToStandardHeight,
@@ -369,7 +370,15 @@ const tryHLSStream = async (
       return true;
     }
 
-    // Fall back to on-demand single-stream HLS generation
+    // Fall back to on-demand single-stream HLS generation (requires hardware acceleration)
+    if (!(await isCudaAvailable())) {
+      writeJson(res, 422, {
+        error: "HLS not available",
+        message: "No cached HLS and hardware acceleration is not available for on-the-fly encoding",
+      });
+      return true;
+    }
+
     const hlsInfo = await measureOperation(
       "getHLSInfo",
       () => getHLSInfo(normalizedPath, height),

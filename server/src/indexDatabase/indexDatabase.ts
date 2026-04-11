@@ -1679,7 +1679,8 @@ export class IndexDatabase {
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(
     options: QueryOptions,
   ): Promise<QueryResult<TMetadata>> {
-    const { filter, metadata, pageSize = 1_000, page = 1 } = options;
+    const { filter, metadata, pageSize = 1_000, page: rawPage = 1 } = options;
+    const page = Math.max(1, rawPage);
     console.log(
       `[query] Starting query: filter=${JSON.stringify(filter)}, metadata=${JSON.stringify(metadata)}, page=${page}, pageSize=${pageSize}`,
     );
