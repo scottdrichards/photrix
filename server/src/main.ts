@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { startTelemetry } from "./observability/telemetry.ts";
 import path from "node:path";
 import { discoverFiles } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
@@ -120,8 +121,10 @@ const noAutoStart = process.env.PHOTRIX_NO_AUTOSTART || process.env.VITEST_WORKE
 
 if (!noAutoStart) {
   console.log("[bootstrap] Starting server");
-  startServer().catch((error) => {
-    console.error("[bootstrap] Failed to start server", error);
-    process.exit(1);
-  });
+  startTelemetry()
+    .then(() => startServer())
+    .catch((error) => {
+      console.error("[bootstrap] Failed to start server", error);
+      process.exit(1);
+    });
 }
