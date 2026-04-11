@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { startTelemetry } from "./observability/telemetry.ts";
 import path from "node:path";
-import { discoverFiles } from "./indexDatabase/fileScanner.ts";
+import { fileScanner } from "./indexDatabase/fileScanner.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { initializeCacheDirectories } from "./common/cacheUtils.ts";
 import { createServer } from "./createServer.ts";
@@ -13,17 +13,9 @@ import { startBackgroundConversionWorker } from "./indexDatabase/processHLSEncod
 import { measureOperation } from "./observability/requestTrace.ts";
 
 const startServer = async () => {
-  await measureOperation(
-    "bootstrap.startServer",
-    async () => {
       console.log("Starting photrix server...");
       runAuthStartupChecks();
-
-      await measureOperation(
-        "bootstrap.initializeCacheDirectories",
-        () => initializeCacheDirectories(),
-        { category: "file", logWithoutRequest: true },
-      );
+      initializeCacheDirectories();
       console.log("[bootstrap] Cache directories initialized");
 
       const mediaRoot = process.env.MEDIA_ROOT || "./exampleFolder";
@@ -42,17 +34,7 @@ const startServer = async () => {
       const metadataProcessingPriorities = [
         {
           name: "discover-files",
-          start: async (db: IndexDatabase, onComplete?: () => void) => {
-            measureOperation(
-              "pipeline.discoverFiles",
-              () => discoverFiles({ root: absolutePath, db }),
-              { category: "file", logWithoutRequest: true },
-            ).then(() => {
-              onComplete?.();
-            });
-            // discoverFiles doesn't support pause, return no-op
-            return () => {};
-          },
+          start: fileScanner,
         },
         {
           name: "file-info",
@@ -111,15 +93,14 @@ const startServer = async () => {
 
       console.log("[bootstrap] Server started - metadata processing will run in background");
       console.log("[bootstrap] Starting file discovery in background...");
-    },
-    { category: "other", detail: "server-bootstrap", logWithoutRequest: true },
-  );
-};
+    }
 
-console.log("[bootstrap] Starting server");
-startTelemetry()
-  .then(() => startServer())
-  .catch((error) => {
-    console.error("[bootstrap] Failed to start server", error);
-    process.exit(1);
-  });
+
+
+await startTelemetry()
+
+await measureOperation(
+  "bootstrap.startServer",
+  startServer,
+  { category: "other", detail: "server-bootstrap", logWithoutRequest: true }
+);
