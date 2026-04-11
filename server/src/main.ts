@@ -116,15 +116,10 @@ const startServer = async () => {
   );
 };
 
-// For testing etc,  you may wish to prevent it from starting
-const noAutoStart = process.env.PHOTRIX_NO_AUTOSTART || process.env.VITEST_WORKER_ID;
-
-if (!noAutoStart) {
-  console.log("[bootstrap] Starting server");
-  startTelemetry()
-    .then(() => startServer())
-    .catch((error) => {
-      console.error("[bootstrap] Failed to start server", error);
-      process.exit(1);
-    });
-}
+console.log("[bootstrap] Starting server");
+startTelemetry()
+  .then(() => startServer())
+  .catch((error) => {
+    console.error("[bootstrap] Failed to start server", error);
+    process.exit(1);
+  });
