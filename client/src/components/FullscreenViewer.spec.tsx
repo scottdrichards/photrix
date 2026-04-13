@@ -176,6 +176,26 @@ describe("FullscreenViewer", () => {
     expect(selectPrevious).toHaveBeenCalledTimes(1);
   });
 
+  it("locks body scroll when open and restores on close", () => {
+    const setSelected = vi.fn();
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto(),
+      selectionMode: false,
+      setSelected,
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { unmount } = render(<FullscreenViewer />);
+
+    expect(document.documentElement.style.overflow).toBe("hidden");
+    expect(document.documentElement.style.scrollbarGutter).toBe("unset");
+
+    unmount();
+    expect(document.documentElement.style.overflow).toBe("");
+    expect(document.documentElement.style.scrollbarGutter).toBe("");
+  });
+
   it("does not render media while selection mode is active", () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto(),

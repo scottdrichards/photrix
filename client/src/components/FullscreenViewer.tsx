@@ -250,6 +250,16 @@ export function FullscreenViewer() {
 
   useEffect(() => {
     if (!photo) return;
+    document.documentElement.style.overflow = "hidden";
+    document.documentElement.style.scrollbarGutter = "unset";
+    return () => {
+      document.documentElement.style.overflow = "";
+      document.documentElement.style.scrollbarGutter = "";
+    };
+  }, [photo]);
+
+  useEffect(() => {
+    if (!photo) return;
 
     const operations = {
       ArrowRight: selectNext,
