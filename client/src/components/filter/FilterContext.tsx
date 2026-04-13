@@ -39,6 +39,7 @@ const createInitialFilterFromURL = (): FilterState => {
     includeSubfolders:
       new URLSearchParams(window.location.search).get("includeSubfolders") !== "false",
     path,
+    mediaTypeFilter: "all",
   };
 };
 

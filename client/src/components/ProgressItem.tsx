@@ -1,39 +1,14 @@
-import { ProgressBar, makeStyles, tokens, Text } from "@fluentui/react-components";
+import css from "./ProgressItem.module.css";
 import type { ProgressEntry } from "../api";
 
-const useStyles = makeStyles({
-  progressCard: {
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingHorizontalM,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  progressHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: tokens.spacingVerticalS,
-  },
-  label: {
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  percent: {
-    fontSize: tokens.fontSizeBase200,
-  },
-  muted: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-  },
-});
-
-interface ProgressItemProps {
+type ProgressItemProps = {
   label: string;
   progress: ProgressEntry;
   detail?: string;
   eta?: string | null;
   summaryLabel?: string;
   valueFormatter?: (value: number) => string;
-}
+};
 
 export const ProgressItem = ({
   label,
@@ -43,26 +18,25 @@ export const ProgressItem = ({
   summaryLabel = "ready",
   valueFormatter = (value: number) => value.toLocaleString(),
 }: ProgressItemProps) => {
-  const styles = useStyles();
   const percentFormatter = new Intl.NumberFormat("en-US", {
     style: "percent",
     maximumFractionDigits: 0,
   });
 
   return (
-    <div className={styles.progressCard}>
-      <div className={styles.progressHeader}>
-        <Text className={styles.label}>{label}</Text>
-        <Text className={styles.percent}>
+    <div className={css.progressCard}>
+      <div className={css.progressHeader}>
+        <span className={css.label}>{label}</span>
+        <span className={css.percent}>
           {percentFormatter.format(progress.percent)}
-        </Text>
+        </span>
       </div>
-      <ProgressBar value={progress.percent} max={1} />
-      <Text className={styles.muted}>
+      <progress value={progress.percent} max={1} />
+      <span className={css.muted}>
         {valueFormatter(progress.completed)} / {valueFormatter(progress.total)} {summaryLabel}
         {detail ? ` • ${detail}` : ""}
         {eta ? ` • ETA: ${eta}` : ""}
-      </Text>
+      </span>
     </div>
   );
 };

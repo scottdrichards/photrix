@@ -67,6 +67,7 @@ describe("filesRequestHandler representation paths", () => {
     }));
 
     const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const { createConversionWorker } = await import("../../indexDatabase/conversionWorker.ts");
     const res = createStreamingResponse();
     const chunks: Buffer[] = [];
     res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
@@ -80,6 +81,7 @@ describe("filesRequestHandler representation paths", () => {
       {
         database: {} as IndexDatabase,
         storageRoot,
+        conversionWorker: createConversionWorker(),
       },
     );
 
@@ -101,6 +103,7 @@ describe("filesRequestHandler representation paths", () => {
     writeFileSync(cachedThumb, "thumb");
 
     const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const { createConversionWorker } = await import("../../indexDatabase/conversionWorker.ts");
     const res = createStreamingResponse();
     const chunks: Buffer[] = [];
     res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
@@ -114,6 +117,7 @@ describe("filesRequestHandler representation paths", () => {
       {
         database: {} as IndexDatabase,
         storageRoot,
+        conversionWorker: createConversionWorker(),
       },
     );
 
@@ -124,7 +128,7 @@ describe("filesRequestHandler representation paths", () => {
     expect(Buffer.concat(chunks).toString()).toBe("thumb");
   });
 
-  it("returns 500 when HLS generation throws", async () => {
+  it("returns synthetic playlist when HLS generation throws (error surfaces on segment request)", async () => {
     const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-hls-"));
     const sourceFile = path.join(storageRoot, "clip.mp4");
     writeFileSync(sourceFile, "video");
@@ -133,11 +137,12 @@ describe("filesRequestHandler representation paths", () => {
       throw new Error("hls boom");
     });
 
-    jest.unstable_mockModule("../../videoProcessing/cudaAvailability.ts", () => ({
-      isCudaAvailable: jest.fn(async () => true),
+    jest.unstable_mockModule("../../videoProcessing/gpuAcceleration.ts", () => ({
+      getGpuAcceleration: jest.fn(async () => ({ vendor: "nvidia" })),
     }));
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
+      generateMultibitrateHLS: jest.fn(),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         exists: false,
         hlsDir: "",
@@ -157,6 +162,7 @@ describe("filesRequestHandler representation paths", () => {
     }));
 
     const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const { createConversionWorker } = await import("../../indexDatabase/conversionWorker.ts");
     const { res, getBody } = createJsonResponse();
 
     await filesEndpointRequestHandler(
@@ -170,9 +176,11 @@ describe("filesRequestHandler representation paths", () => {
           getFileRecord: jest.fn(async () => ({ duration: 30 })),
         } as unknown as IndexDatabase,
         storageRoot,
+        conversionWorker: createConversionWorker(),
       },
     );
 
+    // If generation fails immediately, the playlist request surfaces a 500 error
     expect(generateHLS).toHaveBeenCalled();
     expect((res.writeHead as jest.Mock).mock.calls.at(-1)?.[0]).toBe(500);
     const payload = JSON.parse(getBody());
@@ -188,6 +196,7 @@ describe("filesRequestHandler representation paths", () => {
     const missingVariantPlaylistPath = path.join(hlsDir, "360p", "playlist.m3u8");
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
+      generateMultibitrateHLS: jest.fn(),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         exists: true,
         hlsDir,
@@ -204,6 +213,7 @@ describe("filesRequestHandler representation paths", () => {
     }));
 
     const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const { createConversionWorker } = await import("../../indexDatabase/conversionWorker.ts");
     const { res, getBody } = createJsonResponse();
 
     await filesEndpointRequestHandler(
@@ -217,6 +227,7 @@ describe("filesRequestHandler representation paths", () => {
           getFileRecord: jest.fn(async () => ({ duration: 30 })),
         } as unknown as IndexDatabase,
         storageRoot,
+        conversionWorker: createConversionWorker(),
       },
     );
 
@@ -230,11 +241,12 @@ describe("filesRequestHandler representation paths", () => {
     const sourceFile = path.join(storageRoot, "clip.mp4");
     writeFileSync(sourceFile, "video");
 
-    jest.unstable_mockModule("../../videoProcessing/cudaAvailability.ts", () => ({
-      isCudaAvailable: jest.fn(async () => false),
+    jest.unstable_mockModule("../../videoProcessing/gpuAcceleration.ts", () => ({
+      getGpuAcceleration: jest.fn(async () => null),
     }));
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
+      generateMultibitrateHLS: jest.fn(),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         exists: false,
         hlsDir: "",
@@ -255,6 +267,7 @@ describe("filesRequestHandler representation paths", () => {
     }));
 
     const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const { createConversionWorker } = await import("../../indexDatabase/conversionWorker.ts");
     const { res, getBody } = createJsonResponse();
 
     await filesEndpointRequestHandler(
@@ -268,12 +281,143 @@ describe("filesRequestHandler representation paths", () => {
           getFileRecord: jest.fn(async () => ({ duration: 30 })),
         } as unknown as IndexDatabase,
         storageRoot,
+        conversionWorker: createConversionWorker(),
       },
     );
 
     expect((res.writeHead as jest.Mock).mock.calls.at(-1)?.[0]).toBe(422);
     const payload = JSON.parse(getBody());
     expect(payload.error).toBe("HLS not available");
+  });
+
+  it("returns synthetic VOD playlist immediately when duration is known", async () => {
+    const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-hls-synthetic-"));
+    const sourceFile = path.join(storageRoot, "clip.mp4");
+    writeFileSync(sourceFile, "video");
+
+    const hlsDir = path.join(storageRoot, "hls");
+    const generateHLS = jest.fn(
+      () => new Promise<string>(() => {}), // never resolves — simulates ongoing encode
+    );
+
+    jest.unstable_mockModule("../../videoProcessing/gpuAcceleration.ts", () => ({
+      getGpuAcceleration: jest.fn(async () => ({ vendor: "nvidia" })),
+    }));
+
+    jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
+      generateMultibitrateHLS: jest.fn(),
+      getMultibitrateHLSInfo: jest.fn(async () => ({
+        exists: false,
+        hlsDir: "",
+        masterPlaylistPath: "",
+      })),
+      getVariantPlaylistPath: jest.fn(),
+      getVariantSegmentPath: jest.fn(),
+    }));
+
+    jest.unstable_mockModule("../../videoProcessing/generateHLS.ts", () => ({
+      generateHLS,
+      getHLSInfo: jest.fn(async () => ({
+        hlsDir,
+        playlistPath: path.join(hlsDir, "playlist.m3u8"),
+      })),
+      getHLSSegmentPath: jest.fn(),
+    }));
+
+    const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const { createConversionWorker } = await import("../../indexDatabase/conversionWorker.ts");
+    const { res, getBody } = createJsonResponse();
+
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/clip.mp4?representation=hls",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      {
+        database: {
+          getFileRecord: jest.fn(async () => ({ duration: 6.5 })),
+        } as unknown as IndexDatabase,
+        storageRoot,
+        conversionWorker: createConversionWorker(),
+      },
+    );
+
+    expect(generateHLS).toHaveBeenCalled();
+    expect((res.writeHead as jest.Mock).mock.calls.at(-1)?.[0]).toBe(200);
+    const body = getBody();
+    expect(body).toContain("#EXTM3U");
+    expect(body).toContain("#EXT-X-PLAYLIST-TYPE:VOD");
+    expect(body).toContain("#EXT-X-ENDLIST");
+    expect(body).toContain("segment_000.ts");
+    expect(body).toContain("segment_003.ts"); // ceil(6.5/2) = 4 segments
+    expect(body).not.toContain("segment_004.ts");
+  });
+
+  it("returns bootstrap EVENT playlist immediately when duration is unknown", async () => {
+    const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-hls-bootstrap-"));
+    const sourceFile = path.join(storageRoot, "clip.mp4");
+    writeFileSync(sourceFile, "video");
+
+    const hlsDir = path.join(storageRoot, "hls");
+    const generateHLS = jest.fn(
+      () => new Promise<string>(() => {}), // never resolves — simulates ongoing encode
+    );
+
+    jest.unstable_mockModule("../../videoProcessing/gpuAcceleration.ts", () => ({
+      getGpuAcceleration: jest.fn(async () => ({ vendor: "nvidia" })),
+    }));
+
+    jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
+      generateMultibitrateHLS: jest.fn(),
+      getMultibitrateHLSInfo: jest.fn(async () => ({
+        exists: false,
+        hlsDir: "",
+        masterPlaylistPath: "",
+      })),
+      getVariantPlaylistPath: jest.fn(),
+      getVariantSegmentPath: jest.fn(),
+    }));
+
+    jest.unstable_mockModule("../../videoProcessing/generateHLS.ts", () => ({
+      generateHLS,
+      getHLSInfo: jest.fn(async () => ({
+        hlsDir,
+        playlistPath: path.join(hlsDir, "playlist.m3u8"),
+      })),
+      getHLSSegmentPath: jest.fn(),
+    }));
+
+    // Simulate ffprobe not providing duration yet
+    jest.unstable_mockModule("../../videoProcessing/getVideoMetadata.ts", () => ({
+      getVideoMetadata: jest.fn(async () => ({})),
+    }));
+
+    const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const { createConversionWorker } = await import("../../indexDatabase/conversionWorker.ts");
+    const { res, getBody } = createJsonResponse();
+
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/clip.mp4?representation=hls",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      {
+        database: {
+          getFileRecord: jest.fn(async () => ({ duration: null })),
+        } as unknown as IndexDatabase,
+        storageRoot,
+        conversionWorker: createConversionWorker(),
+      },
+    );
+
+    expect(generateHLS).toHaveBeenCalled();
+    expect((res.writeHead as jest.Mock).mock.calls.at(-1)?.[0]).toBe(200);
+    const body = getBody();
+    expect(body).toContain("#EXT-X-PLAYLIST-TYPE:EVENT");
+    expect(body).toContain("segment_000.ts");
+    expect(body).not.toContain("#EXT-X-ENDLIST");
   });
 
 });

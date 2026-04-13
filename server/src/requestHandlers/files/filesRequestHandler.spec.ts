@@ -5,6 +5,7 @@ import path from "node:path";
 import type http from "node:http";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import { filesEndpointRequestHandler } from "./filesRequestHandler.ts";
+import { createConversionWorker } from "../../indexDatabase/conversionWorker.ts";
 
 const createMockResponse = () => {
   let body = "";
@@ -43,6 +44,7 @@ describe("filesEndpointRequestHandler", () => {
       {
         database: {} as IndexDatabase,
         storageRoot: os.tmpdir(),
+        conversionWorker: createConversionWorker(),
       },
     );
 
@@ -68,6 +70,7 @@ describe("filesEndpointRequestHandler", () => {
       {
         database: { queryFiles } as unknown as IndexDatabase,
         storageRoot: os.tmpdir(),
+        conversionWorker: createConversionWorker(),
       },
     );
 
@@ -94,6 +97,7 @@ describe("filesEndpointRequestHandler", () => {
       {
         database: {} as IndexDatabase,
         storageRoot,
+        conversionWorker: createConversionWorker(),
       },
     );
 
@@ -114,6 +118,7 @@ describe("filesEndpointRequestHandler", () => {
       {
         database: {} as IndexDatabase,
         storageRoot,
+        conversionWorker: createConversionWorker(),
       },
     );
 
@@ -136,6 +141,7 @@ describe("filesEndpointRequestHandler", () => {
       {
         database: {} as IndexDatabase,
         storageRoot,
+        conversionWorker: createConversionWorker(),
       },
     );
 

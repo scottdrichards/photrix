@@ -1,0 +1,27 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s);
+}
+
+.textFilterInput {
+  width: 100%;
+}
+
+.selectedRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+.selectedButton {
+  padding-inline: var(--space-s);
+}
+
+.controlsRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+  flex-wrap: wrap;
+}

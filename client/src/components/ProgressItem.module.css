@@ -1,0 +1,26 @@
+.progressCard {
+  border: 1px solid var(--stroke1);
+  border-radius: var(--radius-md);
+  padding: var(--space-m);
+  background-color: var(--bg2);
+}
+
+.progressHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-s);
+}
+
+.label {
+  font-weight: var(--fw-semi);
+}
+
+.percent {
+  font-size: var(--fs-sm);
+}
+
+.muted {
+  color: var(--fg3);
+  font-size: var(--fs-sm);
+}

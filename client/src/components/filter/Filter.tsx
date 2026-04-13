@@ -1,27 +1,15 @@
 import {
-  Button,
-  Caption1,
-  Popover,
-  PopoverSurface,
-  PopoverTrigger,
-  Spinner,
-  Subtitle2,
-  Switch,
-  Tooltip,
-  makeStyles,
-  tokens,
-} from "@fluentui/react-components";
-import {
-  Camera24Regular,
-  Calendar24Regular,
-  Folder24Regular,
-  Image24Regular,
-  Location24Regular,
-  Person24Regular,
-  Star24Filled,
-  Star24Regular,
-} from "@fluentui/react-icons";
-import { useCallback, useEffect, useMemo, useState } from "react";
+  Camera,
+  Calendar,
+  Folder,
+  Image,
+  MapPin,
+  User,
+  Star,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Spinner } from "../../Spinner";
+import css from "./Filter.module.css";
 import { fetchFolders, fetchSuggestionsWithCounts } from "../../api";
 import type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
 import { DateHistogram } from "../DateHistogram";
@@ -39,92 +27,8 @@ type FilterPanel =
   | "date"
   | "map";
 
-const useStyles = makeStyles({
-  iconBar: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalM,
-    flexWrap: "wrap",
-  },
-  filterIconButton: {
-    minWidth: "36px",
-    width: "36px",
-    height: "36px",
-    padding: 0,
-  },
-  panelSurface: {
-    width: "min(92vw, 440px)",
-    maxHeight: "70vh",
-    overflowY: "auto",
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingHorizontalM,
-  },
-  mapPanelSurface: {
-    width: "min(92vw, 620px)",
-    maxHeight: "80vh",
-    overflowY: "auto",
-  },
-  panelSection: {
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingHorizontalS,
-  },
-  controlsRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalS,
-    flexWrap: "wrap",
-  },
-  ratingFilter: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalS,
-    flexWrap: "wrap",
-  },
-  starButton: {
-    cursor: "pointer",
-    border: "none",
-    background: "none",
-    padding: "2px",
-    display: "flex",
-    alignItems: "center",
-    color: tokens.colorBrandForeground1,
-    ":hover": {
-      transform: "scale(1.1)",
-    },
-  },
-  atLeastButton: {
-    minWidth: "32px",
-    height: "32px",
-  },
-  breadcrumbRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: "wrap",
-  },
-  folderGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-    gap: tokens.spacingHorizontalS,
-  },
-  folderCard: {
-    padding: tokens.spacingVerticalM,
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
-    borderRadius: tokens.borderRadiusMedium,
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalS,
-    ":hover": {
-      backgroundColor: tokens.colorNeutralBackground1Hover,
-    },
-  },
-});
-
 export const Filter = () => {
-  const styles = useStyles();
+  const filterBarRef = useRef<HTMLDivElement>(null);
   const { filter, setFilter } = useFilterContext();
   const {
     includeSubfolders,
@@ -150,6 +54,15 @@ export const Filter = () => {
   const [loadingFolders, setLoadingFolders] = useState(false);
   const [ratingCounts, setRatingCounts] = useState<Record<number, number>>({});
   const [loadingRatingCounts, setLoadingRatingCounts] = useState(false);
+
+  useEffect(() => {
+    if (!activePanel) return;
+    const handle = (e: MouseEvent) => {
+      if (!filterBarRef.current?.contains(e.target as Node)) setActivePanel(null);
+    };
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [activePanel]);
 
   const currentPath = path?.replace(/\/$/, "");
   const isFolderFilterActive = Boolean(currentPath) || includeSubfolders === false;
@@ -329,339 +242,298 @@ export const Filter = () => {
   );
 
   return (
-    <div className={styles.iconBar}>
-      <Popover
-        open={activePanel === "folders"}
-        onOpenChange={(_, data) => setActivePanel(data.open ? "folders" : null)}
-        positioning="below-start"
-      >
-        <PopoverTrigger disableButtonEnhancement>
-          <Tooltip content="Folders" relationship="label">
-            <Button
-              aria-label="Folders filter"
-              icon={<Folder24Regular />}
-              aria-pressed={isFolderFilterActive}
-              appearance={activePanel === "folders" || isFolderFilterActive ? "primary" : "subtle"}
-              className={styles.filterIconButton}
-            />
-          </Tooltip>
-        </PopoverTrigger>
-        <PopoverSurface className={styles.panelSurface}>
-          <div className={styles.panelSection}>
-            <Subtitle2>Folders</Subtitle2>
-            <Switch
-              checked={includeSubfolders}
-              onChange={(_, data) => setFilter({ includeSubfolders: data.checked })}
-              label="Include subfolders"
-            />
-            {currentPath ? (
-              <div className={styles.breadcrumbRow}>
-                <Button appearance="transparent" onClick={() => setFilter({ path: "" })}>
-                  Home
-                </Button>
-                {breadcrumbs.map((part, index) => (
-                  <span key={index}>
-                    <span>/</span>
-                    <Button
-                      appearance="transparent"
-                      onClick={() => handleBreadcrumbClick(index)}
+    <div ref={filterBarRef} className={css.iconBar}>
+      {/* Folders */}
+      <div className="popover-anchor">
+        <button
+          title="Folders"
+          aria-label="Folders filter"
+          aria-pressed={isFolderFilterActive}
+          className={`btn btn-icon ${css.filterIconButton} ${activePanel === "folders" || isFolderFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={() => setActivePanel(activePanel === "folders" ? null : "folders")}
+        >
+          <Folder size={20} />
+        </button>
+        {activePanel === "folders" && (
+          <div className={`popover-surface ${css.panelSurface}`}>
+            <div className={css.panelSection}>
+              <h3>Folders</h3>
+              <label className="switch-label">
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="switch-track"
+                  checked={includeSubfolders}
+                  onChange={(e) => setFilter({ includeSubfolders: e.target.checked })}
+                />
+                <span>Include subfolders</span>
+              </label>
+              {currentPath ? (
+                <div className={css.breadcrumbRow}>
+                  <button className="btn btn-transparent" onClick={() => setFilter({ path: "" })}>
+                    Home
+                  </button>
+                  {breadcrumbs.map((part, index) => (
+                    <span key={index}>
+                      <span>/</span>
+                      <button
+                        className="btn btn-transparent"
+                        onClick={() => handleBreadcrumbClick(index)}
+                      >
+                        {part}
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {loadingFolders ? (
+                <Spinner size="small" label="Loading folders..." />
+              ) : folders.length > 0 ? (
+                <div className={css.folderGrid}>
+                  {folders.map((folder) => (
+                    <div
+                      key={folder}
+                      className={css.folderCard}
+                      onClick={() => handleFolderClick(folder)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleFolderClick(folder);
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
                     >
-                      {part}
-                    </Button>
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            {loadingFolders ? (
-              <Spinner size="small" label="Loading folders..." />
-            ) : folders.length > 0 ? (
-              <div className={styles.folderGrid}>
-                {folders.map((folder) => (
-                  <div
-                    key={folder}
-                    className={styles.folderCard}
-                    onClick={() => handleFolderClick(folder)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        handleFolderClick(folder);
-                      }
-                    }}
-                    role="button"
-                    tabIndex={0}
-                  >
-                    <Folder24Regular />
-                    <span>{folder}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <Caption1>No folders found.</Caption1>
-            )}
-          </div>
-        </PopoverSurface>
-      </Popover>
-
-      <Popover
-        open={activePanel === "type"}
-        onOpenChange={(_, data) => setActivePanel(data.open ? "type" : null)}
-        positioning="below-start"
-      >
-        <PopoverTrigger disableButtonEnhancement>
-          <Tooltip content="Media type" relationship="label">
-            <Button
-              aria-label="Media type filter"
-              icon={<Image24Regular />}
-              aria-pressed={isMediaTypeFilterActive}
-              appearance={activePanel === "type" || isMediaTypeFilterActive ? "primary" : "subtle"}
-              className={styles.filterIconButton}
-            />
-          </Tooltip>
-        </PopoverTrigger>
-        <PopoverSurface className={styles.panelSurface}>
-          <div className={styles.panelSection}>
-            <Subtitle2>Media type</Subtitle2>
-            <div className={styles.controlsRow}>
-              <Button
-                size="small"
-                appearance={mediaTypeFilter === "all" ? "primary" : "subtle"}
-                onClick={() => handleMediaTypeChange("all")}
-              >
-                All
-              </Button>
-              <Button
-                size="small"
-                appearance={mediaTypeFilter === "photo" ? "primary" : "subtle"}
-                onClick={() => handleMediaTypeChange("photo")}
-              >
-                Photo
-              </Button>
-              <Button
-                size="small"
-                appearance={mediaTypeFilter === "video" ? "primary" : "subtle"}
-                onClick={() => handleMediaTypeChange("video")}
-              >
-                Video
-              </Button>
-              <Button
-                size="small"
-                appearance={mediaTypeFilter === "other" ? "primary" : "subtle"}
-                onClick={() => handleMediaTypeChange("other")}
-              >
-                Other
-              </Button>
+                      <Folder size={20} />
+                      <span>{folder}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <small>No folders found.</small>
+              )}
             </div>
           </div>
-        </PopoverSurface>
-      </Popover>
+        )}
+      </div>
 
-      <Popover
-        open={activePanel === "people"}
-        onOpenChange={(_, data) => setActivePanel(data.open ? "people" : null)}
-        positioning="below-start"
-      >
-        <PopoverTrigger disableButtonEnhancement>
-          <Tooltip content="People in image" relationship="label">
-            <Button
-              aria-label="People in image filter"
-              icon={<Person24Regular />}
-              aria-pressed={isPeopleFilterActive}
-              appearance={activePanel === "people" || isPeopleFilterActive ? "primary" : "subtle"}
-              className={styles.filterIconButton}
+      {/* Media type */}
+      <div className="popover-anchor">
+        <button
+          title="Media type"
+          aria-label="Media type filter"
+          aria-pressed={isMediaTypeFilterActive}
+          className={`btn btn-icon ${css.filterIconButton} ${activePanel === "type" || isMediaTypeFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={() => setActivePanel(activePanel === "type" ? null : "type")}
+        >
+          <Image size={20} />
+        </button>
+        {activePanel === "type" && (
+          <div className={`popover-surface ${css.panelSurface}`}>
+            <div className={css.panelSection}>
+              <h3>Media type</h3>
+              <div className={css.controlsRow}>
+                {(["all", "photo", "video", "other"] as const).map((type) => (
+                  <button
+                    key={type}
+                    className={`btn btn-sm ${mediaTypeFilter === type ? "btn-primary" : "btn-subtle"}`}
+                    onClick={() => handleMediaTypeChange(type)}
+                  >
+                    {type.charAt(0).toUpperCase() + type.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* People */}
+      <div className="popover-anchor">
+        <button
+          title="People in image"
+          aria-label="People in image filter"
+          aria-pressed={isPeopleFilterActive}
+          className={`btn btn-icon ${css.filterIconButton} ${activePanel === "people" || isPeopleFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={() => setActivePanel(activePanel === "people" ? null : "people")}
+        >
+          <User size={20} />
+        </button>
+        {activePanel === "people" && (
+          <div className={`popover-surface ${css.panelSurface}`}>
+            <SuggestionFilterField
+              title="People in image"
+              placeholder="Search names (e.g. Scott)"
+              loadingLabel="Finding people..."
+              field="personInImage"
+              selectedValues={selectedPeople}
+              onSelectedValuesChange={setPeopleFilterValues}
+              isActive={activePanel === "people"}
+              includeSubfolders={includeSubfolders}
+              path={path}
+              ratingFilter={ratingFilter}
+              mediaTypeFilter={mediaTypeFilter}
+              locationBounds={locationBounds}
+              dateRange={dateRange}
+              peopleInImageFilter={selectedPeople}
+              cameraModelFilter={selectedCameraModels}
+              lensFilter={selectedLensModels}
             />
-          </Tooltip>
-        </PopoverTrigger>
-        <PopoverSurface className={styles.panelSurface}>
-          <SuggestionFilterField
-            title="People in image"
-            placeholder="Search names (e.g. Scott)"
-            loadingLabel="Finding people..."
-            field="personInImage"
-            selectedValues={selectedPeople}
-            onSelectedValuesChange={setPeopleFilterValues}
-            isActive={activePanel === "people"}
-            includeSubfolders={includeSubfolders}
-            path={path}
-            ratingFilter={ratingFilter}
-            mediaTypeFilter={mediaTypeFilter}
-            locationBounds={locationBounds}
-            dateRange={dateRange}
-            peopleInImageFilter={selectedPeople}
-            cameraModelFilter={selectedCameraModels}
-            lensFilter={selectedLensModels}
-          />
-        </PopoverSurface>
-      </Popover>
+          </div>
+        )}
+      </div>
 
-      <Popover
-        open={activePanel === "gear"}
-        onOpenChange={(_, data) => setActivePanel(data.open ? "gear" : null)}
-        positioning="below-start"
-      >
-        <PopoverTrigger disableButtonEnhancement>
-          <Tooltip content="Camera and lens" relationship="label">
-            <Button
-              aria-label="Camera and lens filter"
-              icon={<Camera24Regular />}
-              aria-pressed={isGearFilterActive}
-              appearance={activePanel === "gear" || isGearFilterActive ? "primary" : "subtle"}
-              className={styles.filterIconButton}
+      {/* Camera/Lens */}
+      <div className="popover-anchor">
+        <button
+          title="Camera and lens"
+          aria-label="Camera and lens filter"
+          aria-pressed={isGearFilterActive}
+          className={`btn btn-icon ${css.filterIconButton} ${activePanel === "gear" || isGearFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={() => setActivePanel(activePanel === "gear" ? null : "gear")}
+        >
+          <Camera size={20} />
+        </button>
+        {activePanel === "gear" && (
+          <div className={`popover-surface ${css.panelSurface}`}>
+            <SuggestionFilterField
+              title="Camera model"
+              placeholder="Search camera model (e.g. R6 Mark II)"
+              loadingLabel="Finding camera models..."
+              field="cameraModel"
+              selectedValues={selectedCameraModels}
+              onSelectedValuesChange={setCameraModelFilterValues}
+              isActive={activePanel === "gear"}
+              includeSubfolders={includeSubfolders}
+              path={path}
+              ratingFilter={ratingFilter}
+              mediaTypeFilter={mediaTypeFilter}
+              locationBounds={locationBounds}
+              dateRange={dateRange}
+              peopleInImageFilter={selectedPeople}
+              cameraModelFilter={selectedCameraModels}
+              lensFilter={selectedLensModels}
             />
-          </Tooltip>
-        </PopoverTrigger>
-        <PopoverSurface className={styles.panelSurface}>
-          <SuggestionFilterField
-            title="Camera model"
-            placeholder="Search camera model (e.g. R6 Mark II)"
-            loadingLabel="Finding camera models..."
-            field="cameraModel"
-            selectedValues={selectedCameraModels}
-            onSelectedValuesChange={setCameraModelFilterValues}
-            isActive={activePanel === "gear"}
-            includeSubfolders={includeSubfolders}
-            path={path}
-            ratingFilter={ratingFilter}
-            mediaTypeFilter={mediaTypeFilter}
-            locationBounds={locationBounds}
-            dateRange={dateRange}
-            peopleInImageFilter={selectedPeople}
-            cameraModelFilter={selectedCameraModels}
-            lensFilter={selectedLensModels}
-          />
 
-          <SuggestionFilterField
-            title="Lens model"
-            placeholder="Search lens model (e.g. RF 24-70mm F2.8)"
-            loadingLabel="Finding lenses..."
-            field="lens"
-            selectedValues={selectedLensModels}
-            onSelectedValuesChange={setLensFilterValues}
-            isActive={activePanel === "gear"}
-            includeSubfolders={includeSubfolders}
-            path={path}
-            ratingFilter={ratingFilter}
-            mediaTypeFilter={mediaTypeFilter}
-            locationBounds={locationBounds}
-            dateRange={dateRange}
-            peopleInImageFilter={selectedPeople}
-            cameraModelFilter={selectedCameraModels}
-            lensFilter={selectedLensModels}
-          />
-        </PopoverSurface>
-      </Popover>
-
-      <Popover
-        open={activePanel === "rating"}
-        onOpenChange={(_, data) => setActivePanel(data.open ? "rating" : null)}
-        positioning="below-start"
-      >
-        <PopoverTrigger disableButtonEnhancement>
-          <Tooltip content="Rating" relationship="label">
-            <Button
-              aria-label="Rating filter"
-              icon={<Star24Regular />}
-              aria-pressed={isRatingFilterActive}
-              appearance={activePanel === "rating" || isRatingFilterActive ? "primary" : "subtle"}
-              className={styles.filterIconButton}
+            <SuggestionFilterField
+              title="Lens model"
+              placeholder="Search lens model (e.g. RF 24-70mm F2.8)"
+              loadingLabel="Finding lenses..."
+              field="lens"
+              selectedValues={selectedLensModels}
+              onSelectedValuesChange={setLensFilterValues}
+              isActive={activePanel === "gear"}
+              includeSubfolders={includeSubfolders}
+              path={path}
+              ratingFilter={ratingFilter}
+              mediaTypeFilter={mediaTypeFilter}
+              locationBounds={locationBounds}
+              dateRange={dateRange}
+              peopleInImageFilter={selectedPeople}
+              cameraModelFilter={selectedCameraModels}
+              lensFilter={selectedLensModels}
             />
-          </Tooltip>
-        </PopoverTrigger>
-        <PopoverSurface className={styles.panelSurface}>
-          <div className={styles.panelSection}>
-            <Subtitle2>Rating</Subtitle2>
-            <div className={styles.ratingFilter}>
-              {[1, 2, 3, 4, 5].map((star) => (
-                <button
-                  key={star}
-                  className={styles.starButton}
-                  onClick={() => handleRatingClick(star)}
-                  title={`${star} star${star > 1 ? "s" : ""}`}
-                >
-                  {ratingValue !== null && star <= ratingValue ? (
-                    <Star24Filled />
-                  ) : (
-                    <Star24Regular />
-                  )}
-                </button>
-              ))}
-              {ratingFilter ? (
-                <Tooltip
-                  content={ratingAtLeast ? "At least this rating" : "Exactly this rating"}
-                  relationship="label"
-                >
-                  <Button
-                    size="small"
-                    appearance={ratingAtLeast ? "primary" : "subtle"}
+          </div>
+        )}
+      </div>
+
+      {/* Rating */}
+      <div className="popover-anchor">
+        <button
+          title="Rating"
+          aria-label="Rating filter"
+          aria-pressed={isRatingFilterActive}
+          className={`btn btn-icon ${css.filterIconButton} ${activePanel === "rating" || isRatingFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={() => setActivePanel(activePanel === "rating" ? null : "rating")}
+        >
+          <Star size={20} />
+        </button>
+        {activePanel === "rating" && (
+          <div className={`popover-surface ${css.panelSurface}`}>
+            <div className={css.panelSection}>
+              <h3>Rating</h3>
+              <div className={css.ratingFilter}>
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    className={css.starButton}
+                    onClick={() => handleRatingClick(star)}
+                    title={`${star} star${star > 1 ? "s" : ""}`}
+                  >
+                    {ratingValue !== null && star <= ratingValue ? (
+                      <Star size={24} fill="currentColor" />
+                    ) : (
+                      <Star size={24} />
+                    )}
+                  </button>
+                ))}
+                {ratingFilter ? (
+                  <button
+                    title={ratingAtLeast ? "At least this rating" : "Exactly this rating"}
+                    className={`btn btn-sm ${css.atLeastButton} ${ratingAtLeast ? "btn-primary" : "btn-subtle"}`}
                     onClick={handleAtLeastToggle}
-                    className={styles.atLeastButton}
                   >
                     ≥
-                  </Button>
-                </Tooltip>
+                  </button>
+                ) : null}
+                {ratingFilter ? (
+                  <button className="btn btn-sm btn-subtle" onClick={handleClearRating}>
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+              {loadingRatingCounts ? (
+                <Spinner size="tiny" label="Loading rating counts..." />
               ) : null}
-              {ratingFilter ? (
-                <Button size="small" appearance="subtle" onClick={handleClearRating}>
-                  Clear
-                </Button>
-              ) : null}
+              <OptionListWithCounts
+                options={ratingOptions}
+                onSelect={(optionKey) => {
+                  const selectedStar = Number.parseInt(optionKey, 10);
+                  if (Number.isFinite(selectedStar)) {
+                    handleRatingClick(selectedStar);
+                  }
+                }}
+              />
             </div>
-            {loadingRatingCounts ? (
-              <Spinner size="tiny" label="Loading rating counts..." />
-            ) : null}
-            <OptionListWithCounts
-              options={ratingOptions}
-              onSelect={(optionKey) => {
-                const selectedStar = Number.parseInt(optionKey, 10);
-                if (Number.isFinite(selectedStar)) {
-                  handleRatingClick(selectedStar);
-                }
-              }}
-            />
           </div>
-        </PopoverSurface>
-      </Popover>
+        )}
+      </div>
 
-      <Popover
-        open={activePanel === "date"}
-        onOpenChange={(_, data) => setActivePanel(data.open ? "date" : null)}
-        positioning="below-start"
-      >
-        <PopoverTrigger disableButtonEnhancement>
-          <Tooltip content="Date" relationship="label">
-            <Button
-              aria-label="Date filter"
-              icon={<Calendar24Regular />}
-              aria-pressed={isDateFilterActive}
-              appearance={activePanel === "date" || isDateFilterActive ? "primary" : "subtle"}
-              className={styles.filterIconButton}
-            />
-          </Tooltip>
-        </PopoverTrigger>
-        <PopoverSurface className={styles.panelSurface}>
-          <DateHistogram label="Date taken" />
-        </PopoverSurface>
-      </Popover>
+      {/* Date */}
+      <div className="popover-anchor">
+        <button
+          title="Date"
+          aria-label="Date filter"
+          aria-pressed={isDateFilterActive}
+          className={`btn btn-icon ${css.filterIconButton} ${activePanel === "date" || isDateFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={() => setActivePanel(activePanel === "date" ? null : "date")}
+        >
+          <Calendar size={20} />
+        </button>
+        {activePanel === "date" && (
+          <div className={`popover-surface ${css.panelSurface}`}>
+            <DateHistogram label="Date taken" />
+          </div>
+        )}
+      </div>
 
-      <Popover
-        open={activePanel === "map"}
-        onOpenChange={(_, data) => setActivePanel(data.open ? "map" : null)}
-        positioning="below-start"
-      >
-        <PopoverTrigger disableButtonEnhancement>
-          <Tooltip content="Map" relationship="label">
-            <Button
-              aria-label="Map filter"
-              icon={<Location24Regular />}
-              aria-pressed={isMapFilterActive}
-              appearance={activePanel === "map" || isMapFilterActive ? "primary" : "subtle"}
-              className={styles.filterIconButton}
-            />
-          </Tooltip>
-        </PopoverTrigger>
-        <PopoverSurface className={styles.mapPanelSurface}>
-          <MapFilter compact />
-        </PopoverSurface>
-      </Popover>
+      {/* Map */}
+      <div className="popover-anchor">
+        <button
+          title="Map"
+          aria-label="Map filter"
+          aria-pressed={isMapFilterActive}
+          className={`btn btn-icon ${css.filterIconButton} ${activePanel === "map" || isMapFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={() => setActivePanel(activePanel === "map" ? null : "map")}
+        >
+          <MapPin size={20} />
+        </button>
+        {activePanel === "map" && (
+          <div className={`popover-surface ${css.mapPanelSurface}`}>
+            <MapFilter compact />
+          </div>
+        )}
+      </div>
     </div>
   );
 };

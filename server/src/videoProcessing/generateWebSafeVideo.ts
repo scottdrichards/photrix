@@ -4,6 +4,9 @@ import { getHash, getCachedFilePath } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
 import type { StandardHeight } from "../common/standardHeights.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
+import { getGpuAcceleration } from "./gpuAcceleration.ts";
+
+const gpu = await getGpuAcceleration();
 
 /** Generates a web-safe video (full-length H.264/AAC MP4) and caches the result. Returns the cached file path. */
 export const generateWebSafeVideo = async (
@@ -22,29 +25,30 @@ export const generateWebSafeVideo = async (
     return cachedPath;
   }
 
-  console.log(`[VideoCache] Generating ${height}p web-safe video for ${filePath}`);
+  const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
+  const encoderLabel = gpu ? gpu.label : "software";
+  console.log(`[VideoCache] Generating ${height}p web-safe video for ${filePath} (${encoderLabel})`);
   await new Promise<void>((resolve, reject) => {
-        const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
         const args = [
-          "-y", // Overwrite output file
+          "-y",
+          ...( gpu ? gpu.hwaccelArgs : []),
           "-i",
           filePath,
           "-vf",
           `scale=${scaleFilter}`,
           "-c:v",
-          "libx264", // Video codec (H.264)
+          gpu ? gpu.h264Codec : "libx264",
+          ...(gpu
+            ? gpu.cqArgs(23)
+            : ["-preset", "fast", "-crf", "23"]),
           "-pix_fmt",
-          "yuv420p", // Ensure compatibility
-          "-preset",
-          "fast",
-          "-crf",
-          "23", // Quality (lower = better, 23 is default)
+          "yuv420p",
           "-c:a",
-          "aac", // Audio codec
+          "aac",
           "-b:a",
-          "128k", // Audio bitrate
+          "128k",
           "-movflags",
-          "+faststart", // Enable streaming
+          "+faststart",
           cachedPath,
         ];
 

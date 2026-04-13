@@ -1,0 +1,95 @@
+.iconBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-m);
+  flex-wrap: wrap;
+}
+
+.filterIconButton {
+  min-width: 36px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+}
+
+.panelSurface {
+  width: min(92vw, 440px);
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-m);
+}
+
+.mapPanelSurface {
+  width: min(92vw, 620px);
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.panelSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s);
+}
+
+.controlsRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+  flex-wrap: wrap;
+}
+
+.ratingFilter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+  flex-wrap: wrap;
+}
+
+.starButton {
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  color: var(--brand);
+}
+
+.starButton:hover {
+  transform: scale(1.1);
+}
+
+.atLeastButton {
+  min-width: 32px;
+  height: 32px;
+}
+
+.breadcrumbRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+.folderGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-s);
+}
+
+.folderCard {
+  padding: var(--space-m);
+  border: 1px solid var(--stroke1);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+}
+
+.folderCard:hover {
+  background-color: var(--bg1-hover);
+}

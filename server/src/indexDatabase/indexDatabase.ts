@@ -107,6 +107,12 @@ export class IndexDatabase {
     this.storagePath = storagePath;
   }
 
+  static async create(storagePath: string): Promise<IndexDatabase> {
+    const instance = new IndexDatabase(storagePath);
+    await instance.init();
+    return instance;
+  }
+
   async init(): Promise<void> {
     const envDbLocation = process.env.INDEX_DB_LOCATION?.trim();
     const databaseDirectory = envDbLocation || CACHE_DIR;
@@ -379,6 +385,7 @@ export class IndexDatabase {
 
   async getFileRecord(
     relativePath: string,
+    _fields?: string[],
   ): Promise<FileRecord | undefined> {
     const { folder, fileName } = splitPath(relativePath);
     const row = await this.db.get<Record<string, string | number>>(

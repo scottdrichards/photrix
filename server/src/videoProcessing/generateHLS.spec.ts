@@ -47,7 +47,8 @@ describe("generateHLS", () => {
     const result = await generateHLS(source, 720);
 
     expect(result).toBe(playlistPath);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    // 2 calls = GPU probes (NVIDIA + AMD both fail). Existing playlist means no encode.
+    expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
   it("enqueues conversion and uses software encoder when CUDA is unavailable", async () => {
@@ -65,6 +66,11 @@ describe("generateHLS", () => {
       queueMicrotask(() => {
         if (args.includes("-init_hw_device")) {
           proc.stderr.emit("data", Buffer.from("Could not dynamically load CUDA"));
+          proc.emit("close", 1);
+          return;
+        }
+
+        if (args.includes("h264_amf")) {
           proc.emit("close", 1);
           return;
         }
@@ -89,9 +95,9 @@ describe("generateHLS", () => {
     });
 
     expect(result).toBe(playlistPath);
-    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock).toHaveBeenCalledTimes(3);
 
-    const generationArgs = spawnMock.mock.calls[1]?.[1] as string[];
+    const generationArgs = spawnMock.mock.calls[2]?.[1] as string[];
     expect(generationArgs).toContain("libx264");
     expect(generationArgs).toContain("scale=-2:360");
   });
@@ -107,6 +113,10 @@ describe("generateHLS", () => {
       queueMicrotask(() => {
         if (args.includes("-init_hw_device")) {
           proc.stderr.emit("data", Buffer.from("Could not dynamically load CUDA"));
+          proc.emit("close", 1);
+          return;
+        }
+        if (args.includes("h264_amf")) {
           proc.emit("close", 1);
           return;
         }

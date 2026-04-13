@@ -3,6 +3,9 @@ Review these files when implicated (relative to root)
 - Testing: /TESTING.md
 - Deployment/Setup: /GETTING_STARTED.md
 
+# Terminal commands
+- Never use `npx` to run tools. Use `npm run <script>` instead, adding scripts to the relevant `package.json` if one doesn't already exist.
+
 # Agent interactions
 - If a prompt/interaction is testable, create a test before implementation if possible. If not possible, inform the user and create one after implementation.
 - If a prompt/interaction could be reflected in a prettier/linting change, suggest updating

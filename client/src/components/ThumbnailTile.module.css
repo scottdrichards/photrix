@@ -1,0 +1,74 @@
+.tile {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  cursor: pointer;
+  min-height: var(--thumbnail-size);
+  min-width: calc(min(100%, calc(var(--thumbnail-size) * var(--ratio))));
+  flex-basis: calc(var(--thumbnail-size) * var(--ratio));
+  flex-grow: var(--ratio);
+  flex-shrink: 1;
+  max-width: min(100%, calc(var(--thumbnail-size) * var(--ratio) * 1.5));
+  transition-property: transform, box-shadow;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: var(--ease-accel);
+  background-color: var(--bg4);
+  border: none;
+  padding: 0;
+  position: relative;
+}
+
+.tile:hover {
+  transform: scale(1.02);
+  box-shadow: var(--shadow-md);
+}
+
+.tile:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.tileSelected {
+  box-shadow: inset 0 0 0 2px var(--brand);
+}
+
+.image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  flex-grow: 1;
+  object-fit: cover;
+}
+
+.caption {
+  display: none;
+}
+
+.videoBadge {
+  position: absolute;
+  top: var(--space-xxs);
+  right: var(--space-xxs);
+  background-color: var(--bg1);
+  color: var(--fg2);
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xs);
+  box-shadow: var(--shadow-sm);
+  opacity: 0.86;
+  z-index: 1;
+}
+
+.selectedBadge {
+  position: absolute;
+  top: var(--space-xxs);
+  left: var(--space-xxs);
+  color: var(--brand);
+  background-color: var(--bg1);
+  border-radius: var(--radius-full);
+  z-index: 2;
+  display: flex;
+}

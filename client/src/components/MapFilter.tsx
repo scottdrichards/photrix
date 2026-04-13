@@ -1,11 +1,7 @@
-import {
-  Button,
-  Caption1,
-  mergeClasses,
-  Spinner,
-  Switch,
-  Tooltip,
-} from "@fluentui/react-components";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { cx } from "../cx";
+import { Spinner } from "../Spinner";
+import css from "./MapFilter.module.css";
 import Feature from "ol/Feature";
 import Map from "ol/Map";
 import View from "ol/View";
@@ -17,11 +13,10 @@ import "ol/ol.css";
 import { fromLonLat, transformExtent } from "ol/proj";
 import OSM from "ol/source/OSM";
 import VectorSource from "ol/source/Vector";
-import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchGeotaggedPhotos } from "../api";
 import type { GeoPoint } from "../api";
 import type { GeoBoundsLike as GeoBounds } from "../../../shared/filter-contract/src";
-import { markerStyle, useMapFilterStyles } from "./MapFilter.styles";
+import { markerStyle } from "./MapFilter.styles";
 import { useFilterContext } from "./filter/FilterContext";
 
 type MapFilterProps = {
@@ -52,7 +47,6 @@ const maybeBoundsEqual = (
 };
 
 export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
-  const styles = useMapFilterStyles();
   const { filter, setFilter } = useFilterContext();
   const { locationBounds } = filter;
   const normalizedLocationBounds = locationBounds ?? undefined;
@@ -293,26 +287,30 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
   };
 
   return (
-    <div className={mergeClasses(styles.card, compact ? styles.compactCard : undefined)}>
-      <div className={styles.headerRow}>
+    <div className={cx(css.card, compact ? css.compactCard : undefined)}>
+      <div className={css.headerRow}>
         <div>
-          <Caption1>Map filter</Caption1>
-          <Caption1 className={styles.description}>
+          <small>Map filter</small>
+          <small className={css.description}>
             Pins show items with location metadata.
-          </Caption1>
+          </small>
         </div>
-        <div className={styles.actions}>
-          <Tooltip
-            content="Keep results synced to the current map view"
-            relationship="label"
+        <div className={css.actions}>
+          <label
+            className="switch-label"
+            title="Keep results synced to the current map view"
           >
-            <Switch
+            <input
+              type="checkbox"
+              role="switch"
+              className="switch-track"
+              aria-label="Keep results synced to the current map view"
               checked={Boolean(locationBounds)}
-              onChange={(_, data) => {
+              onChange={(e) => {
                 if (!mapInstance) {
                   return;
                 }
-                if (!data.checked) {
+                if (!e.target.checked) {
                   setPendingLocationBounds(undefined);
                   mapInstance.set("lastBounds", null);
                   return;
@@ -331,39 +329,38 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
                 mapInstance.set("lastBounds", nextBounds);
                 setPendingLocationBounds(nextBounds);
               }}
-              label="Filter to map view"
             />
-          </Tooltip>
-          <Button
-            size="small"
-            appearance="secondary"
+            <span>Filter to map view</span>
+          </label>
+          <button
+            className="btn btn-sm"
             onClick={fitToData}
             disabled={!points.length}
           >
             Fit to pins
-          </Button>
+          </button>
         </div>
       </div>
 
-      <div className={styles.mapShell}>
+      <div className={css.mapShell}>
         <div
           ref={mapElementRef}
-          className={mergeClasses(styles.map, compact ? styles.compactMap : undefined)}
+          className={cx(css.map, compact ? css.compactMap : undefined)}
         />
         {showOverlay ? (
-          <div className={styles.overlay}>
+          <div className={css.overlay}>
             <Spinner label="Loading map data" />
           </div>
         ) : null}
       </div>
 
-      <div className={styles.statusRow}>
-        <Caption1>{pinSummary}</Caption1>
-        {error ? <Caption1 className={styles.error}>{error}</Caption1> : null}
+      <div className={css.statusRow}>
+        <small>{pinSummary}</small>
+        {error ? <small className={css.error}>{error}</small> : null}
         {truncated ? (
-          <Caption1 className={styles.description}>
+          <small className={css.description}>
             Limited to current slice for performance.
-          </Caption1>
+          </small>
         ) : null}
       </div>
     </div>

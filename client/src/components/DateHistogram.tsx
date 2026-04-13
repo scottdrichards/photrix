@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Button,
-  Caption1,
-  Spinner,
-  makeStyles,
-  tokens,
-} from "@fluentui/react-components";
+import { Spinner } from "../Spinner";
+import css from "./DateHistogram.module.css";
 import { fetchDateHistogram } from "../api";
 import type { DateHistogramBucket } from "../api";
 import { useFilterContext } from "./filter/FilterContext";
@@ -17,52 +12,6 @@ type DateHistogramProps = {
 };
 
 const CHART_PADDING = { left: 18, right: 18, top: 10, bottom: 22 } as const;
-
-const useStyles = makeStyles({
-  root: {
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingHorizontalXS,
-    minWidth: "320px",
-    width: "100%",
-    maxWidth: "680px",
-  },
-  header: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: tokens.spacingHorizontalS,
-  },
-  chartShell: {
-    position: "relative",
-    width: "100%",
-    height: "160px",
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground1,
-    padding: tokens.spacingHorizontalXS,
-    boxSizing: "border-box",
-  },
-  overlayText: {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: tokens.colorNeutralForeground2,
-  },
-  labels: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: tokens.spacingHorizontalS,
-    flexWrap: "wrap",
-    color: tokens.colorNeutralForeground2,
-  },
-  error: {
-    color: tokens.colorPaletteRedForeground3,
-  },
-});
 
 const formatDate = (value: number) =>
   new Date(value).toLocaleDateString(undefined, {
@@ -128,7 +77,6 @@ const buildTicks = (
 };
 
 export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
-  const styles = useStyles();
   const { filter, setFilter } = useFilterContext();
   const {
     includeSubfolders,
@@ -411,21 +359,21 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
   const canClear = Boolean(value);
 
   return (
-    <div className={styles.root}>
-      <div className={styles.header}>
-        <Caption1>{label}</Caption1>
+    <div className={css.root}>
+      <div className={css.header}>
+        <small>{label}</small>
         {canClear ? (
-          <Button size="small" appearance="subtle" onClick={clearSelection}>
+          <button className="btn btn-sm btn-subtle" onClick={clearSelection}>
             Clear
-          </Button>
+          </button>
         ) : null}
       </div>
-      <div ref={containerRef} className={styles.chartShell}>
+      <div ref={containerRef} className={css.chartShell}>
         {showEmpty ? (
-          <div className={styles.overlayText}>No date metadata available</div>
+          <div className={css.overlayText}>No date metadata available</div>
         ) : null}
         {loading ? (
-          <div className={styles.overlayText}>
+          <div className={css.overlayText}>
             <Spinner label="Loading dates" />
           </div>
         ) : null}
@@ -447,7 +395,7 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
               y={bar.y}
               width={bar.width}
               height={bar.height}
-              fill={tokens.colorPaletteBlueBackground2}
+              style={{ fill: "var(--blue-bg2)" }}
               opacity={0.9}
             />
           ))}
@@ -460,7 +408,7 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
                   x2={x}
                   y1={height - padding.bottom}
                   y2={height - padding.bottom + 6}
-                  stroke={tokens.colorNeutralStroke2}
+                  style={{ stroke: "var(--stroke2)" }}
                   strokeWidth={1}
                 />
                 <text
@@ -468,7 +416,7 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
                   y={height - 4}
                   textAnchor="middle"
                   fontSize={10}
-                  fill={tokens.colorNeutralForeground2}
+                  style={{ fill: "var(--fg2)" }}
                 >
                   {formatTick(t, inferredGrouping)}
                 </text>
@@ -481,18 +429,18 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
               y={padding.top}
               width={selectionRect.width}
               height={height - padding.top - padding.bottom}
-              fill={tokens.colorPaletteBlueBackground2}
+              style={{ fill: "var(--blue-bg2)" }}
               opacity={0.25}
               pointerEvents="none"
             />
           ) : null}
         </svg>
       </div>
-      <div className={styles.labels}>
-        <Caption1>{minDate ? formatDate(minDate) : ""}</Caption1>
-        <Caption1>{maxDate ? formatDate(maxDate) : ""}</Caption1>
+      <div className={css.labels}>
+        <small>{minDate ? formatDate(minDate) : ""}</small>
+        <small>{maxDate ? formatDate(maxDate) : ""}</small>
       </div>
-      {error ? <Caption1 className={styles.error}>{error}</Caption1> : null}
+      {error ? <small className={css.error}>{error}</small> : null}
     </div>
   );
 };

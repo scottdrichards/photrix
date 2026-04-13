@@ -1,19 +1,7 @@
-import {
-  Button,
-  Caption1,
-  Menu,
-  MenuItem,
-  MenuList,
-  MenuPopover,
-  MenuTrigger,
-  Title2,
-  Tooltip,
-  mergeClasses,
-  makeStyles,
-  tokens,
-} from "@fluentui/react-components";
-import { Info24Regular, Person24Regular, SignOut24Regular } from "@fluentui/react-icons";
-import { useEffect, useState } from "react";
+import { Info, User, LogOut } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { cx } from "./cx";
+import css from "./App.module.css";
 import { FullscreenViewer } from "./components/FullscreenViewer";
 import { FacesReviewPage } from "./components/faces";
 import { StatusModal } from "./components/StatusModal";
@@ -28,57 +16,11 @@ import {
 import { useSyncUrlWithFilter, type ViewMode } from "./hooks/useSyncUrlWithFilter";
 import { probeVideoPlaybackProfile } from "./videoPlaybackProfile";
 
-const useStyles = makeStyles({
-  app: {
-    paddingInline: tokens.spacingHorizontalM,
-    paddingBlockEnd: tokens.spacingHorizontalXL,
-    display: "flex",
-    flexDirection: "column",
-    gap: 0,
-  },
-  header: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: tokens.spacingHorizontalM,
-    position: "sticky",
-    top: 0,
-    zIndex: 10,
-    paddingBlock: tokens.spacingHorizontalM,
-    paddingInline: tokens.spacingHorizontalM,
-    marginInline: `calc(${tokens.spacingHorizontalM} * -1)`,
-    backgroundColor: "rgba(255, 255, 255, 0.4)",
-    backdropFilter: "blur(10px)",
-    WebkitBackdropFilter: "blur(10px)",
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    marginBlockEnd: tokens.spacingHorizontalL,
-  },
-  headerStatusOpen: {
-    zIndex: 2000,
-    pointerEvents: "none",
-  },
-  headerTitle: {
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingHorizontalXS,
-  },
-  headerActions: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalM,
-    flexWrap: "wrap",
-    justifyContent: "flex-end",
-  },
-  headerAuthMenu: {
-    marginInlineStart: "auto",
-  },
-});
-
 const AppContent = () => {
-  const styles = useStyles();
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<ViewMode>(
     () => new URLSearchParams(window.location.search).get("view") === "faces" ? "faces" : "library",
   );
@@ -90,6 +32,15 @@ const AppContent = () => {
   useEffect(() => {
     void probeVideoPlaybackProfile();
   }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handle = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [menuOpen]);
 
   const canUseNativeShare =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
@@ -160,40 +111,40 @@ const AppContent = () => {
   };
 
   return (
-    <div className={styles.app}>
+    <div className={css.app}>
       <header
-        className={mergeClasses(
-          styles.header,
-          isStatusOpen ? styles.headerStatusOpen : undefined,
+        className={cx(
+          css.header,
+          isStatusOpen ? css.headerStatusOpen : undefined,
         )}
       >
-        <div className={styles.headerTitle}>
-          <Title2>Photrix</Title2>
-          <Caption1>A better way to view photos.</Caption1>
+        <div className={css.headerTitle}>
+          <h2>Photrix</h2>
+          <small>A better way to view photos.</small>
         </div>
 
-        <div className={styles.headerActions}>
-          <Button
-            appearance={view === "library" ? "primary" : "subtle"}
+        <div className={css.headerActions}>
+          <button
+            className={`btn ${view === "library" ? "btn-primary" : "btn-subtle"}`}
             onClick={() => setView("library")}
           >
             Library
-          </Button>
-          <Button
-            appearance={view === "faces" ? "primary" : "subtle"}
+          </button>
+          <button
+            className={`btn ${view === "faces" ? "btn-primary" : "btn-subtle"}`}
             onClick={() => setView("faces")}
           >
             Faces
-          </Button>
+          </button>
           <Filter />
           {view === "library" ? (
             <>
               {selectionMode ? (
                 <>
-                  <Caption1>{selectedItems.length} selected</Caption1>
-                  <Button
+                  <small>{selectedItems.length} selected</small>
+                  <button
                     onClick={handleShare}
-                    appearance="primary"
+                    className="btn btn-primary"
                     disabled={
                       !canUseNativeShare ||
                       !supportsFileShare ||
@@ -202,49 +153,56 @@ const AppContent = () => {
                     }
                   >
                     {isSharing ? "Preparing…" : "Share"}
-                  </Button>
-                  <Button
+                  </button>
+                  <button
                     onClick={() => handleSelectionModeChange(false)}
-                    appearance="subtle"
+                    className="btn btn-subtle"
                   >
                     Done
-                  </Button>
+                  </button>
                 </>
               ) : (
-                <Button
+                <button
                   onClick={() => handleSelectionModeChange(true)}
-                  appearance="subtle"
+                  className="btn btn-subtle"
                 >
                   Select
-                </Button>
+                </button>
               )}
             </>
           ) : null}
-          <Tooltip content="Server Status" relationship="description">
-            <Button
-              icon={<Info24Regular />}
-              onClick={() => setIsStatusOpen(true)}
-              appearance="subtle"
-            >
-              Status
-            </Button>
-          </Tooltip>
+          <button
+            title="Server Status"
+            className="btn btn-subtle"
+            onClick={() => setIsStatusOpen(true)}
+          >
+            <Info size={20} />
+            Status
+          </button>
         </div>
 
-        <Menu positioning="below-end">
-          <MenuTrigger disableButtonEnhancement>
-            <Button className={styles.headerAuthMenu} appearance="subtle" icon={<Person24Regular />}>
-              {username}
-            </Button>
-          </MenuTrigger>
-          <MenuPopover>
-            <MenuList>
-              <MenuItem icon={<SignOut24Regular />} onClick={signOut} disabled={isSigningOut}>
+        <div ref={menuRef} className={css.headerAuthMenu}>
+          <button
+            className="btn btn-subtle"
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            <User size={20} />
+            {username}
+          </button>
+          {menuOpen && (
+            <div role="menu" className="menu-popover">
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => { signOut(); setMenuOpen(false); }}
+                disabled={isSigningOut}
+              >
+                <LogOut size={20} />
                 Sign out
-              </MenuItem>
-            </MenuList>
-          </MenuPopover>
-        </Menu>
+              </button>
+            </div>
+          )}
+        </div>
       </header>
 
       <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />

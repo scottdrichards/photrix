@@ -33,6 +33,7 @@ Thumbs.db
 
 # Editor directories and files
 .idea/
+.vscode/settings.json
 *.swp
 
 # Runtime data
@@ -48,6 +49,9 @@ Thumbs.db
 
 # DB
 data-index.json
+
+# ts-jest debug log
+server/ts-jest
 
 # Tools (large binaries and downloads)
 tools/jaeger/

@@ -54,6 +54,10 @@ describe("generateMultibitrateHLS", () => {
     const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
+        if (args.includes("-init_hw_device") || args.includes("h264_amf")) {
+          proc.emit("close", 0);
+          return;
+        }
         const playlistPath = args.at(-1);
         if (playlistPath) {
           mkdirSync(path.dirname(playlistPath), { recursive: true });
@@ -77,10 +81,10 @@ describe("generateMultibitrateHLS", () => {
     });
 
     expect(masterPath).toBe(getMasterPlaylistPath(hlsDir));
-    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock).toHaveBeenCalledTimes(3);
 
-    const firstArgs = spawnMock.mock.calls[0]?.[1] as string[];
-    const secondArgs = spawnMock.mock.calls[1]?.[1] as string[];
+    const firstArgs = spawnMock.mock.calls[1]?.[1] as string[];
+    const secondArgs = spawnMock.mock.calls[2]?.[1] as string[];
     expect(firstArgs).toContain("scale=-2:360");
     expect(secondArgs).toContain("scale=-2:720");
   });
@@ -94,28 +98,29 @@ describe("generateMultibitrateHLS", () => {
     const { getMirroredHLSDirectory } = await import("../common/cacheUtils.ts");
     const hlsDir = getMirroredHLSDirectory(source, "abr");
 
-    const spawnMock = jest
-      .fn()
-      .mockImplementationOnce((_command: string, _args: string[]) => {
-        const proc = makeSpawnProcess();
-        queueMicrotask(() => {
+    const spawnMock = jest.fn((_command: string, args: string[]) => {
+      const proc = makeSpawnProcess();
+      queueMicrotask(() => {
+        if (args.includes("-init_hw_device")) {
+          proc.emit("close", 0);
+          return;
+        }
+
+        if (args.includes("h264_nvenc") && args.includes("scale=-2:360")) {
           proc.stderr.emit("data", Buffer.from("h264_nvenc failed: Could not load CUDA"));
           proc.emit("close", 1);
-        });
-        return proc;
-      })
-      .mockImplementation((_command: string, args: string[]) => {
-        const proc = makeSpawnProcess();
-        queueMicrotask(() => {
-          const playlistPath = args.at(-1);
-          if (playlistPath) {
-            mkdirSync(path.dirname(playlistPath), { recursive: true });
-            writeFileSync(playlistPath, "#EXTM3U");
-          }
-          proc.emit("close", 0);
-        });
-        return proc;
+          return;
+        }
+
+        const playlistPath = args.at(-1);
+        if (playlistPath) {
+          mkdirSync(path.dirname(playlistPath), { recursive: true });
+          writeFileSync(playlistPath, "#EXTM3U");
+        }
+        proc.emit("close", 0);
       });
+      return proc;
+    });
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
 
@@ -123,8 +128,8 @@ describe("generateMultibitrateHLS", () => {
 
     await generateMultibitrateHLS(source, { waitForCompletion: true });
 
-    expect(spawnMock).toHaveBeenCalledTimes(3);
-    const retryArgs = spawnMock.mock.calls[1]?.[1] as string[];
+    expect(spawnMock).toHaveBeenCalledTimes(4);
+    const retryArgs = spawnMock.mock.calls[2]?.[1] as string[];
     expect(retryArgs).toContain("libx264");
   });
 

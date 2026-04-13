@@ -5,6 +5,12 @@ import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { setBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
 import { statusRequestHandler } from "./statusRequestHandler.ts";
 
+const flushMicrotasks = async () => {
+  for (let i = 0; i < 10; i++) {
+    await Promise.resolve();
+  }
+};
+
 const createMockResponse = () => {
   let body = "";
   const writes: string[] = [];
@@ -59,7 +65,7 @@ afterEach(() => {
 });
 
 describe("statusRequestHandler", () => {
-  it("returns JSON status payload for non-stream mode", () => {
+  it("returns JSON status payload for non-stream mode", async () => {
     const { res, getBody } = createMockResponse();
 
     const database = {
@@ -79,7 +85,7 @@ describe("statusRequestHandler", () => {
       }),
     } as unknown as IndexDatabase;
 
-    statusRequestHandler({} as http.IncomingMessage, res, {
+    await statusRequestHandler({} as http.IncomingMessage, res, {
       database,
       stream: false,
     });
@@ -116,7 +122,7 @@ describe("statusRequestHandler", () => {
     );
   });
 
-  it("streams SSE updates and closes on request close", () => {
+  it("streams SSE updates and closes on request close", async () => {
     jest.useFakeTimers();
 
     const req = new EventEmitter() as http.IncomingMessage;
@@ -141,13 +147,68 @@ describe("statusRequestHandler", () => {
     });
 
     expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
+    await flushMicrotasks();
     expect(getWrites().length).toBe(1);
 
     jest.advanceTimersByTime(2000);
+    await flushMicrotasks();
     expect(getWrites().length).toBe(2);
     expect(getWrites()[0]?.startsWith("data: ")).toBe(true);
 
     req.emit("close");
     expect(res.end).toHaveBeenCalled();
+  });
+
+  it("skips overlapping stream updates when previous is still in flight", async () => {
+    jest.useFakeTimers();
+
+    const req = new EventEmitter() as http.IncomingMessage;
+    const { res, getWrites } = createMockResponse();
+
+    let resolveStatus: (() => void) | undefined;
+    const statusCalls: number[] = [];
+
+    const database = {
+      getStatusCounts: () => {
+        statusCalls.push(Date.now());
+        return new Promise((resolve) => {
+          resolveStatus = () =>
+            resolve({
+              allEntries: 1,
+              mediaEntries: 1,
+              missingInfo: 0,
+              missingDateTaken: 0,
+            });
+        });
+      },
+      countImageEntries: () => 1,
+      getConversionQueueCounts: () => ({ pending: 0, processing: 0 }),
+      getConversionQueueSummary: () => queueSummaryFixture,
+      getMostRecentExifProcessedEntry: () => null,
+    } as unknown as IndexDatabase;
+
+    statusRequestHandler(req, res, { database, stream: true });
+
+    // First sendUpdate is in flight (getStatusCounts hasn't resolved)
+    expect(statusCalls).toHaveLength(1);
+
+    // Advance past the interval — should NOT start another update
+    jest.advanceTimersByTime(2_000);
+    expect(statusCalls).toHaveLength(1);
+
+    // Resolve the first call and flush microtasks
+    resolveStatus!();
+    await flushMicrotasks();
+    expect(getWrites()).toHaveLength(1);
+
+    // Now the next interval tick should start a new update
+    jest.advanceTimersByTime(2_000);
+    expect(statusCalls).toHaveLength(2);
+
+    resolveStatus!();
+    await flushMicrotasks();
+    expect(getWrites()).toHaveLength(2);
+
+    req.emit("close");
   });
 });

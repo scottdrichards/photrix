@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, makeStyles, tokens } from "@fluentui/react-components";
-import { Dismiss24Regular } from "@fluentui/react-icons";
+import { X } from "lucide-react";
 import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
 import { negotiateVideoPlayback } from "../api";
 import { useSelectionContext } from "./selection/SelectionContext";
+import css from "./FullscreenViewer.module.css";
 
 const SWIPE_THRESHOLD_PX = 60;
 
@@ -28,62 +28,6 @@ const safePlay = (video: HTMLVideoElement, logPrefix: string) => {
   }
 };
 
-const useStyles = makeStyles({
-  dialog: {
-    border: "none",
-    padding: 0,
-    backgroundColor: "transparent",
-    maxWidth: "100vw",
-    maxHeight: "100vh",
-    width: "100%",
-    height: "100%",
-    "::backdrop": {
-      backgroundColor: "rgba(0, 0, 0, 0.85)",
-    },
-    // Reset user agent styles
-    margin: 0,
-    overflow: "hidden",
-  },
-  container: {
-    display: "flex",
-    width: "100%",
-    height: "100%",
-    alignItems: "center",
-    justifyContent: "center",
-    position: "relative",
-    zIndex: 1,
-  },
-  media: {
-    maxWidth: "100%",
-    maxHeight: "100%",
-    objectFit: "contain",
-    display: "block",
-  },
-  closeButton: {
-    position: "absolute",
-    top: tokens.spacingVerticalM,
-    right: tokens.spacingHorizontalM,
-    color: tokens.colorNeutralForegroundInverted,
-    zIndex: 100,
-    ":hover": {
-      color: tokens.colorNeutralForegroundInvertedHover,
-      backgroundColor: "rgba(255, 255, 255, 0.1)",
-    },
-  },
-  videoBadge: {
-    position: "absolute",
-    bottom: tokens.spacingVerticalXXL,
-    left: tokens.spacingHorizontalM,
-    fontSize: "12px",
-    padding: "2px 8px",
-    borderRadius: "4px",
-    color: "rgba(255, 255, 255, 0.85)",
-    backgroundColor: "rgba(0, 0, 0, 0.55)",
-    pointerEvents: "none",
-    zIndex: 100,
-  },
-});
-
 type VideoStatus = "hls" | "direct" | "incompatible" | null;
 
 const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
@@ -93,7 +37,6 @@ const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
 };
 
 export function FullscreenViewer() {
-  const styles = useStyles();
   const {
     selected: selectedPhoto,
     selectionMode,
@@ -375,24 +318,23 @@ export function FullscreenViewer() {
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
     <dialog
       ref={dialogRef}
-      className={styles.dialog}
+      className={css.dialog}
       onClose={handleClose}
       onCancel={handleClose}
       onClick={handleBackdropClick}
     >
       {photo && (
         <>
-          <Button
-            appearance="subtle"
-            icon={<Dismiss24Regular />}
+          <button
             onClick={() => setSelected(null)}
-            className={styles.closeButton}
+            className={css.closeButton}
             aria-label="Close"
-            size="large"
-          />
+          >
+            <X size={24} />
+          </button>
           {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
           <div
-            className={styles.container}
+            className={css.container}
             onClick={handleContainerClick}
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
@@ -403,7 +345,7 @@ export function FullscreenViewer() {
                   ref={videoRef}
                   key={photo.path}
                   controls
-                  className={styles.media}
+                  className={css.media}
                   poster={photo.previewUrl}
                   preload="metadata"
                 >
@@ -411,13 +353,13 @@ export function FullscreenViewer() {
                   Your browser does not support HTML video playback.
                 </video>
                 {videoStatus && (
-                  <span className={styles.videoBadge} data-testid="video-status">
+                  <span className={css.videoBadge} data-testid="video-status">
                     {videoStatusLabel[videoStatus]}
                   </span>
                 )}
               </>
             ) : (
-              <img src={photo.fullUrl} alt={photo.name} className={styles.media} />
+              <img src={photo.fullUrl} alt={photo.name} className={css.media} />
             )}
           </div>
         </>

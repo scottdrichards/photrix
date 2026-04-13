@@ -51,9 +51,13 @@ describe("generateWebSafeVideo", () => {
     const source = path.join(root, "source.mov");
     writeFileSync(source, "video");
 
-    const spawnMock = jest.fn((_command: string, _args: string[]) => {
+    const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
+        if (args.includes("-init_hw_device") || args.includes("h264_amf")) {
+          proc.emit("close", 1);
+          return;
+        }
         proc.emit("close", 0);
       });
       return proc;
@@ -65,7 +69,7 @@ describe("generateWebSafeVideo", () => {
     const out = await generateWebSafeVideo(source, 720, { priority: "background" });
 
     expect(out.endsWith(".720.mp4")).toBe(true);
-    const ffmpegArgs = spawnMock.mock.calls[0]?.[1] as string[];
+    const ffmpegArgs = spawnMock.mock.calls[2]?.[1] as string[];
     expect(ffmpegArgs).toContain("scale=-2:720");
     expect(ffmpegArgs).toContain("libx264");
   });
@@ -77,9 +81,13 @@ describe("generateWebSafeVideo", () => {
     const source = path.join(root, "source.mov");
     writeFileSync(source, "video");
 
-    const spawnMock = jest.fn((_command: string, _args: string[]) => {
+    const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
+        if (args.includes("-init_hw_device") || args.includes("h264_amf")) {
+          proc.emit("close", 1);
+          return;
+        }
         proc.stderr.emit("data", Buffer.from("encode failed"));
         proc.emit("close", 1);
       });
@@ -102,9 +110,13 @@ describe("generateWebSafeVideo", () => {
     const source = path.join(root, "source.mov");
     writeFileSync(source, "video");
 
-    const spawnMock = jest.fn((_command: string, _args: string[]) => {
+    const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
+        if (args.includes("-init_hw_device") || args.includes("h264_amf")) {
+          proc.emit("close", 1);
+          return;
+        }
         proc.emit("error", new Error("spawn boom"));
       });
       return proc;

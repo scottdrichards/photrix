@@ -1,41 +1,15 @@
-import { Spinner, Subtitle2, makeStyles, tokens } from "@fluentui/react-components";
 import { memo, useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 import { fetchPhotos } from "../api";
+import { Spinner } from "../Spinner";
 import { useFilterContext } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { ThumbnailTile } from "./ThumbnailTile";
-
-export const useStyles = makeStyles({
-  statusRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalS,
-    color: tokens.colorNeutralForeground2,
-    marginBlockEnd: tokens.spacingHorizontalS,
-  },
-  grid: {
-    display: "flex",
-    flexWrap: "wrap",
-    alignItems: "stretch",
-    gap: tokens.spacingHorizontalM,
-    paddingBlockEnd: tokens.spacingHorizontalXXL,
-    "--thumbnail-size": "clamp(150px, 20vw, 260px)",
-  },
-  sentinel: {
-    flexBasis: "100%",
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: tokens.spacingHorizontalL,
-    color: tokens.colorNeutralForeground3,
-  },
-});
+import css from "./ThumbnailGrid.module.css";
 
 const PAGE_SIZE = 200;
 
 const ThumbnailGridComponent = () => {
-  const styles = useStyles();
   const { filter } = useFilterContext();
   const { setItems } = useSelectionContext();
   const [page, setPage] = useState(1);
@@ -125,19 +99,19 @@ const ThumbnailGridComponent = () => {
 
   return (
     <>
-      {error ? <Subtitle2>{error}</Subtitle2> : null}
-      <div className={styles.grid}>
+      {error ? <h3>{error}</h3> : null}
+      <div className={css.grid}>
         {data?.items.map((item) => (
           <ThumbnailTile key={item.path} photo={item} />
         ))}
         {data && data.items.length < data.total && (
-          <div ref={loadMoreSentinelRef} className={styles.sentinel}>
+          <div ref={loadMoreSentinelRef} className={css.sentinel}>
             {loading && <Spinner size="extra-tiny" />}
           </div>
         )}
       </div>
       {data && data.items.length === 0 && (
-        <Subtitle2>No photos yet. Upload some to get started.</Subtitle2>
+        <h3>No photos yet. Upload some to get started.</h3>
       )}
     </>
   );

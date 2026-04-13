@@ -17,11 +17,13 @@ import {
   runWithRequestTrace,
 } from "./observability/requestTrace.ts";
 import { writeJson } from "./utils.ts";
+import type { ConversionWorker } from "./indexDatabase/conversionWorker.ts";
 
 const PORT = process.env.PORT || 3000;
 
 type ServerOptions = {
   onRequest: () => void;
+  conversionWorker: ConversionWorker;
 };
 
 // Monitors event-loop lag by scheduling a timer and measuring actual delay
@@ -42,9 +44,9 @@ const startEventLoopLagMonitor = () => {
 export const createServer = async (
   database: IndexDatabase,
   storagePath: string,
-  options: ServerOptions = { onRequest: () => {} },
+  options: ServerOptions,
 ) => {
-  const { onRequest } = options;
+  const { onRequest, conversionWorker } = options;
   const authService = await AuthService.create();
   startEventLoopLagMonitor();
 
@@ -262,6 +264,7 @@ export const createServer = async (
                   {
                     database,
                     storageRoot: storagePath,
+                    conversionWorker,
                   },
                 ),
               { category: "request", detail: "/api/files/*" },

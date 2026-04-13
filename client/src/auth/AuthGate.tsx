@@ -1,44 +1,12 @@
-import {
-  Body1,
-  Button,
-  Card,
-  CardHeader,
-  Input,
-  Spinner,
-  Text,
-  Title3,
-  makeStyles,
-  tokens,
-} from "@fluentui/react-components";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
+import { Spinner } from "../Spinner";
+import css from "./AuthGate.module.css";
 import {
   getAuthSession,
   loginWithPasskey,
   registerWithPasskey,
   signOut,
 } from "./authApi";
-
-const useStyles = makeStyles({
-  root: {
-    minHeight: "100vh",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: tokens.spacingHorizontalL,
-  },
-  stack: {
-    width: "100%",
-    maxWidth: "440px",
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingHorizontalM,
-  },
-  content: {
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingHorizontalM,
-  },
-});
 
 type AuthGateProps = {
   children: ReactNode;
@@ -67,7 +35,6 @@ const initialState: AuthState = {
 };
 
 export const AuthGate = ({ children }: AuthGateProps) => {
-  const styles = useStyles();
   const [state, setState] = useState(initialState);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -136,7 +103,7 @@ export const AuthGate = ({ children }: AuthGateProps) => {
 
   if (state.loading) {
     return (
-      <div className={styles.root}>
+      <div className={css.root}>
         <Spinner label="Checking session…" />
       </div>
     );
@@ -158,48 +125,48 @@ export const AuthGate = ({ children }: AuthGateProps) => {
   const canLogin = !state.setupRequired && !busy;
 
   return (
-    <div className={styles.root}>
-      <Card className={styles.stack}>
-        <CardHeader
-          header={<Title3>{state.setupRequired ? "Set up Photrix" : "Sign in to Photrix"}</Title3>}
-          description={
-            <Body1>
-              {state.setupRequired
-                ? "Create the first admin user with a passkey."
-                : "Use your passkey to unlock the application."}
-            </Body1>
-          }
-        />
+    <div className={css.root}>
+      <div className={css.card}>
+        <div>
+          <h3>{state.setupRequired ? "Set up Photrix" : "Sign in to Photrix"}</h3>
+          <p>
+            {state.setupRequired
+              ? "Create the first admin user with a passkey."
+              : "Use your passkey to unlock the application."}
+          </p>
+        </div>
 
-        <div className={styles.content}>
-          <Input
+        <div className={css.content}>
+          <input
+            className="input"
             value={usernameInput}
-            onChange={(_, data) => setUsernameInput(data.value)}
+            onChange={(e) => setUsernameInput(e.target.value)}
             placeholder="Username"
             disabled={busy}
           />
 
           {state.setupRequired ? (
-            <Input
+            <input
+              className="input"
               value={bootstrapTokenInput}
-              onChange={(_, data) => setBootstrapTokenInput(data.value)}
+              onChange={(e) => setBootstrapTokenInput(e.target.value)}
               placeholder="Bootstrap token"
               type="password"
               disabled={busy}
             />
           ) : null}
 
-          <Button
-            appearance="primary"
+          <button
+            className="btn btn-primary"
             onClick={state.setupRequired ? handleRegister : handleLogin}
             disabled={state.setupRequired ? !canRegister : !canLogin}
           >
             {busy ? "Working…" : state.setupRequired ? "Create passkey" : "Sign in with passkey"}
-          </Button>
+          </button>
 
-          {error ? <Text>{error}</Text> : null}
+          {error ? <span>{error}</span> : null}
         </div>
-      </Card>
+      </div>
     </div>
   );
 };

@@ -1,8 +1,8 @@
-import { makeStyles, tokens } from "@fluentui/react-components";
-import { CheckmarkCircle20Filled, PlayCircle24Regular } from "@fluentui/react-icons";
+import { CheckCircle, PlayCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 import { useSelectionContext } from "./selection/SelectionContext";
+import css from "./ThumbnailTile.module.css";
 
 const DEFAULT_RATIO = 1;
 const LONG_PRESS_MS = 450;
@@ -23,7 +23,6 @@ const toFiniteNumber = (value: unknown): number | null => {
 };
 
 const getAspectRatio = (photo: PhotoItem): number => {
-  // Server now provides post-rotation dimensions, so no need to check orientation
   const width = toFiniteNumber(photo.metadata?.dimensionWidth);
   const height = toFiniteNumber(photo.metadata?.dimensionHeight);
 
@@ -34,84 +33,12 @@ const getAspectRatio = (photo: PhotoItem): number => {
   return DEFAULT_RATIO;
 };
 
-const useStyles = makeStyles({
-  tile: {
-    borderRadius: tokens.borderRadiusMedium,
-    overflow: "hidden",
-    display: "flex",
-    flexDirection: "column",
-    justifyContent: "flex-start",
-    cursor: "pointer",
-    minHeight: "var(--thumbnail-size)",
-    minWidth: "calc(min(100%, calc(var(--thumbnail-size) * var(--ratio))))",
-    flexBasis: "calc(var(--thumbnail-size) * var(--ratio))",
-    flexGrow: "var(--ratio)",
-    flexShrink: 1,
-    maxWidth: "min(100%, calc(var(--thumbnail-size) * var(--ratio) * 1.5))",
-    transitionProperty: "transform, box-shadow",
-    transitionDuration: tokens.durationUltraFast,
-    transitionTimingFunction: tokens.curveAccelerateMid,
-    backgroundColor: tokens.colorNeutralBackground4,
-    border: "none",
-    padding: 0,
-    position: "relative",
-    ":hover": {
-      transform: "scale(1.02)",
-      boxShadow: tokens.shadow16,
-    },
-    ":focus-visible": {
-      outline: `2px solid ${tokens.colorBrandBackground}`,
-      outlineOffset: "2px",
-    },
-  },
-  tileSelected: {
-    boxShadow: `inset 0 0 0 2px ${tokens.colorBrandStroke1}`,
-  },
-
-  image: {
-    width: "100%",
-    height: "100%",
-    display: "block",
-    flexGrow: 1,
-    objectFit: "cover",
-  },
-  caption: {
-    display: "none",
-  },
-  videoBadge: {
-    position: "absolute",
-    top: tokens.spacingHorizontalXXS,
-    right: tokens.spacingHorizontalXXS,
-    backgroundColor: tokens.colorNeutralBackground1,
-    color: tokens.colorNeutralForeground2,
-    borderRadius: tokens.borderRadiusCircular,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: tokens.spacingHorizontalXS,
-    boxShadow: tokens.shadow4,
-    opacity: 0.86,
-    zIndex: 1,
-  },
-  selectedBadge: {
-    position: "absolute",
-    top: tokens.spacingHorizontalXXS,
-    left: tokens.spacingHorizontalXXS,
-    color: tokens.colorBrandForeground1,
-    backgroundColor: tokens.colorNeutralBackground1,
-    borderRadius: tokens.borderRadiusCircular,
-    zIndex: 2,
-    display: "flex",
-  },
-});
-
 type Props = {
   photo: PhotoItem;
 };
 
 export const ThumbnailTile: React.FC<Props> = (props) => {
   const { photo } = props;
-  const styles = useStyles();
   const tileRef = useRef<HTMLButtonElement | null>(null);
   const supportsIntersectionObserver = typeof IntersectionObserver !== "undefined";
   const [isNearViewport, setIsNearViewport] = useState(!supportsIntersectionObserver);
@@ -229,14 +156,14 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   };
 
   const loading = isNearViewport ? "eager" : "lazy";
-  const fetchpriority = isNearViewport ? "high" : "low";
+  const fetchPriority = isNearViewport ? "high" : "low";
   const thumbnailUrl = canRequestThumbnail ? photo.thumbnailUrl : undefined;
 
   return (
     <button
       type="button"
       ref={tileRef}
-      className={`${styles.tile} ${selected ? styles.tileSelected : ""}`}
+      className={`${css.tile} ${selected ? css.tileSelected : ""}`}
       style={{ "--ratio": ratio.toString() } as React.CSSProperties}
       onClick={handleClick}
       onMouseEnter={() => setIsHovered(true)}
@@ -249,28 +176,28 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       aria-pressed={selected}
     >
       {selected ? (
-        <span className={styles.selectedBadge} aria-hidden="true">
-          <CheckmarkCircle20Filled />
+        <span className={css.selectedBadge} aria-hidden="true">
+          <CheckCircle size={20} fill="currentColor" />
         </span>
       ) : null}
       {photo.mediaType === "video" ? (
         <>
-          <span className={styles.videoBadge} aria-hidden="true">
-            <PlayCircle24Regular />
+          <span className={css.videoBadge} aria-hidden="true">
+            <PlayCircle size={24} />
           </span>
           <img
             src={thumbnailUrl}
             alt={photo.name}
             loading={loading}
-            fetchpriority={fetchpriority}
-            className={styles.image}
+            fetchPriority={fetchPriority}
+            className={css.image}
             style={{ opacity: isImageLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
             onLoad={handleImageLoad}
           />
           {isHovered && (
             <video
               src={photo.videoPreviewUrl}
-              className={styles.image}
+              className={css.image}
               style={{ position: "absolute", top: 0, left: 0 }}
               muted
               loop
@@ -284,8 +211,8 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           src={thumbnailUrl}
           alt={photo.name}
           loading={loading}
-          fetchpriority={fetchpriority}
-          className={styles.image}
+          fetchPriority={fetchPriority}
+          className={css.image}
           style={{ opacity: isImageLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
           onLoad={handleImageLoad}
         />

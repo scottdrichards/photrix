@@ -5,7 +5,7 @@ const baseDeps = (
   overrides: Partial<NegotiationDeps> = {},
 ): NegotiationDeps => ({
   hasCachedHLS: async () => false,
-  isCudaAvailable: async () => false,
+  isGpuAvailable: async () => false,
   getFileMetadata: async () => ({
     sizeInBytes: 100_000_000,
     duration: 60,
@@ -34,7 +34,7 @@ describe("negotiateVideoPlayback", () => {
   it("returns HLS when CUDA is available even without cached HLS", async () => {
     const result = await negotiateVideoPlayback(
       { path: "video.mp4", bandwidthMbps: 10, hevcSupported: false },
-      baseDeps({ isCudaAvailable: async () => true }),
+      baseDeps({ isGpuAvailable: async () => true }),
     );
 
     expect(result).toEqual({
@@ -173,7 +173,7 @@ describe("negotiateVideoPlayback", () => {
       { path: "video.mp4", bandwidthMbps: 50, hevcSupported: true },
       baseDeps({
         hasCachedHLS: async () => true,
-        isCudaAvailable: async () => true,
+        isGpuAvailable: async () => true,
       }),
     );
 
@@ -184,7 +184,7 @@ describe("negotiateVideoPlayback", () => {
     const result = await negotiateVideoPlayback(
       { path: "video.mp4", bandwidthMbps: 50, hevcSupported: true },
       baseDeps({
-        isCudaAvailable: async () => true,
+        isGpuAvailable: async () => true,
         getFileMetadata: async () => ({
           sizeInBytes: 100_000_000,
           duration: 60,

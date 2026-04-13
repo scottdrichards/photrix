@@ -1,0 +1,14 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.button {
+  justify-content: flex-start;
+}
+
+.countText {
+  color: var(--fg3);
+  opacity: 0.82;
+}

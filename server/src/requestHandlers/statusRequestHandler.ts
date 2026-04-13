@@ -114,14 +114,21 @@ export const statusRequestHandler = async (
     res.flushHeaders();
   }
 
+  let updating = false;
   const sendUpdate = async () => {
-    const statusStartTime = Date.now();
-    const payload = await getStatusPayload(database);
-    const elapsed = Date.now() - statusStartTime;
-    if (elapsed > 200) {
-      console.log(`[status] stream payload generation took ${elapsed}ms`);
+    if (updating) return;
+    updating = true;
+    try {
+      const statusStartTime = Date.now();
+      const payload = await getStatusPayload(database);
+      const elapsed = Date.now() - statusStartTime;
+      if (elapsed > 200) {
+        console.log(`[status] stream payload generation took ${elapsed}ms`);
+      }
+      writeSSE(res, payload);
+    } finally {
+      updating = false;
     }
-    writeSSE(res, payload);
   };
 
   sendUpdate();

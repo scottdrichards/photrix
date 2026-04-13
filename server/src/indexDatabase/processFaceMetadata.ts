@@ -298,7 +298,7 @@ const collectConfirmedProfiles = (tags: FaceTag[]): PersonProfile[] =>
       ];
     });
 
-export const startBackgroundProcessFaceMetadata = async (
+export const startBackgroundProcessFaceMetadata = (
   database: IndexDatabase,
   onComplete?: () => void,
 ) => {
@@ -313,13 +313,13 @@ export const startBackgroundProcessFaceMetadata = async (
     fallbackCount: 0,
     workerFailures: 0,
   };
-  const totalToProcess = await database.countFilesNeedingMetadataUpdate("faceMetadata");
   let processedCount = 0;
   let restartAtMS = 0;
   let lastReportTime = Date.now();
   const confirmedProfiles: PersonProfile[] = [];
 
   const processAll = async () => {
+    const totalToProcess = await database.countFilesNeedingMetadataUpdate("faceMetadata");
     while (true) {
       await waitForBackgroundTasksEnabled();
 
@@ -350,7 +350,12 @@ export const startBackgroundProcessFaceMetadata = async (
               return;
             }
 
-            const fileRecord = await database.getFileRecord(item.relativePath);
+            const fileRecord = await database.getFileRecord(item.relativePath, [
+              "regions",
+              "personInImage",
+              "dimensionWidth",
+              "dimensionHeight",
+            ]);
             const hasKnownTagging =
               (fileRecord?.regions?.length ?? 0) > 0 ||
               (fileRecord?.personInImage?.length ?? 0) > 0;

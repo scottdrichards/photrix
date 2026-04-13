@@ -1,4 +1,3 @@
-import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import * as React from "react";
 import * as ReactDOM from "react-dom/client";
 import "./styles.css";
@@ -14,8 +13,6 @@ const root = ReactDOM.createRoot(rootElement);
 
 root.render(
   <React.StrictMode>
-    <FluentProvider theme={webLightTheme}>
-      <App />
-    </FluentProvider>
+    <App />
   </React.StrictMode>,
 );

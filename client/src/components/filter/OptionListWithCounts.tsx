@@ -1,5 +1,5 @@
-import { Button, makeStyles, tokens } from "@fluentui/react-components";
 import { useMemo } from "react";
+import css from "./OptionListWithCounts.module.css";
 
 type OptionListWithCountsProps = {
     options: {
@@ -11,24 +11,7 @@ type OptionListWithCountsProps = {
   onSelect: (optionKey: string) => void;
 };
 
-const useStyles = makeStyles({
-  list: {
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingHorizontalXS,
-  },
-  button: {
-    justifyContent: "flex-start",
-  },
-  countText: {
-    color: tokens.colorNeutralForeground3,
-    opacity: 0.82,
-  },
-});
-
 export const OptionListWithCounts = ({ options, onSelect }: OptionListWithCountsProps) => {
-
-  const styles = useStyles();
   const formatNumber = useMemo(() => new Intl.NumberFormat(), []);
 
   if (options.length === 0) {
@@ -36,18 +19,16 @@ export const OptionListWithCounts = ({ options, onSelect }: OptionListWithCounts
   }
 
   return (
-    <div className={styles.list}>
+    <div className={css.list}>
       {options.map((option) => (
-        <Button
+        <button
           key={option.key}
-          size="small"
-          appearance={option.selected ? "primary" : "subtle"}
-          className={styles.button}
+          className={`btn btn-sm ${css.button} ${option.selected ? "btn-primary" : "btn-subtle"}`}
           onClick={() => onSelect(option.key)}
         >
           <span>{option.label}</span>
-          <span className={styles.countText}>{` (${formatNumber.format(option.count)})`}</span>
-        </Button>
+          <span className={css.countText}>{` (${formatNumber.format(option.count)})`}</span>
+        </button>
       ))}
     </div>
   );

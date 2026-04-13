@@ -6,9 +6,9 @@ import { type ConversionPriority } from "../common/conversionPriority.ts";
 import { measureOperation } from "../observability/requestTrace.ts";
 import type { StandardHeight } from "../common/standardHeights.ts";
 import { appendWithLimit, pipeChildProcessLogs } from "./videoUtils.ts";
-import { isCudaAvailable } from "./cudaAvailability.ts";
+import { getGpuAcceleration } from "./gpuAcceleration.ts";
 
-const cudaAvailable = await isCudaAvailable();
+const gpu = await getGpuAcceleration();
 
 const getHLSDirectory = (filePath: string, height: StandardHeight): string =>
   getMirroredHLSDirectory(filePath, String(height));
@@ -101,48 +101,36 @@ export const generateHLS = async (
         playlistPath,
       ];
 
-  if (cudaAvailable) {
-        // FFmpeg args for HLS with NVIDIA NVENC hardware acceleration
-        const nvencArgs = [
-          "-hwaccel",
-          "cuda", // use GPU for decoding
+  if (gpu) {
+        const hwArgs = [
+          ...gpu.hwaccelArgs,
           ...inputArgs,
           "-c:v",
-          "h264_nvenc", // NVIDIA hardware encoder
-          "-preset",
-          "p1", // fastest NVENC preset
-          "-tune",
-          "ll", // low latency tuning
-          "-rc",
-          "vbr", // variable bitrate rate control
-          "-cq",
-          "28", // constant quality level (lower = better quality)
-          "-b:v",
-          "0", // let CQ control quality, no target bitrate
+          gpu.h264Codec,
+          ...gpu.cqArgs(28),
           "-maxrate",
-          maxBitrate, // cap peak bitrate
+          maxBitrate,
           "-bufsize",
-          maxBitrate, // VBV buffer size
+          maxBitrate,
           ...outputArgs,
         ];
-        console.log(`[HLS] Generating ${height}p HLS stream for ${filePath} using NVENC`);
+        console.log(`[HLS] Generating ${height}p HLS stream for ${filePath} using ${gpu.label}`);
         await measureOperation(
           "generateHLSWithFFMPEG",
-          () => generateHLSWithFFMPEG(nvencArgs, hlsDir, "nvenc"),
-          { category: "conversion", detail: `nvenc:${String(height)}`, logWithoutRequest: true },
+          () => generateHLSWithFFMPEG(hwArgs, hlsDir, gpu.vendor),
+          { category: "conversion", detail: `${gpu.vendor}:${String(height)}`, logWithoutRequest: true },
         );
   } else {
-        // FFmpeg args for software encoding fallback
         const softwareArgs = [
           ...inputArgs,
           "-c:v",
-          "libx264", // software H.264 encoder
+          "libx264",
           "-preset",
-          "fast", // balance speed vs compression
+          "fast",
           "-crf",
-          "23", // constant rate factor (lower = better quality, 23 is default)
+          "23",
           "-pix_fmt",
-          "yuv420p", // widely compatible pixel format
+          "yuv420p",
           ...outputArgs,
         ];
         console.log(

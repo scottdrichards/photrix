@@ -5,20 +5,11 @@ import { StandardHeight } from "../common/standardHeights.ts";
 import { CACHE_DIR, getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
 import { measureOperation } from "../observability/requestTrace.ts";
-import { isCudaAvailable } from "./cudaAvailability.ts";
+import { getGpuAcceleration } from "./gpuAcceleration.ts";
 
 console.log(`[VideoCache] Initialized at ${CACHE_DIR}`);
 
 const MAX_CAPTURED_LOG_CHARS = 64_000;
-
-const isCUDAFailure = (stderr: string): boolean => {
-  const normalized = stderr.toLowerCase();
-  return (
-    normalized.includes("nvcuda") ||
-    normalized.includes("cuda") ||
-    normalized.includes("hwaccel")
-  );
-};
 
 export const appendWithLimit = (current: string, chunk: string): string => {
   if (chunk.length >= MAX_CAPTURED_LOG_CHARS) {
@@ -86,28 +77,29 @@ export const generateVideoPreview = async (
 
   console.log(`[VideoCache] Generating ${height}p preview for ${filePath}`);
   await mkdir(dirname(cachedPath), { recursive: true });
+  const gpu = await getGpuAcceleration();
   await measureOperation(
     "generateVideoPreview",
     () =>
       new Promise<void>((resolve, reject) => {
         const args = [
-          "-y", // Overwrite output file
+          "-y",
+          ...(gpu ? gpu.hwaccelArgs : []),
           "-ss",
-          "00:00:00", // Start time
+          "00:00:00",
           "-i",
           filePath,
           "-t",
-          `${durationMS / 1000}`, // Duration
+          `${durationMS / 1000}`,
           "-vf",
           `scale=-2:${height === "original" ? -1 : height}`,
           "-c:v",
-          "libx264", // Video codec
+          gpu ? gpu.h264Codec : "libx264",
+          ...(gpu
+            ? gpu.cqArgs(23)
+            : ["-preset", "fast", "-crf", "23"]),
           "-pix_fmt",
-          "yuv420p", // Ensure compatibility
-          "-preset",
-          "fast",
-          "-crf",
-          "23",
+          "yuv420p",
           "-c:a",
           "aac",
           "-b:a",
@@ -168,10 +160,10 @@ export const generateVideoThumbnail = async (
     return cachedPath;
   }
 
-  const cudaAvailable = await isCudaAvailable();
+  const gpu = await getGpuAcceleration();
 
   const generateWithMode = async (useHardware: boolean): Promise<void> => {
-        const encoderType = useHardware ? "CUDA" : "software";
+        const encoderType = useHardware && gpu ? gpu.label : "software";
         console.log(
           `[VideoCache] Generating ${height}p thumbnail for ${filePath} (${encoderType})`,
         );
@@ -182,7 +174,7 @@ export const generateVideoThumbnail = async (
             new Promise<void>((resolve, reject) => {
           const args = [
             "-y",
-            ...(useHardware ? ["-hwaccel", "cuda"] : []),
+            ...(useHardware && gpu ? gpu.hwaccelArgs : []),
             "-ss",
             "00:00:00",
             "-i",
@@ -211,9 +203,9 @@ export const generateVideoThumbnail = async (
               return;
             }
 
-            if (useHardware && isCUDAFailure(stderr)) {
+            if (useHardware && gpu?.isHardwareFailure(stderr)) {
               console.warn(
-                `[VideoCache] CUDA thumbnail generation failed, retrying with software encoding`,
+                `[VideoCache] ${gpu.label} thumbnail generation failed, retrying with software encoding`,
               );
               generateWithMode(false).then(resolve).catch(reject);
               return;
@@ -236,6 +228,6 @@ export const generateVideoThumbnail = async (
         );
       };
 
-  await generateWithMode(cudaAvailable);
+  await generateWithMode(gpu !== null);
   return cachedPath;
 };

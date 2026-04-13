@@ -1,4 +1,3 @@
-import { Button, Caption1 } from "@fluentui/react-components";
 import type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
 
 type FileTypeFilterProps = {
@@ -12,35 +11,31 @@ export const FileTypeFilter = ({
 }: FileTypeFilterProps) => {
   return (
     <div>
-      <Caption1>Type:</Caption1>
-      <Button
-        size="small"
-        appearance={mediaTypeFilter === "all" ? "primary" : "subtle"}
+      <small>Type:</small>
+      <button
+        className={`btn btn-sm ${mediaTypeFilter === "all" ? "btn-primary" : "btn-subtle"}`}
         onClick={() => handleMediaTypeChange("all")}
       >
         All
-      </Button>
-      <Button
-        size="small"
-        appearance={mediaTypeFilter === "photo" ? "primary" : "subtle"}
+      </button>
+      <button
+        className={`btn btn-sm ${mediaTypeFilter === "photo" ? "btn-primary" : "btn-subtle"}`}
         onClick={() => handleMediaTypeChange("photo")}
       >
         Photo
-      </Button>
-      <Button
-        size="small"
-        appearance={mediaTypeFilter === "video" ? "primary" : "subtle"}
+      </button>
+      <button
+        className={`btn btn-sm ${mediaTypeFilter === "video" ? "btn-primary" : "btn-subtle"}`}
         onClick={() => handleMediaTypeChange("video")}
       >
         Video
-      </Button>
-      <Button
-        size="small"
-        appearance={mediaTypeFilter === "other" ? "primary" : "subtle"}
+      </button>
+      <button
+        className={`btn btn-sm ${mediaTypeFilter === "other" ? "btn-primary" : "btn-subtle"}`}
         onClick={() => handleMediaTypeChange("other")}
       >
         Other
-      </Button>
+      </button>
     </div>
   );
 };

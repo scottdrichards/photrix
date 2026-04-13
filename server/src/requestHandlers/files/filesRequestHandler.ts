@@ -19,22 +19,23 @@ import {
   getVariantPlaylistPath,
   getVariantSegmentPath,
 } from "../../videoProcessing/generateMultibitrateHLS.ts";
-import { isCudaAvailable } from "../../videoProcessing/cudaAvailability.ts";
+import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
+import { getVideoMetadata } from "../../videoProcessing/getVideoMetadata.ts";
 import {
   StandardHeight,
   parseToStandardHeight,
 } from "../../common/standardHeights.ts";
 import { measureOperation } from "../../observability/requestTrace.ts";
-import { scheduleWork } from "../../common/scheduleWork.ts";
+import type { ConversionWorker } from "../../indexDatabase/conversionWorker.ts";
 import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../utils.ts";
 
-type Options = { database: IndexDatabase; storageRoot: string };
+type Options = { database: IndexDatabase; storageRoot: string; conversionWorker: ConversionWorker };
 
 export const filesEndpointRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
   res: http.ServerResponse,
-  { database, storageRoot }: Options,
+  { database, storageRoot, conversionWorker }: Options,
 ) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -42,7 +43,7 @@ export const filesEndpointRequestHandler = async (
     if (!pathMatch) return writeJson(res, 400, { error: "Bad request" });
     const subPath = decodeURIComponent(pathMatch[1]) || "/";
     if (subPath.endsWith("/")) return queryHandler(url, subPath, database, res);
-    await fileHandler(req, url, subPath, storageRoot, res, database);
+    await fileHandler(req, url, subPath, storageRoot, res, database, conversionWorker);
   } catch (error) {
     console.error("Error processing files request:", error);
     if (!res.headersSent)
@@ -159,6 +160,49 @@ const logQueueStatus = (label: string, subPath: string) => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Generates a synthetic VOD playlist based on known duration so the client
+ * can begin requesting segments immediately while ffmpeg encodes them.
+ */
+const generateSyntheticPlaylist = (
+  durationSeconds: number,
+  segmentDuration: number,
+): string => {
+  const numSegments = Math.max(1, Math.ceil(durationSeconds / segmentDuration));
+  const lines = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:3",
+    `#EXT-X-TARGETDURATION:${Math.ceil(segmentDuration)}`,
+    "#EXT-X-MEDIA-SEQUENCE:0",
+    "#EXT-X-PLAYLIST-TYPE:VOD",
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+  ];
+
+  for (let i = 0; i < numSegments; i++) {
+    const isLast = i === numSegments - 1;
+    const dur = isLast
+      ? Math.max(0.1, durationSeconds - i * segmentDuration)
+      : segmentDuration;
+    lines.push(`#EXTINF:${dur.toFixed(6)},`);
+    lines.push(`segment_${String(i).padStart(3, "0")}.ts`);
+  }
+
+  lines.push("#EXT-X-ENDLIST");
+  return lines.join("\n") + "\n";
+};
+
+const generateBootstrapEventPlaylist = (segmentDuration: number): string =>
+  [
+    "#EXTM3U",
+    "#EXT-X-VERSION:3",
+    `#EXT-X-TARGETDURATION:${Math.ceil(segmentDuration)}`,
+    "#EXT-X-MEDIA-SEQUENCE:0",
+    "#EXT-X-PLAYLIST-TYPE:EVENT",
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+    `#EXTINF:${segmentDuration.toFixed(6)},`,
+    "segment_000.ts",
+  ].join("\n") + "\n";
+
 const getDurationHeader = (knownDuration: number | null | undefined) =>
   typeof knownDuration === "number" && Number.isFinite(knownDuration)
     ? { "X-Content-Duration": String(knownDuration) }
@@ -222,6 +266,7 @@ type FileHandlingContext = {
   isImage: boolean;
   isVideo: boolean;
   database: IndexDatabase;
+  conversionWorker: ConversionWorker;
 };
 
 const serveVideoThumb = async (
@@ -235,7 +280,7 @@ const serveVideoThumb = async (
     const cachedPath = await measureOperation(
       "generateVideoThumbnail",
       () =>
-        scheduleWork(`videoThumb:${normalizedPath}:${height}`, () =>
+        ctx.conversionWorker.submitActive(`videoThumb:${normalizedPath}:${height}`, () =>
           generateVideoThumbnail(normalizedPath, height, { priority: "userBlocked" }),
         ),
       { category: "conversion", detail: String(height) },
@@ -284,13 +329,28 @@ const tryHLSStream = async (
       subPath,
     );
 
-    // Get duration from database for accurate playlist duration
+    // Get duration from database, falling back to ffprobe if not indexed yet
     const fileRecord = await measureOperation(
       "getFileRecord",
       () => database.getFileRecord(subPath),
       { category: "db", detail: "duration" },
     );
-    const knownDuration = fileRecord?.duration;
+    let knownDuration = fileRecord?.duration;
+
+    if (typeof knownDuration !== "number" || !Number.isFinite(knownDuration)) {
+      try {
+        const probed = await measureOperation(
+          "ffprobeDuration",
+          () => getVideoMetadata(normalizedPath),
+          { category: "conversion", detail: "ffprobe" },
+        );
+        if (typeof probed.duration === "number" && Number.isFinite(probed.duration)) {
+          knownDuration = probed.duration;
+        }
+      } catch {
+        // ffprobe failed — continue without duration
+      }
+    }
 
     // Check if multi-bitrate HLS is pre-encoded
     const multibitrateInfo = await measureOperation(
@@ -371,7 +431,7 @@ const tryHLSStream = async (
     }
 
     // Fall back to on-demand single-stream HLS generation (requires hardware acceleration)
-    if (!(await isCudaAvailable())) {
+    if (!(await getGpuAcceleration())) {
       writeJson(res, 422, {
         error: "HLS not available",
         message: "No cached HLS and hardware acceleration is not available for on-the-fly encoding",
@@ -385,7 +445,27 @@ const tryHLSStream = async (
       { category: "conversion", detail: String(height) },
     );
 
-    // If requesting a segment, serve it directly if it exists
+    // Start ffmpeg in background before handling segment or playlist requests.
+    // This ensures encoding is running when segments are requested on-demand.
+    const generationPromise = ctx.conversionWorker.submitActive(
+      `hls:${normalizedPath}:${height}`,
+      () =>
+        generateHLS(normalizedPath, height, {
+          priority: "userBlocked",
+          contentDurationSeconds:
+            typeof knownDuration === "number" && Number.isFinite(knownDuration)
+              ? knownDuration
+              : undefined,
+        }),
+    );
+
+    let generationError: Error | undefined;
+    generationPromise.catch((err) => {
+      generationError = err instanceof Error ? err : new Error(String(err));
+      console.error(`[HLS] Background generation failed for ${subPath}:`, err);
+    });
+
+    // Serve individual segments on-demand — wait for ffmpeg to produce them
     if (segment) {
       const segmentPath = getHLSSegmentPath(hlsInfo.hlsDir, segment);
 
@@ -397,79 +477,57 @@ const tryHLSStream = async (
       return true;
     }
 
-    // Start HLS generation, deduplicated so concurrent requests share one encode
-    await measureOperation(
-      "generateHLS",
-      () =>
-        scheduleWork(`hls:${normalizedPath}:${height}`, () =>
-          generateHLS(normalizedPath, height, {
-            priority: "userBlocked",
-            contentDurationSeconds:
-              typeof knownDuration === "number" && Number.isFinite(knownDuration)
-                ? knownDuration
-                : undefined,
-          }),
-        ),
-      { category: "conversion", detail: String(height) },
-    );
+    // Playlist request — serve immediately if possible
 
-    // Wait for playlist to have at least 3 segments for smooth initial playback
-    const maxWaitMs = 30_000;
-    const pollIntervalMs = 200;
-    let waited = 0;
-    const minSegments = 3;
-
-    const countSegments = async (): Promise<number> => {
-      if (!(await fileExists(hlsInfo.playlistPath))) return 0;
-      const content = await measureOperation(
+    // If the real playlist already exists (encoding in progress or done), serve it
+    if (await fileExists(hlsInfo.playlistPath)) {
+      const playlistContent = await measureOperation(
         "readHlsPlaylist",
         () => readFile(hlsInfo.playlistPath, "utf-8"),
         { category: "file" },
       );
-      const matches = content.match(/segment_\d+\.ts/g);
-      return matches?.length ?? 0;
-    };
-
-    while ((await countSegments()) < minSegments && waited < maxWaitMs) {
-      await sleep(pollIntervalMs);
-      waited += pollIntervalMs;
-    }
-
-    if (!(await fileExists(hlsInfo.playlistPath))) {
-      writeJson(res, 500, { error: "HLS playlist generation timed out" });
+      const isDone = playlistContent.includes("#EXT-X-ENDLIST");
+      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&height=${height}&segment=`;
+      const modifiedPlaylist = playlistContent.replace(
+        /^(segment_\d+\.ts)$/gm,
+        (match) => `${baseUrl}${match}`,
+      );
+      writeHlsPlaylistResponse(
+        res,
+        modifiedPlaylist,
+        isDone ? "public, max-age=31536000" : "no-cache",
+        knownDuration,
+      );
       return true;
     }
 
-    // Read and serve the playlist, modifying segment URLs to include proper path
-    let playlistContent = await measureOperation(
-      "readHlsPlaylist",
-      () => readFile(hlsInfo.playlistPath, "utf-8"),
-      { category: "file" },
-    );
+    // If generation already failed, surface the error immediately
+    if (generationError) throw generationError;
 
-    // Inject total duration into playlist if we know it from the database
-    // This allows the player to show correct duration even during encoding
-    if (knownDuration && Number.isFinite(knownDuration)) {
-      // Add EXT-X-TARGETDURATION if not present or too low, and add a comment with total duration
-      // The #EXT-X-TOTALDURATION is a custom tag that hls.js doesn't use, but we can also
-      // manipulate the playlist to help the player
-      if (!playlistContent.includes("#EXT-X-ENDLIST")) {
-        // Still encoding - add a hint about total duration
-        // Insert after #EXTM3U line
-        playlistContent = playlistContent.replace(
-          "#EXTM3U",
-          `#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES`,
-        );
-      }
+    // No real playlist yet — return a synthetic VOD playlist immediately
+    // so the client can start requesting segments as ffmpeg produces them
+    if (typeof knownDuration === "number" && Number.isFinite(knownDuration) && knownDuration > 0) {
+      console.log(`[HLS] Serving synthetic playlist for ${subPath} (duration=${knownDuration}s)`);
+      const hlsSegmentDuration = 2;
+      const synthetic = generateSyntheticPlaylist(knownDuration, hlsSegmentDuration);
+      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&height=${height}&segment=`;
+      const modifiedPlaylist = synthetic.replace(
+        /^(segment_\d+\.ts)$/gm,
+        (match) => `${baseUrl}${match}`,
+      );
+      writeHlsPlaylistResponse(res, modifiedPlaylist, "no-cache", knownDuration);
+      return true;
     }
 
-    // Rewrite segment paths in playlist to use API endpoint
+    // No duration and no real playlist yet. Return a bootstrap EVENT playlist immediately
+    // so the client can request segment_000 while ffmpeg continues writing in background.
+    console.log(`[HLS] Serving bootstrap EVENT playlist for ${subPath}`);
     const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&height=${height}&segment=`;
-    const modifiedPlaylist = playlistContent.replace(
+    const bootstrap = generateBootstrapEventPlaylist(2).replace(
       /^(segment_\d+\.ts)$/gm,
       (match) => `${baseUrl}${match}`,
     );
-    writeHlsPlaylistResponse(res, modifiedPlaylist, "no-cache", knownDuration);
+    writeHlsPlaylistResponse(res, bootstrap, "no-cache", knownDuration);
     return true;
   } catch (error) {
     console.error(`Error generating HLS stream for: ${subPath}`, error);
@@ -498,7 +556,7 @@ const tryImageVariant = async (ctx: FileHandlingContext) => {
     const cachedPath = await measureOperation(
       "convertImage",
       () =>
-        scheduleWork(`thumbnail:${normalizedPath}:${height}`, () =>
+        ctx.conversionWorker.submitActive(`thumbnail:${normalizedPath}:${height}`, () =>
           convertImage(normalizedPath, height, { priority: "userBlocked" }),
         ),
       { category: "conversion", detail: String(height) },
@@ -530,6 +588,7 @@ const fileHandler = async (
   storageRoot: string,
   res: http.ServerResponse,
   database: IndexDatabase,
+  conversionWorker: ConversionWorker,
 ) => {
   if (!subPath) {
     return writeJson(res, 400, { error: "Missing file path" });
@@ -585,6 +644,7 @@ const fileHandler = async (
     isImage,
     isVideo,
     database,
+    conversionWorker,
   };
 
   // HLS handler needs URL for segment parameter

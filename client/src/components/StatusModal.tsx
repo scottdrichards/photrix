@@ -1,120 +1,13 @@
-import {
-  Dialog,
-  DialogSurface,
-  DialogTitle,
-  DialogBody,
-  DialogContent,
-  DialogActions,
-  Button,
-  ProgressBar,
-  Switch,
-  makeStyles,
-  tokens,
-  Text,
-} from "@fluentui/react-components";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   setBackgroundTasksEnabled,
   subscribeStatusStream,
   type ServerStatus,
 } from "../api";
 import { RecentActivity } from "./RecentActivity";
+import css from "./StatusModal.module.css";
 
-const useStyles = makeStyles({
-  container: {
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingVerticalM,
-  },
-  statsRow: {
-    display: "flex",
-    gap: tokens.spacingHorizontalL,
-    marginBottom: tokens.spacingVerticalM,
-    flexWrap: "wrap",
-  },
-  recentRow: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-    gap: tokens.spacingHorizontalM,
-  },
-  label: {
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  value: {
-    marginLeft: tokens.spacingHorizontalS,
-  },
-  badgeRow: {
-    display: "flex",
-    gap: tokens.spacingHorizontalM,
-    flexWrap: "wrap",
-  },
-  toggleRow: {
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingVerticalXS,
-  },
-  errorText: {
-    color: tokens.colorPaletteRedForeground1,
-  },
-  queueBarSection: {
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingVerticalXS,
-  },
-  queueBarHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalM,
-  },
-  queueBarTrack: {
-    position: "relative",
-    display: "flex",
-    width: "100%",
-    height: "18px",
-    borderRadius: tokens.borderRadiusLarge,
-    overflow: "hidden",
-    backgroundColor: tokens.colorNeutralBackground3,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  queueSegment: {
-    height: "100%",
-  },
-  queueSeparator: {
-    position: "absolute",
-    top: 0,
-    bottom: 0,
-    width: "2px",
-    backgroundColor: tokens.colorNeutralStrokeAccessible,
-    transform: "translateX(-1px)",
-    pointerEvents: "none",
-  },
-  queueAxis: {
-    display: "flex",
-    justifyContent: "space-between",
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-  },
-  queueLegend: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: tokens.spacingHorizontalM,
-  },
-  queueLegendItem: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalXS,
-    color: tokens.colorNeutralForeground2,
-  },
-  queueLegendSwatch: {
-    width: "12px",
-    height: "12px",
-    borderRadius: tokens.borderRadiusSmall,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-});
-
-interface StatusModalProps {
+type StatusModalProps = {
   isOpen: boolean;
   onDismiss: () => void;
 }
@@ -237,17 +130,22 @@ const buildQueueVisualization = (summary: ServerStatus["queueSummary"]) => {
 };
 
 export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
-  const styles = useStyles();
   const [statusHistory, setStatusHistory] = useState<
     Array<{ timestamp: number; status: ServerStatus }> | undefined
   >(undefined);
   const [isTogglingBackgroundTasks, setIsTogglingBackgroundTasks] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
 
   const status = statusHistory?.at(-1)?.status;
   const backgroundTasksEnabled = status?.maintenance.backgroundTasksEnabled ?? true;
 
   const queueVisualization = status ? buildQueueVisualization(status.queueSummary) : undefined;
+
+  useEffect(() => {
+    if (isOpen) dialogRef.current?.showModal();
+    else dialogRef.current?.close();
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -318,99 +216,102 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={(_, data) => !data.open && onDismiss()}>
-      <DialogSurface>
-        <DialogBody>
-          <DialogTitle>Server Status</DialogTitle>
-          <DialogContent>
-            {/* Indeterminate progress bar while loading initial status */}
-            {!statusHistory && <ProgressBar />}
+    <dialog ref={dialogRef} onClose={onDismiss}>
+      <div className={css.dialogBody}>
+        <h2>Server Status</h2>
+          {!statusHistory && <progress />}
             {status && (
-              <div className={styles.container}>
-                <div className={styles.toggleRow}>
-                  <Switch
-                    checked={backgroundTasksEnabled}
-                    disabled={isTogglingBackgroundTasks}
-                    label="Enable background tasks"
-                    onChange={(_, data) => onToggleBackgroundTasks(data.checked)}
-                  />
-                  <Text size={200}>
+              <div className={css.container}>
+                <div className={css.toggleRow}>
+                  <label className="switch-label">
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      className="switch-track"
+                      aria-label="Enable background tasks"
+                      checked={backgroundTasksEnabled}
+                      disabled={isTogglingBackgroundTasks}
+                      onChange={(e) => onToggleBackgroundTasks(e.target.checked)}
+                    />
+                    <span>Enable background tasks</span>
+                  </label>
+                  <small>
                     When disabled, the server only runs user-blocking work.
-                  </Text>
-                  {toggleError ? <Text className={styles.errorText}>{toggleError}</Text> : null}
+                  </small>
+                  {toggleError ? <span className={css.errorText}>{toggleError}</span> : null}
                 </div>
 
-                <div className={styles.statsRow}>
-                  <Text>
-                    <span className={styles.label}>Database Size:</span>
-                    <span className={styles.value}>
+                <div className={css.statsRow}>
+                  <span>
+                    <span className={css.label}>Database Size:</span>
+                    <span className={css.value}>
                       {status.databaseSize.toLocaleString()} files
                     </span>
-                  </Text>
-                  <Text>
-                    <span className={styles.label}>Scanned:</span>
-                    <span className={styles.value}>
+                  </span>
+                  <span>
+                    <span className={css.label}>Scanned:</span>
+                    <span className={css.value}>
                       {status.scannedFilesCount.toLocaleString()} files
                     </span>
-                  </Text>
-                  <Text>
-                    <span className={styles.label}>EXIF worker:</span>
-                    <span className={styles.value}>
+                  </span>
+                  <span>
+                    <span className={css.label}>EXIF worker:</span>
+                    <span className={css.value}>
                       {status.maintenance.exifActive ? "active" : "idle"}
                     </span>
-                  </Text>
-                  <Text>
-                    <span className={styles.label}>Face worker:</span>
-                    <span className={styles.value}>
+                  </span>
+                  <span>
+                    <span className={css.label}>Face worker:</span>
+                    <span className={css.value}>
                       {status.maintenance.faceActive ? "active" : "idle"}
                     </span>
-                  </Text>
-                  <Text>
-                    <span className={styles.label}>Queue:</span>
-                    <span className={styles.value}>
+                  </span>
+                  <span>
+                    <span className={css.label}>Queue:</span>
+                    <span className={css.value}>
                       {status.queues.pending.toLocaleString()} waiting / {" "}
                       {status.queues.processing.toLocaleString()} processing
                     </span>
-                  </Text>
+                  </span>
                 </div>
 
-                <div className={styles.statsRow}>
-                  <Text>
-                    <span className={styles.label}>Face processed:</span>
-                    <span className={styles.value}>
+                <div className={css.statsRow}>
+                  <span>
+                    <span className={css.label}>Face processed:</span>
+                    <span className={css.value}>
                       {(status.faceProcessing?.processed ?? 0).toLocaleString()}
                     </span>
-                  </Text>
-                  <Text>
-                    <span className={styles.label}>Worker success:</span>
-                    <span className={styles.value}>
+                  </span>
+                  <span>
+                    <span className={css.label}>Worker success:</span>
+                    <span className={css.value}>
                       {(status.faceProcessing?.workerSuccess ?? 0).toLocaleString()}
                     </span>
-                  </Text>
-                  <Text>
-                    <span className={styles.label}>Fallback used:</span>
-                    <span className={styles.value}>
+                  </span>
+                  <span>
+                    <span className={css.label}>Fallback used:</span>
+                    <span className={css.value}>
                       {(status.faceProcessing?.fallbackCount ?? 0).toLocaleString()}
                     </span>
-                  </Text>
-                  <Text>
-                    <span className={styles.label}>Worker failures:</span>
-                    <span className={styles.value}>
+                  </span>
+                  <span>
+                    <span className={css.label}>Worker failures:</span>
+                    <span className={css.value}>
                       {(status.faceProcessing?.workerFailures ?? 0).toLocaleString()}
                     </span>
-                  </Text>
+                  </span>
                 </div>
                 {queueVisualization ? (
-                  <div className={styles.queueBarSection}>
-                    <div className={styles.queueBarHeader}>
-                      <Text weight="semibold">Queue by disk size</Text>
-                      <Text>{formatBytes(queueVisualization.totalBytes)} total</Text>
+                  <div className={css.queueBarSection}>
+                    <div className={css.queueBarHeader}>
+                      <span style={{ fontWeight: 'var(--fw-semi)' }}>Queue by disk size</span>
+                      <span>{formatBytes(queueVisualization.totalBytes)} total</span>
                     </div>
-                    <div className={styles.queueBarTrack}>
+                    <div className={css.queueBarTrack}>
                       {queueVisualization.segments.map((segment) => (
                         <div
                           key={segment.key}
-                          className={styles.queueSegment}
+                          className={css.queueSegment}
                           style={{
                             width: `${segment.widthPercent}%`,
                             backgroundColor: segment.color,
@@ -420,20 +321,20 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                       {queueVisualization.separatorsPercent.map((separator, index) => (
                         <div
                           key={`separator-${index}`}
-                          className={styles.queueSeparator}
+                          className={css.queueSeparator}
                           style={{ left: `${separator}%` }}
                         />
                       ))}
                     </div>
-                    <div className={styles.queueAxis}>
+                    <div className={css.queueAxis}>
                       <span>0</span>
                       <span>{formatBytes(queueVisualization.totalBytes)}</span>
                     </div>
-                    <div className={styles.queueLegend}>
+                    <div className={css.queueLegend}>
                       {queueVisualization.groupBreakdown.map((item) => (
-                        <span key={item.group} className={styles.queueLegendItem}>
+                        <span key={item.group} className={css.queueLegendItem}>
                           <span
-                            className={styles.queueLegendSwatch}
+                            className={css.queueLegendSwatch}
                             style={{
                               background: `linear-gradient(90deg, ${getMediaColor(item.group, "image")} 50%, ${getMediaColor(item.group, "video")} 50%)`,
                             }}
@@ -445,22 +346,20 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                   </div>
                 ) : null}
 
-                <Text size={400} weight="semibold">
+                <span style={{ fontSize: '16px', fontWeight: 'var(--fw-semi)' }}>
                   Recent activity
-                </Text>
-                <div className={styles.recentRow}>
+                </span>
+                <div className={css.recentRow}>
                   <RecentActivity label="Last EXIF" entry={status.recent.exif} />
                 </div>
               </div>
             )}
-          </DialogContent>
-          <DialogActions>
-            <Button appearance="primary" onClick={onDismiss}>
+          <div className={css.dialogActions}>
+            <button className="btn btn-primary" onClick={onDismiss}>
               Close
-            </Button>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
+            </button>
+          </div>
+      </div>
+    </dialog>
   );
 };

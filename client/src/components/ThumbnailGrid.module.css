@@ -1,0 +1,25 @@
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+  color: var(--fg2);
+  margin-block-end: var(--space-s);
+}
+
+.grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: var(--space-m);
+  padding-block-end: var(--space-xxl);
+  --thumbnail-size: clamp(150px, 20vw, 260px);
+}
+
+.sentinel {
+  flex-basis: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: var(--space-l);
+  color: var(--fg3);
+}

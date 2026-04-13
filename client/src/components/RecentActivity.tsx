@@ -1,30 +1,20 @@
-import { makeStyles, tokens, Text } from "@fluentui/react-components";
+import css from "./RecentActivity.module.css";
 import type { RecentMaintenance } from "../api";
 
-const useStyles = makeStyles({
-  label: {
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  value: {
-    marginLeft: tokens.spacingHorizontalS,
-  },
-});
-
-interface RecentActivityProps {
+type RecentActivityProps = {
   label: string;
   entry: RecentMaintenance | null;
-}
+};
 
 export const RecentActivity = ({ label, entry }: RecentActivityProps) => {
-  const styles = useStyles();
   const description = entry
     ? `${entry.folder}${entry.fileName} (${new Date(entry.completedAt).toLocaleTimeString()})`
     : "No activity yet";
 
   return (
-    <Text>
-      <span className={styles.label}>{label}:</span>
-      <span className={styles.value}>{description}</span>
-    </Text>
+    <span>
+      <span className={css.label}>{label}:</span>
+      <span className={css.value}>{description}</span>
+    </span>
   );
 };

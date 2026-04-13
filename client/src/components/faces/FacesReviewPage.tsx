@@ -1,5 +1,6 @@
-import { Button, Caption1, Input, Spinner, Subtitle2, makeStyles, tokens } from "@fluentui/react-components";
 import { type CSSProperties, useEffect, useMemo, useState } from "react";
+import { Spinner } from "../../Spinner";
+import css from "./FacesReviewPage.module.css";
 import {
   acceptFaceSuggestion,
   fetchFacePersonSuggestions,
@@ -13,142 +14,6 @@ import {
 import { useFilterContext } from "../filter/FilterContext";
 
 type PreviewMode = "cropped" | "uncropped" | "zoomed";
-
-const flexColumnBase = {
-  display: "flex",
-  flexDirection: "column",
-} as const;
-
-const useStyles = makeStyles({
-  root: {
-    ...flexColumnBase,
-    gap: tokens.spacingVerticalL,
-  },
-  peopleGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-    gap: tokens.spacingHorizontalM,
-  },
-  personCard: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    padding: tokens.spacingHorizontalM,
-    ...flexColumnBase,
-    gap: tokens.spacingVerticalS,
-    textAlign: "left",
-    cursor: "pointer",
-  },
-  cards: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-    gap: tokens.spacingHorizontalM,
-  },
-  card: {
-    ...flexColumnBase,
-    gap: tokens.spacingVerticalS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    padding: tokens.spacingHorizontalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  previewViewport: {
-    width: "100%",
-    aspectRatio: "4 / 3",
-    overflow: "hidden",
-    position: "relative",
-    borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  preview: {
-    position: "absolute",
-    inset: 0,
-    width: "100%",
-    height: "100%",
-    backgroundColor: tokens.colorNeutralBackground2,
-    transition: "transform 180ms ease",
-    display: "block",
-    transformOrigin: "top left",
-    backgroundPosition: "center center",
-    backgroundRepeat: "no-repeat",
-  },
-  previewCropped: {
-    transform:
-      "translate(var(--preview-pan-x, 0%), var(--preview-pan-y, 0%)) scale(var(--preview-scale, 1))",
-    backgroundSize: "100% 100%",
-  },
-  previewUncropped: {
-    transform: "translate(0%, 0%) scale(1)",
-    backgroundSize: "contain",
-  },
-  previewZoomed: {
-    transform:
-      "translate(var(--preview-pan-x, 0%), var(--preview-pan-y, 0%)) scale(var(--preview-scale, 1))",
-    backgroundSize: "100% 100%",
-  },
-  previewButton: {
-    border: "none",
-    background: "transparent",
-    padding: 0,
-    margin: 0,
-    cursor: "zoom-in",
-    textAlign: "left",
-    width: "100%",
-    display: "block",
-  },
-  previewButtonUncropped: {
-    cursor: "zoom-in",
-  },
-  previewButtonZoomed: {
-    cursor: "zoom-out",
-  },
-  regionBox: {
-    position: "absolute",
-    border: "2px solid #d13438",
-    boxShadow: "0 0 0 1px rgba(255,255,255,0.7)",
-    pointerEvents: "none",
-    transition: "opacity 180ms ease",
-  },
-  previewHint: {
-    color: tokens.colorNeutralForeground3,
-  },
-  cardActions: {
-    display: "flex",
-    gap: tokens.spacingHorizontalS,
-  },
-  nameInput: {
-    width: "100%",
-  },
-  personMeta: {
-    color: tokens.colorNeutralForeground3,
-  },
-  personHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  section: {
-    ...flexColumnBase,
-    gap: tokens.spacingVerticalXS,
-  },
-  matchesGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-    gap: tokens.spacingHorizontalS,
-  },
-  matchCard: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingHorizontalS,
-    ...flexColumnBase,
-    gap: tokens.spacingVerticalXS,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  matchMeta: {
-    color: tokens.colorNeutralForeground3,
-  },
-});
 
 const formatSuggestion = (item: FaceQueueItem) => {
   if (item.person?.id) {
@@ -227,14 +92,14 @@ const nextPreviewMode = (mode: PreviewMode): PreviewMode => {
   return "uncropped";
 };
 
-const getPreviewClassName = (styles: ReturnType<typeof useStyles>, mode: PreviewMode) => {
+const getPreviewClassName = (mode: PreviewMode) => {
   if (mode === "uncropped") {
-    return styles.previewUncropped;
+    return css.previewUncropped;
   }
   if (mode === "zoomed") {
-    return styles.previewZoomed;
+    return css.previewZoomed;
   }
-  return styles.previewCropped;
+  return css.previewCropped;
 };
 
 const getPreviewPan = (
@@ -264,7 +129,6 @@ const displayPersonName = (person: FacePerson) => {
 };
 
 export const FacesReviewPage = () => {
-  const styles = useStyles();
   const { filter } = useFilterContext();
   const [people, setPeople] = useState<FacePerson[]>([]);
   const [isLoadingPeople, setIsLoadingPeople] = useState(true);
@@ -464,7 +328,7 @@ export const FacesReviewPage = () => {
   }) => {
     const previewScale = getPreviewScale(options.dimensions, options.mode);
     const previewPan = getPreviewPan(options.dimensions, options.mode, previewScale);
-    const previewClassName = getPreviewClassName(styles, options.mode);
+    const previewClassName = getPreviewClassName(options.mode);
     const previewStyle: CSSProperties &
       Record<"--preview-scale" | "--preview-pan-x" | "--preview-pan-y", string> = {
       "--preview-scale": previewScale.toFixed(3),
@@ -474,16 +338,16 @@ export const FacesReviewPage = () => {
     };
 
     return (
-      <div className={styles.previewViewport}>
+      <div className={css.previewViewport}>
         <div
-          className={`${styles.preview} ${previewClassName}`}
+          className={`${css.preview} ${previewClassName}`}
           role="img"
           aria-label={options.ariaLabel}
           style={previewStyle}
         >
           {options.showRegionBox ? (
             <div
-              className={styles.regionBox}
+              className={css.regionBox}
               aria-label={`Face region for ${options.ariaLabel}`}
               style={{
                 left: `${(options.dimensions.x * 100).toFixed(2)}%`,
@@ -501,25 +365,25 @@ export const FacesReviewPage = () => {
 
   if (!selectedPerson) {
     return (
-      <section className={styles.root}>
+      <section className={css.root}>
         <div>
-          <Subtitle2>People</Subtitle2>
-          <Caption1>Choose a person to review all detected faces</Caption1>
+          <h3>People</h3>
+          <small>Choose a person to review all detected faces</small>
         </div>
 
         {isLoadingPeople ? <Spinner label="Loading people" /> : null}
-        {peopleError ? <Subtitle2>{peopleError}</Subtitle2> : null}
+        {peopleError ? <h3>{peopleError}</h3> : null}
 
         {!isLoadingPeople && !peopleError && people.length === 0 ? (
-          <Subtitle2>No identified people yet.</Subtitle2>
+          <h3>No identified people yet.</h3>
         ) : null}
 
-        <div className={styles.peopleGrid}>
+        <div className={css.peopleGrid}>
           {people.map((person) => (
             <button
               key={person.id}
               type="button"
-              className={styles.personCard}
+              className={css.personCard}
               onClick={() => {
                 void openPersonFaces(person);
               }}
@@ -535,8 +399,8 @@ export const FacesReviewPage = () => {
                     showRegionBox: false,
                   })
                 : null}
-              <Subtitle2>{displayPersonName(person)}</Subtitle2>
-              <Caption1 className={styles.personMeta}>{person.count} faces</Caption1>
+              <h3>{displayPersonName(person)}</h3>
+              <small className={css.personMeta}>{person.count} faces</small>
             </button>
           ))}
         </div>
@@ -545,14 +409,15 @@ export const FacesReviewPage = () => {
   }
 
   return (
-    <section className={styles.root}>
-      <div className={styles.personHeader}>
+    <section className={css.root}>
+      <div className={css.personHeader}>
         <div>
-          <Subtitle2>{displayPersonName(selectedPerson)}</Subtitle2>
-          <Caption1>{taggedItems.length} tagged faces</Caption1>
+          <h3>{displayPersonName(selectedPerson)}</h3>
+          <small>{taggedItems.length} tagged faces</small>
         </div>
-        <Button
-          appearance="subtle"
+        <button
+          type="button"
+          className="btn btn-subtle"
           onClick={() => {
             setSelectedPersonId(null);
             setTaggedItems([]);
@@ -560,26 +425,26 @@ export const FacesReviewPage = () => {
           }}
         >
           Back to people
-        </Button>
+        </button>
       </div>
 
       {isLoadingFaces ? <Spinner label="Loading faces" /> : null}
-      {facesError ? <Subtitle2>{facesError}</Subtitle2> : null}
+      {facesError ? <h3>{facesError}</h3> : null}
       {!isLoadingFaces && !facesError && taggedItems.length === 0 ? (
-        <Subtitle2>No faces found for this person.</Subtitle2>
+        <h3>No faces found for this person.</h3>
       ) : null}
 
-      <div className={styles.section}>
-        <Subtitle2>Tagged Faces</Subtitle2>
-        <div className={styles.cards}>
+      <div className={css.section}>
+        <h3>Tagged Faces</h3>
+        <div className={css.cards}>
           {taggedItems.map((item) => {
             const previewMode = previewModes[item.faceId] ?? "cropped";
 
             return (
-              <article key={item.faceId} className={styles.card}>
+              <article key={item.faceId} className={css.card}>
                 <button
                   type="button"
-                  className={`${styles.previewButton} ${previewMode === "zoomed" ? styles.previewButtonZoomed : styles.previewButtonUncropped}`}
+                  className={`${css.previewButton} ${previewMode === "zoomed" ? css.previewButtonZoomed : css.previewButtonUncropped}`}
                   onClick={() => {
                     handlePreviewClick(item.faceId);
                   }}
@@ -596,32 +461,33 @@ export const FacesReviewPage = () => {
                   })}
                 </button>
 
-                <Subtitle2>{item.fileName}</Subtitle2>
-                <Caption1>{formatAssigned(item)}</Caption1>
+                <h3>{item.fileName}</h3>
+                <small>{formatAssigned(item)}</small>
                 {selectedPerson.id === "__unassigned__" ? (
-                  <Input
-                    className={styles.nameInput}
+                  <input
+                    className={`input ${css.nameInput}`}
                     placeholder="Type a name to confirm this person"
                     value={pendingNames[item.faceId] ?? ""}
-                    onChange={(_, data) => {
-                      setPendingName(item.faceId, data.value);
+                    onChange={(e) => {
+                      setPendingName(item.faceId, e.target.value);
                     }}
                   />
                 ) : null}
-                <Caption1 className={styles.previewHint}>
+                <small className={css.previewHint}>
                   Click preview: uncrop, then zoom to face
-                </Caption1>
+                </small>
                 {selectedPerson.id === "__unassigned__" ? (
-                  <div className={styles.cardActions}>
-                    <Button
-                      appearance="primary"
+                  <div className={css.cardActions}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
                       onClick={() => {
                         void handleNameUnassignedFace(item);
                       }}
                       disabled={(pendingNames[item.faceId] ?? "").trim().length === 0}
                     >
                       Accept
-                    </Button>
+                    </button>
                   </div>
                 ) : null}
               </article>
@@ -630,20 +496,20 @@ export const FacesReviewPage = () => {
         </div>
       </div>
 
-      <div className={styles.section}>
-        <Subtitle2>Suggested Faces</Subtitle2>
+      <div className={css.section}>
+        <h3>Suggested Faces</h3>
         {suggestedItems.length === 0 ? (
-          <Caption1 className={styles.personMeta}>No profile-based suggestions available.</Caption1>
+          <small className={css.personMeta}>No profile-based suggestions available.</small>
         ) : null}
-        <div className={styles.cards}>
+        <div className={css.cards}>
         {suggestedItems.map((item) => {
           const previewMode = previewModes[item.faceId] ?? "cropped";
 
           return (
-            <article key={item.faceId} className={styles.card}>
+            <article key={item.faceId} className={css.card}>
               <button
                 type="button"
-                className={`${styles.previewButton} ${previewMode === "zoomed" ? styles.previewButtonZoomed : styles.previewButtonUncropped}`}
+                className={`${css.previewButton} ${previewMode === "zoomed" ? css.previewButtonZoomed : css.previewButtonUncropped}`}
                 onClick={() => {
                   handlePreviewClick(item.faceId);
                 }}
@@ -660,29 +526,31 @@ export const FacesReviewPage = () => {
                 })}
               </button>
 
-              <Subtitle2>{item.fileName}</Subtitle2>
-              <Caption1>{Math.round(item.confidence * 100)}% profile match</Caption1>
-              <Caption1 className={styles.previewHint}>
+              <h3>{item.fileName}</h3>
+              <small>{Math.round(item.confidence * 100)}% profile match</small>
+              <small className={css.previewHint}>
                 Click preview: uncrop, then zoom to face
-              </Caption1>
-              <div className={styles.cardActions}>
-                <Button
-                  appearance="primary"
+              </small>
+              <div className={css.cardActions}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
                   onClick={() => {
                     void handleAcceptSuggestion(item);
                   }}
                   disabled={selectedPerson.id === "__unassigned__"}
                 >
                   Accept
-                </Button>
-                <Button
-                  appearance="subtle"
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-subtle"
                   onClick={() => {
                     void handleRejectSuggestion(item);
                   }}
                 >
                   Reject
-                </Button>
+                </button>
               </div>
             </article>
           );

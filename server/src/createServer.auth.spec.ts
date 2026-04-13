@@ -69,7 +69,11 @@ describe("createServer auth gate", () => {
     await db.addPaths(["root.jpg"]);
 
     const { createServer } = await import("./createServer.ts");
-    server = await createServer(db, storagePath);
+    const { createConversionWorker } = await import("./indexDatabase/conversionWorker.ts");
+    server = await createServer(db, storagePath, {
+      onRequest: () => {},
+      conversionWorker: createConversionWorker(),
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
   });

@@ -5,6 +5,7 @@ import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
 import { measureOperation } from "../observability/requestTrace.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
+import { getGpuAcceleration, type GpuAcceleration } from "./gpuAcceleration.ts";
 
 /** HLS quality variants: 360p for fast start, 720p for quality */
 const HLS_VARIANTS = [
@@ -75,7 +76,7 @@ const generateVariant = (
   filePath: string,
   hlsDir: string,
   variant: HLSVariant,
-  useHardware: boolean = true,
+  gpu: GpuAcceleration | null,
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
     const variantDir = join(hlsDir, `${variant.height}p`);
@@ -83,15 +84,15 @@ const generateVariant = (
 
     const args = [
       "-y",
-      ...(useHardware ? ["-hwaccel", "cuda"] : []),
+      ...(gpu ? gpu.hwaccelArgs : []),
       "-i",
       filePath,
       "-vf",
       `scale=-2:${variant.height}`,
       "-c:v",
-      useHardware ? "h264_nvenc" : "libx264",
-      ...(useHardware
-        ? ["-preset", "p1", "-tune", "ll", "-rc", "vbr", "-cq", "28"]
+      gpu ? gpu.h264Codec : "libx264",
+      ...(gpu
+        ? gpu.vbrArgs(28)
         : ["-preset", "veryfast", "-crf", "28"]),
       "-b:v",
       String(variant.bitrate),
@@ -122,10 +123,10 @@ const generateVariant = (
       playlistPath,
     ];
 
-    const encoderType = useHardware ? "NVIDIA NVENC" : "software";
+    const encoderLabel = gpu ? gpu.label : "software";
     if (isVerboseHlsLoggingEnabled()) {
       console.log(
-        `[HLS-ABR] Generating ${variant.height}p variant (${encoderType}) for ${filePath}`,
+        `[HLS-ABR] Generating ${variant.height}p variant (${encoderLabel}) for ${filePath}`,
       );
     }
     const process = spawn("ffmpeg", args);
@@ -138,24 +139,17 @@ const generateVariant = (
     process.on("close", (code) => {
       if (code === 0) {
         if (isVerboseHlsLoggingEnabled()) {
-          console.log(`[HLS-ABR] ${variant.height}p variant complete (${encoderType})`);
+          console.log(`[HLS-ABR] ${variant.height}p variant complete (${encoderLabel})`);
         }
         resolve();
         return;
       }
 
-      // Check if it's a hardware encoding failure
-      if (
-        useHardware &&
-        (stderr.includes("nvcuda") ||
-          stderr.includes("CUDA") ||
-          stderr.includes("h264_nvenc"))
-      ) {
+      if (gpu && gpu.isHardwareFailure(stderr)) {
         console.warn(
-          `[HLS-ABR] Hardware encoding failed for ${variant.height}p, falling back to software encoding`,
+          `[HLS-ABR] ${gpu.label} encoding failed for ${variant.height}p, falling back to software encoding`,
         );
-        // Retry with software encoding
-        generateVariant(filePath, hlsDir, variant, false).then(resolve).catch(reject);
+        generateVariant(filePath, hlsDir, variant, null).then(resolve).catch(reject);
         return;
       }
 
@@ -213,6 +207,8 @@ export const generateMultibitrateHLS = async (
   }
 
   const doEncode = async () => {
+    const gpu = await getGpuAcceleration();
+
     // Create directories for each variant
     for (const variant of HLS_VARIANTS) {
       await mkdir(join(hlsDir, `${variant.height}p`), { recursive: true });
@@ -223,11 +219,11 @@ export const generateMultibitrateHLS = async (
     }
     const startTime = Date.now();
 
-    // Generate variants sequentially (NVENC can only do one encode at a time efficiently)
+    // Generate variants sequentially (GPU encoders work best one at a time)
     for (const variant of HLS_VARIANTS) {
       await measureOperation(
         "generateHlsVariant",
-        () => generateVariant(filePath, hlsDir, variant),
+        () => generateVariant(filePath, hlsDir, variant, gpu),
         {
           category: "conversion",
           detail: `${variant.height}p`,

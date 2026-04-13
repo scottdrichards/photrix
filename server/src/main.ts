@@ -9,7 +9,7 @@ import { runAuthStartupChecks } from "./auth/authStartupChecks.ts";
 import { startBackgroundProcessExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { startBackgroundProcessFaceMetadata } from "./indexDatabase/processFaceMetadata.ts";
 import { startBackgroundProcessFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
-import { startBackgroundConversionWorker } from "./indexDatabase/processHLSEncoding.ts";
+import { createConversionWorker } from "./indexDatabase/conversionWorker.ts";
 import { measureOperation } from "./observability/requestTrace.ts";
 
 const startServer = async () => {
@@ -31,6 +31,8 @@ const startServer = async () => {
         { category: "db", logWithoutRequest: true },
       );
       console.log("[bootstrap] IndexDatabase done");
+
+      const conversionWorker = createConversionWorker();
 
       const metadataProcessingPriorities = [
         {
@@ -55,33 +57,26 @@ const startServer = async () => {
           : []),
         {
           name: "conversion",
-          start: startBackgroundConversionWorker,
+          start: (db: IndexDatabase, onComplete?: () => void) =>
+            conversionWorker.startBackgroundLoop(db, onComplete).then(() => () => conversionWorker.pause()),
         },
       ];
 
-      // Execute metadata processors in sequence
-      let pauseBackgroundProcessMetadata: (() => void) =
-        () => {
-          // No-op until metadata processing starts
-        };
+      let pauseBackgroundProcessMetadata: (() => void) = () => {};
 
       const startMetadataProcessingPipeline = async () => {
-        for (const metadataProcess of metadataProcessingPriorities) {
-          console.log(`[pipeline] Starting ${metadataProcess.name} processing`);
-          pauseBackgroundProcessMetadata = await new Promise<() => void>(
-            (resolve, reject) => {
-              let pauseFn: () => void = () => {};
-              metadataProcess
-                .start(database, () => {
-                  console.log(`[pipeline] ${metadataProcess.name} complete`);
-                  resolve(pauseFn);
-                })
-                .then((fn) => {
-                  pauseFn = fn;
-                })
-                .catch(reject);
-            },
-          );
+        for (const { name, start } of metadataProcessingPriorities) {
+          console.log(`[pipeline] Starting ${name} processing`);
+
+          let signalComplete!: () => void;
+          const completed = new Promise<void>((resolve) => { signalComplete = resolve; });
+
+          pauseBackgroundProcessMetadata = await start(database, () => {
+            console.log(`[pipeline] ${name} complete`);
+            signalComplete();
+          });
+
+          await completed;
         }
         console.log("[bootstrap] All metadata processing priorities scheduled");
       };
@@ -90,6 +85,7 @@ const startServer = async () => {
 
       await createServer(database, absolutePath, {
         onRequest: () => pauseBackgroundProcessMetadata(),
+        conversionWorker,
       });
 
       console.log("[bootstrap] Server started - metadata processing will run in background");

@@ -69,7 +69,11 @@ describe("main.ts HTTP Server", () => {
     await database.addPaths(relativePaths);
 
     const { createServer } = await import("./createServer.ts");
-    server = await createServer(database, storagePath);
+    const { createConversionWorker } = await import("./indexDatabase/conversionWorker.ts");
+    server = await createServer(database, storagePath, {
+      onRequest: () => {},
+      conversionWorker: createConversionWorker(),
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
   });

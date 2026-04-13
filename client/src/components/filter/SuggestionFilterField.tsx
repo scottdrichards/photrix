@@ -1,12 +1,6 @@
-import {
-  Button,
-  Input,
-  Spinner,
-  Subtitle2,
-  makeStyles,
-  tokens,
-} from "@fluentui/react-components";
 import { useEffect, useMemo, useState } from "react";
+import { Spinner } from "../../Spinner";
+import css from "./SuggestionFilterField.module.css";
 import {
   fetchSuggestionsWithCounts,
   SuggestionsField,
@@ -40,32 +34,6 @@ type SuggestionFilterFieldProps = {
   lensFilter?: Exclude<ApiFilterOptions["lensFilter"], string | null>;
 };
 
-const useStyles = makeStyles({
-  section: {
-    display: "flex",
-    flexDirection: "column",
-    gap: tokens.spacingHorizontalS,
-  },
-  textFilterInput: {
-    width: "100%",
-  },
-  selectedRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: "wrap",
-  },
-  selectedButton: {
-    paddingInline: tokens.spacingHorizontalS,
-  },
-  controlsRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalS,
-    flexWrap: "wrap",
-  },
-});
-
 export const SuggestionFilterField = ({
   title,
   placeholder,
@@ -84,7 +52,6 @@ export const SuggestionFilterField = ({
   cameraModelFilter = [],
   lensFilter = [],
 }: SuggestionFilterFieldProps) => {
-  const styles = useStyles();
   const [searchText, setSearchText] = useState("");
   const [suggestions, setSuggestions] = useState<SuggestionWithCount[]>([]);
   const [loading, setLoading] = useState(false);
@@ -188,27 +155,25 @@ export const SuggestionFilterField = ({
   const hasInteraction = selectedValues.length > 0 || searchText.trim().length > 0;
 
   return (
-    <div className={styles.section}>
-      <Subtitle2>{title}</Subtitle2>
+    <div className={css.section}>
+      <h3>{title}</h3>
       {selectedValues.length > 0 ? (
-        <div className={styles.selectedRow}>
+        <div className={css.selectedRow}>
           {selectedValues.map((value) => (
-            <Button
+            <button
               key={value}
-              size="small"
-              appearance="secondary"
-              className={styles.selectedButton}
+              className={`btn btn-sm ${css.selectedButton}`}
               onClick={() => handleRemoveValue(value)}
             >
               {value} ×
-            </Button>
+            </button>
           ))}
         </div>
       ) : null}
-      <Input
-        className={styles.textFilterInput}
+      <input
+        className={`input ${css.textFilterInput}`}
         value={searchText}
-        onChange={(_, data) => setSearchText(data.value)}
+        onChange={(e) => setSearchText(e.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();
@@ -228,10 +193,10 @@ export const SuggestionFilterField = ({
         onSelect={handleAddValue}
       />
       {hasInteraction ? (
-        <div className={styles.controlsRow}>
-          <Button size="small" appearance="subtle" onClick={handleClear}>
+        <div className={css.controlsRow}>
+          <button className="btn btn-sm btn-subtle" onClick={handleClear}>
             Clear
-          </Button>
+          </button>
         </div>
       ) : null}
     </div>

@@ -20,22 +20,22 @@ let isProcessingExif = false;
 
 export const isExifMetadataProcessingActive = () => isProcessingExif;
 
-export const startBackgroundProcessExifMetadata = async (
+export const startBackgroundProcessExifMetadata = (
   database: IndexDatabase,
   onComplete?: () => void,
 ) => {
   if (isProcessingExif) {
-    // Just for deugging - should never happen in practice
+    // Just for debugging - should never happen in practice
     throw new Error("EXIF processing is already running");
   }
   isProcessingExif = true;
-  const totalToProcess = await database.countFilesNeedingMetadataUpdate("exif");
   let processedCount = 0;
   let restartAtMS: number = 0;
   let lastReportTime = Date.now();
   let lastReportCount = 0;
 
   const processAll = async () => {
+    const totalToProcess = await database.countFilesNeedingMetadataUpdate("exif");
     while (true) {
       await waitForBackgroundTasksEnabled();
 
@@ -120,7 +120,7 @@ export const startBackgroundProcessExifMetadata = async (
     }
   };
 
-  processAll();
+  void processAll();
 
   const pause = (durationMS: number = 10_000) => {
     const localRestartMs = Date.now() + durationMS;

@@ -1,5 +1,5 @@
 import type http from "node:http";
-import { isCudaAvailable } from "../../videoProcessing/cudaAvailability.ts";
+import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
 import { getHLSInfo } from "../../videoProcessing/generateHLS.ts";
 import { getMultibitrateHLSInfo } from "../../videoProcessing/generateMultibitrateHLS.ts";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
@@ -33,7 +33,7 @@ const canClientPlayCodec = (
 
 export type NegotiationDeps = {
   hasCachedHLS: (filePath: string) => Promise<boolean>;
-  isCudaAvailable: () => Promise<boolean>;
+  isGpuAvailable: () => Promise<boolean>;
   getFileMetadata: (
     subPath: string,
   ) => Promise<
@@ -70,7 +70,7 @@ export const negotiateVideoPlayback = async (
   }
 
   // 2. CUDA available — can generate HLS on-the-fly
-  if (await deps.isCudaAvailable()) {
+  if (await deps.isGpuAvailable()) {
     return { mode: "hls", url: hlsUrl, reason: "Hardware-accelerated HLS encoding available" };
   }
 
@@ -98,7 +98,7 @@ const buildDeps = (
     const singleBitrate = await getHLSInfo(filePath);
     return singleBitrate.exists;
   },
-  isCudaAvailable,
+  isGpuAvailable: async () => (await getGpuAcceleration()) !== null,
   getFileMetadata: async (subPath: string) => {
     const record = await database.getFileRecord(subPath);
     if (!record) return undefined;
