@@ -51,6 +51,7 @@ export function FullscreenViewer() {
   const durationIntervalRef = useRef<number | null>(null);
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
+  const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null);
 
   // HLS setup effect
   useEffect(() => {
@@ -73,6 +74,7 @@ export function FullscreenViewer() {
     // Clean up previous HLS instance
     destroyHls();
     setVideoStatus(null);
+    setVideoAspectRatio(null);
 
     const loadSelectedPlayback = async () => {
       try {
@@ -351,17 +353,28 @@ export function FullscreenViewer() {
           >
             {photo.mediaType === "video" ? (
               <>
-                <video
-                  ref={videoRef}
-                  key={photo.path}
-                  controls
-                  className={css.media}
-                  poster={photo.previewUrl}
-                  preload="metadata"
+                <div
+                  className={css.videoWrapper}
+                  style={videoAspectRatio ? { aspectRatio: videoAspectRatio } : undefined}
                 >
-                  <track kind="captions" src="data:," label="Captions not provided" />
-                  Your browser does not support HTML video playback.
-                </video>
+                  <video
+                    ref={videoRef}
+                    key={photo.path}
+                    controls
+                    className={css.videoMedia}
+                    poster={photo.previewUrl}
+                    preload="metadata"
+                    onLoadedMetadata={(e) => {
+                      const v = e.currentTarget;
+                      if (v.videoWidth && v.videoHeight) {
+                        setVideoAspectRatio(v.videoWidth / v.videoHeight);
+                      }
+                    }}
+                  >
+                    <track kind="captions" src="data:," label="Captions not provided" />
+                    Your browser does not support HTML video playback.
+                  </video>
+                </div>
                 {videoStatus && (
                   <span className={css.videoBadge} data-testid="video-status">
                     {videoStatusLabel[videoStatus]}
