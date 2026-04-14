@@ -206,33 +206,11 @@ describe("MapFilter", () => {
     ).toBeInTheDocument();
   });
 
-  it("updates filter bounds when map view filter is enabled", async () => {
-    fetchGeotaggedPhotosMock.mockResolvedValueOnce({
-      points: [],
-      total: 0,
-      truncated: false,
-    });
-
-    render(<MapFilter />);
-
-    const toggle = await screen.findByRole("switch", {
-      name: "Keep results synced to the current map view",
-    });
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(setFilterMock).toHaveBeenCalledWith({
-        locationBounds: {
-          west: 10,
-          east: 30,
-          north: 40,
-          south: 20,
-        },
-      });
-    });
-  });
-
-  it("fits map view to pins when fit button is clicked", async () => {
+  it("shows clear map filter button when locationBounds is set", async () => {
+    currentFilter = {
+      ...currentFilter,
+      locationBounds: { north: 40, south: 20, east: 30, west: 10 },
+    };
     fetchGeotaggedPhotosMock.mockResolvedValueOnce({
       points: [{ path: "a/1.jpg", name: "1.jpg", latitude: 1, longitude: 2, count: 1 }],
       total: 1,
@@ -241,10 +219,66 @@ describe("MapFilter", () => {
 
     render(<MapFilter />);
 
-    const button = await screen.findByRole("button", { name: "Fit to pins" });
+    expect(
+      await screen.findByRole("button", { name: "Clear map filter" }),
+    ).toBeInTheDocument();
+  });
+
+  it("fits map to filter bounds immediately on mount", async () => {
+    currentFilter = {
+      ...currentFilter,
+      locationBounds: { north: 40, south: 20, east: 30, west: 10 },
+    };
+    fetchGeotaggedPhotosMock.mockResolvedValueOnce({
+      points: [],
+      total: 0,
+      truncated: false,
+    });
+
+    render(<MapFilter />);
+
+    await waitFor(() => {
+      expect(fitSpy).toHaveBeenCalledWith(
+        [10, 20, 30, 40],
+        expect.objectContaining({ padding: [24, 24, 24, 24], maxZoom: 20 }),
+      );
+    });
+  });
+
+  it("does not show clear map filter button when no locationBounds", async () => {
+    fetchGeotaggedPhotosMock.mockResolvedValueOnce({
+      points: [{ path: "a/1.jpg", name: "1.jpg", latitude: 1, longitude: 2, count: 1 }],
+      total: 1,
+      truncated: false,
+    });
+
+    render(<MapFilter />);
+
+    await screen.findByText("1 of 1 pins");
+    expect(
+      screen.queryByRole("button", { name: "Clear map filter" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clears location bounds when clear button is clicked", async () => {
+    currentFilter = {
+      ...currentFilter,
+      locationBounds: { north: 40, south: 20, east: 30, west: 10 },
+    };
+    fetchGeotaggedPhotosMock.mockResolvedValueOnce({
+      points: [{ path: "a/1.jpg", name: "1.jpg", latitude: 1, longitude: 2, count: 1 }],
+      total: 1,
+      truncated: false,
+    });
+
+    render(<MapFilter />);
+
+    const button = await screen.findByRole("button", { name: "Clear map filter" });
     fireEvent.click(button);
 
-    expect(fitSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(setFilterMock).toHaveBeenCalledWith({ locationBounds: undefined });
+    });
   });
 
   it("shows error state when loading points fails", async () => {

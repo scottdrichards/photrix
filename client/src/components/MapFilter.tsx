@@ -162,6 +162,20 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
 
     requestAnimationFrame(() => {
       map.updateSize();
+      if (normalizedLocationBounds) {
+        const extent = transformExtent(
+          [
+            normalizedLocationBounds.west,
+            normalizedLocationBounds.south,
+            normalizedLocationBounds.east,
+            normalizedLocationBounds.north,
+          ],
+          "EPSG:4326",
+          "EPSG:3857",
+        );
+        map.getView().fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20 });
+        setHasFitted(true);
+      }
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -263,27 +277,9 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
     }
   }, [hasFitted, mapInstance, points, vectorSource]);
 
-  const fitToData = () => {
-    if (!mapInstance) {
-      return;
-    }
-
-    mapInstance.set("userInteracted", true);
-
-    if (!points.length) {
-      mapInstance.getView().setCenter(fromLonLat([0, 0]));
-      mapInstance.getView().setZoom(1.5);
-      return;
-    }
-
-    if (!vectorSource) {
-      return;
-    }
-
-    const extent = vectorSource.getExtent();
-    mapInstance
-      .getView()
-      .fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
+  const clearMapFilter = () => {
+    setPendingLocationBounds(undefined);
+    setHasFitted(false);
   };
 
   return (
@@ -296,49 +292,11 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
           </small>
         </div>
         <div className={css.actions}>
-          <label
-            className="switch-label"
-            title="Keep results synced to the current map view"
-          >
-            <input
-              type="checkbox"
-              role="switch"
-              className="switch-track"
-              aria-label="Keep results synced to the current map view"
-              checked={Boolean(locationBounds)}
-              onChange={(e) => {
-                if (!mapInstance) {
-                  return;
-                }
-                if (!e.target.checked) {
-                  setPendingLocationBounds(undefined);
-                  mapInstance.set("lastBounds", null);
-                  return;
-                }
-                const size = mapInstance.getSize();
-                if (!size) {
-                  return;
-                }
-                const extent = mapInstance.getView().calculateExtent(size);
-                const [west, south, east, north] = transformExtent(
-                  extent,
-                  "EPSG:3857",
-                  "EPSG:4326",
-                );
-                const nextBounds: GeoBounds = { west, east, north, south };
-                mapInstance.set("lastBounds", nextBounds);
-                setPendingLocationBounds(nextBounds);
-              }}
-            />
-            <span>Filter to map view</span>
-          </label>
-          <button
-            className="btn btn-sm"
-            onClick={fitToData}
-            disabled={!points.length}
-          >
-            Fit to pins
-          </button>
+          {locationBounds ? (
+            <button className="btn btn-sm" onClick={clearMapFilter}>
+              Clear map filter
+            </button>
+          ) : null}
         </div>
       </div>
 
