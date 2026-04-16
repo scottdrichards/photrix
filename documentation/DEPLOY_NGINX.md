@@ -5,7 +5,6 @@ This guide shows a split-domain setup where:
 - `photrix.scottdrichards.com` serves built client files from disk (production)
 - `local.photrix.scottdrichards.com` reverse proxies to the calling client IP on your LAN
 - Local host access is restricted to `192.168.1.0/24`
-- Photrix trusts forwarded headers only from the Nginx host IP
 
 Drop-in server blocks are in `documentation/NGINX_SITES_PROD_TEST.conf`.
 
@@ -64,36 +63,7 @@ Notes:
 - `PHOTRIX_DEPLOY_PASSWORD` is not supported by OpenSSH `scp` CLI options.
 - Use SSH keys, agent auth, or interactive password prompt.
 
-## 3) Configure backend env (prod and local)
-
-Configure the production backend (running on the Nginx host) with production origin/host:
-
-```dotenv
-AUTH_ORIGIN=https://photrix.scottdrichards.com
-AUTH_ALLOWED_ORIGINS=https://photrix.scottdrichards.com
-AUTH_ALLOWED_HOSTS=photrix.scottdrichards.com
-AUTH_TRUSTED_PROXY_IPS=192.168.1.97,127.0.0.1,::1
-AUTH_REQUIRE_HTTPS=true
-```
-
-`AUTH_TRUSTED_PROXY_IPS` should include the immediate peer IP that Photrix sees for Nginx.
-
-Configure the local backend (running on your dev machine) with local origin:
-
-```dotenv
-AUTH_ORIGIN=https://local.photrix.scottdrichards.com
-AUTH_ALLOWED_ORIGINS=https://local.photrix.scottdrichards.com
-AUTH_ALLOWED_HOSTS=local.photrix.scottdrichards.com
-AUTH_RP_ID=photrix.scottdrichards.com
-AUTH_TRUSTED_PROXY_IPS=192.168.1.97,127.0.0.1,::1
-AUTH_REQUIRE_HTTPS=true
-AUTH_SECURE_COOKIES=true
-```
-
-`AUTH_ORIGIN` is used directly in WebAuthn verification, so keep one origin per backend instance.
-If you want local credentials isolated from production, set `AUTH_RP_ID=local.photrix.scottdrichards.com` on the local backend.
-
-## 4) Start backend server
+## 3) Start backend server
 
 On the Photrix host:
 
@@ -104,7 +74,7 @@ npm --prefix server run start
 
 The Photrix server is API-only and listens on port `3000` by default.
 
-## 5) Nginx site config
+## 4) Nginx site config
 
 Use `documentation/NGINX_SITES_PROD_TEST.conf` as the baseline config.
 
@@ -116,7 +86,7 @@ Key points:
 
 Create a symlink (or copy) to your enabled sites directory and reload Nginx.
 
-## 6) Run local dev services on the calling machine
+## 5) Run local dev services on the calling machine
 
 On the machine you browse from (for example `192.168.1.42`), run:
 
@@ -132,26 +102,22 @@ Nginx will proxy requests for `local.photrix.scottdrichards.com` to:
 
 Ensure your machine firewall allows the Nginx host (`192.168.1.97`) to reach ports `5173` and `3000`.
 
-## 7) Reload Nginx
+## 6) Reload Nginx
 
 ```bash
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-## 8) Verify
+## 7) Verify
 
 - `https://photrix.scottdrichards.com/` loads the UI
 - `https://local.photrix.scottdrichards.com/` loads local dev UI from the calling machine
-- `https://photrix.scottdrichards.com/api/auth/session` returns session JSON
-- `https://local.photrix.scottdrichards.com/api/auth/session` reaches local server API
-- Protected API routes return `401 Authentication required` until login (expected)
+- `https://photrix.scottdrichards.com/api/health` returns health JSON
+- `https://local.photrix.scottdrichards.com/api/health` reaches local server API
 
 ## Troubleshooting
 
-- Error: `Forwarded headers are only accepted from trusted proxies`
-  - Add the Nginx peer IP to `AUTH_TRUSTED_PROXY_IPS`
-  - Restart the Photrix server after env changes
 - `local.photrix.scottdrichards.com` returns `403`
   - Confirm client IP is in `192.168.1.0/24`
   - Confirm no upstream proxy is rewriting source IP before Nginx

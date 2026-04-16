@@ -366,4 +366,91 @@ describe("FullscreenViewer", () => {
       expect(screen.getByTestId("video-status")).toHaveTextContent("No Compatible Stream");
     });
   });
+
+  describe("live photo", () => {
+    it("shows live photo button for photos with livePhotoUrl", () => {
+      useSelectionContextMock.mockReturnValue({
+        selected: createPhoto({ livePhotoUrl: "http://localhost/a/1.MOV" }),
+        selectionMode: false,
+        setSelected: vi.fn(),
+        selectNext: vi.fn(),
+        selectPrevious: vi.fn(),
+      });
+
+      render(<FullscreenViewer />);
+
+      expect(screen.getByRole("button", { name: "Play live photo" })).toBeInTheDocument();
+    });
+
+    it("does not show live photo button for photos without livePhotoUrl", () => {
+      useSelectionContextMock.mockReturnValue({
+        selected: createPhoto(),
+        selectionMode: false,
+        setSelected: vi.fn(),
+        selectNext: vi.fn(),
+        selectPrevious: vi.fn(),
+      });
+
+      render(<FullscreenViewer />);
+
+      expect(screen.queryByRole("button", { name: "Play live photo" })).not.toBeInTheDocument();
+    });
+
+    it("does not show live photo button for video media items", () => {
+      useSelectionContextMock.mockReturnValue({
+        selected: createPhoto({
+          mediaType: "video",
+          livePhotoUrl: "http://localhost/a/1.MOV",
+        }),
+        selectionMode: false,
+        setSelected: vi.fn(),
+        selectNext: vi.fn(),
+        selectPrevious: vi.fn(),
+      });
+
+      const { container } = render(<FullscreenViewer />);
+
+      expect(screen.queryByRole("button", { name: "Play live photo" })).not.toBeInTheDocument();
+      expect(container.querySelector("video")).not.toBeNull();
+    });
+
+    it("clicking live photo button shows the live video and hides the still image", () => {
+      useSelectionContextMock.mockReturnValue({
+        selected: createPhoto({ livePhotoUrl: "http://localhost/a/1.MOV" }),
+        selectionMode: false,
+        setSelected: vi.fn(),
+        selectNext: vi.fn(),
+        selectPrevious: vi.fn(),
+      });
+
+      const { container } = render(<FullscreenViewer />);
+
+      expect(screen.getByRole("img", { name: "1.jpg" })).toBeInTheDocument();
+      expect(container.querySelector("video")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Play live photo" }));
+
+      expect(screen.queryByRole("img", { name: "1.jpg" })).not.toBeInTheDocument();
+      expect(container.querySelector("video[src='http://localhost/a/1.MOV']")).not.toBeNull();
+      expect(screen.getByRole("button", { name: "Show photo" })).toBeInTheDocument();
+    });
+
+    it("clicking live photo button again switches back to the still image", () => {
+      useSelectionContextMock.mockReturnValue({
+        selected: createPhoto({ livePhotoUrl: "http://localhost/a/1.MOV" }),
+        selectionMode: false,
+        setSelected: vi.fn(),
+        selectNext: vi.fn(),
+        selectPrevious: vi.fn(),
+      });
+
+      const { container } = render(<FullscreenViewer />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Play live photo" }));
+      fireEvent.click(screen.getByRole("button", { name: "Show photo" }));
+
+      expect(screen.getByRole("img", { name: "1.jpg" })).toBeInTheDocument();
+      expect(container.querySelector("video[src='http://localhost/a/1.MOV']")).toBeNull();
+    });
+  });
 });

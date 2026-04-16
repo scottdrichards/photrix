@@ -1,5 +1,5 @@
 import { describe, it, expect, jest } from "@jest/globals";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -75,6 +75,25 @@ describe("getExifMetadataFromFile", () => {
     if (result.dateTaken) {
       expect(result.dateTaken).toBeInstanceOf(Date);
     }
+  });
+
+  it("sets livePhotoVideoFileName when a sibling MOV file exists", async () => {
+    const dir = tmpDir();
+    const imagePath = path.join(dir, "sewing-threads.heic");
+    const videoPath = path.join(dir, "sewing-threads.MOV");
+    copyFileSync(resolveExamplePath("sewing-threads.heic"), imagePath);
+    writeFileSync(videoPath, "fake-mov-data");
+
+    const result = await getExifMetadataFromFile(imagePath);
+
+      expect(result.livePhotoVideoFileName?.toLowerCase()).toBe("sewing-threads.mov");
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("does not set livePhotoVideoFileName when no sibling video exists", async () => {
+    const heicPath = resolveExamplePath("sewing-threads.heic");
+    const result = await getExifMetadataFromFile(heicPath);
+    expect(result.livePhotoVideoFileName).toBeUndefined();
   });
 
   it("prefers decoded image dimensions over stale EXIF width/height tags", async () => {

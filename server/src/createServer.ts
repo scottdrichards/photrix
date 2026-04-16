@@ -1,8 +1,6 @@
 import http from "node:http";
-import { AuthService } from "./auth/authService.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { filesEndpointRequestHandler } from "./requestHandlers/files/filesRequestHandler.ts";
-import { facesRequestHandler } from "./requestHandlers/faces/facesRequestHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
 import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts";
 import { statusBackgroundTasksRequestHandler } from "./requestHandlers/statusBackgroundTasksRequestHandler.ts";
@@ -47,7 +45,6 @@ export const createServer = async (
   options: ServerOptions,
 ) => {
   const { onRequest, conversionWorker } = options;
-  const authService = await AuthService.create();
   startEventLoopLagMonitor();
 
   const server = http.createServer(async (req, res) => {
@@ -67,7 +64,9 @@ export const createServer = async (
         const handlerStartTime = process.hrtime.bigint();
         const queueMs = Number(handlerStartTime - arrivalTime) / 1_000_000;
         if (queueMs > 20) {
-          console.warn(`[event-loop] request queued ${queueMs.toFixed(0)}ms before handler: ${req.method} ${req.url}`);
+          console.warn(
+            `[event-loop] request queued ${queueMs.toFixed(0)}ms before handler: ${req.method} ${req.url}`,
+          );
         }
 
         let requestLogged = false;
@@ -89,25 +88,14 @@ export const createServer = async (
         }
 
         try {
-          await measureOperation(
-            "request.applyResponseHeaders",
-            async () => authService.applyResponseHeaders(req, res),
-            { category: "request" },
-          );
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+          res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+          res.setHeader("Vary", "Origin");
 
-          const requestRejection = await measureOperation(
-            "request.validateRequest",
-            async () => authService.validateRequest(req),
-            { category: "request" },
-          );
-          if (requestRejection) {
-            writeJson(res, requestRejection.status, { error: requestRejection.error });
-            return;
-          }
-
-          // Handle preflight requests
           if (req.method === "OPTIONS") {
-            authService.handlePreflight(req, res);
+            res.writeHead(204);
+            res.end();
             return;
           }
 
@@ -116,34 +104,10 @@ export const createServer = async (
             return;
           }
 
-          const authHandled = await measureOperation(
-            "request.auth.handleAuthRequest",
-            () =>
-              authService.handleAuthRequest(
-                req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-                res,
-              ),
-            { category: "request" },
-          );
-
-          if (authHandled) {
-            return;
-          }
-
-          const session = await measureOperation(
-            "request.auth.requireAuthenticated",
-            async () => authService.requireAuthenticated(req, res),
-            { category: "request" },
-          );
-          if (!session) {
-            return;
-          }
-
           if (req.url === "/api/health" && req.method === "GET") {
             const payload = {
               status: "ok",
               message: "Server is running",
-              ...(authService.enabled ? { user: session.username } : {}),
             };
 
             await measureOperation(
@@ -186,7 +150,8 @@ export const createServer = async (
               "request.route.networkProbe",
               () =>
                 networkProbeRequestHandler(
-                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  req as http.IncomingMessage &
+                    Required<Pick<http.IncomingMessage, "url">>,
                   res,
                 ),
               { category: "request", detail: "/api/network-probe" },
@@ -200,7 +165,8 @@ export const createServer = async (
               "request.route.folders",
               () =>
                 foldersRequestHandler(
-                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  req as http.IncomingMessage &
+                    Required<Pick<http.IncomingMessage, "url">>,
                   res,
                   { database },
                 ),
@@ -214,7 +180,8 @@ export const createServer = async (
               "request.route.suggestions",
               () =>
                 suggestionsRequestHandler(
-                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  req as http.IncomingMessage &
+                    Required<Pick<http.IncomingMessage, "url">>,
                   res,
                   { database },
                 ),
@@ -228,25 +195,12 @@ export const createServer = async (
               "request.route.video.negotiate",
               () =>
                 videoNegotiationRequestHandler(
-                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  req as http.IncomingMessage &
+                    Required<Pick<http.IncomingMessage, "url">>,
                   res,
                   { database, storageRoot: storagePath },
                 ),
               { category: "request", detail: "/api/video/negotiate" },
-            );
-            return;
-          }
-
-          if (req.url?.startsWith("/api/faces/") && ["GET", "POST"].includes(req.method ?? "")) {
-            await measureOperation(
-              "request.route.faces",
-              () =>
-                facesRequestHandler(
-                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-                  res,
-                  { database },
-                ),
-              { category: "request", detail: "/api/faces/*" },
             );
             return;
           }
@@ -259,7 +213,8 @@ export const createServer = async (
               "request.route.files",
               () =>
                 filesEndpointRequestHandler(
-                  req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+                  req as http.IncomingMessage &
+                    Required<Pick<http.IncomingMessage, "url">>,
                   res,
                   {
                     database,
@@ -299,10 +254,6 @@ export const createServer = async (
         }
       },
     );
-  });
-
-  server.on("close", () => {
-    authService.close();
   });
 
   server.listen(PORT, () => {

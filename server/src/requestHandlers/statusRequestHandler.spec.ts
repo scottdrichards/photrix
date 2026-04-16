@@ -75,8 +75,6 @@ describe("statusRequestHandler", () => {
         missingInfo: 4,
         missingDateTaken: 2,
       }),
-      countImageEntries: () => 6,
-      getConversionQueueCounts: () => ({ pending: 0, processing: 0 }),
       getConversionQueueSummary: () => queueSummaryFixture,
       getMostRecentExifProcessedEntry: () => ({
         folder: "/",
@@ -102,14 +100,7 @@ describe("statusRequestHandler", () => {
       percent: 12 / 18,
     });
     expect(payload.recent.exif.fileName).toBe("img.jpg");
-    expect(payload.maintenance.faceActive).toBe(false);
     expect(payload.maintenance.backgroundTasksEnabled).toBe(true);
-    expect(payload.faceProcessing).toEqual({
-      processed: 0,
-      workerSuccess: 0,
-      fallbackCount: 0,
-      workerFailures: 0,
-    });
     expect(payload.queueSummary).toBeDefined();
     expect(payload.queueSummary).toEqual(
       expect.objectContaining({
@@ -135,8 +126,6 @@ describe("statusRequestHandler", () => {
         missingInfo: 0,
         missingDateTaken: 0,
       }),
-      countImageEntries: () => 1,
-      getConversionQueueCounts: () => ({ pending: 0, processing: 0 }),
       getConversionQueueSummary: () => queueSummaryFixture,
       getMostRecentExifProcessedEntry: () => null,
     } as unknown as IndexDatabase;
@@ -181,8 +170,6 @@ describe("statusRequestHandler", () => {
             });
         });
       },
-      countImageEntries: () => 1,
-      getConversionQueueCounts: () => ({ pending: 0, processing: 0 }),
       getConversionQueueSummary: () => queueSummaryFixture,
       getMostRecentExifProcessedEntry: () => null,
     } as unknown as IndexDatabase;

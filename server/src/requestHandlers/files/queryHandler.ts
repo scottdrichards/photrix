@@ -1,5 +1,6 @@
 import type * as http from "http";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
+import { ConversionTaskPriority } from "../../indexDatabase/indexDatabase.type.ts";
 import type { QueryOptions } from "../../indexDatabase/indexDatabase.type.ts";
 import { measureOperation } from "../../observability/requestTrace.ts";
 import { writeJson } from "../../utils.ts";
@@ -120,6 +121,15 @@ export const queryHandler = async (
     () => database.queryFiles(queryOptions),
     { category: "db", detail: countOnly ? "countOnly=true" : "countOnly=false" },
   );
+
+  if (!countOnly) {
+    const paths = result.items.map(({ folder, fileName }) => `${folder}${fileName}`);
+    await Promise.all([
+      database.raiseConversionPriority(paths, "thumbnail", ConversionTaskPriority.UserImplicit),
+      database.raiseConversionPriority(paths, "hls", ConversionTaskPriority.UserImplicit),
+    ]);
+  }
+
   const responseBody = countOnly ? { count: result.total } : result;
   try {
     writeJson(res, 200, responseBody);

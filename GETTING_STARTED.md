@@ -1,6 +1,6 @@
 # Getting Started
 
-Internet-facing deployment checklist for Photrix.
+Deployment checklist for Photrix.
 
 For a concrete Nginx deployment example (serve client build + proxy `/api/`), see `documentation/DEPLOY_NGINX.md`.
 
@@ -8,7 +8,6 @@ For a concrete Nginx deployment example (serve client build + proxy `/api/`), se
 
 - Reverse proxy is configured in front of server
 - Public host: `photrix.scottdrichards.com`
-- Trusted proxy IP: `192.168.1.97`
 
 ## 2) Install
 
@@ -25,7 +24,7 @@ Copy the template and edit values for your deployment:
 Copy-Item server/.env.example server/.env
 ```
 
-Use `server/.env.example` as the source of truth for required auth/proxy settings.
+Use `server/.env.example` as the source of truth for required settings.
 
 ## 4) Start services
 
@@ -34,55 +33,13 @@ npm --prefix server run start
 npm --prefix client run dev
 ```
 
-## 5) Verify startup security checks
+## 5) Local development
 
-- Confirm server logs include `[auth:start:pass]` entries
-- Ensure there are no `[auth:start:fail]` entries
-- In `NODE_ENV=production`, startup should fail on unsafe auth/proxy config
-
-## 6) First login
-
-1. Open `https://photrix.scottdrichards.com`
-2. Register first user with bootstrap token
-3. Create/store passkey
-4. Rotate or remove bootstrap token after setup
-
-## 7) Local development
-
-Auth is disabled by default when `NODE_ENV` is not `production`, and localhost origins (ports 3000, 5173) are auto-allowed. Just start both services:
+Just start both services:
 
 ```powershell
 npm --prefix server run start
 npm --prefix client run dev
 ```
 
-Open `http://localhost:5173`. No passkey or env overrides needed.
-
-To test with auth enabled locally, set `AUTH_REQUIRED=true` in `server/.env` and follow the passkey setup with a custom local domain:
-
-1. Add host entries (one-time, admin):
-
-```text
-127.0.0.1 local.photrix.scottderichards.com
-::1 local.photrix.scottderichards.com
-```
-
-2. In `server/.env`, set:
-
-```dotenv
-AUTH_ORIGIN=http://local.photrix.scottderichards.com:5173
-AUTH_ALLOWED_ORIGINS=http://local.photrix.scottderichards.com:5173,http://localhost:5173,http://localhost:3000
-AUTH_ALLOWED_HOSTS=local.photrix.scottderichards.com,localhost
-AUTH_RP_ID=local.photrix.scottderichards.com
-AUTH_REQUIRE_HTTPS=false
-AUTH_SECURE_COOKIES=false
-```
-
-3. Start normally:
-
-```powershell
-npm --prefix server run start
-npm --prefix client run dev
-```
-
-4. Open `http://local.photrix.scottderichards.com:5173`.
+Open `http://localhost:5173`.

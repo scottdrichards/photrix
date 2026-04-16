@@ -3,15 +3,11 @@ import path from "node:path";
 import { CACHE_DIR } from "../common/cacheUtils.ts";
 import { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
-import { MetadataGroups, type FaceTag, type FileRecord } from "./fileRecord.type.ts";
+import { MetadataGroups, type FileRecord } from "./fileRecord.type.ts";
 import { filterToSQL } from "./filterToSQL.ts";
 import {
   ConversionTaskPriority,
   type DateHistogramResult,
-  type FaceMatchItem,
-  type FacePeopleItem,
-  type FaceQueueResult,
-  type FaceQueueStatus,
   type FilterElement,
   type GeoClusterResult,
   type QueryOptions,
@@ -24,79 +20,7 @@ import {
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 import { measureOperation } from "../observability/requestTrace.ts";
-
-const embeddingToBlob = (embedding: number[]): Buffer => {
-  const arr = new Float64Array(embedding);
-  return Buffer.from(arr.buffer);
-};
-
-const blobToEmbedding = (blob: Buffer | Uint8Array): number[] => {
-  const arr = new Float64Array(blob.buffer, blob.byteOffset, blob.byteLength / 8);
-  return Array.from(arr);
-};
-
-const getFaceId = (folder: string, fileName: string, tag: FaceTag, index: number): string =>
-  typeof tag.faceId === "string" && tag.faceId.trim().length > 0
-    ? tag.faceId
-    : `${folder}${fileName}#${index}`;
-
-const parseFaceTags = (faceTags: string | null): FaceTag[] => {
-  if (!faceTags) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(faceTags);
-    return Array.isArray(parsed) ? (parsed as FaceTag[]) : [];
-  } catch {
-    return [];
-  }
-};
-
-const getFaceEmbedding = (tag: FaceTag): number[] | null => {
-  if (!tag.featureDescription || typeof tag.featureDescription !== "object") {
-    return null;
-  }
-  const candidate = (tag.featureDescription as { embedding?: unknown }).embedding;
-  if (!Array.isArray(candidate) || candidate.length === 0) {
-    return null;
-  }
-  const values = candidate.filter(
-    (value): value is number => typeof value === "number" && Number.isFinite(value),
-  );
-  return values.length > 0 ? values : null;
-};
-
-const embeddingWeight = (quality?: { overall?: number; effectiveResolution?: number }): number => {
-  const overall = quality?.overall ?? 0.2;
-  const effectiveResolution = quality?.effectiveResolution ?? 64;
-  const normalizedResolution = Math.max(0.1, Math.min(effectiveResolution / 256, 2));
-  return Math.max(0.1, overall * normalizedResolution);
-};
-
-const buildWeightedCentroid = (
-  entries: Array<{ embedding: number[]; weight: number }>,
-): number[] | null => {
-  if (entries.length === 0) {
-    return null;
-  }
-  const dimensions = Math.min(...entries.map((entry) => entry.embedding.length));
-  if (!Number.isFinite(dimensions) || dimensions <= 0) {
-    return null;
-  }
-  const sum = new Array(dimensions).fill(0) as number[];
-  let totalWeight = 0;
-  for (const entry of entries) {
-    const weight = Math.max(0.1, entry.weight);
-    totalWeight += weight;
-    for (let index = 0; index < dimensions; index += 1) {
-      sum[index] += (entry.embedding[index] ?? 0) * weight;
-    }
-  }
-  if (totalWeight <= 0) {
-    return null;
-  }
-  return sum.map((value) => value / totalWeight);
-};
+import { prepareTables } from "./prepareTables.ts";
 
 export class IndexDatabase {
   public readonly storagePath: string;
@@ -128,152 +52,22 @@ export class IndexDatabase {
       pragmas: ["journal_mode = WAL"],
       customFunctions: [
         { name: "REGEXP", options: { deterministic: true }, type: "regexp" },
-        { name: "cosine_similarity", options: { deterministic: true }, type: "cosine_similarity" },
+        {
+          name: "cosine_similarity",
+          options: { deterministic: true },
+          type: "cosine_similarity",
+        },
       ],
     });
 
-    await this.db.exec(`
-      CREATE TABLE IF NOT EXISTS files (
-        folder TEXT NOT NULL,
-        fileName TEXT NOT NULL,
-        mimeType TEXT,
-        sizeInBytes INTEGER,
-        created TEXT,
-        modified TEXT,
-        dateTaken TEXT,
-        dimensionsWidth INTEGER,
-        dimensionsHeight INTEGER,
-        locationLatitude REAL,
-        locationLongitude REAL,
-        cameraMake TEXT,
-        cameraModel TEXT,
-        exposureTime TEXT,
-        aperture TEXT,
-        iso INTEGER,
-        focalLength TEXT,
-        lens TEXT,
-        duration REAL,
-        framerate REAL,
-        videoCodec TEXT,
-        audioCodec TEXT,
-        rating INTEGER,
-        tags TEXT,
-        personInImage TEXT,
-        regions TEXT,
-        orientation INTEGER,
-        aiDescription TEXT,
-        aiTags TEXT,
-        faceTags TEXT,
-        thumbnailsReady INTEGER DEFAULT 0,
-        fileHash TEXT,
-        infoProcessedAt TEXT,
-        exifProcessedAt TEXT,
-        thumbnailsProcessedAt TEXT,
-        PRIMARY KEY (folder, fileName)
-      )
-    `);
-    await this.db.exec(`
-      CREATE TABLE IF NOT EXISTS meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      )
-    `);
-
-    await this.db.exec(`
-      CREATE TABLE IF NOT EXISTS face_embeddings (
-        faceId TEXT PRIMARY KEY,
-        folder TEXT NOT NULL,
-        fileName TEXT NOT NULL,
-        tagIndex INTEGER NOT NULL,
-        embedding BLOB NOT NULL,
-        personId TEXT,
-        personName TEXT,
-        status TEXT DEFAULT 'unverified',
-        dimensionsX REAL,
-        dimensionsY REAL,
-        dimensionsWidth REAL,
-        dimensionsHeight REAL,
-        qualityOverall REAL,
-        qualityEffectiveResolution REAL,
-        thumbnailPreferredHeight INTEGER,
-        thumbnailCropVersion TEXT
-      )
-    `);
-    await this.db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_file ON face_embeddings(folder, fileName)`);
-    await this.db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_person ON face_embeddings(personId)`);
-    await this.db.exec(`CREATE INDEX IF NOT EXISTS idx_face_embeddings_status ON face_embeddings(status)`);
-
-    await this.ensureFilesColumns([
-      { name: "personInImage", type: "TEXT" },
-      { name: "regions", type: "TEXT" },
-      { name: "faceMetadataProcessedAt", type: "TEXT" },
-      { name: "thumbnailConversionPriority", type: "INTEGER" },
-      { name: "hlsConversionPriority", type: "INTEGER" },
-      { name: "thumbnailConversionPrioritySetAt", type: "TEXT" },
-      { name: "hlsConversionPrioritySetAt", type: "TEXT" },
-    ]);
-
-    await this.ensureIndexes();
+    await this.migrateConversionTasksToOwnTable();
+    await prepareTables(this.db);
     console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
-    await this.ensureRootPath();
 
-    const count = await this.db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
+    const count = await this.db.get<{ count: number }>(
+      "SELECT COUNT(*) as count FROM files",
+    );
     console.log(`[IndexDatabase] Contains ${count?.count ?? 0} entries`);
-  }
-
-  private async ensureFilesColumns(columns: Array<{ name: string; type: string }>): Promise<void> {
-    const existingColumnsRaw = await this.db.all<{ name: string }>("PRAGMA table_info(files)");
-    const existingColumns = new Set(existingColumnsRaw.map(({ name }) => name));
-
-    for (const { name, type } of columns) {
-      if (existingColumns.has(name)) {
-        continue;
-      }
-      await this.db.exec(`ALTER TABLE files ADD COLUMN ${name} ${type}`);
-    }
-  }
-
-  private async ensureIndexes(): Promise<void> {
-    const indexDefinitions: Array<{
-      name: string;
-      expression: string;
-      where?: string;
-    }> = [
-      { name: "idx_files_dateTaken", expression: "dateTaken DESC" },
-      { name: "idx_files_mimeType", expression: "mimeType" },
-      { name: "idx_files_rating", expression: "rating" },
-      { name: "idx_files_folder", expression: "folder" },
-      { name: "idx_files_infoProcessedAt", expression: "infoProcessedAt" },
-      { name: "idx_files_exifProcessedAt", expression: "exifProcessedAt" },
-      {
-        name: "idx_files_thumbnailsProcessedAt",
-        expression: "thumbnailsProcessedAt",
-      },
-      {
-        name: "idx_files_thumbnailConversionQueue",
-        expression: "thumbnailConversionPriority ASC, thumbnailConversionPrioritySetAt ASC, folder, fileName",
-        where: `thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
-      },
-      {
-        name: "idx_files_hlsConversionQueue",
-        expression: "hlsConversionPriority ASC, hlsConversionPrioritySetAt ASC, folder, fileName",
-        where: `hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
-      },
-    ];
-
-    for (const { name, expression, where } of indexDefinitions) {
-      const whereClause = where ? ` WHERE ${where}` : "";
-      await this.db.exec(
-        `CREATE INDEX IF NOT EXISTS ${name} ON files(${expression})${whereClause}`,
-      );
-    }
-
-    for (const old of [
-      "idx_files_thumbnailConversionPriority",
-      "idx_files_hlsConversionPriority",
-    ]) {
-      await this.db.exec(`DROP INDEX IF EXISTS ${old}`);
-    }
   }
 
   private async runInsert(
@@ -302,18 +96,55 @@ export class IndexDatabase {
     return row?.count ?? 0;
   }
 
-  private getConversionColumns(taskType: "thumbnail" | "hls") {
-    if (taskType === "thumbnail") {
-      return {
-        priority: "thumbnailConversionPriority",
-        setAt: "thumbnailConversionPrioritySetAt",
-      } as const;
+  private async migrateConversionTasksToOwnTable(): Promise<void> {
+    const tables = await this.db.all<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='files'",
+    );
+    if (!tables.length) return;
+
+    // Deduplicate files rows (keep the one with the highest rowid, which was inserted last).
+    // This is needed so that CREATE UNIQUE INDEX on (folder, fileName) can succeed.
+    await this.db.exec(`
+      DELETE FROM files
+      WHERE rowid NOT IN (
+        SELECT MAX(rowid)
+        FROM files
+        GROUP BY folder, fileName
+      )
+    `);
+
+    const columns = await this.db.all<{ name: string }>("PRAGMA table_info(files)");
+    const columnNames = new Set(columns.map((c) => c.name));
+    if (!columnNames.has("thumbnailConversionPriority")) return;
+
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS conversion_tasks (
+        folder TEXT,
+        fileName TEXT,
+        taskType TEXT,
+        priority INTEGER,
+        prioritySetAt TEXT,
+        PRIMARY KEY (folder, fileName, taskType)
+      )
+    `);
+
+    await this.db.exec(`
+      INSERT OR IGNORE INTO conversion_tasks (folder, fileName, taskType, priority, prioritySetAt)
+      SELECT folder, fileName, 'thumbnail', thumbnailConversionPriority, thumbnailConversionPrioritySetAt
+      FROM files
+      WHERE thumbnailConversionPriority IS NOT NULL
+    `);
+
+    if (columnNames.has("hlsConversionPriority")) {
+      await this.db.exec(`
+        INSERT OR IGNORE INTO conversion_tasks (folder, fileName, taskType, priority, prioritySetAt)
+        SELECT folder, fileName, 'hls', hlsConversionPriority, hlsConversionPrioritySetAt
+        FROM files
+        WHERE hlsConversionPriority IS NOT NULL
+      `);
     }
 
-    return {
-      priority: "hlsConversionPriority",
-      setAt: "hlsConversionPrioritySetAt",
-    } as const;
+    console.log("[IndexDatabase] Migrated conversion tasks to own table");
   }
 
   async addFile(fileData: FileRecord): Promise<void> {
@@ -328,7 +159,8 @@ export class IndexDatabase {
     const { folder: oldFolder, fileName: oldFile } = splitPath(oldRelativePath);
     const row = await this.db.get<FileRecord>(
       "SELECT * FROM files WHERE folder = ? AND fileName = ?",
-      oldFolder, oldFile,
+      oldFolder,
+      oldFile,
     );
     if (!row) {
       throw new Error(
@@ -346,8 +178,18 @@ export class IndexDatabase {
     const columns = fileRecordToColumnNamesAndValues(updated);
     const placeholders = columns.values.map(() => "?").join(", ");
     await this.db.transaction([
-      { sql: "DELETE FROM files WHERE folder = ? AND fileName = ?", params: [oldFolder, oldFile] },
-      { sql: `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`, params: columns.values },
+      {
+        sql: "DELETE FROM files WHERE folder = ? AND fileName = ?",
+        params: [oldFolder, oldFile],
+      },
+      {
+        sql: `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`,
+        params: columns.values,
+      },
+      {
+        sql: "UPDATE conversion_tasks SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
+        params: [newFolder, newFile, oldFolder, oldFile],
+      },
     ]);
   }
 
@@ -359,7 +201,8 @@ export class IndexDatabase {
     const execute = async () => {
       const row = await this.db.get<FileRecord>(
         "SELECT * FROM files WHERE folder = ? AND fileName = ?",
-        folder, fileName,
+        folder,
+        fileName,
       );
       const updatedEntry = {
         ...(row ?? {
@@ -377,10 +220,6 @@ export class IndexDatabase {
     };
 
     await this.runWithRetry(execute);
-
-    if (fileData.faceTags !== undefined) {
-      await this.syncFaceEmbeddings(folder, fileName, fileData.faceTags as FaceTag[]);
-    }
   }
 
   async getFileRecord(
@@ -390,7 +229,8 @@ export class IndexDatabase {
     const { folder, fileName } = splitPath(relativePath);
     const row = await this.db.get<Record<string, string | number>>(
       "SELECT * FROM files WHERE folder = ? AND fileName = ?",
-      folder, fileName,
+      folder,
+      fileName,
     );
     if (!row) {
       return undefined;
@@ -400,7 +240,9 @@ export class IndexDatabase {
   }
 
   async countMissingInfo(): Promise<number> {
-    return this.countEntries("sizeInBytes IS NULL OR created IS NULL OR modified IS NULL");
+    return this.countEntries(
+      "sizeInBytes IS NULL OR created IS NULL OR modified IS NULL",
+    );
   }
 
   async countMissingDateTaken(): Promise<number> {
@@ -411,24 +253,12 @@ export class IndexDatabase {
 
   async countPendingConversions(): Promise<{ thumbnail: number; hls: number }> {
     const t = await this.db.get<{ c: number }>(
-      `SELECT COUNT(*) AS c FROM files WHERE thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
+      `SELECT COUNT(*) AS c FROM conversion_tasks WHERE taskType = 'thumbnail' AND priority >= ${ConversionTaskPriority.UserBlocked}`,
     );
     const h = await this.db.get<{ c: number }>(
-      `SELECT COUNT(*) AS c FROM files WHERE hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}`,
+      `SELECT COUNT(*) AS c FROM conversion_tasks WHERE taskType = 'hls' AND priority >= ${ConversionTaskPriority.UserBlocked}`,
     );
     return { thumbnail: t?.c ?? 0, hls: h?.c ?? 0 };
-  }
-
-  async getConversionQueueCounts(): Promise<{ pending: number; processing: number }> {
-    const row = await this.db.get<{ pending: number | null; processing: number | null }>(
-      `SELECT
-          SUM(CASE WHEN thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END)
-          + SUM(CASE WHEN hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked} THEN 1 ELSE 0 END) AS pending,
-          SUM(CASE WHEN thumbnailConversionPriority = ${ConversionTaskPriority.InProgress} THEN 1 ELSE 0 END)
-          + SUM(CASE WHEN hlsConversionPriority = ${ConversionTaskPriority.InProgress} THEN 1 ELSE 0 END) AS processing
-       FROM files`,
-    );
-    return { pending: row?.pending ?? 0, processing: row?.processing ?? 0 };
   }
 
   async getConversionQueueSummary(): Promise<{
@@ -472,39 +302,42 @@ export class IndexDatabase {
     };
 
     const rows = await this.db.all<{
-      mimeType: string | null;
-      sizeInBytes: number | null;
-      duration: number | null;
-      thumbnailConversionPriority: ConversionTaskPriority | null;
-      hlsConversionPriority: ConversionTaskPriority | null;
+      mediaType: string;
+      priority: ConversionTaskPriority;
+      cnt: number;
+      sizeBytes: number;
+      durationMs: number;
     }>(
-      `SELECT mimeType, sizeInBytes, duration, thumbnailConversionPriority, hlsConversionPriority
-       FROM files
-       WHERE thumbnailConversionPriority IS NOT NULL OR hlsConversionPriority IS NOT NULL`,
+      `SELECT
+         CASE WHEN f.mimeType LIKE 'video/%' THEN 'video' ELSE 'image' END AS mediaType,
+         ct.priority,
+         COUNT(*) AS cnt,
+         COALESCE(SUM(MAX(0, COALESCE(f.sizeInBytes, 0))), 0) AS sizeBytes,
+         COALESCE(SUM(CASE WHEN f.mimeType LIKE 'video/%' THEN MAX(0, ROUND(COALESCE(f.duration, 0) * 1000)) ELSE 0 END), 0) AS durationMs
+       FROM conversion_tasks ct
+       JOIN files f ON f.folder = ct.folder AND f.fileName = ct.fileName
+       WHERE ct.taskType = 'thumbnail'
+       GROUP BY mediaType, ct.priority
+       UNION ALL
+       SELECT
+         'video' AS mediaType,
+         ct.priority,
+         COUNT(*) AS cnt,
+         COALESCE(SUM(MAX(0, COALESCE(f.sizeInBytes, 0))), 0) AS sizeBytes,
+         COALESCE(SUM(MAX(0, ROUND(COALESCE(f.duration, 0) * 1000))), 0) AS durationMs
+       FROM conversion_tasks ct
+       JOIN files f ON f.folder = ct.folder AND f.fileName = ct.fileName
+       WHERE ct.taskType = 'hls' AND f.mimeType LIKE 'video/%'
+       GROUP BY ct.priority`,
     );
 
-    const addTask = (
-      priority: ConversionTaskPriority | null,
-      mediaType: "image" | "video",
-      sizeBytes: number,
-      durationMilliseconds: number,
-    ) => {
-      if (priority === null) return;
-      const bucket = bucketForPriority[priority] ?? summary.background;
-      bucket[mediaType].count += 1;
-      bucket[mediaType].sizeBytes += sizeBytes;
-      if (mediaType === "video") {
-        bucket.video.durationMilliseconds += durationMilliseconds;
-      }
-    };
-
     for (const row of rows) {
-      const mediaType = row.mimeType?.startsWith("video/") ? "video" : "image";
-      const sizeBytes = Math.max(0, row.sizeInBytes ?? 0);
-      const durationMilliseconds = Math.max(0, Math.round((row.duration ?? 0) * 1000));
-      addTask(row.thumbnailConversionPriority, mediaType, sizeBytes, durationMilliseconds);
-      if (row.mimeType?.startsWith("video/")) {
-        addTask(row.hlsConversionPriority, "video", sizeBytes, durationMilliseconds);
+      const bucket = bucketForPriority[row.priority] ?? summary.background;
+      const mediaType = row.mediaType as "image" | "video";
+      bucket[mediaType].count += row.cnt;
+      bucket[mediaType].sizeBytes += row.sizeBytes;
+      if (mediaType === "video") {
+        bucket.video.durationMilliseconds += row.durationMs;
       }
     }
 
@@ -512,7 +345,7 @@ export class IndexDatabase {
   }
 
   /**
-   * null = done, enum value = queued or in-progress
+   * null = done (row deleted), enum value = queued or in-progress
    */
   async setConversionPriority(
     relativePath: string,
@@ -520,67 +353,120 @@ export class IndexDatabase {
     priority: ConversionTaskPriority | null,
   ): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
-    const { priority: priorityColumn, setAt: setAtColumn } =
-      this.getConversionColumns(taskType);
+    if (priority === null) {
+      await this.db.run(
+        "DELETE FROM conversion_tasks WHERE folder = ? AND fileName = ? AND taskType = ?",
+        folder,
+        fileName,
+        taskType,
+      );
+      return;
+    }
     await this.db.run(
-      `UPDATE files SET ${priorityColumn} = ?, ${setAtColumn} = ? WHERE folder = ? AND fileName = ?`,
-      priority, priority !== null ? new Date().toISOString() : null, folder, fileName,
+      `INSERT OR REPLACE INTO conversion_tasks (folder, fileName, taskType, priority, prioritySetAt)
+       VALUES (?, ?, ?, ?, ?)`,
+      folder,
+      fileName,
+      taskType,
+      priority,
+      new Date().toISOString(),
     );
   }
 
+  /**
+   * Raises the conversion priority for a batch of files, but never lowers it.
+   * Files with a higher-priority (lower numeric value) are left unchanged.
+   * Files without a pending conversion task are left unchanged.
+   */
+  async raiseConversionPriority(
+    relativePaths: string[],
+    taskType: "thumbnail" | "hls",
+    priority: ConversionTaskPriority,
+  ): Promise<void> {
+    if (!relativePaths.length) return;
+    const now = new Date().toISOString();
+    const statements = relativePaths.map((relativePath) => {
+      const { folder, fileName } = splitPath(relativePath);
+      return {
+        sql: `UPDATE conversion_tasks SET priority = ?, prioritySetAt = ?
+              WHERE folder = ? AND fileName = ? AND taskType = ? AND priority > ?`,
+        params: [priority, now, folder, fileName, taskType, priority] as unknown[],
+      };
+    });
+    await this.db.transaction(statements);
+  }
+
   async resetInProgressConversions(taskType: "thumbnail" | "hls"): Promise<void> {
-    const { priority: priorityColumn, setAt: setAtColumn } =
-      this.getConversionColumns(taskType);
     await this.db.run(
-      `UPDATE files SET ${priorityColumn} = ?, ${setAtColumn} = ? WHERE ${priorityColumn} = ?`,
+      `UPDATE conversion_tasks SET priority = ?, prioritySetAt = ?
+       WHERE taskType = ? AND priority = ?`,
       ConversionTaskPriority.Background,
       new Date().toISOString(),
+      taskType,
       ConversionTaskPriority.InProgress,
     );
   }
 
   /**
    * Returns the next pending conversion task ordered by priority (ASC), then by when the
-   * priority was set (FIFO), then thumbnails before HLS for equal priority and time.
-   * Excludes in-progress tasks.
+   * priority was set (FIFO for most priorities, LIFO for userImplicit), then thumbnails
+   * before HLS for equal priority and time. Excludes in-progress tasks.
    *
-   * Uses two separate indexed queries instead of UNION ALL so SQLite can satisfy
-   * the WHERE + ORDER BY + LIMIT 1 directly from the partial composite index.
+   * Uses two separate queries (thumbnail and HLS) merged in TypeScript.
    */
-  async getNextConversionTasks(count = 1): Promise<Array<{
-    relativePath: string;
-    taskType: "thumbnail" | "hls";
-  }>> {
-    type CandidateRow = { folder: string; fileName: string; priority: number; prioritySetAt: string };
+  async getNextConversionTasks(count = 1): Promise<
+    Array<{
+      relativePath: string;
+      taskType: "thumbnail" | "hls";
+    }>
+  > {
+    type CandidateRow = {
+      folder: string;
+      fileName: string;
+      priority: number;
+      prioritySetAt: string;
+    };
+    const lifo = ConversionTaskPriority.UserImplicit;
 
     const thumbnailRows = await this.db.all<CandidateRow>(
-      `SELECT folder, fileName, thumbnailConversionPriority AS priority, thumbnailConversionPrioritySetAt AS prioritySetAt
-       FROM files
-       WHERE thumbnailConversionPriority >= ${ConversionTaskPriority.UserBlocked}
-       ORDER BY thumbnailConversionPriority ASC, thumbnailConversionPrioritySetAt ASC
+      `SELECT folder, fileName, priority, prioritySetAt
+       FROM conversion_tasks
+       WHERE taskType = 'thumbnail' AND priority >= ${ConversionTaskPriority.UserBlocked}
+       ORDER BY priority ASC,
+         CASE WHEN priority = ${lifo} THEN -strftime('%s', prioritySetAt)
+              ELSE strftime('%s', prioritySetAt) END ASC
        LIMIT ?`,
       count,
     );
 
     const hlsRows = await this.db.all<CandidateRow>(
-      `SELECT folder, fileName, hlsConversionPriority AS priority, hlsConversionPrioritySetAt AS prioritySetAt
-       FROM files
-       WHERE hlsConversionPriority >= ${ConversionTaskPriority.UserBlocked}
-       ORDER BY hlsConversionPriority ASC, hlsConversionPrioritySetAt ASC
+      `SELECT folder, fileName, priority, prioritySetAt
+       FROM conversion_tasks
+       WHERE taskType = 'hls' AND priority >= ${ConversionTaskPriority.UserBlocked}
+       ORDER BY priority ASC,
+         CASE WHEN priority = ${lifo} THEN -strftime('%s', prioritySetAt)
+              ELSE strftime('%s', prioritySetAt) END ASC
        LIMIT ?`,
       count,
     );
 
     const tagged = [
-      ...thumbnailRows.map((r) => ({ ...r, taskType: "thumbnail" as const, taskOrder: 0 })),
+      ...thumbnailRows.map((r) => ({
+        ...r,
+        taskType: "thumbnail" as const,
+        taskOrder: 0,
+      })),
       ...hlsRows.map((r) => ({ ...r, taskType: "hls" as const, taskOrder: 1 })),
     ];
 
-    tagged.sort((a, b) =>
-      a.priority !== b.priority ? a.priority - b.priority
-        : a.prioritySetAt !== b.prioritySetAt ? (a.prioritySetAt < b.prioritySetAt ? -1 : 1)
-        : a.taskOrder - b.taskOrder,
-    );
+    tagged.sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      if (a.prioritySetAt !== b.prioritySetAt) {
+        const chronological = a.prioritySetAt < b.prioritySetAt ? -1 : 1;
+        return a.priority === lifo ? -chronological : chronological;
+      }
+      return a.taskOrder - b.taskOrder;
+    });
 
     return tagged.slice(0, count).map((row) => ({
       relativePath: joinPath(row.folder, row.fileName),
@@ -591,12 +477,24 @@ export class IndexDatabase {
   async getConversionTaskInfo(
     relativePath: string,
     taskType: "thumbnail" | "hls",
-  ): Promise<{ mimeType: string | null; duration: number | null; priority: ConversionTaskPriority | null } | null> {
+  ): Promise<{
+    mimeType: string | null;
+    duration: number | null;
+    priority: ConversionTaskPriority | null;
+  } | null> {
     const { folder, fileName } = splitPath(relativePath);
-    const { priority: priorityColumn } = this.getConversionColumns(taskType);
-    const row = await this.db.get<{ mimeType: string | null; duration: number | null; priority: ConversionTaskPriority | null }>(
-      `SELECT mimeType, duration, ${priorityColumn} AS priority FROM files WHERE folder = ? AND fileName = ?`,
-      folder, fileName,
+    const row = await this.db.get<{
+      mimeType: string | null;
+      duration: number | null;
+      priority: ConversionTaskPriority | null;
+    }>(
+      `SELECT f.mimeType, f.duration, ct.priority
+       FROM files f
+       LEFT JOIN conversion_tasks ct ON ct.folder = f.folder AND ct.fileName = f.fileName AND ct.taskType = ?
+       WHERE f.folder = ? AND f.fileName = ?`,
+      taskType,
+      folder,
+      fileName,
     );
     return row ?? null;
   }
@@ -649,7 +547,11 @@ export class IndexDatabase {
     fileName: string;
     completedAt: string;
   } | null> {
-    const row = await this.db.get<{ folder: string; fileName: string; exifProcessedAt: string }>(
+    const row = await this.db.get<{
+      folder: string;
+      fileName: string;
+      exifProcessedAt: string;
+    }>(
       `SELECT folder, fileName, exifProcessedAt
        FROM files
        WHERE exifProcessedAt IS NOT NULL
@@ -702,52 +604,36 @@ export class IndexDatabase {
     };
   }
 
-  private async ensureRootPath(): Promise<void> {
-    const existing = await this.db.get<{ value: string }>(
-      "SELECT value FROM meta WHERE key = 'rootPath'",
-    );
-
-    if (!existing) {
-      await this.db.run(
-        "INSERT INTO meta (key, value) VALUES ('rootPath', ?)",
-        this.storagePath,
-      );
-      return;
-    }
-
-    if (existing.value !== this.storagePath) {
-      console.warn(
-        `[IndexDatabase] Media root changed from ${existing.value} to ${this.storagePath}. Resetting index.`,
-      );
-      await this.db.transaction([
-        { sql: "DELETE FROM files", params: [] },
-        { sql: "UPDATE meta SET value = ? WHERE key = 'rootPath'", params: [this.storagePath] },
-      ]);
-    }
-  }
-
   async addPaths(paths: string[]): Promise<void> {
     if (!paths.length) return;
-    const statements = paths.map((relativePath) => {
+    const pathStatements = paths.map((relativePath) => {
       const { folder, fileName } = splitPath(relativePath);
       const mimeType = mimeTypeForFilename(relativePath);
-      const thumbnailPriority =
-        mimeType?.startsWith("image/") || mimeType?.startsWith("video/")
-          ? ConversionTaskPriority.Background
-          : null;
+      const needsThumbnail =
+        mimeType?.startsWith("image/") || mimeType?.startsWith("video/");
       return {
-        sql: `INSERT OR IGNORE INTO files (folder, fileName, mimeType, thumbnailConversionPriority, thumbnailConversionPrioritySetAt)
-              VALUES (?, ?, ?, ?, ?)`,
-        params: [
-          folder,
-          fileName,
-          mimeType,
-          thumbnailPriority,
-          thumbnailPriority !== null ? new Date().toISOString() : null,
-        ] as unknown[],
+        fileStatement: {
+          sql: "INSERT OR IGNORE INTO files (folder, fileName, mimeType) VALUES (?, ?, ?)",
+          params: [folder, fileName, mimeType] as unknown[],
+        },
+        taskStatement: needsThumbnail
+          ? {
+              sql: `INSERT OR IGNORE INTO conversion_tasks (folder, fileName, taskType, priority, prioritySetAt)
+                    VALUES (?, ?, 'thumbnail', ?, ?)`,
+              params: [
+                folder,
+                fileName,
+                ConversionTaskPriority.Background,
+                new Date().toISOString(),
+              ] as unknown[],
+            }
+          : null,
       };
     });
-    await this.db.transaction(statements);
+    const allStatements = pathStatements.flatMap(({ fileStatement, taskStatement }) =>
+      taskStatement ? [fileStatement, taskStatement] : [fileStatement],
+    );
+    await this.db.transaction(allStatements);
   }
 
   async countFilesNeedingMetadataUpdate(
@@ -762,13 +648,15 @@ export class IndexDatabase {
   async getFilesNeedingMetadataUpdate(
     metadataGroupName: keyof typeof MetadataGroups,
     limit = 200,
-  ): Promise<Array<
-    {
-      relativePath: string;
-      mimeType: string | null;
-      sizeInBytes?: number;
-    } & { [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null }
-  >> {
+  ): Promise<
+    Array<
+      {
+        relativePath: string;
+        mimeType: string | null;
+        sizeInBytes?: number;
+      } & { [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null }
+    >
+  > {
     const rows = await this.db.all<Record<string, unknown>>(
       `SELECT folder, fileName, mimeType, sizeInBytes, ${metadataGroupName}ProcessedAt FROM files
        WHERE ${metadataGroupName}ProcessedAt IS NULL
@@ -795,7 +683,8 @@ export class IndexDatabase {
   }
 
   async allFiles(): Promise<FileRecord[]> {
-    const rows = await this.db.all<Record<string, string | number>>("SELECT * FROM files");
+    const rows =
+      await this.db.all<Record<string, string | number>>("SELECT * FROM files");
     return rows.map((row) => rowToFileRecord(row));
   }
 
@@ -861,14 +750,12 @@ export class IndexDatabase {
 
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
     const likeQuery =
-      normalizedSearch.length === 0
-        ? "%"
-        : `%${escapeLikeLiteral(normalizedSearch)}%`;
+      normalizedSearch.length === 0 ? "%" : `%${escapeLikeLiteral(normalizedSearch)}%`;
     const whereFragment = whereClause ? `AND (${whereClause})` : "";
 
     if (field === "personInImage" || field === "tags" || field === "aiTags") {
       const rows = await this.db.all<{ suggestion: string }>(
-          `SELECT DISTINCT json_each.value AS suggestion
+        `SELECT DISTINCT json_each.value AS suggestion
          FROM files, json_each(${field})
          WHERE files.${field} IS NOT NULL
            AND json_each.value IS NOT NULL
@@ -877,7 +764,10 @@ export class IndexDatabase {
            ${whereFragment}
          ORDER BY suggestion COLLATE NOCASE ASC
          LIMIT ?`,
-        likeQuery, ...whereParams, limit);
+        likeQuery,
+        ...whereParams,
+        limit,
+      );
 
       return rows
         .map((row) => row.suggestion)
@@ -886,14 +776,17 @@ export class IndexDatabase {
 
     if (field === "rating") {
       const rows = await this.db.all<{ suggestion: string }>(
-          `SELECT DISTINCT CAST(rating AS TEXT) AS suggestion
+        `SELECT DISTINCT CAST(rating AS TEXT) AS suggestion
          FROM files
          WHERE rating IS NOT NULL
            AND CAST(rating AS TEXT) LIKE ? ESCAPE '\\'
            ${whereFragment}
          ORDER BY CAST(suggestion AS INTEGER) DESC
          LIMIT ?`,
-        likeQuery, ...whereParams, limit);
+        likeQuery,
+        ...whereParams,
+        limit,
+      );
 
       return rows
         .map((row) => row.suggestion)
@@ -901,7 +794,7 @@ export class IndexDatabase {
     }
 
     const rows = await this.db.all<{ suggestion: string }>(
-        `SELECT DISTINCT ${field} AS suggestion
+      `SELECT DISTINCT ${field} AS suggestion
        FROM files
        WHERE ${field} IS NOT NULL
          AND ${field} != ''
@@ -909,7 +802,10 @@ export class IndexDatabase {
          ${whereFragment}
        ORDER BY suggestion COLLATE NOCASE ASC
        LIMIT ?`,
-      likeQuery, ...whereParams, limit);
+      likeQuery,
+      ...whereParams,
+      limit,
+    );
 
     return rows
       .map((row) => row.suggestion)
@@ -935,9 +831,7 @@ export class IndexDatabase {
 
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
     const likeQuery =
-      normalizedSearch.length === 0
-        ? "%"
-        : `%${escapeLikeLiteral(normalizedSearch)}%`;
+      normalizedSearch.length === 0 ? "%" : `%${escapeLikeLiteral(normalizedSearch)}%`;
     const whereFragment = whereClause ? `AND (${whereClause})` : "";
 
     if (field === "personInImage" || field === "tags" || field === "aiTags") {
@@ -945,7 +839,7 @@ export class IndexDatabase {
         suggestion: string;
         count: number;
       }>(
-          `SELECT
+        `SELECT
              json_each.value AS suggestion,
              COUNT(DISTINCT files.folder || files.fileName) AS count
            FROM files, json_each(${field})
@@ -957,7 +851,10 @@ export class IndexDatabase {
            GROUP BY json_each.value
            ORDER BY count DESC, suggestion COLLATE NOCASE ASC
            LIMIT ?`,
-        likeQuery, ...whereParams, limit);
+        likeQuery,
+        ...whereParams,
+        limit,
+      );
 
       return rows
         .filter(
@@ -971,7 +868,7 @@ export class IndexDatabase {
 
     if (field === "rating") {
       const rows = await this.db.all<{ suggestion: string; count: number }>(
-          `SELECT
+        `SELECT
              CAST(rating AS TEXT) AS suggestion,
              COUNT(*) AS count
            FROM files
@@ -981,7 +878,10 @@ export class IndexDatabase {
            GROUP BY rating
            ORDER BY CAST(suggestion AS INTEGER) DESC
            LIMIT ?`,
-        likeQuery, ...whereParams, limit);
+        likeQuery,
+        ...whereParams,
+        limit,
+      );
 
       return rows
         .filter(
@@ -994,7 +894,7 @@ export class IndexDatabase {
     }
 
     const rows = await this.db.all<{ suggestion: string; count: number }>(
-        `SELECT
+      `SELECT
            ${field} AS suggestion,
            COUNT(*) AS count
          FROM files
@@ -1005,7 +905,10 @@ export class IndexDatabase {
          GROUP BY ${field}
          ORDER BY count DESC, suggestion COLLATE NOCASE ASC
          LIMIT ?`,
-      likeQuery, ...whereParams, limit);
+      likeQuery,
+      ...whereParams,
+      limit,
+    );
 
     return rows
       .filter(
@@ -1035,7 +938,7 @@ export class IndexDatabase {
       samplePath: string | null;
       sampleName: string | null;
     }>(
-        `WITH buckets AS (
+      `WITH buckets AS (
          SELECT
            CAST(FLOOR((locationLatitude - ?) / ?) AS INTEGER) AS latBucket,
            CAST(FLOOR((locationLongitude - ?) / ?) AS INTEGER) AS lonBucket,
@@ -1096,588 +999,6 @@ export class IndexDatabase {
     };
   }
 
-  async queryFaceQueue(options: {
-    status?: FaceQueueStatus;
-    personId?: string;
-    minConfidence?: number;
-    page?: number;
-    pageSize?: number;
-    path?: string;
-    includeSubfolders?: boolean;
-  }): Promise<FaceQueueResult> {
-    const status = options.status;
-    const personId = options.personId?.trim();
-    const isUnassignedFilter = personId === "__unassigned__";
-    const minConfidence = options.minConfidence;
-    const page = Math.max(1, options.page ?? 1);
-    const pageSize = Math.max(1, Math.min(500, options.pageSize ?? 100));
-    const normalizedPath = options.path ? normalizeFolderPath(options.path) : null;
-    const includeSubfolders = options.includeSubfolders !== false;
-
-    let sql = `SELECT folder, fileName, dateTaken, faceTags FROM files WHERE faceTags IS NOT NULL`;
-    const params: unknown[] = [];
-
-    if (normalizedPath) {
-      if (includeSubfolders) {
-        sql += ` AND folder LIKE ?`;
-        params.push(`${escapeLikeLiteral(normalizedPath)}%`);
-      } else {
-        sql += ` AND folder = ?`;
-        params.push(normalizedPath);
-      }
-    }
-
-    const rows = await this.db.all<{
-      folder: string;
-      fileName: string;
-      dateTaken: number | null;
-      faceTags: string | null;
-    }>(sql, ...params);
-
-    const allItems = rows.flatMap((row) => {
-      const parsedFaceTags = parseFaceTags(row.faceTags);
-      return parsedFaceTags
-        .map((faceTag, index) => {
-          const faceId =
-            typeof faceTag.faceId === "string" && faceTag.faceId.trim().length > 0
-              ? faceTag.faceId
-              : `${row.folder}${row.fileName}#${index}`;
-          const statusValue = faceTag.status ?? "unverified";
-          const confidence = faceTag.suggestion?.confidence;
-          return {
-            faceId,
-            relativePath: `${row.folder}${row.fileName}`,
-            fileName: row.fileName,
-            dateTaken: row.dateTaken ?? undefined,
-            dimensions: faceTag.dimensions,
-            person: faceTag.person,
-            status: statusValue,
-            source: faceTag.source,
-            suggestion: faceTag.suggestion,
-            quality: faceTag.quality,
-            thumbnail: faceTag.thumbnail,
-            confidence,
-          };
-        })
-        .filter((item) => Boolean(item.dimensions));
-    });
-
-    const filteredItems = allItems
-      .filter((item) => (status ? item.status === status : true))
-      .filter((item) => {
-        if (!personId) {
-          return true;
-        }
-
-        if (isUnassignedFilter) {
-          return item.person == null;
-        }
-
-        return item.person?.id === personId;
-      })
-      .filter((item) =>
-        typeof minConfidence === "number" && Number.isFinite(minConfidence)
-          ? (item.confidence ?? -1) >= minConfidence
-          : true,
-      )
-      .sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1));
-
-    const offset = (page - 1) * pageSize;
-    const items = filteredItems.slice(offset, offset + pageSize).map(({ confidence: _confidence, ...rest }) => rest);
-
-    return {
-      items,
-      total: filteredItems.length,
-      page,
-      pageSize,
-    };
-  }
-
-  async acceptFaceSuggestion(options: {
-    faceId: string;
-    personId?: string;
-    personName?: string;
-    reviewer?: string;
-  }): Promise<boolean> {
-    const { faceId, personId, personName, reviewer } = options;
-    const match = await this.findFaceById(faceId);
-    if (!match) {
-      return false;
-    }
-
-    const { row, tags } = match;
-    const nextTags = tags.map((faceTag, index) => {
-      const computedFaceId = getFaceId(row.folder, row.fileName, faceTag, index);
-      if (computedFaceId !== faceId) {
-        return faceTag;
-      }
-
-      const resolvedPersonId = personId ?? faceTag.suggestion?.personId;
-      return {
-        ...faceTag,
-        faceId,
-        person:
-          resolvedPersonId || personName
-            ? { id: resolvedPersonId ?? `name:${personName}`, ...(personName ? { name: personName } : {}) }
-            : faceTag.person,
-        status: "confirmed" as const,
-        review: {
-          action: "accept" as const,
-          reviewedAt: new Date().toISOString(),
-          ...(reviewer ? { reviewer } : {}),
-        },
-      };
-    });
-
-    await this.persistFaceTags(row.folder, row.fileName, nextTags);
-    return true;
-  }
-
-  async rejectFaceSuggestion(options: {
-    faceId: string;
-    personId?: string;
-    reviewer?: string;
-  }): Promise<boolean> {
-    const { faceId, personId, reviewer } = options;
-    const match = await this.findFaceById(faceId);
-    if (!match) {
-      return false;
-    }
-
-    const { row, tags } = match;
-    const nextTags = tags.map((faceTag, index) => {
-      const computedFaceId = getFaceId(row.folder, row.fileName, faceTag, index);
-      if (computedFaceId !== faceId) {
-        return faceTag;
-      }
-
-      const shouldClearSuggestion =
-        !personId || personId === faceTag.suggestion?.personId;
-
-      return {
-        ...faceTag,
-        faceId,
-        status: "rejected" as const,
-        ...(shouldClearSuggestion ? { suggestion: undefined } : {}),
-        review: {
-          action: "reject" as const,
-          reviewedAt: new Date().toISOString(),
-          ...(reviewer ? { reviewer } : {}),
-        },
-      };
-    });
-
-    await this.persistFaceTags(row.folder, row.fileName, nextTags);
-    return true;
-  }
-
-  async queryFacePeople(options?: { path?: string; includeSubfolders?: boolean }): Promise<FacePeopleItem[]> {
-    const startTime = Date.now();
-    const normalizedPath = options?.path ? normalizeFolderPath(options.path) : null;
-    const includeSubfolders = options?.includeSubfolders !== false;
-
-    let pathWhereClause = "";
-    const params: unknown[] = [];
-
-    if (normalizedPath) {
-      if (includeSubfolders) {
-        pathWhereClause = ` AND files.folder LIKE ?`;
-        params.push(`${escapeLikeLiteral(normalizedPath)}%`);
-      } else {
-        pathWhereClause = ` AND files.folder = ?`;
-        params.push(normalizedPath);
-      }
-    }
-
-    const rows = await this.db.all<{
-      personId: string;
-      personName: string | null;
-      personCount: number;
-      folder: string;
-      fileName: string;
-      tagIndex: number;
-      faceIdRaw: string | null;
-      dimX: number;
-      dimY: number;
-      dimWidth: number;
-      dimHeight: number;
-      thumbPreferredHeight: number | null;
-      thumbCropVersion: string | null;
-    }>(
-        `WITH expanded AS (
-           SELECT
-             files.folder AS folder,
-             files.fileName AS fileName,
-             CAST(tags.key AS INTEGER) AS tagIndex,
-             json_extract(tags.value, '$.person.id') AS personIdRaw,
-             json_extract(tags.value, '$.person.name') AS personNameRaw,
-             json_extract(tags.value, '$.faceId') AS faceIdRaw,
-             json_extract(tags.value, '$.dimensions.x') AS dimX,
-             json_extract(tags.value, '$.dimensions.y') AS dimY,
-             json_extract(tags.value, '$.dimensions.width') AS dimWidth,
-             json_extract(tags.value, '$.dimensions.height') AS dimHeight,
-             json_extract(tags.value, '$.thumbnail.preferredHeight') AS thumbPreferredHeight,
-             json_extract(tags.value, '$.thumbnail.cropVersion') AS thumbCropVersion,
-             COALESCE(json_extract(tags.value, '$.quality.overall'), 0) * 10000
-               + COALESCE(json_extract(tags.value, '$.quality.effectiveResolution'), 0)
-               + MAX(
-                   0,
-                   COALESCE(json_extract(tags.value, '$.dimensions.width'), 0)
-                     * COALESCE(json_extract(tags.value, '$.dimensions.height'), 0)
-                 ) * 1000 AS representativeScore
-           FROM files, json_each(files.faceTags) AS tags
-           WHERE files.faceTags IS NOT NULL
-             AND json_type(tags.value, '$.dimensions') = 'object'
-             ${pathWhereClause}
-         ),
-         ranked AS (
-           SELECT
-             COALESCE(personIdRaw, '__unassigned__') AS personId,
-             COALESCE(
-               personNameRaw,
-               MAX(personNameRaw) OVER (
-                 PARTITION BY COALESCE(personIdRaw, '__unassigned__')
-               ),
-               CASE WHEN personIdRaw IS NULL THEN 'Unassigned' ELSE NULL END
-             ) AS personName,
-             folder,
-             fileName,
-             tagIndex,
-             faceIdRaw,
-             dimX,
-             dimY,
-             dimWidth,
-             dimHeight,
-             thumbPreferredHeight,
-             thumbCropVersion,
-             representativeScore,
-             COUNT(*) OVER (PARTITION BY COALESCE(personIdRaw, '__unassigned__')) AS personCount,
-             ROW_NUMBER() OVER (
-               PARTITION BY COALESCE(personIdRaw, '__unassigned__')
-               ORDER BY representativeScore DESC
-             ) AS representativeRank
-           FROM expanded
-         )
-         SELECT
-           personId,
-           personName,
-           personCount,
-           folder,
-           fileName,
-           tagIndex,
-           faceIdRaw,
-           dimX,
-           dimY,
-           dimWidth,
-           dimHeight,
-           thumbPreferredHeight,
-           thumbCropVersion
-         FROM ranked
-         WHERE representativeRank = 1
-         ORDER BY personCount DESC`,
-      ...params,
-    );
-
-    const people = rows.map((row) => {
-      const faceId = row.faceIdRaw?.trim().length
-        ? row.faceIdRaw
-        : `${row.folder}${row.fileName}#${row.tagIndex}`;
-      const thumbnail =
-        row.thumbPreferredHeight == null && row.thumbCropVersion == null
-          ? undefined
-          : {
-              ...(row.thumbPreferredHeight == null
-                ? {}
-                : { preferredHeight: row.thumbPreferredHeight }),
-              ...(row.thumbCropVersion == null ? {} : { cropVersion: row.thumbCropVersion }),
-            };
-
-      return {
-        id: row.personId,
-        ...(row.personName ? { name: row.personName } : {}),
-        count: row.personCount,
-        representativeFace: {
-          faceId,
-          relativePath: `${row.folder}${row.fileName}`,
-          fileName: row.fileName,
-          dimensions: {
-            x: row.dimX,
-            y: row.dimY,
-            width: row.dimWidth,
-            height: row.dimHeight,
-          },
-          ...(thumbnail ? { thumbnail } : {}),
-        },
-      };
-    });
-
-    console.log(
-      `[faces] queryFacePeople returned ${people.length} buckets in ${Date.now() - startTime}ms`,
-    );
-    return people;
-  }
-
-  async queryFaceMatches(options: { faceId: string; limit?: number }): Promise<FaceMatchItem[]> {
-    const faceId = options.faceId.trim();
-    const limit = Math.max(1, Math.min(100, options.limit ?? 12));
-    if (!faceId) {
-      return [];
-    }
-
-    const target = await this.db.get<{ embedding: Buffer }>(
-      `SELECT embedding FROM face_embeddings WHERE faceId = ?`,
-      faceId,
-    );
-    if (!target?.embedding) {
-      return [];
-    }
-
-    const rows = await this.db.all<{
-      faceId: string;
-      folder: string;
-      fileName: string;
-      personId: string | null;
-      personName: string | null;
-      status: string;
-      dimensionsX: number | null;
-      dimensionsY: number | null;
-      dimensionsWidth: number | null;
-      dimensionsHeight: number | null;
-      thumbnailPreferredHeight: number | null;
-      thumbnailCropVersion: string | null;
-      confidence: number;
-    }>(
-      `SELECT
-         faceId, folder, fileName, personId, personName, status,
-         dimensionsX, dimensionsY, dimensionsWidth, dimensionsHeight,
-         thumbnailPreferredHeight, thumbnailCropVersion,
-         cosine_similarity(?, embedding) AS confidence
-       FROM face_embeddings
-       WHERE faceId != ? AND status != 'rejected'
-       ORDER BY confidence DESC
-       LIMIT ?`,
-      target.embedding, faceId, limit,
-    );
-
-    return rows.map((row) => ({
-      faceId: row.faceId,
-      relativePath: `${row.folder}${row.fileName}`,
-      fileName: row.fileName,
-      dimensions: {
-        x: row.dimensionsX ?? 0,
-        y: row.dimensionsY ?? 0,
-        width: row.dimensionsWidth ?? 0,
-        height: row.dimensionsHeight ?? 0,
-      },
-      ...(row.personId ? { person: { id: row.personId, ...(row.personName ? { name: row.personName } : {}) } } : {}),
-      status: row.status ?? "unverified",
-      ...(row.thumbnailPreferredHeight != null || row.thumbnailCropVersion != null
-        ? {
-            thumbnail: {
-              ...(row.thumbnailPreferredHeight != null ? { preferredHeight: row.thumbnailPreferredHeight } : {}),
-              ...(row.thumbnailCropVersion != null ? { cropVersion: row.thumbnailCropVersion } : {}),
-            },
-          }
-        : {}),
-      confidence: Number(row.confidence.toFixed(4)),
-    }));
-  }
-
-  async queryPersonFaceSuggestions(options: { personId: string; limit?: number }): Promise<FaceMatchItem[]> {
-    const personId = options.personId.trim();
-    const limit = Math.max(1, Math.min(200, options.limit ?? 200));
-    if (!personId) {
-      return [];
-    }
-
-    const profileFaces = await this.db.all<{
-      embedding: Buffer;
-      qualityOverall: number | null;
-      qualityEffectiveResolution: number | null;
-    }>(
-      `SELECT embedding, qualityOverall, qualityEffectiveResolution
-       FROM face_embeddings
-       WHERE personId = ? AND status = 'confirmed'`,
-      personId,
-    );
-
-    if (profileFaces.length === 0) {
-      return [];
-    }
-
-    const centroid = buildWeightedCentroid(
-      profileFaces.map((row) => ({
-        embedding: blobToEmbedding(row.embedding),
-        weight: embeddingWeight({
-          overall: row.qualityOverall ?? undefined,
-          effectiveResolution: row.qualityEffectiveResolution ?? undefined,
-        }),
-      })),
-    );
-    if (!centroid) {
-      return [];
-    }
-
-    const centroidBlob = embeddingToBlob(centroid);
-    const MIN_SIMILARITY = 0.4;
-
-    const rows = await this.db.all<{
-      faceId: string;
-      folder: string;
-      fileName: string;
-      personId: string | null;
-      personName: string | null;
-      status: string;
-      dimensionsX: number | null;
-      dimensionsY: number | null;
-      dimensionsWidth: number | null;
-      dimensionsHeight: number | null;
-      thumbnailPreferredHeight: number | null;
-      thumbnailCropVersion: string | null;
-      confidence: number;
-    }>(
-      `SELECT
-         faceId, folder, fileName, personId, personName, status,
-         dimensionsX, dimensionsY, dimensionsWidth, dimensionsHeight,
-         thumbnailPreferredHeight, thumbnailCropVersion,
-         cosine_similarity(?, embedding) AS confidence
-       FROM face_embeddings
-       WHERE personId IS NULL AND status != 'rejected'
-       ORDER BY confidence DESC
-       LIMIT ?`,
-      centroidBlob, limit,
-    );
-
-    const topMatch = rows.at(0);
-    if (!topMatch || topMatch.confidence < MIN_SIMILARITY) {
-      return [];
-    }
-
-    const secondMatch = rows.at(1);
-    if (secondMatch && topMatch.confidence / (secondMatch.confidence + 0.001) < 1.12) {
-      return [];
-    }
-
-    return rows.map((row) => ({
-      faceId: row.faceId,
-      relativePath: `${row.folder}${row.fileName}`,
-      fileName: row.fileName,
-      dimensions: {
-        x: row.dimensionsX ?? 0,
-        y: row.dimensionsY ?? 0,
-        width: row.dimensionsWidth ?? 0,
-        height: row.dimensionsHeight ?? 0,
-      },
-      ...(row.personId ? { person: { id: row.personId, ...(row.personName ? { name: row.personName } : {}) } } : {}),
-      status: row.status ?? "unverified",
-      ...(row.thumbnailPreferredHeight != null || row.thumbnailCropVersion != null
-        ? {
-            thumbnail: {
-              ...(row.thumbnailPreferredHeight != null ? { preferredHeight: row.thumbnailPreferredHeight } : {}),
-              ...(row.thumbnailCropVersion != null ? { cropVersion: row.thumbnailCropVersion } : {}),
-            },
-          }
-        : {}),
-      confidence: Number(row.confidence.toFixed(4)),
-    }));
-  }
-
-  private async findFaceById(faceId: string): Promise<{
-    row: { folder: string; fileName: string; faceTags: string | null };
-    tags: FaceTag[];
-  } | null> {
-    const embeddingRow = await this.db.get<{ folder: string; fileName: string }>(
-      `SELECT folder, fileName FROM face_embeddings WHERE faceId = ?`,
-      faceId,
-    );
-
-    if (embeddingRow) {
-      const fileRow = await this.db.get<{ folder: string; fileName: string; faceTags: string | null }>(
-        `SELECT folder, fileName, faceTags FROM files WHERE folder = ? AND fileName = ?`,
-        embeddingRow.folder, embeddingRow.fileName,
-      );
-      if (fileRow) {
-        const tags = parseFaceTags(fileRow.faceTags);
-        const found = tags.some(
-          (tag, index) => getFaceId(fileRow.folder, fileRow.fileName, tag, index) === faceId,
-        );
-        if (found) {
-          return { row: fileRow, tags };
-        }
-      }
-    }
-
-    const rows = await this.db.all<{ folder: string; fileName: string; faceTags: string | null }>(
-      `SELECT folder, fileName, faceTags FROM files WHERE faceTags IS NOT NULL`,
-    );
-
-    for (const row of rows) {
-      const tags = parseFaceTags(row.faceTags);
-      const found = tags.some(
-        (tag, index) => getFaceId(row.folder, row.fileName, tag, index) === faceId,
-      );
-      if (found) {
-        return { row, tags };
-      }
-    }
-
-    return null;
-  }
-
-  private async persistFaceTags(folder: string, fileName: string, faceTags: FaceTag[]): Promise<void> {
-    await this.db.run(
-      `UPDATE files
-       SET faceTags = ?, faceMetadataProcessedAt = ?
-       WHERE folder = ? AND fileName = ?`,
-      JSON.stringify(faceTags), new Date().toISOString(), folder, fileName,
-    );
-    await this.syncFaceEmbeddings(folder, fileName, faceTags);
-  }
-
-  async syncFaceEmbeddings(folder: string, fileName: string, faceTags: FaceTag[]): Promise<void> {
-    await this.db.run(
-      `DELETE FROM face_embeddings WHERE folder = ? AND fileName = ?`,
-      folder, fileName,
-    );
-
-    const statements = faceTags
-      .map((tag, index) => {
-        const embedding = getFaceEmbedding(tag);
-        if (!embedding || !tag.dimensions) {
-          return null;
-        }
-        const faceId = getFaceId(folder, fileName, tag, index);
-        return {
-          sql: `INSERT OR REPLACE INTO face_embeddings
-                (faceId, folder, fileName, tagIndex, embedding, personId, personName, status,
-                 dimensionsX, dimensionsY, dimensionsWidth, dimensionsHeight,
-                 qualityOverall, qualityEffectiveResolution,
-                 thumbnailPreferredHeight, thumbnailCropVersion)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          params: [
-            faceId, folder, fileName, index,
-            embeddingToBlob(embedding),
-            tag.person?.id ?? null,
-            tag.person?.name ?? null,
-            tag.status ?? "unverified",
-            tag.dimensions.x ?? null,
-            tag.dimensions.y ?? null,
-            tag.dimensions.width ?? null,
-            tag.dimensions.height ?? null,
-            tag.quality?.overall ?? null,
-            tag.quality?.effectiveResolution ?? null,
-            tag.thumbnail?.preferredHeight ?? null,
-            tag.thumbnail?.cropVersion ?? null,
-          ] as unknown[],
-        };
-      })
-      .filter((stmt): stmt is NonNullable<typeof stmt> => stmt !== null);
-
-    if (statements.length > 0) {
-      await this.db.transaction(statements);
-    }
-  }
-
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(
     options: QueryOptions,
   ): Promise<QueryResult<TMetadata>> {
@@ -1714,7 +1035,8 @@ export class IndexDatabase {
 
     const rows = await measureOperation(
       "queryFiles.rows",
-      () => this.db.all<Record<string, unknown>>(mainSQL, ...whereParams, pageSize, offset),
+      () =>
+        this.db.all<Record<string, unknown>>(mainSQL, ...whereParams, pageSize, offset),
       { category: "db", detail: `limit=${pageSize} offset=${offset}` },
     );
     const matchedFiles = rows.map((v) =>
@@ -1736,7 +1058,9 @@ export class IndexDatabase {
     return result;
   }
 
-  async getDateRange(filter: FilterElement): Promise<{ minDate: Date | null; maxDate: Date | null }> {
+  async getDateRange(
+    filter: FilterElement,
+  ): Promise<{ minDate: Date | null; maxDate: Date | null }> {
     const { where: whereClause, params } = filterToSQL(filter);
     const sql = `
       SELECT
@@ -1789,7 +1113,7 @@ export class IndexDatabase {
 
     const { where: whereClause, params } = filterToSQL(filter);
     const rows = await this.db.all<{ bucket: string; count: number }>(
-        `SELECT
+      `SELECT
             strftime('${bucketFormat}', datetime(dateTaken / 1000, 'unixepoch')) AS bucket,
             COUNT(*) AS count
           FROM files
@@ -1797,7 +1121,8 @@ export class IndexDatabase {
           ${whereClause ? `AND ${whereClause}` : ""}
           GROUP BY bucket
           ORDER BY bucket`,
-      ...params);
+      ...params,
+    );
 
     const buckets = rows.map(({ bucket, count }) => {
       const start =
@@ -1824,7 +1149,9 @@ export class IndexDatabase {
   }
 
   async getSize(): Promise<number> {
-    const result = await this.db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
+    const result = await this.db.get<{ count: number }>(
+      "SELECT COUNT(*) as count FROM files",
+    );
     return result?.count ?? 0;
   }
 

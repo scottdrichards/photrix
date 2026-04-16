@@ -2,7 +2,7 @@
 import exifr from "exifr";
 import sharp from "sharp";
 import { readdirSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { access, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { ExifMetadata, FileInfo } from "../indexDatabase/fileRecord.type.ts";
 import { getVideoMetadata } from "../videoProcessing/getVideoMetadata.ts";
@@ -352,7 +352,25 @@ export const getExifMetadataFromFile = async (
     metadata.dimensionHeight = decodedDimensions.height;
   }
 
+  const livePhotoVideoFileName = await findSiblingLivePhotoVideo(fullPath);
+  if (livePhotoVideoFileName) {
+    metadata.livePhotoVideoFileName = livePhotoVideoFileName;
+  }
+
   return metadata as ExifMetadata;
+};
+
+const LIVE_PHOTO_VIDEO_EXTENSIONS = [".mov", ".MOV", ".mp4", ".MP4"];
+
+/** Checks for a sibling video file (same stem, video extension) — used to detect Apple Live Photos. */
+const findSiblingLivePhotoVideo = async (fullPath: string): Promise<string | undefined> => {
+  const dir = path.dirname(fullPath);
+  const stem = path.basename(fullPath, path.extname(fullPath));
+  for (const ext of LIVE_PHOTO_VIDEO_EXTENSIONS) {
+    const exists = await access(path.join(dir, stem + ext)).then(() => true, () => false);
+    if (exists) return stem + ext;
+  }
+  return undefined;
 };
 
 /**

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect, jest } from "@jest/globals";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -88,6 +88,36 @@ describe("IndexDatabase", () => {
     });
   });
 
+  it("persists and returns livePhotoVideoFileName in queried metadata", async () => {
+    await withTempDb(async (db) => {
+      await db.addFile(createRecord("live/photo.heic", { mimeType: "image/heic" }));
+      await db.addOrUpdateFileData("live/photo.heic", {
+        exifProcessedAt: "2026-01-05T00:00:00.000Z",
+        livePhotoVideoFileName: "photo.MOV",
+      });
+
+      const record = await db.getFileRecord("live/photo.heic");
+      expect(record?.livePhotoVideoFileName).toBe("photo.MOV");
+
+      const result = await db.queryFiles({
+        filter: {},
+        metadata: ["livePhotoVideoFileName"],
+        pageSize: 10,
+        page: 1,
+      });
+
+      expect(result.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            folder: "/live/",
+            fileName: "photo.heic",
+            livePhotoVideoFileName: "photo.MOV",
+          }),
+        ]),
+      );
+    });
+  });
+
   it("tracks missing metadata counters", async () => {
     await withTempDb(async (db) => {
       await db.addPaths(["a.jpg", "b.mp4", "doc.txt"]);
@@ -143,6 +173,53 @@ describe("IndexDatabase", () => {
         relativePath: "/video.mp4",
         taskType: "hls",
       });
+    });
+  });
+
+  it("userImplicit conversion queue is LIFO", async () => {
+    await withTempDb(async (db) => {
+      await db.addPaths(["older.jpg", "newer.jpg"]);
+
+      jest.useFakeTimers();
+      try {
+        jest.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+        await db.setConversionPriority("older.jpg", "thumbnail", ConversionTaskPriority.UserImplicit);
+
+        jest.setSystemTime(new Date("2026-01-02T00:00:00.000Z"));
+        await db.setConversionPriority("newer.jpg", "thumbnail", ConversionTaskPriority.UserImplicit);
+      } finally {
+        jest.useRealTimers();
+      }
+
+      const [nextTask] = await db.getNextConversionTasks();
+
+      expect(nextTask).toEqual({
+        relativePath: "/newer.jpg",
+        taskType: "thumbnail",
+      });
+    });
+  });
+
+  it("raiseConversionPriority bumps background items but does not lower higher-priority or already-converted items", async () => {
+    await withTempDb(async (db) => {
+      await db.addPaths(["background.jpg", "blocked.jpg", "converted.jpg"]);
+      await db.setConversionPriority("background.jpg", "thumbnail", ConversionTaskPriority.Background);
+      await db.setConversionPriority("blocked.jpg", "thumbnail", ConversionTaskPriority.UserBlocked);
+      await db.setConversionPriority("converted.jpg", "thumbnail", null); // mark as done
+
+      await db.raiseConversionPriority(
+        ["/background.jpg", "/blocked.jpg", "/converted.jpg"],
+        "thumbnail",
+        ConversionTaskPriority.UserImplicit,
+      );
+
+      const background = await db.getConversionTaskInfo("/background.jpg", "thumbnail");
+      const blocked = await db.getConversionTaskInfo("/blocked.jpg", "thumbnail");
+      const converted = await db.getConversionTaskInfo("/converted.jpg", "thumbnail");
+
+      expect(background?.priority).toBe(ConversionTaskPriority.UserImplicit);
+      expect(blocked?.priority).toBe(ConversionTaskPriority.UserBlocked);
+      expect(converted?.priority).toBeNull();
     });
   });
 

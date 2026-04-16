@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Film, X } from "lucide-react";
 import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
 import { negotiateVideoPlayback } from "../api";
@@ -52,6 +52,11 @@ export function FullscreenViewer() {
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null);
+  const [showLiveVideo, setShowLiveVideo] = useState(false);
+
+  useEffect(() => {
+    setShowLiveVideo(false);
+  }, [photo?.path]);
 
   // HLS setup effect
   useEffect(() => {
@@ -344,6 +349,17 @@ export function FullscreenViewer() {
           >
             <X size={24} />
           </button>
+                    {photo.mediaType !== "video" && photo.livePhotoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setShowLiveVideo((v) => !v)}
+                        className={css.livePhotoButton}
+                        aria-label={showLiveVideo ? "Show photo" : "Play live photo"}
+                        title={showLiveVideo ? "Show photo" : "Play live photo"}
+                      >
+                        <Film size={20} />
+                      </button>
+                    )}
           {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
           <div
             className={css.container}
@@ -381,6 +397,17 @@ export function FullscreenViewer() {
                   </span>
                 )}
               </>
+            ) : showLiveVideo && photo.livePhotoUrl ? (
+              // eslint-disable-next-line jsx-a11y/media-has-caption
+              <video
+                key={photo.livePhotoUrl}
+                src={photo.livePhotoUrl}
+                autoPlay
+                loop
+                playsInline
+                muted
+                className={css.media}
+              />
             ) : (
               <img src={photo.fullUrl} alt={photo.name} className={css.media} />
             )}

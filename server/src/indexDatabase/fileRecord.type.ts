@@ -46,6 +46,7 @@ export type ExifMetadata = {
   rating?: number;
   tags?: string[];
   orientation?: number;
+  livePhotoVideoFileName?: string;
 };
 
 export type AIMetadata = {
@@ -53,53 +54,7 @@ export type AIMetadata = {
   aiTags?: string[];
 };
 
-type Person = {
-  id: string;
-  name?: string;
-};
-
-type FaceQuality = {
-  overall?: number;
-  sharpness?: number;
-  effectiveResolution?: number;
-};
-
-type FaceSuggestion = {
-  personId: string;
-  confidence: number;
-  modelVersion?: string;
-  suggestedAt?: string;
-};
-
-type FaceReview = {
-  action: "accept" | "reject" | "skip";
-  reviewedAt: string;
-  reviewer?: string;
-};
-
-export type FaceTag = {
-  faceId?: string;
-  dimensions: { x: number; y: number; width: number; height: number };
-  /** The output of a face detection algorithm */
-  featureDescription: unknown;
-  person: Person | null;
-  source?: "seed-known" | "auto-detected";
-  status?: "unverified" | "confirmed" | "rejected";
-  suggestion?: FaceSuggestion;
-  review?: FaceReview;
-  quality?: FaceQuality;
-  thumbnail?: {
-    preferredHeight?: number;
-    cropVersion?: string;
-  };
-  detectedAt?: string;
-};
-
-export type FaceMetadata = {
-  faceTags?: FaceTag[];
-};
-
-export type AllMetaData = FileInfo & ExifMetadata & AIMetadata & FaceMetadata;
+export type AllMetaData = FileInfo & ExifMetadata & AIMetadata;
 
 /**
  * Indicates how to acquire metadata for a file
@@ -128,20 +83,10 @@ export const MetadataGroups = {
     "rating",
     "tags",
     "orientation",
+    "livePhotoVideoFileName",
   ],
   aiMetadata: ["aiDescription", "aiTags"],
-  faceMetadata: ["faceTags"],
 } as const satisfies Record<string, AllMetaData[keyof AllMetaData][]>;
-/**
- * This will verify that all metadata keys are assigned a group
- */
-type AllMetadataKeysInGroups = UnionXOR<
-  {
-    [K in keyof typeof MetadataGroups]: (typeof MetadataGroups)[K][number];
-  }[keyof typeof MetadataGroups],
-  keyof ExifMetadata | keyof AIMetadata | keyof FaceMetadata | keyof FileInfo
->;
-type _ErrorsIfUnassignedMetadataKeys = AssertNever<AllMetadataKeysInGroups>;
 
 /** Undefined means "I don't know", null means "I know there is no value
  * Generally, it is best to look at the presence of the `${MetadataGroup}ProcessedAt` fields to see if metadata has been processed
@@ -150,3 +95,17 @@ export type FileRecord = BaseFileRecord &
   Partial<AllMetaData> & {
     [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null;
   };
+
+///////////////////////////////////////////
+// Validation
+
+/**
+ * This will verify that all metadata keys are assigned a group
+ */
+type AllMetadataKeysInGroups = UnionXOR<
+  {
+    [K in keyof typeof MetadataGroups]: (typeof MetadataGroups)[K][number];
+  }[keyof typeof MetadataGroups],
+  keyof ExifMetadata | keyof AIMetadata | keyof FileInfo
+>;
+type _ErrorsIfUnassignedMetadataKeys = AssertNever<AllMetadataKeysInGroups>;

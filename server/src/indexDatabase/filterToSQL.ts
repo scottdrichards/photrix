@@ -1,4 +1,9 @@
-import type { FilterCondition, FilterElement, FilterField, Range } from "./indexDatabase.type.ts";
+import type {
+  FilterCondition,
+  FilterElement,
+  FilterField,
+  Range,
+} from "./indexDatabase.type.ts";
 import type { FileRecord } from "./fileRecord.type.ts";
 import { normalizeFolderPath } from "./utils/pathUtils.ts";
 

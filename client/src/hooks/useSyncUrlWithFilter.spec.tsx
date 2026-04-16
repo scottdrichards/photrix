@@ -25,9 +25,6 @@ const SyncHarness = ({ initialView = "library" as ViewMode } = {}) => {
       >
         set-filter
       </button>
-      <button type="button" onClick={() => setView("faces")}>
-        set-faces
-      </button>
       <div data-testid="path">{filter.path ?? ""}</div>
       <div data-testid="include">{String(filter.includeSubfolders ?? true)}</div>
       <div data-testid="view">{view}</div>
@@ -55,20 +52,6 @@ describe("useSyncUrlWithFilter", () => {
     });
   });
 
-  it("syncs view=faces to URL when view changes", async () => {
-    render(
-      <FilterProvider>
-        <SyncHarness />
-      </FilterProvider>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "set-faces" }));
-
-    await waitFor(() => {
-      expect(window.location.search).toBe("?view=faces");
-    });
-  });
-
   it("syncs filter state when browser popstate fires", async () => {
     render(
       <FilterProvider>
@@ -82,21 +65,6 @@ describe("useSyncUrlWithFilter", () => {
     await waitFor(() => {
       expect(screen.getByTestId("path")).toHaveTextContent("travel/italy/");
       expect(screen.getByTestId("include")).toHaveTextContent("false");
-    });
-  });
-
-  it("restores view=faces from URL on popstate", async () => {
-    render(
-      <FilterProvider>
-        <SyncHarness />
-      </FilterProvider>,
-    );
-
-    window.history.pushState(null, "", "/?view=faces");
-    fireEvent.popState(window);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("view")).toHaveTextContent("faces");
     });
   });
 });

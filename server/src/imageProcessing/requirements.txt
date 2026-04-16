@@ -1,6 +1,2 @@
 Pillow
 pillow-heif
-# CPU-first baseline for face embedding worker.
-# Pinned for broader older-CPU compatibility on Windows VMs.
-numpy==1.26.4
-opencv-python-headless==4.10.0.84

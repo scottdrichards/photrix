@@ -1,46 +1,27 @@
-import { Info, User, LogOut } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Info } from "lucide-react";
+import { useEffect, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
 import { FullscreenViewer } from "./components/FullscreenViewer";
-import { FacesReviewPage } from "./components/faces";
 import { StatusModal } from "./components/StatusModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
-import { AuthGate, useAuthSession } from "./auth/AuthGate";
 import { Filter } from "./components/filter/Filter";
 import { FilterProvider } from "./components/filter/FilterContext";
 import {
   SelectionProvider,
   useSelectionContext,
 } from "./components/selection/SelectionContext";
-import { useSyncUrlWithFilter, type ViewMode } from "./hooks/useSyncUrlWithFilter";
 import { probeVideoPlaybackProfile } from "./videoPlaybackProfile";
 
 const AppContent = () => {
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<ViewMode>(
-    () => new URLSearchParams(window.location.search).get("view") === "faces" ? "faces" : "library",
-  );
-  const { username, isSigningOut, signOut } = useAuthSession();
   const { clearSelection, selectedItems, selectionMode, setSelectionMode } =
     useSelectionContext();
-  useSyncUrlWithFilter(view, setView);
 
   useEffect(() => {
     void probeVideoPlaybackProfile();
   }, []);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handle = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
-    };
-    document.addEventListener("mousedown", handle);
-    return () => document.removeEventListener("mousedown", handle);
-  }, [menuOpen]);
 
   const canUseNativeShare =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
@@ -112,65 +93,44 @@ const AppContent = () => {
 
   return (
     <div className={css.app}>
-      <header
-        className={cx(
-          css.header,
-          isStatusOpen ? css.headerStatusOpen : undefined,
-        )}
-      >
+      <header className={cx(css.header, isStatusOpen ? css.headerStatusOpen : undefined)}>
         <div className={css.headerTitle}>
           <h2>Photrix</h2>
           <small>A better way to view photos.</small>
         </div>
 
         <div className={css.headerActions}>
-          <button
-            className={`btn ${view === "library" ? "btn-primary" : "btn-subtle"}`}
-            onClick={() => setView("library")}
-          >
-            Library
-          </button>
-          <button
-            className={`btn ${view === "faces" ? "btn-primary" : "btn-subtle"}`}
-            onClick={() => setView("faces")}
-          >
-            Faces
-          </button>
           <Filter />
-          {view === "library" ? (
+          {selectionMode ? (
             <>
-              {selectionMode ? (
-                <>
-                  <small>{selectedItems.length} selected</small>
-                  <button
-                    onClick={handleShare}
-                    className="btn btn-primary"
-                    disabled={
-                      !canUseNativeShare ||
-                      !supportsFileShare ||
-                      selectedItems.length === 0 ||
-                      isSharing
-                    }
-                  >
-                    {isSharing ? "Preparing…" : "Share"}
-                  </button>
-                  <button
-                    onClick={() => handleSelectionModeChange(false)}
-                    className="btn btn-subtle"
-                  >
-                    Done
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={() => handleSelectionModeChange(true)}
-                  className="btn btn-subtle"
-                >
-                  Select
-                </button>
-              )}
+              <small>{selectedItems.length} selected</small>
+              <button
+                onClick={handleShare}
+                className="btn btn-primary"
+                disabled={
+                  !canUseNativeShare ||
+                  !supportsFileShare ||
+                  selectedItems.length === 0 ||
+                  isSharing
+                }
+              >
+                {isSharing ? "Preparing…" : "Share"}
+              </button>
+              <button
+                onClick={() => handleSelectionModeChange(false)}
+                className="btn btn-subtle"
+              >
+                Done
+              </button>
             </>
-          ) : null}
+          ) : (
+            <button
+              onClick={() => handleSelectionModeChange(true)}
+              className="btn btn-subtle"
+            >
+              Select
+            </button>
+          )}
           <button
             title="Server Status"
             className="btn btn-subtle"
@@ -180,53 +140,22 @@ const AppContent = () => {
             Status
           </button>
         </div>
-
-        <div ref={menuRef} className={css.headerAuthMenu}>
-          <button
-            className="btn btn-subtle"
-            onClick={() => setMenuOpen(!menuOpen)}
-          >
-            <User size={20} />
-            {username}
-          </button>
-          {menuOpen && (
-            <div role="menu" className="menu-popover">
-              <button
-                role="menuitem"
-                className="menu-item"
-                onClick={() => { signOut(); setMenuOpen(false); }}
-                disabled={isSigningOut}
-              >
-                <LogOut size={20} />
-                Sign out
-              </button>
-            </div>
-          )}
-        </div>
       </header>
 
       <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
 
-      {view === "library" ? (
-        <>
-          <ThumbnailGrid />
-          <FullscreenViewer />
-        </>
-      ) : (
-        <FacesReviewPage />
-      )}
+      <ThumbnailGrid />
+      <FullscreenViewer />
     </div>
   );
 };
 
 export default function App() {
   return (
-    <AuthGate>
-      <FilterProvider>
-        <SelectionProvider>
-          <AppContent />
-        </SelectionProvider>
-      </FilterProvider>
-    </AuthGate>
+    <FilterProvider>
+      <SelectionProvider>
+        <AppContent />
+      </SelectionProvider>
+    </FilterProvider>
   );
 }

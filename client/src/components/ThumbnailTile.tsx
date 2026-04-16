@@ -1,4 +1,4 @@
-import { CheckCircle, PlayCircle } from "lucide-react";
+import { CheckCircle, Film, PlayCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 import { useSelectionContext } from "./selection/SelectionContext";
@@ -178,6 +178,11 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       {selected ? (
         <span className={css.selectedBadge} aria-hidden="true">
           <CheckCircle size={20} fill="currentColor" />
+        </span>
+      ) : null}
+      {photo.livePhotoUrl && !selected ? (
+        <span className={css.livePhotoBadge} aria-label="Live photo" title="Live photo">
+          <Film size={14} />
         </span>
       ) : null}
       {photo.mediaType === "video" ? (

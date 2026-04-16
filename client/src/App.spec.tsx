@@ -3,8 +3,6 @@ import type { ReactNode } from "react";
 import App from "./App";
 
 const useSelectionContextMock = vi.fn();
-const useSyncUrlWithFilterMock = vi.fn();
-const useAuthSessionMock = vi.fn();
 const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
   bandwidthMbps: 20,
   hevcSupported: true,
@@ -14,11 +12,6 @@ vi.mock("./components/filter/Filter", () => ({
   Filter: () => <div data-testid="filter">filter</div>,
 }));
 
-vi.mock("./auth/AuthGate", () => ({
-  AuthGate: ({ children }: { children: ReactNode }) => <>{children}</>,
-  useAuthSession: () => useAuthSessionMock(),
-}));
-
 vi.mock("./components/filter/FilterContext", () => ({
   FilterProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
@@ -26,10 +19,6 @@ vi.mock("./components/filter/FilterContext", () => ({
 vi.mock("./components/selection/SelectionContext", () => ({
   SelectionProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   useSelectionContext: () => useSelectionContextMock(),
-}));
-
-vi.mock("./hooks/useSyncUrlWithFilter", () => ({
-  useSyncUrlWithFilter: () => useSyncUrlWithFilterMock(),
 }));
 
 vi.mock("./components/ThumbnailGrid", () => ({
@@ -46,10 +35,6 @@ vi.mock("./components/StatusModal", () => ({
   ),
 }));
 
-vi.mock("./components/faces/FacesReviewPage", () => ({
-  FacesReviewPage: () => <div data-testid="faces-review-page">faces</div>,
-}));
-
 vi.mock("./videoPlaybackProfile", () => ({
   probeVideoPlaybackProfile: () => probeVideoPlaybackProfileMock(),
 }));
@@ -57,14 +42,7 @@ vi.mock("./videoPlaybackProfile", () => ({
 describe("App", () => {
   beforeEach(() => {
     useSelectionContextMock.mockReset();
-    useSyncUrlWithFilterMock.mockReset();
-    useAuthSessionMock.mockReset();
     probeVideoPlaybackProfileMock.mockClear();
-    useAuthSessionMock.mockReturnValue({
-      username: "scott",
-      isSigningOut: false,
-      signOut: vi.fn(),
-    });
   });
 
   it("calls url sync hook and enters selection mode from Select button", () => {
@@ -79,7 +57,6 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(useSyncUrlWithFilterMock).toHaveBeenCalled();
     expect(probeVideoPlaybackProfileMock).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
 
@@ -163,84 +140,5 @@ describe("App", () => {
     });
 
     fetchMock.mockRestore();
-  });
-
-  it("opens user menu and signs out from the header", async () => {
-    const signOut = vi.fn().mockResolvedValue(undefined);
-    useAuthSessionMock.mockReturnValue({
-      username: "Scott",
-      isSigningOut: false,
-      signOut,
-    });
-    useSelectionContextMock.mockReturnValue({
-      clearSelection: vi.fn(),
-      selectedItems: [],
-      selectionMode: false,
-      setSelectionMode: vi.fn(),
-    });
-
-    render(<App />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Scott" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
-
-    expect(signOut).toHaveBeenCalledTimes(1);
-  });
-
-  it("switches between library and faces views", () => {
-    useSelectionContextMock.mockReturnValue({
-      clearSelection: vi.fn(),
-      selectedItems: [],
-      selectionMode: false,
-      setSelectionMode: vi.fn(),
-    });
-
-    render(<App />);
-
-    expect(screen.getByTestId("thumbnail-grid")).toBeInTheDocument();
-    expect(screen.queryByTestId("faces-review-page")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Faces" }));
-
-    expect(screen.getByTestId("faces-review-page")).toBeInTheDocument();
-    expect(screen.queryByTestId("thumbnail-grid")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Library" }));
-
-    expect(screen.getByTestId("thumbnail-grid")).toBeInTheDocument();
-  });
-
-  it("initializes faces view when URL has view=faces", () => {
-    window.history.pushState(null, "", "/?view=faces");
-    useSelectionContextMock.mockReturnValue({
-      clearSelection: vi.fn(),
-      selectedItems: [],
-      selectionMode: false,
-      setSelectionMode: vi.fn(),
-    });
-
-    render(<App />);
-
-    expect(screen.getByTestId("faces-review-page")).toBeInTheDocument();
-    expect(screen.queryByTestId("thumbnail-grid")).not.toBeInTheDocument();
-
-    window.history.pushState(null, "", "/");
-  });
-
-  it("shows filter in both library and faces views", () => {
-    useSelectionContextMock.mockReturnValue({
-      clearSelection: vi.fn(),
-      selectedItems: [],
-      selectionMode: false,
-      setSelectionMode: vi.fn(),
-    });
-
-    render(<App />);
-
-    expect(screen.getByTestId("filter")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Faces" }));
-
-    expect(screen.getByTestId("filter")).toBeInTheDocument();
   });
 });

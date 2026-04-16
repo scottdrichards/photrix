@@ -54,7 +54,6 @@ describe("main.ts HTTP Server", () => {
 
   beforeEach(async () => {
     setBackgroundTasksEnabled(true);
-    process.env.AUTH_REQUIRED = "false";
     storagePath = mkdtempSync(path.join(os.tmpdir(), "photrix-main-spec-root-"));
     process.env.INDEX_DB_LOCATION = mkdtempSync(path.join(os.tmpdir(), "photrix-main-spec-db-"));
 
@@ -84,7 +83,6 @@ describe("main.ts HTTP Server", () => {
     });
     rmSync(storagePath, { recursive: true, force: true });
     setBackgroundTasksEnabled(true);
-    delete process.env.AUTH_REQUIRED;
   });
 
   it("returns health response", async () => {

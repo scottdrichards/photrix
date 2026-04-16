@@ -14,12 +14,9 @@ import {
   type PendingConversionTaskPriority,
 } from "./indexDatabase.type.ts";
 
-const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
-const numericHeights = standardHeights.filter(
-  (height): height is Exclude<StandardHeight, "original"> => typeof height === "number",
-);
-
-const toConversionPriority = (priority: PendingConversionTaskPriority): ConversionPriority => {
+const toConversionPriority = (
+  priority: PendingConversionTaskPriority,
+): ConversionPriority => {
   if (priority === ConversionTaskPriority.UserBlocked) return "userBlocked";
   if (priority === ConversionTaskPriority.UserImplicit) return "userImplicit";
   return "background";
@@ -66,8 +63,12 @@ export const createConversionWorker = () => {
     restartAtMS = Math.max(restartAtMS, Date.now() + durationMS);
   };
 
-  const startBackgroundLoop = async (database: IndexDatabase, onComplete?: () => void) => {
-    if (backgroundRunning) throw new Error("Background conversion loop is already running");
+  const startBackgroundLoop = async (
+    database: IndexDatabase,
+    onComplete?: () => void,
+  ) => {
+    if (backgroundRunning)
+      throw new Error("Background conversion loop is already running");
     backgroundRunning = true;
 
     await database.resetInProgressConversions("thumbnail");
@@ -104,7 +105,10 @@ export const createConversionWorker = () => {
           return;
         }
 
-        const taskInfo = await database.getConversionTaskInfo(task.relativePath, task.taskType);
+        const taskInfo = await database.getConversionTaskInfo(
+          task.relativePath,
+          task.taskType,
+        );
         const mimeType = taskInfo?.mimeType ?? null;
         const durationSeconds =
           typeof taskInfo?.duration === "number" && Number.isFinite(taskInfo.duration)
@@ -121,7 +125,9 @@ export const createConversionWorker = () => {
         );
         await yieldToEventLoop();
 
-        const fullPath = path.join(database.storagePath, stripLeadingSlash(task.relativePath));
+        const pathWithoutLeadingSlash = task.relativePath.replace(/^\\?\//, "");
+
+        const fullPath = path.join(database.storagePath, pathWithoutLeadingSlash);
         const startTime = Date.now();
 
         try {
@@ -140,15 +146,23 @@ export const createConversionWorker = () => {
               }
 
               if (mimeType?.startsWith("video/")) {
-                console.log(`[conversion-worker] Thumbnail (video): ${task.relativePath}`);
-                await generateVideoThumbnail(fullPath, 320, { priority: conversionPriority });
+                console.log(
+                  `[conversion-worker] Thumbnail (video): ${task.relativePath}`,
+                );
+                await generateVideoThumbnail(fullPath, 320, {
+                  priority: conversionPriority,
+                });
                 return;
               }
 
               console.log(`[conversion-worker] Thumbnail (image): ${task.relativePath}`);
-              await convertImageToMultipleSizes(fullPath, numericHeights, {
-                priority: conversionPriority,
-              });
+              await convertImageToMultipleSizes(
+                fullPath,
+                standardHeights.filter((height) => typeof height === "number"),
+                {
+                  priority: conversionPriority,
+                },
+              );
             },
             {
               category: "conversion",
@@ -159,10 +173,16 @@ export const createConversionWorker = () => {
           await database.setConversionPriority(task.relativePath, task.taskType, null);
           remainingCount = Math.max(0, remainingCount - 1);
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-          console.log(`[conversion-worker] Completed: ${task.relativePath} (${elapsed}s)`);
+          console.log(
+            `[conversion-worker] Completed: ${task.relativePath} (${elapsed}s)`,
+          );
         } catch (error) {
           failedCount++;
-          await database.setConversionPriority(task.relativePath, task.taskType, originalPriority);
+          await database.setConversionPriority(
+            task.relativePath,
+            task.taskType,
+            originalPriority,
+          );
           console.error(`[conversion-worker] Failed: ${task.relativePath}:`, error);
         }
 
@@ -171,7 +191,8 @@ export const createConversionWorker = () => {
         const now = Date.now();
         if (now - lastReportTime > 10_000) {
           const pending = remainingCount;
-          const rate = (processedCount - lastReportCount) / ((now - lastReportTime) / 1000);
+          const rate =
+            (processedCount - lastReportCount) / ((now - lastReportTime) / 1000);
           lastReportCount = processedCount;
           if (rate > 0) {
             console.log(

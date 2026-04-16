@@ -1,7 +1,6 @@
 import http from "node:http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { isExifMetadataProcessingActive } from "../indexDatabase/processExifMetadata.ts";
-import { getFaceMetadataProcessingStats } from "../indexDatabase/processFaceMetadata.ts";
 import { isBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
 
 type StatusRequestHandlerProps = {
@@ -28,8 +27,36 @@ const toProgressEntry = (completed: number, total: number): ProgressEntry => {
   };
 };
 
+const countQueueEntries = (
+  queueSummary: Awaited<ReturnType<IndexDatabase["getConversionQueueSummary"]>>,
+) => {
+  const pending =
+    queueSummary.userBlocked.image.count +
+    queueSummary.userBlocked.video.count +
+    queueSummary.userImplicit.image.count +
+    queueSummary.userImplicit.video.count +
+    queueSummary.background.image.count +
+    queueSummary.background.video.count;
+  const processing = queueSummary.active.image.count + queueSummary.active.video.count;
+  return { pending, processing };
+};
+
+const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+  const start = Date.now();
+  const result = await fn();
+  console.log(`[status:timing] ${label}: ${Date.now() - start}ms`);
+  return result;
+};
+
 const getStatusPayload = async (database: IndexDatabase) => {
-  const statusCounts = await database.getStatusCounts();
+  const [statusCounts, lastExif, queueSummary] = await Promise.all([
+    timed("getStatusCounts", () => database.getStatusCounts()),
+    timed("getMostRecentExifProcessedEntry", () =>
+      database.getMostRecentExifProcessedEntry(),
+    ),
+    timed("getConversionQueueSummary", () => database.getConversionQueueSummary()),
+  ]);
+
   const databaseSize = statusCounts.allEntries;
   const mediaEntries = statusCounts.mediaEntries;
   const pendingInfo = statusCounts.missingInfo;
@@ -40,11 +67,6 @@ const getStatusPayload = async (database: IndexDatabase) => {
   const overallCompleted = infoCompleted + exifCompleted;
   const overallTotal = databaseSize + mediaEntries;
 
-  const lastExif = await database.getMostRecentExifProcessedEntry();
-  const queueCounts = await database.getConversionQueueCounts();
-  const queueSummary = await database.getConversionQueueSummary();
-  const faceProcessingStatus = getFaceMetadataProcessingStats();
-
   return {
     databaseSize,
     scannedFilesCount: databaseSize,
@@ -54,19 +76,9 @@ const getStatusPayload = async (database: IndexDatabase) => {
     },
     maintenance: {
       exifActive: isExifMetadataProcessingActive() || pendingExif > 0,
-      faceActive: faceProcessingStatus.active,
       backgroundTasksEnabled: isBackgroundTasksEnabled(),
     },
-    faceProcessing: {
-      processed: faceProcessingStatus.processed,
-      workerSuccess: faceProcessingStatus.workerSuccess,
-      fallbackCount: faceProcessingStatus.fallbackCount,
-      workerFailures: faceProcessingStatus.workerFailures,
-    },
-    queues: {
-      pending: queueCounts.pending,
-      processing: queueCounts.processing,
-    },
+    queues: countQueueEntries(queueSummary),
     queueSummary,
     progress: {
       overall: toProgressEntry(overallCompleted, overallTotal),

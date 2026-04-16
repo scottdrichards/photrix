@@ -21,7 +21,10 @@ export type FilterField = keyof FileRecord | "relativePath";
 
 export type FilterCondition = RecordFilterCondition<FileRecord, "relativePath">;
 
-export type LogicalFilter = Extract<RecordFilterElement<FileRecord, "relativePath">, { operation: "and" | "or" }>;
+export type LogicalFilter = Extract<
+  RecordFilterElement<FileRecord, "relativePath">,
+  { operation: "and" | "or" }
+>;
 
 export type FilterElement = RecordFilterElement<FileRecord, "relativePath">;
 
@@ -81,68 +84,3 @@ export type GetFiles = <TQueryOptions extends QueryOptions>(
 ) => Promise<QueryResult<TQueryOptions["metadata"]>>;
 
 export type UpsertFileData = (fileData: FileRecord) => Promise<void>;
-
-export type FaceQueueStatus = "unverified" | "confirmed" | "rejected";
-
-export type FaceQueueItem = {
-  faceId: string;
-  relativePath: string;
-  fileName: string;
-  dateTaken?: number;
-  dimensions: { x: number; y: number; width: number; height: number };
-  person: { id: string; name?: string } | null;
-  status: FaceQueueStatus;
-  source?: "seed-known" | "auto-detected";
-  suggestion?: {
-    personId: string;
-    confidence: number;
-    modelVersion?: string;
-    suggestedAt?: string;
-  };
-  quality?: {
-    overall?: number;
-    sharpness?: number;
-    effectiveResolution?: number;
-  };
-  thumbnail?: {
-    preferredHeight?: number;
-    cropVersion?: string;
-  };
-};
-
-export type FaceQueueResult = {
-  items: FaceQueueItem[];
-  total: number;
-  page: number;
-  pageSize: number;
-};
-
-export type FacePeopleItem = {
-  id: string;
-  name?: string;
-  count: number;
-  representativeFace?: {
-    faceId: string;
-    relativePath: string;
-    fileName: string;
-    dimensions: { x: number; y: number; width: number; height: number };
-    thumbnail?: {
-      preferredHeight?: number;
-      cropVersion?: string;
-    };
-  };
-};
-
-export type FaceMatchItem = {
-  faceId: string;
-  relativePath: string;
-  fileName: string;
-  dimensions: { x: number; y: number; width: number; height: number };
-  confidence: number;
-  thumbnail?: {
-    preferredHeight?: number;
-    cropVersion?: string;
-  };
-  person: { id: string; name?: string } | null;
-  status: FaceQueueStatus;
-};

@@ -30,6 +30,7 @@ export interface PhotoItem {
   fullUrl: string;
   videoPreviewUrl?: string;
   hlsUrl?: string;
+  livePhotoUrl?: string;
   metadata?: {
     mimeType?: string | null;
     sizeInBytes?: number;
@@ -128,73 +129,10 @@ export type SuggestionWithCount = {
   count: number;
 };
 
-export type FaceQueueStatus = "unverified" | "confirmed" | "rejected";
-
-export type FaceQueueItem = {
-  faceId: string;
-  relativePath: string;
-  fileName: string;
-  dateTaken?: number;
-  dimensions: { x: number; y: number; width: number; height: number };
-  person: { id: string; name?: string } | null;
-  status: FaceQueueStatus;
-  source?: "seed-known" | "auto-detected";
-  suggestion?: {
-    personId: string;
-    confidence: number;
-    modelVersion?: string;
-    suggestedAt?: string;
-  };
-  quality?: {
-    overall?: number;
-    sharpness?: number;
-    effectiveResolution?: number;
-  };
-  thumbnail?: {
-    preferredHeight?: number;
-    cropVersion?: string;
-  };
-};
-
-export type FaceQueueResult = {
-  items: FaceQueueItem[];
-  total: number;
-  page: number;
-  pageSize: number;
-};
-
-export type FaceMatchItem = {
-  faceId: string;
-  relativePath: string;
-  fileName: string;
-  dimensions: { x: number; y: number; width: number; height: number };
-  confidence: number;
-  thumbnail?: {
-    preferredHeight?: number;
-    cropVersion?: string;
-  };
-  person: { id: string; name?: string } | null;
-  status: FaceQueueStatus;
-};
-
-export type FacePerson = {
-  id: string;
-  name?: string;
-  count: number;
-  representativeFace?: {
-    faceId: string;
-    relativePath: string;
-    fileName: string;
-    dimensions: { x: number; y: number; width: number; height: number };
-    thumbnail?: {
-      preferredHeight?: number;
-      cropVersion?: string;
-    };
-  };
-};
-
-export interface FetchGeotaggedPhotosOptions
-  extends Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata"> {
+export interface FetchGeotaggedPhotosOptions extends Omit<
+  FetchPhotosOptions,
+  "page" | "pageSize" | "metadata"
+> {
   pageSize?: number;
   locationBounds?: GeoBounds | null;
   clusterSize?: number;
@@ -209,17 +147,6 @@ export type FetchDateHistogramOptions = Omit<
   FetchPhotosOptions,
   "page" | "pageSize" | "metadata"
 >;
-
-export type FetchFaceQueueOptions = {
-  status?: FaceQueueStatus;
-  personId?: string;
-  minConfidence?: number;
-  page?: number;
-  pageSize?: number;
-  path?: string;
-  includeSubfolders?: boolean;
-  signal?: AbortSignal;
-};
 
 export interface ProgressEntry {
   completed: number;
@@ -253,14 +180,7 @@ export interface ServerStatus {
   };
   maintenance: {
     exifActive: boolean;
-    faceActive?: boolean;
     backgroundTasksEnabled?: boolean;
-  };
-  faceProcessing?: {
-    processed: number;
-    workerSuccess: number;
-    fallbackCount: number;
-    workerFailures: number;
   };
   progress: {
     overall: ProgressEntry;
@@ -289,7 +209,7 @@ export const subscribeStatusStream = (
   onUpdate: (status: ServerStatus) => void,
   onError?: (error: unknown) => void,
 ) => {
-  const source = new EventSource("/api/status/stream", { withCredentials: true });
+  const source = new EventSource("/api/status/stream");
 
   source.onmessage = (event) => {
     try {
@@ -330,6 +250,7 @@ const DEFAULT_METADATA_KEYS = [
   "duration",
   "framerate",
   "videoCodec",
+  "livePhotoVideoFileName",
 ] as const;
 
 const clampNumber = (value: number, min: number, max: number) =>
@@ -405,7 +326,9 @@ type BuildFiltersInput = {
 };
 
 const normalizeDistinctNonEmpty = (values: string[]) =>
-  Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)));
+  Array.from(
+    new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)),
+  );
 
 const toStringIncludesFilter = (value: string) => {
   const normalizedValue = value.trim();
@@ -511,7 +434,7 @@ const fetchJsonOrThrow = async <T>(
   errorLabel: string,
   init?: RequestInit,
 ): Promise<T> => {
-  const response = await fetch(url, { ...init, credentials: "include" });
+  const response = await fetch(url, init);
   if (!response.ok) {
     throw new Error(`Failed to ${errorLabel} (status ${response.status})`);
   }
@@ -603,7 +526,10 @@ export const setBackgroundTasksEnabled = async (
   );
 };
 
-export const fetchFolders = async (path: string = "", signal?: AbortSignal): Promise<string[]> => {
+export const fetchFolders = async (
+  path: string = "",
+  signal?: AbortSignal,
+): Promise<string[]> => {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
   const data = await fetchJsonOrThrow<{ folders: string[] }>(
     `/api/folders/${normalizedPath}`,
@@ -658,6 +584,11 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
     mediaType === "video"
       ? buildFileUrl(relativePath, { representation: "hls", height: "original" })
       : undefined;
+  const livePhotoVideoFileName = item.livePhotoVideoFileName;
+  const livePhotoUrl =
+    mediaType === "photo" && typeof livePhotoVideoFileName === "string"
+      ? buildFileUrl(item.folder + livePhotoVideoFileName, {})
+      : undefined;
 
   const metadata = Object.fromEntries(
     Object.entries(item).filter(([key]) => key !== "folder" && key !== "fileName"),
@@ -673,6 +604,7 @@ const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
     fullUrl,
     videoPreviewUrl,
     hlsUrl,
+    livePhotoUrl,
     metadata,
   };
 };
@@ -1014,144 +946,6 @@ export const fetchSuggestionsWithCounts = async ({
   return payload.suggestions;
 };
 
-export const fetchFaceQueue = async ({
-  status,
-  personId,
-  minConfidence,
-  page = 1,
-  pageSize = 100,
-  path,
-  includeSubfolders,
-  signal,
-}: FetchFaceQueueOptions = {}): Promise<FaceQueueResult> => {
-  const params = new URLSearchParams();
-  params.set("page", page.toString());
-  params.set("pageSize", pageSize.toString());
-  if (status) {
-    params.set("status", status);
-  }
-  if (personId) {
-    params.set("personId", personId);
-  }
-  if (typeof minConfidence === "number" && Number.isFinite(minConfidence)) {
-    params.set("minConfidence", minConfidence.toString());
-  }
-  if (path) {
-    params.set("path", path);
-  }
-  if (typeof includeSubfolders === "boolean") {
-    params.set("includeSubfolders", includeSubfolders.toString());
-  }
-
-  return await fetchJsonOrThrow<FaceQueueResult>(
-    `/api/faces/queue?${params.toString()}`,
-    "fetch face queue",
-    { signal },
-  );
-};
-
-export const fetchFacePeople = async (options: {
-  path?: string;
-  includeSubfolders?: boolean;
-  signal?: AbortSignal;
-} = {}): Promise<FacePerson[]> => {
-  const { path, includeSubfolders, signal } = options;
-  const params = new URLSearchParams();
-  if (path) {
-    params.set("path", path);
-  }
-  if (typeof includeSubfolders === "boolean") {
-    params.set("includeSubfolders", includeSubfolders.toString());
-  }
-  const query = params.toString() ? `?${params.toString()}` : "";
-  const payload = await fetchJsonOrThrow<{ people: FacePerson[] }>(
-    `/api/faces/people${query}`,
-    "fetch face people",
-    { signal },
-  );
-  return payload.people;
-};
-
-export const fetchFaceMatches = async (options: {
-  faceId: string;
-  limit?: number;
-  signal?: AbortSignal;
-}): Promise<FaceMatchItem[]> => {
-  const { faceId, limit = 8, signal } = options;
-  const params = new URLSearchParams({ limit: String(limit) });
-
-  const payload = await fetchJsonOrThrow<{ items: FaceMatchItem[] }>(
-    `/api/faces/${encodeURIComponent(faceId)}/matches?${params.toString()}`,
-    "fetch face matches",
-    { signal },
-  );
-  return payload.items;
-};
-
-export const fetchFacePersonSuggestions = async (options: {
-  personId: string;
-  limit?: number;
-  signal?: AbortSignal;
-}): Promise<FaceMatchItem[]> => {
-  const { personId, limit = 200, signal } = options;
-  const params = new URLSearchParams({ limit: String(limit) });
-
-  const payload = await fetchJsonOrThrow<{ items: FaceMatchItem[] }>(
-    `/api/faces/people/${encodeURIComponent(personId)}/suggestions?${params.toString()}`,
-    "fetch person face suggestions",
-    { signal },
-  );
-  return payload.items;
-};
-
-export const acceptFaceSuggestion = async (options: {
-  faceId: string;
-  personId?: string;
-  personName?: string;
-  reviewer?: string;
-  signal?: AbortSignal;
-}): Promise<{ ok: true; action: "accept"; faceId: string }> => {
-  const { faceId, personId, personName, reviewer, signal } = options;
-
-  return await fetchJsonOrThrow<{ ok: true; action: "accept"; faceId: string }>(
-    `/api/faces/${encodeURIComponent(faceId)}/accept`,
-    "accept face suggestion",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...(personId ? { personId } : {}),
-        ...(personName ? { personName } : {}),
-        ...(reviewer ? { reviewer } : {}),
-      }),
-      signal,
-    },
-  );
-};
-
-export const rejectFaceSuggestion = async (options: {
-  faceId: string;
-  personId?: string;
-  reviewer?: string;
-  signal?: AbortSignal;
-}): Promise<{ ok: true; action: "reject"; faceId: string }> => {
-  const { faceId, personId, reviewer, signal } = options;
-
-  return await fetchJsonOrThrow<{ ok: true; action: "reject"; faceId: string }>(
-    `/api/faces/${encodeURIComponent(faceId)}/reject`,
-    "reject face suggestion",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...(personId ? { personId } : {}),
-        ...(reviewer ? { reviewer } : {}),
-      }),
-      signal,
-    },
-  );
-};
-
 export type VideoNegotiationResult =
   | { mode: "hls"; url: string; reason: string }
   | { mode: "direct"; url: string; reason: string }
@@ -1170,9 +964,7 @@ export const negotiateVideoPlayback = async (options: {
   }
   params.set("hevcSupported", String(hevcSupported));
 
-  const response = await fetch(`/api/video/negotiate?${params.toString()}`, {
-    credentials: "include",
-  });
+  const response = await fetch(`/api/video/negotiate?${params.toString()}`);
 
   return (await response.json()) as VideoNegotiationResult;
 };

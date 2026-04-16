@@ -39,9 +39,9 @@ export const rowToFileRecord = (
     "rating",
     ["tags", json],
     "orientation",
+    "livePhotoVideoFileName",
     "aiDescription",
     ["aiTags", json],
-    ["faceTags", json],
     "locationLatitude",
     "locationLongitude",
   ] as const;
@@ -145,6 +145,7 @@ export const fileRecordToColumnNamesAndValues = (
     addColumn("rating", entry.rating);
     addColumn("tags", JSON.stringify(entry.tags));
     addColumn("orientation", entry.orientation);
+    addColumn("livePhotoVideoFileName", entry.livePhotoVideoFileName);
   }
 
   // AI Metadata
@@ -152,12 +153,6 @@ export const fileRecordToColumnNamesAndValues = (
     addColumn("aiMetadataProcessedAt", entry.aiMetadataProcessedAt);
     addColumn("aiDescription", entry.aiDescription);
     addColumn("aiTags", JSON.stringify(entry.aiTags));
-  }
-
-  // Face Metadata
-  if (entry.faceMetadataProcessedAt) {
-    addColumn("faceMetadataProcessedAt", entry.faceMetadataProcessedAt);
-    addColumn("faceTags", JSON.stringify(entry.faceTags));
   }
 
   // Validate that names and values are in sync

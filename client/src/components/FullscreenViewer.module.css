@@ -66,6 +66,25 @@
   background-color: rgba(255, 255, 255, 0.1);
 }
 
+.livePhotoButton {
+  position: absolute;
+  top: var(--space-m);
+  left: var(--space-m);
+  color: var(--fg-inv);
+  z-index: 100;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+}
+
+.livePhotoButton:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
 .videoBadge {
   position: absolute;
   bottom: var(--space-xxl);

@@ -3,9 +3,11 @@
 ## Endpoints
 
 ### GET `/health`
+
 Health check endpoint.
 
 **Response:**
+
 ```json
 {
   "status": "ok",
@@ -14,9 +16,11 @@ Health check endpoint.
 ```
 
 ### GET `/files/count`
+
 Get the total count of indexed files.
 
 **Response:**
+
 ```json
 {
   "count": 1234
@@ -24,14 +28,17 @@ Get the total count of indexed files.
 ```
 
 ### GET `/folders` or `/folders/{path}`
+
 Get a list of subfolders at the specified path.
 
 **Path-based queries:**
+
 - `/folders` - Get subfolders at root level
 - `/folders/2024` - Get subfolders directly under `2024`
 - `/folders/2024/vacation` - Get subfolders directly under `2024/vacation`
 
 **Response:**
+
 ```json
 {
   "folders": ["subfolder1", "subfolder2", "subfolder3"]
@@ -39,9 +46,11 @@ Get a list of subfolders at the specified path.
 ```
 
 ### GET `/suggestions`
+
 Get distinct text suggestions for searchable metadata fields.
 
 **Query Parameters:**
+
 - `field` (required): one of `personInImage`, `tags`, `aiTags`, `cameraMake`, `cameraModel`, `lens`
 - `q` (required): search text (substring match)
 - `limit` (optional): max number of suggestions (default: 8, max: 100)
@@ -50,6 +59,7 @@ Get distinct text suggestions for searchable metadata fields.
 - `filter` (optional): JSON-encoded FilterElement for additional constraints
 
 **Response:**
+
 ```json
 {
   "suggestions": ["Scott", "Scott and Ruby"]
@@ -61,24 +71,28 @@ Get distinct text suggestions for searchable metadata fields.
 Access files with different representations (thumbnails, previews, HLS streaming).
 
 **Query Parameters:**
+
 - `representation` (optional): `webSafe`, `preview`, or `hls`
 - `height` (optional): Target height for resizing (`160`, `320`, `640`, `1080`, `2160`, or `original`)
 - `segment` (optional, for HLS only): Name of the HLS segment file to retrieve
 
 **Representations:**
 
-*webSafe* - Converted to a web-compatible format (JPEG for images, thumbnail for videos):
+_webSafe_ - Converted to a web-compatible format (JPEG for images, thumbnail for videos):
+
 ```bash
 curl "http://localhost:3000/api/files/photo.heic?representation=webSafe&height=1080"
 curl "http://localhost:3000/api/files/video.mov?representation=webSafe&height=320"
 ```
 
-*preview* - Video preview thumbnail:
+_preview_ - Video preview thumbnail:
+
 ```bash
 curl "http://localhost:3000/api/files/video.mov?representation=preview"
 ```
 
-*hls* - HTTP Live Streaming for videos (uses NVIDIA NVENC hardware acceleration):
+_hls_ - HTTP Live Streaming for videos (uses NVIDIA NVENC hardware acceleration):
+
 ```bash
 # Get HLS playlist (m3u8)
 curl "http://localhost:3000/api/files/video.mov?representation=hls&height=1080"
@@ -88,18 +102,22 @@ curl "http://localhost:3000/api/files/video.mov?representation=hls&height=1080&s
 ```
 
 **HLS Response:**
+
 - Playlist request returns `application/vnd.apple.mpegurl` with segment URLs
 - Segment request returns `video/mp2t` binary data
 
 ### GET `/files` or `/files/{path}/` (with trailing slash)
+
 Query files with filtering, pagination, and metadata selection.
 
 **Path-based filtering:**
+
 - `/files` - Get all files
 - `/files/subFolder` - Get files directly in `subFolder` (excludes subfolders)
 - `/files/subFolder/nested` - Get files directly in `subFolder/nested` (excludes deeper nesting)
 
 **Query Parameters:**
+
 - `filter` (optional): JSON-encoded FilterElement (overrides path-based filter)
 - `metadata` (optional): Comma-separated list or JSON array of metadata fields
 - `pageSize` (optional): Items per page (default: 1000)
@@ -107,7 +125,8 @@ Query files with filtering, pagination, and metadata selection.
 
 **Filter Types:**
 
-*FilterCondition* - Match specific field values:
+_FilterCondition_ - Match specific field values:
+
 ```json
 {
   "mimeType": "image/jpeg",
@@ -115,45 +134,47 @@ Query files with filtering, pagination, and metadata selection.
 }
 ```
 
-*LogicalFilter* - Combine multiple conditions:
+_LogicalFilter_ - Combine multiple conditions:
+
 ```json
 {
   "operation": "and",
-  "conditions": [
-    { "mimeType": "image/jpeg" },
-    { "sizeInBytes": { "min": 1000 } }
-  ]
+  "conditions": [{ "mimeType": "image/jpeg" }, { "sizeInBytes": { "min": 1000 } }]
 }
 ```
 
 **Response:**
+
 ```json
 {
   "items": [
     {
-      "relativePath": "photo.jpg",
+      "relativePath": "photo.jpg"
       // ... requested metadata fields
     }
   ],
-  "total": 1234,        // Total matching items
-  "page": 1,            // Current page
-  "pageSize": 50        // Items per page
+  "total": 1234, // Total matching items
+  "page": 1, // Current page
+  "pageSize": 50 // Items per page
 }
 ```
 
 ## Examples
 
 ### Get all files with basic metadata
+
 ```bash
 curl "http://localhost:3000/files?metadata=relativePath,mimeType,sizeInBytes"
 ```
 
 ### Get folders at root level
+
 ```bash
 curl "http://localhost:3000/folders"
 ```
 
 ### Get subfolders within a specific path
+
 ```bash
 # Get folders directly under "2024"
 curl "http://localhost:3000/folders/2024"
@@ -163,6 +184,7 @@ curl "http://localhost:3000/folders/vacation/photos"
 ```
 
 ### Get files in a specific folder (path-based, excludes subfolders)
+
 ```bash
 # Files directly in subFolder (no subfolders)
 curl "http://localhost:3000/files/subFolder?metadata=relativePath,mimeType"
@@ -172,6 +194,7 @@ curl "http://localhost:3000/files/subFolder/nested?metadata=relativePath,sizeInB
 ```
 
 ### Get files with explicit filter (overrides path)
+
 ```bash
 # Get all JPEG images
 filter='{"mimeType":"image/jpeg"}'
@@ -179,12 +202,14 @@ curl "http://localhost:3000/files?filter=$(echo $filter | jq -sRr @uri)&metadata
 ```
 
 ### Complex query with AND/OR logic
+
 ```bash
 filter='{"operation":"or","conditions":[{"mimeType":"image/jpeg"},{"mimeType":"image/png"}]}'
 curl "http://localhost:3000/files?filter=$(echo $filter | jq -sRr @uri)&metadata=mimeType,sizeInBytes,created&pageSize=25&page=2"
 ```
 
 ### Partial search by person name
+
 ```bash
 filter='{"personInImage":{"includes":"Scott"}}'
 metadata='fileName,personInImage,regions'
@@ -192,11 +217,13 @@ curl "http://localhost:3000/files?filter=$(echo $filter | jq -sRr @uri)&metadata
 ```
 
 ### Get people suggestions for typeahead
+
 ```bash
 curl "http://localhost:3000/api/suggestions?field=personInImage&q=sco&limit=8"
 ```
 
 ### Get files with EXIF metadata
+
 ```bash
 filter='{"mimeType":"image/jpeg"}'
 metadata='cameraMake,cameraModel,fNumber,iso,dateTaken'
@@ -204,6 +231,7 @@ curl "http://localhost:3000/files?filter=$(echo $filter | jq -sRr @uri)&metadata
 ```
 
 ### Pagination example
+
 ```bash
 # First page
 curl "http://localhost:3000/files/subFolder?metadata=relativePath&pageSize=10&page=1"
@@ -213,14 +241,19 @@ curl "http://localhost:3000/files/subFolder?metadata=relativePath&pageSize=10&pa
 ```
 
 ### JavaScript/TypeScript Example
+
 ```javascript
 // Simple - get all files
-const response = await fetch("http://localhost:3000/files?metadata=relativePath,mimeType");
+const response = await fetch(
+  "http://localhost:3000/files?metadata=relativePath,mimeType",
+);
 const data = await response.json();
 console.log(`Found ${data.total} files:`, data.items);
 
 // Path-based - files in a specific folder
-const folderResponse = await fetch("http://localhost:3000/files/subFolder?metadata=relativePath,sizeInBytes");
+const folderResponse = await fetch(
+  "http://localhost:3000/files/subFolder?metadata=relativePath,sizeInBytes",
+);
 const folderData = await folderResponse.json();
 console.log(`Files in subFolder: ${folderData.total}`, folderData.items);
 
@@ -231,7 +264,7 @@ const params = new URLSearchParams({
   filter: JSON.stringify(filter),
   metadata: metadata.join(","),
   pageSize: "50",
-  page: "1"
+  page: "1",
 });
 const filteredResponse = await fetch(`http://localhost:3000/files?${params}`);
 const filteredData = await filteredResponse.json();
@@ -241,6 +274,7 @@ console.log(filteredData);
 ## Available Metadata Fields
 
 **Basic File Info:**
+
 - `relativePath` (always included)
 - `mimeType`
 - `sizeInBytes`
@@ -248,6 +282,7 @@ console.log(filteredData);
 - `modified`
 
 **EXIF Metadata:**
+
 - `cameraMake`
 - `cameraModel`
 - `lensMake`
@@ -263,13 +298,9 @@ console.log(filteredData);
 - `regions`
 
 **AI Metadata:**
-- `labels`
-- `faces`
-- `text`
 
-**Face Metadata:**
-- `faceCount`
-- `faceNames`
+- `labels`
+- `text`
 
 ## Environment
 
@@ -278,6 +309,7 @@ console.log(filteredData);
 ## Error Responses
 
 **400 Bad Request:**
+
 ```json
 {
   "error": "Missing required field: filter"
@@ -285,6 +317,7 @@ console.log(filteredData);
 ```
 
 **404 Not Found:**
+
 ```json
 {
   "error": "Not found"
@@ -292,6 +325,7 @@ console.log(filteredData);
 ```
 
 **500 Internal Server Error:**
+
 ```json
 {
   "error": "Internal server error",

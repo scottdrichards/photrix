@@ -1,20 +1,17 @@
 import {
-  acceptFaceSuggestion,
   createFallbackPhoto,
-  fetchFaceMatches,
-  fetchFacePersonSuggestions,
-  fetchFacePeople,
-  fetchFaceQueue,
   fetchFolders,
   fetchGeotaggedPhotos,
   fetchPhotos,
   setBackgroundTasksEnabled,
   fetchSuggestions,
   fetchSuggestionsWithCounts,
-  rejectFaceSuggestion,
   subscribeStatusStream,
 } from "./api";
-import { filterFieldCapabilities, FIELD_METADATA } from "../../shared/filter-contract/src";
+import {
+  filterFieldCapabilities,
+  FIELD_METADATA,
+} from "../../shared/filter-contract/src";
 
 describe("api", () => {
   beforeEach(() => {
@@ -31,7 +28,7 @@ describe("api", () => {
 
     expect(result).toEqual(["a", "b"]);
     expect(fetchMock).toHaveBeenCalledWith("/api/folders/photos/2024/", {
-      credentials: "include",
+      signal: undefined,
     });
   });
 
@@ -46,7 +43,6 @@ describe("api", () => {
     expect(result).toEqual({ enabled: false });
     expect(fetchMock).toHaveBeenCalledWith("/api/status/background-tasks", {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: false }),
     });
@@ -344,211 +340,5 @@ describe("api", () => {
     expect(eventSources[0].close).toHaveBeenCalled();
 
     globalThis.EventSource = OriginalEventSource;
-  });
-
-  it("fetchFaceQueue builds query parameters and returns queue payload", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        items: [
-          {
-            faceId: "f1",
-            relativePath: "/trip/a.jpg",
-            fileName: "a.jpg",
-            dimensions: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
-            person: null,
-            status: "unverified",
-            source: "auto-detected",
-            quality: { overall: 0.76 },
-            thumbnail: { preferredHeight: 320, cropVersion: "v1" },
-            suggestion: { personId: "p1", confidence: 0.81 },
-          },
-        ],
-        total: 1,
-        page: 2,
-        pageSize: 20,
-      }),
-    } as Response);
-
-    const result = await fetchFaceQueue({
-      status: "unverified",
-      personId: "p1",
-      minConfidence: 0.7,
-      page: 2,
-      pageSize: 20,
-    });
-
-    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const url = new URL(calledUrl, window.location.origin);
-    expect(url.pathname).toBe("/api/faces/queue");
-    expect(url.searchParams.get("status")).toBe("unverified");
-    expect(url.searchParams.get("personId")).toBe("p1");
-    expect(url.searchParams.get("minConfidence")).toBe("0.7");
-    expect(url.searchParams.get("page")).toBe("2");
-    expect(url.searchParams.get("pageSize")).toBe("20");
-
-    expect(result.total).toBe(1);
-    expect(result.items[0]).toEqual({
-      faceId: "f1",
-      relativePath: "/trip/a.jpg",
-      fileName: "a.jpg",
-      dimensions: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
-      person: null,
-      status: "unverified",
-      source: "auto-detected",
-      quality: { overall: 0.76 },
-      thumbnail: { preferredHeight: 320, cropVersion: "v1" },
-      suggestion: { personId: "p1", confidence: 0.81 },
-    });
-  });
-
-  it("fetchFacePeople returns people list", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        people: [
-          {
-            id: "p1",
-            name: "Sam",
-            count: 3,
-            representativeFace: {
-              faceId: "f1",
-              relativePath: "/trip/a.jpg",
-              fileName: "a.jpg",
-              dimensions: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-              thumbnail: { preferredHeight: 224, cropVersion: "v1" },
-            },
-          },
-        ],
-      }),
-    } as Response);
-
-    const result = await fetchFacePeople();
-
-    expect(result).toEqual([
-      {
-        id: "p1",
-        name: "Sam",
-        count: 3,
-        representativeFace: {
-          faceId: "f1",
-          relativePath: "/trip/a.jpg",
-          fileName: "a.jpg",
-          dimensions: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-          thumbnail: { preferredHeight: 224, cropVersion: "v1" },
-        },
-      },
-    ]);
-  });
-
-  it("fetchFacePeople appends path and includeSubfolders params", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => ({ people: [] }),
-    } as Response);
-
-    await fetchFacePeople({ path: "trip/", includeSubfolders: false });
-
-    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const url = new URL(calledUrl, window.location.origin);
-    expect(url.pathname).toBe("/api/faces/people");
-    expect(url.searchParams.get("path")).toBe("trip/");
-    expect(url.searchParams.get("includeSubfolders")).toBe("false");
-  });
-
-  it("fetchFaceMatches returns closest face matches", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        items: [
-          {
-            faceId: "match-1",
-            relativePath: "/trip/b.jpg",
-            fileName: "b.jpg",
-            dimensions: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
-            confidence: 0.9321,
-            person: null,
-            status: "unverified",
-          },
-        ],
-      }),
-    } as Response);
-
-    const result = await fetchFaceMatches({ faceId: "face-1", limit: 5 });
-
-    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const url = new URL(calledUrl, window.location.origin);
-    expect(url.pathname).toBe("/api/faces/face-1/matches");
-    expect(url.searchParams.get("limit")).toBe("5");
-    expect(result[0]?.faceId).toBe("match-1");
-  });
-
-  it("fetchFacePersonSuggestions returns profile-based suggestions", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        items: [
-          {
-            faceId: "suggested-1",
-            relativePath: "/trip/s.jpg",
-            fileName: "s.jpg",
-            dimensions: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
-            confidence: 0.87,
-            person: null,
-            status: "unverified",
-          },
-        ],
-      }),
-    } as Response);
-
-    const result = await fetchFacePersonSuggestions({ personId: "name:sam", limit: 25 });
-
-    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const url = new URL(calledUrl, window.location.origin);
-    expect(url.pathname).toBe("/api/faces/people/name%3Asam/suggestions");
-    expect(url.searchParams.get("limit")).toBe("25");
-    expect(result[0]?.faceId).toBe("suggested-1");
-  });
-
-  it("acceptFaceSuggestion posts review payload", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => ({ ok: true, action: "accept", faceId: "f1" }),
-    } as Response);
-
-    await acceptFaceSuggestion({
-      faceId: "f1",
-      personId: "p1",
-      reviewer: "scott",
-    });
-
-    const [calledUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(calledUrl).toBe("/api/faces/f1/accept");
-    expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body as string)).toEqual({
-      personId: "p1",
-      reviewer: "scott",
-    });
-  });
-
-  it("rejectFaceSuggestion posts review payload", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => ({ ok: true, action: "reject", faceId: "f1" }),
-    } as Response);
-
-    await rejectFaceSuggestion({
-      faceId: "f1",
-      personId: "p1",
-      reviewer: "scott",
-    });
-
-    const [calledUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(calledUrl).toBe("/api/faces/f1/reject");
-    expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body as string)).toEqual({
-      personId: "p1",
-      reviewer: "scott",
-    });
   });
 });

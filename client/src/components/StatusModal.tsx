@@ -10,7 +10,7 @@ import css from "./StatusModal.module.css";
 type StatusModalProps = {
   isOpen: boolean;
   onDismiss: () => void;
-}
+};
 
 const summaryGroups = [
   "completed",
@@ -140,7 +140,9 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   const status = statusHistory?.at(-1)?.status;
   const backgroundTasksEnabled = status?.maintenance.backgroundTasksEnabled ?? true;
 
-  const queueVisualization = status ? buildQueueVisualization(status.queueSummary) : undefined;
+  const queueVisualization = status
+    ? buildQueueVisualization(status.queueSummary)
+    : undefined;
 
   useEffect(() => {
     if (isOpen) dialogRef.current?.showModal();
@@ -208,7 +210,9 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
       });
     } catch (error) {
       setToggleError(
-        error instanceof Error ? error.message : "Failed to update background task setting",
+        error instanceof Error
+          ? error.message
+          : "Failed to update background task setting",
       );
     } finally {
       setIsTogglingBackgroundTasks(false);
@@ -219,146 +223,114 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     <dialog ref={dialogRef} onClose={onDismiss}>
       <div className={css.dialogBody}>
         <h2>Server Status</h2>
-          {!statusHistory && <progress />}
-            {status && (
-              <div className={css.container}>
-                <div className={css.toggleRow}>
-                  <label className="switch-label">
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      className="switch-track"
-                      aria-label="Enable background tasks"
-                      checked={backgroundTasksEnabled}
-                      disabled={isTogglingBackgroundTasks}
-                      onChange={(e) => onToggleBackgroundTasks(e.target.checked)}
-                    />
-                    <span>Enable background tasks</span>
-                  </label>
-                  <small>
-                    When disabled, the server only runs user-blocking work.
-                  </small>
-                  {toggleError ? <span className={css.errorText}>{toggleError}</span> : null}
-                </div>
+        {!statusHistory && <progress />}
+        {status && (
+          <div className={css.container}>
+            <div className={css.toggleRow}>
+              <label className="switch-label">
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="switch-track"
+                  aria-label="Enable background tasks"
+                  checked={backgroundTasksEnabled}
+                  disabled={isTogglingBackgroundTasks}
+                  onChange={(e) => onToggleBackgroundTasks(e.target.checked)}
+                />
+                <span>Enable background tasks</span>
+              </label>
+              <small>When disabled, the server only runs user-blocking work.</small>
+              {toggleError ? <span className={css.errorText}>{toggleError}</span> : null}
+            </div>
 
-                <div className={css.statsRow}>
-                  <span>
-                    <span className={css.label}>Database Size:</span>
-                    <span className={css.value}>
-                      {status.databaseSize.toLocaleString()} files
-                    </span>
-                  </span>
-                  <span>
-                    <span className={css.label}>Scanned:</span>
-                    <span className={css.value}>
-                      {status.scannedFilesCount.toLocaleString()} files
-                    </span>
-                  </span>
-                  <span>
-                    <span className={css.label}>EXIF worker:</span>
-                    <span className={css.value}>
-                      {status.maintenance.exifActive ? "active" : "idle"}
-                    </span>
-                  </span>
-                  <span>
-                    <span className={css.label}>Face worker:</span>
-                    <span className={css.value}>
-                      {status.maintenance.faceActive ? "active" : "idle"}
-                    </span>
-                  </span>
-                  <span>
-                    <span className={css.label}>Queue:</span>
-                    <span className={css.value}>
-                      {status.queues.pending.toLocaleString()} waiting / {" "}
-                      {status.queues.processing.toLocaleString()} processing
-                    </span>
-                  </span>
-                </div>
-
-                <div className={css.statsRow}>
-                  <span>
-                    <span className={css.label}>Face processed:</span>
-                    <span className={css.value}>
-                      {(status.faceProcessing?.processed ?? 0).toLocaleString()}
-                    </span>
-                  </span>
-                  <span>
-                    <span className={css.label}>Worker success:</span>
-                    <span className={css.value}>
-                      {(status.faceProcessing?.workerSuccess ?? 0).toLocaleString()}
-                    </span>
-                  </span>
-                  <span>
-                    <span className={css.label}>Fallback used:</span>
-                    <span className={css.value}>
-                      {(status.faceProcessing?.fallbackCount ?? 0).toLocaleString()}
-                    </span>
-                  </span>
-                  <span>
-                    <span className={css.label}>Worker failures:</span>
-                    <span className={css.value}>
-                      {(status.faceProcessing?.workerFailures ?? 0).toLocaleString()}
-                    </span>
-                  </span>
-                </div>
-                {queueVisualization ? (
-                  <div className={css.queueBarSection}>
-                    <div className={css.queueBarHeader}>
-                      <span style={{ fontWeight: 'var(--fw-semi)' }}>Queue by disk size</span>
-                      <span>{formatBytes(queueVisualization.totalBytes)} total</span>
-                    </div>
-                    <div className={css.queueBarTrack}>
-                      {queueVisualization.segments.map((segment) => (
-                        <div
-                          key={segment.key}
-                          className={css.queueSegment}
-                          style={{
-                            width: `${segment.widthPercent}%`,
-                            backgroundColor: segment.color,
-                          }}
-                        />
-                      ))}
-                      {queueVisualization.separatorsPercent.map((separator, index) => (
-                        <div
-                          key={`separator-${index}`}
-                          className={css.queueSeparator}
-                          style={{ left: `${separator}%` }}
-                        />
-                      ))}
-                    </div>
-                    <div className={css.queueAxis}>
-                      <span>0</span>
-                      <span>{formatBytes(queueVisualization.totalBytes)}</span>
-                    </div>
-                    <div className={css.queueLegend}>
-                      {queueVisualization.groupBreakdown.map((item) => (
-                        <span key={item.group} className={css.queueLegendItem}>
-                          <span
-                            className={css.queueLegendSwatch}
-                            style={{
-                              background: `linear-gradient(90deg, ${getMediaColor(item.group, "image")} 50%, ${getMediaColor(item.group, "video")} 50%)`,
-                            }}
-                          />
-                          <span>{getGroupLabel(item.group)}: {formatBytes(item.sizeBytes)}</span>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                <span style={{ fontSize: '16px', fontWeight: 'var(--fw-semi)' }}>
-                  Recent activity
+            <div className={css.statsRow}>
+              <span>
+                <span className={css.label}>Database Size:</span>
+                <span className={css.value}>
+                  {status.databaseSize.toLocaleString()} files
                 </span>
-                <div className={css.recentRow}>
-                  <RecentActivity label="Last EXIF" entry={status.recent.exif} />
+              </span>
+              <span>
+                <span className={css.label}>Scanned:</span>
+                <span className={css.value}>
+                  {status.scannedFilesCount.toLocaleString()} files
+                </span>
+              </span>
+              <span>
+                <span className={css.label}>EXIF worker:</span>
+                <span className={css.value}>
+                  {status.maintenance.exifActive ? "active" : "idle"}
+                </span>
+              </span>
+              <span>
+                <span className={css.label}>Queue:</span>
+                <span className={css.value}>
+                  {status.queues.pending.toLocaleString()} waiting /{" "}
+                  {status.queues.processing.toLocaleString()} processing
+                </span>
+              </span>
+            </div>
+
+            {queueVisualization ? (
+              <div className={css.queueBarSection}>
+                <div className={css.queueBarHeader}>
+                  <span style={{ fontWeight: "var(--fw-semi)" }}>Queue by disk size</span>
+                  <span>{formatBytes(queueVisualization.totalBytes)} total</span>
+                </div>
+                <div className={css.queueBarTrack}>
+                  {queueVisualization.segments.map((segment) => (
+                    <div
+                      key={segment.key}
+                      className={css.queueSegment}
+                      style={{
+                        width: `${segment.widthPercent}%`,
+                        backgroundColor: segment.color,
+                      }}
+                    />
+                  ))}
+                  {queueVisualization.separatorsPercent.map((separator, index) => (
+                    <div
+                      key={`separator-${index}`}
+                      className={css.queueSeparator}
+                      style={{ left: `${separator}%` }}
+                    />
+                  ))}
+                </div>
+                <div className={css.queueAxis}>
+                  <span>0</span>
+                  <span>{formatBytes(queueVisualization.totalBytes)}</span>
+                </div>
+                <div className={css.queueLegend}>
+                  {queueVisualization.groupBreakdown.map((item) => (
+                    <span key={item.group} className={css.queueLegendItem}>
+                      <span
+                        className={css.queueLegendSwatch}
+                        style={{
+                          background: `linear-gradient(90deg, ${getMediaColor(item.group, "image")} 50%, ${getMediaColor(item.group, "video")} 50%)`,
+                        }}
+                      />
+                      <span>
+                        {getGroupLabel(item.group)}: {formatBytes(item.sizeBytes)}
+                      </span>
+                    </span>
+                  ))}
                 </div>
               </div>
-            )}
-          <div className={css.dialogActions}>
-            <button className="btn btn-primary" onClick={onDismiss}>
-              Close
-            </button>
+            ) : null}
+
+            <span style={{ fontSize: "16px", fontWeight: "var(--fw-semi)" }}>
+              Recent activity
+            </span>
+            <div className={css.recentRow}>
+              <RecentActivity label="Last EXIF" entry={status.recent.exif} />
+            </div>
           </div>
+        )}
+        <div className={css.dialogActions}>
+          <button className="btn btn-primary" onClick={onDismiss}>
+            Close
+          </button>
+        </div>
       </div>
     </dialog>
   );

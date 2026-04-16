@@ -71,22 +71,34 @@ export const suggestionsRequestHandler = async (
         }
       : pathFilter;
 
+    const limit = Number.isFinite(limitParam) ? limitParam : 8;
+
+    if (includeCounts) {
+      const suggestions = await measureOperation(
+        "queryFieldSuggestionsWithCounts",
+        () =>
+          database.queryFieldSuggestionsWithCounts({
+            field: fieldParam,
+            search: query,
+            filter,
+            limit,
+          }),
+        { category: "db", detail: `field=${fieldParam}` },
+      );
+
+      writeJson(res, 200, { suggestions });
+      return;
+    }
+
     const suggestions = await measureOperation(
-      includeCounts ? "queryFieldSuggestionsWithCounts" : "queryFieldSuggestions",
+      "queryFieldSuggestions",
       () =>
-        includeCounts
-          ? database.queryFieldSuggestionsWithCounts({
-              field: fieldParam,
-              search: query,
-              filter,
-              limit: Number.isFinite(limitParam) ? limitParam : 8,
-            })
-          : database.queryFieldSuggestions({
-              field: fieldParam,
-              search: query,
-              filter,
-              limit: Number.isFinite(limitParam) ? limitParam : 8,
-            }),
+        database.queryFieldSuggestions({
+          field: fieldParam,
+          search: query,
+          filter,
+          limit,
+        }),
       { category: "db", detail: `field=${fieldParam}` },
     );
 

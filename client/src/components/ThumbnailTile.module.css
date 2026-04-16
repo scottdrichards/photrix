@@ -72,3 +72,20 @@
   z-index: 2;
   display: flex;
 }
+
+.livePhotoBadge {
+  position: absolute;
+  top: var(--space-xxs);
+  left: var(--space-xxs);
+  background-color: var(--bg1);
+  color: var(--fg2);
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xs);
+  box-shadow: var(--shadow-sm);
+  opacity: 0.86;
+  z-index: 1;
+  pointer-events: none;
+}

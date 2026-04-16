@@ -12,8 +12,9 @@
     "sourceMap": true,
     "types": ["node", "jest"],
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    "rootDir": ".."
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "../shared/filter-contract/src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.spec.ts"]
 }

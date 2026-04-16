@@ -182,6 +182,34 @@ describe("ThumbnailTile", () => {
     expect(image).toHaveStyle({ opacity: "1" });
   });
 
+  it("shows live photo badge for photos with livePhotoUrl when not selected", () => {
+    const photo = createPhoto({ livePhotoUrl: "http://localhost/a/1.MOV" });
+    render(<ThumbnailTile photo={photo} />);
+
+    expect(screen.getByLabelText("Live photo")).toBeInTheDocument();
+  });
+
+  it("hides live photo badge when photo is selected", () => {
+    useSelectionContextMock.mockReturnValue({
+      isSelected: vi.fn().mockReturnValue(true),
+      selectionMode: true,
+      setSelected: vi.fn(),
+      setSelectionMode: vi.fn(),
+      toggleSelected: vi.fn(),
+    });
+    const photo = createPhoto({ livePhotoUrl: "http://localhost/a/1.MOV" });
+    render(<ThumbnailTile photo={photo} />);
+
+    expect(screen.queryByLabelText("Live photo")).not.toBeInTheDocument();
+  });
+
+  it("does not show live photo badge for photos without livePhotoUrl", () => {
+    const photo = createPhoto();
+    render(<ThumbnailTile photo={photo} />);
+
+    expect(screen.queryByLabelText("Live photo")).not.toBeInTheDocument();
+  });
+
   it("prioritizes in-view thumbnails over offscreen thumbnails", () => {
     const photo = createPhoto();
     render(<ThumbnailTile photo={photo} />);

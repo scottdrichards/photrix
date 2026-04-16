@@ -61,13 +61,7 @@ describe("StatusModal", () => {
           },
         },
         pending: { info: 2, exif: 1 },
-        maintenance: { exifActive: true, faceActive: true },
-        faceProcessing: {
-          processed: 42,
-          workerSuccess: 40,
-          fallbackCount: 2,
-          workerFailures: 1,
-        },
+        maintenance: { exifActive: true },
         progress: {
           overall: { completed: 7, total: 10, percent: 0.7 },
           scanned: { completed: 8, total: 10, percent: 0.8 },
@@ -88,9 +82,6 @@ describe("StatusModal", () => {
     expect(screen.getByText(/10 files/)).toBeInTheDocument();
     expect(screen.getByText(/Queue:/)).toBeInTheDocument();
     expect(screen.getByText(/3 waiting/)).toBeInTheDocument();
-    expect(screen.getByText(/Face worker:/)).toBeInTheDocument();
-    expect(screen.getByText(/Worker success:/)).toBeInTheDocument();
-    expect(screen.getByText("40")).toBeInTheDocument();
     expect(screen.getByText("Queue by disk size")).toBeInTheDocument();
     expect(screen.getByText(/completed:/)).toBeInTheDocument();
     expect(screen.getByText("Recent activity")).toBeInTheDocument();
@@ -148,14 +139,7 @@ describe("StatusModal", () => {
         pending: { info: 2, exif: 1 },
         maintenance: {
           exifActive: true,
-          faceActive: true,
           backgroundTasksEnabled: true,
-        },
-        faceProcessing: {
-          processed: 42,
-          workerSuccess: 40,
-          fallbackCount: 2,
-          workerFailures: 1,
         },
         progress: {
           overall: { completed: 7, total: 10, percent: 0.7 },
@@ -235,13 +219,7 @@ describe("StatusModal", () => {
           },
         },
         pending: { info: 2, exif: 20 },
-        maintenance: { exifActive: false, faceActive: false },
-        faceProcessing: {
-          processed: 0,
-          workerSuccess: 0,
-          fallbackCount: 0,
-          workerFailures: 0,
-        },
+        maintenance: { exifActive: false },
         progress: {
           overall: { completed: 10, total: 40, percent: 0.25 },
           scanned: { completed: 10, total: 40, percent: 0.25 },
@@ -277,13 +255,7 @@ describe("StatusModal", () => {
           },
         },
         pending: { info: 2, exif: 10 },
-        maintenance: { exifActive: false, faceActive: false },
-        faceProcessing: {
-          processed: 1,
-          workerSuccess: 1,
-          fallbackCount: 0,
-          workerFailures: 0,
-        },
+        maintenance: { exifActive: false },
         progress: {
           overall: { completed: 20, total: 40, percent: 0.5 },
           scanned: { completed: 20, total: 40, percent: 0.5 },

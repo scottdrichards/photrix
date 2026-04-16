@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type http from "node:http";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
+import { ConversionTaskPriority } from "../../indexDatabase/indexDatabase.type.ts";
 import { queryHandler } from "./queryHandler.ts";
 
 const createMockResponse = (endImpl?: (chunk?: string) => unknown) => {
@@ -123,6 +124,7 @@ describe("queryHandler", () => {
     });
     const database = {
       queryFiles: jest.fn(async () => ({ items: [{ fileName: "a.jpg", folder: "/" }], total: 1, page: 1, pageSize: 1 })),
+      raiseConversionPriority: jest.fn(),
     } as unknown as IndexDatabase;
 
     await queryHandler(new URL("http://localhost/api/files/"), "/", database, res);
@@ -131,5 +133,51 @@ describe("queryHandler", () => {
     const payloadRaw = (res.end as jest.Mock).mock.calls.at(-1)?.[0] as string;
     const payload = JSON.parse(payloadRaw);
     expect(payload.error).toBe("Response too large");
+  });
+
+  it("raises thumbnail and HLS conversion priority to userImplicit for paged results", async () => {
+    const { res } = createMockResponse();
+    const database = {
+      queryFiles: jest.fn(async () => ({
+        items: [
+          { folder: "/photos/", fileName: "a.jpg" },
+          { folder: "/photos/", fileName: "b.mp4" },
+        ],
+        total: 2,
+        page: 1,
+        pageSize: 20,
+      })),
+      raiseConversionPriority: jest.fn(),
+    } as unknown as IndexDatabase;
+
+    await queryHandler(new URL("http://localhost/api/files/"), "/", database, res);
+
+    expect(database.raiseConversionPriority).toHaveBeenCalledWith(
+      ["/photos/a.jpg", "/photos/b.mp4"],
+      "thumbnail",
+      ConversionTaskPriority.UserImplicit,
+    );
+    expect(database.raiseConversionPriority).toHaveBeenCalledWith(
+      ["/photos/a.jpg", "/photos/b.mp4"],
+      "hls",
+      ConversionTaskPriority.UserImplicit,
+    );
+  });
+
+  it("does not raise conversion priority for count-only queries", async () => {
+    const { res } = createMockResponse();
+    const database = {
+      queryFiles: jest.fn(async () => ({
+        items: [{ folder: "/", fileName: "a.jpg" }],
+        total: 5,
+        page: 1,
+        pageSize: 20,
+      })),
+      raiseConversionPriority: jest.fn(),
+    } as unknown as IndexDatabase;
+
+    await queryHandler(new URL("http://localhost/api/files/?count=true"), "/", database, res);
+
+    expect(database.raiseConversionPriority).not.toHaveBeenCalled();
   });
 });

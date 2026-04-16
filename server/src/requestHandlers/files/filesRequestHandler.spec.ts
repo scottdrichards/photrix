@@ -60,6 +60,7 @@ describe("filesEndpointRequestHandler", () => {
       page: 1,
       pageSize: 1000,
     }));
+    const raiseConversionPriority = jest.fn();
 
     await filesEndpointRequestHandler(
       {
@@ -68,7 +69,7 @@ describe("filesEndpointRequestHandler", () => {
       } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
       res,
       {
-        database: { queryFiles } as unknown as IndexDatabase,
+        database: { queryFiles, raiseConversionPriority } as unknown as IndexDatabase,
         storageRoot: os.tmpdir(),
         conversionWorker: createConversionWorker(),
       },
