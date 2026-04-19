@@ -1,56 +1,37 @@
-import path from "path/win32";
 import { walkFiles } from "../fileHandling/fileUtils.ts";
-import { waitForBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 
-export const fileScanner = async (
-  database: IndexDatabase,
-  onComplete?: () => void,
-): Promise<() => void> => {
+export function* batchGenerator<T>(
+  generator: Generator<T>,
+  batchSize: number,
+): Generator<T[]> {
+  while (true) {
+    const batch = generator.take(batchSize).toArray();
+    if (batch.length === 0) {
+      break;
+    }
+    yield batch;
+  }
+}
+
+export const fileScanner = async (database: IndexDatabase, onComplete?: () => void) => {
   const root = database.storagePath;
 
-  const scan = async () => {
-    console.log(`[fileWatcher] Discovering existing files in ${root}`);
+  console.log(`[fileWatcher] Discovering existing files in ${root}`);
 
-    const batchSize = 500;
-    let batch: string[] = [];
-    let scannedFilesCount = 0;
+  const batchSize = 500;
+  let scannedFilesCount = 0;
 
-    for (const absolutePath of walkFiles(root)) {
-      await waitForBackgroundTasksEnabled();
+  for (const batch of batchGenerator(walkFiles(root), batchSize)) {
+    await database.addPaths(batch);
+    scannedFilesCount += batch.length;
+    console.log(
+      `[fileWatcher] Discovered ${scannedFilesCount.toLocaleString()} files... Current: ${batch[batch.length - 1]}`,
+    );
+  }
 
-      try {
-        const relativePath = path.relative(root, absolutePath);
-        batch.push(relativePath);
-        if (batch.length >= batchSize) {
-          await database.addPaths(batch);
-          batch = [];
-        }
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        console.error(`[fileWatcher] failed to process ${absolutePath}: ${msg}`);
-      }
-
-      scannedFilesCount++;
-
-      if (scannedFilesCount % 1_000 === 0) {
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-
-      if (scannedFilesCount % 10000 === 0) {
-        console.log(
-          `[fileWatcher] Discovered ${scannedFilesCount} files... Current: ${absolutePath}`,
-        );
-      }
-    }
-
-    if (batch.length) {
-      await database.addPaths(batch);
-    }
-
-    console.log(`[fileWatcher] Completed discovering ${scannedFilesCount} files`);
-  };
-
-  scan().then(() => onComplete?.());
-  return () => {};
+  console.log(
+    `[fileWatcher] Completed discovering ${scannedFilesCount.toLocaleString()} files`,
+  );
+  onComplete?.();
 };
