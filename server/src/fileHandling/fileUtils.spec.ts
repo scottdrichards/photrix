@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 
 import {
-  getFileInfo,
   getExifMetadataFromFile,
   getFastMediaDimensions,
   walkFiles,
@@ -33,24 +32,6 @@ const getNormalizedDimensionsFromDecodedMetadata = (metadata: {
     height: orientationNeedsSwap ? metadata.width : metadata.height,
   };
 };
-
-describe("getFileInfo", () => {
-  it("returns file statistics for sample image", async () => {
-    const filePath = resolveExamplePath("sewing-threads.heic");
-
-    const info = await getFileInfo(filePath);
-
-    expect(info.sizeInBytes).toBeGreaterThan(0);
-    expect(info.created).toBeInstanceOf(Date);
-    expect(info.modified).toBeInstanceOf(Date);
-    expect(Number.isNaN(info.created?.getTime() ?? NaN)).toBe(false);
-    expect(Number.isNaN(info.modified?.getTime() ?? NaN)).toBe(false);
-  });
-
-  it("throws when provided a directory path", async () => {
-    await expect(getFileInfo(EXAMPLE_ROOT)).rejects.toThrow(/not a file/i);
-  });
-});
 
 describe("getExifMetadataFromFile", () => {
   it("returns empty object when mime type is unknown", async () => {
@@ -86,7 +67,7 @@ describe("getExifMetadataFromFile", () => {
 
     const result = await getExifMetadataFromFile(imagePath);
 
-      expect(result.livePhotoVideoFileName?.toLowerCase()).toBe("sewing-threads.mov");
+    expect(result.livePhotoVideoFileName?.toLowerCase()).toBe("sewing-threads.mov");
     await rm(dir, { recursive: true, force: true });
   });
 

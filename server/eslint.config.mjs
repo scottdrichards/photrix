@@ -9,7 +9,7 @@ export default tseslint.config(
     ignores: sharedIgnores,
   },
   js.configs.recommended,
-  ...tseslint.configs.recommended,
+  ...tseslint.configs.recommendedTypeChecked,
   {
     files: ["**/*.{ts,tsx,js,jsx,mjs,cjs}"],
     languageOptions: {
@@ -19,10 +19,17 @@ export default tseslint.config(
       },
       parserOptions: {
         sourceType: "module",
+        projectService: true,
       },
     },
     rules: {
       ...sharedRules,
+    },
+  },
+  {
+    files: ["**/*.{ts,tsx}"],
+    rules: {
+      "@typescript-eslint/switch-exhaustiveness-check": "error",
     },
   },
   {

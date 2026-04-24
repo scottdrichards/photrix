@@ -5,18 +5,6 @@ import type {
 } from "../../../shared/filter-contract/src/index.ts";
 export type { Range, StringSearch } from "../../../shared/filter-contract/src/index.ts";
 
-export enum ConversionTaskPriority {
-  InProgress = -1,
-  UserBlocked = 0,
-  UserImplicit = 1,
-  Background = 2,
-}
-
-export type PendingConversionTaskPriority = Exclude<
-  ConversionTaskPriority,
-  ConversionTaskPriority.InProgress
->;
-
 export type FilterField = keyof FileRecord | "relativePath";
 
 export type FilterCondition = RecordFilterCondition<FileRecord, "relativePath">;
@@ -84,3 +72,18 @@ export type GetFiles = <TQueryOptions extends QueryOptions>(
 ) => Promise<QueryResult<TQueryOptions["metadata"]>>;
 
 export type UpsertFileData = (fileData: FileRecord) => Promise<void>;
+
+export type ImageVariantTask = {
+  type: "imageVariants";
+  relativePath: string;
+  mimeType: string;
+};
+
+export type HLSTask = {
+  type: "hls";
+  relativePath: string;
+  mimeType: string;
+  duration?: number;
+};
+
+export type BackgroundTask = ImageVariantTask | HLSTask;

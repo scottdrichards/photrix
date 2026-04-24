@@ -2,7 +2,7 @@ export type TableColumn = {
   name: string;
   type: string;
   mustHaveValue?: boolean;
-  default?: unknown;
+  default?: string | number | boolean | null;
   isPrimaryKey?: boolean;
   indexExpression?: true | string;
 };
@@ -53,6 +53,8 @@ export const tables = {
       { name: "fileHash", type: "TEXT" },
       { name: "infoProcessedAt", type: "TEXT", indexExpression: true },
       { name: "exifProcessedAt", type: "TEXT", indexExpression: true },
+      { name: "imageVariantsGeneratedAt", type: "TEXT", indexExpression: true },
+      { name: "hlsGeneratedAt", type: "TEXT", indexExpression: true },
     ],
     compositeIndexes: [
       {
@@ -60,21 +62,22 @@ export const tables = {
         expression: "folder, fileName",
         unique: true,
       },
-    ],
-  },
-  conversion_tasks: {
-    columns: [
-      { name: "folder", type: "TEXT", isPrimaryKey: true },
-      { name: "fileName", type: "TEXT", isPrimaryKey: true },
-      { name: "taskType", type: "TEXT", isPrimaryKey: true },
-      { name: "priority", type: "INTEGER" },
-      { name: "prioritySetAt", type: "TEXT" },
-    ],
-    compositeIndexes: [
       {
-        name: "idx_conversion_tasks_queue",
-        expression: "taskType, priority ASC, prioritySetAt ASC, folder, fileName",
-        where: "priority >= 0",
+        name: "idx_images_needing_conversion",
+        expression: "mimeType, imageVariantsGeneratedAt, infoProcessedAt",
+        where:
+          "mimeType LIKE 'image/%' AND imageVariantsGeneratedAt IS NULL AND infoProcessedAt IS NOT NULL",
+      },
+      {
+        name: "idx_videos_needing_hls",
+        expression: "mimeType, hlsGeneratedAt, exifProcessedAt",
+        where:
+          "mimeType LIKE 'video/%' AND hlsGeneratedAt IS NULL AND exifProcessedAt IS NOT NULL",
+      },
+      {
+        name: "sort_date",
+        expression:
+          "COALESCE(dateTaken, created, modified) DESC, folder ASC, fileName ASC",
       },
     ],
   },

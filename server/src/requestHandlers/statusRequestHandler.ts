@@ -1,11 +1,15 @@
 import http from "node:http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { isExifMetadataProcessingActive } from "../indexDatabase/processExifMetadata.ts";
-import { isBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
+import type {
+  TaskOrchestrator,
+  TaskQueueSummary,
+} from "../taskOrchestrator/taskOrchestrator.ts";
 
 type StatusRequestHandlerProps = {
   database: IndexDatabase;
   stream: boolean;
+  taskOrchestrator: TaskOrchestrator;
 };
 
 type ProgressEntry = {
@@ -27,9 +31,7 @@ const toProgressEntry = (completed: number, total: number): ProgressEntry => {
   };
 };
 
-const countQueueEntries = (
-  queueSummary: Awaited<ReturnType<IndexDatabase["getConversionQueueSummary"]>>,
-) => {
+const countQueueEntries = (queueSummary: TaskQueueSummary) => {
   const pending =
     queueSummary.userBlocked.image.count +
     queueSummary.userBlocked.video.count +
@@ -48,13 +50,16 @@ const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
   return result;
 };
 
-const getStatusPayload = async (database: IndexDatabase) => {
+const getStatusPayload = async (
+  database: IndexDatabase,
+  taskOrchestrator: TaskOrchestrator,
+) => {
   const [statusCounts, lastExif, queueSummary] = await Promise.all([
     timed("getStatusCounts", () => database.getStatusCounts()),
     timed("getMostRecentExifProcessedEntry", () =>
       database.getMostRecentExifProcessedEntry(),
     ),
-    timed("getConversionQueueSummary", () => database.getConversionQueueSummary()),
+    timed("getQueueSummary", async () => taskOrchestrator.getQueueSummary()),
   ]);
 
   const databaseSize = statusCounts.allEntries;
@@ -76,7 +81,7 @@ const getStatusPayload = async (database: IndexDatabase) => {
     },
     maintenance: {
       exifActive: isExifMetadataProcessingActive() || pendingExif > 0,
-      backgroundTasksEnabled: isBackgroundTasksEnabled(),
+      backgroundTasksEnabled: taskOrchestrator.getProcessBackgroundTasks(),
     },
     queues: countQueueEntries(queueSummary),
     queueSummary,
@@ -101,11 +106,11 @@ export const statusRequestHandler = async (
   res: http.ServerResponse,
   props: StatusRequestHandlerProps,
 ) => {
-  const { database, stream } = props;
+  const { database, stream, taskOrchestrator } = props;
 
   if (!stream) {
     const statusStartTime = Date.now();
-    const payload = await getStatusPayload(database);
+    const payload = await getStatusPayload(database, taskOrchestrator);
     const elapsed = Date.now() - statusStartTime;
     if (elapsed > 200) {
       console.log(`[status] payload generation took ${elapsed}ms`);
@@ -132,7 +137,7 @@ export const statusRequestHandler = async (
     updating = true;
     try {
       const statusStartTime = Date.now();
-      const payload = await getStatusPayload(database);
+      const payload = await getStatusPayload(database, taskOrchestrator);
       const elapsed = Date.now() - statusStartTime;
       if (elapsed > 200) {
         console.log(`[status] stream payload generation took ${elapsed}ms`);

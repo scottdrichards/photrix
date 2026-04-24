@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import { setBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
+import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 import { statusRequestHandler } from "./statusRequestHandler.ts";
 
 const flushMicrotasks = async () => {
@@ -61,8 +61,14 @@ const queueSummaryFixture = {
 
 afterEach(() => {
   jest.useRealTimers();
-  setBackgroundTasksEnabled(true);
 });
+
+const alwaysEnabledOrchestrator: TaskOrchestrator = {
+  setProcessBackgroundTasks: () => {},
+  getProcessBackgroundTasks: () => true,
+  getQueueSummary: () => queueSummaryFixture,
+  addTask: () => {},
+};
 
 describe("statusRequestHandler", () => {
   it("returns JSON status payload for non-stream mode", async () => {
@@ -75,7 +81,6 @@ describe("statusRequestHandler", () => {
         missingInfo: 4,
         missingDateTaken: 2,
       }),
-      getConversionQueueSummary: () => queueSummaryFixture,
       getMostRecentExifProcessedEntry: () => ({
         folder: "/",
         fileName: "img.jpg",
@@ -86,6 +91,7 @@ describe("statusRequestHandler", () => {
     await statusRequestHandler({} as http.IncomingMessage, res, {
       database,
       stream: false,
+      taskOrchestrator: alwaysEnabledOrchestrator,
     });
 
     expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
@@ -126,13 +132,13 @@ describe("statusRequestHandler", () => {
         missingInfo: 0,
         missingDateTaken: 0,
       }),
-      getConversionQueueSummary: () => queueSummaryFixture,
       getMostRecentExifProcessedEntry: () => null,
     } as unknown as IndexDatabase;
 
     statusRequestHandler(req, res, {
       database,
       stream: true,
+      taskOrchestrator: alwaysEnabledOrchestrator,
     });
 
     expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
@@ -170,11 +176,14 @@ describe("statusRequestHandler", () => {
             });
         });
       },
-      getConversionQueueSummary: () => queueSummaryFixture,
       getMostRecentExifProcessedEntry: () => null,
     } as unknown as IndexDatabase;
 
-    statusRequestHandler(req, res, { database, stream: true });
+    statusRequestHandler(req, res, {
+      database,
+      stream: true,
+      taskOrchestrator: alwaysEnabledOrchestrator,
+    });
 
     // First sendUpdate is in flight (getStatusCounts hasn't resolved)
     expect(statusCalls).toHaveLength(1);

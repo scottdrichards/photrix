@@ -5,14 +5,9 @@ import { basename, dirname, extname, join, parse, resolve } from "path";
 export const CACHE_DIR = process.env.CACHE_DIR || join(process.cwd(), ".cache");
 export const MEDIA_CACHE_DIR = join(CACHE_DIR, "media");
 
-let initialized = false;
-
-export const initializeCacheDirectories = async () => {
-  if (initialized) return;
-  await mkdir(CACHE_DIR, { recursive: true });
-  await mkdir(MEDIA_CACHE_DIR, { recursive: true });
-  initialized = true;
-};
+export const initializeCacheDirectories = async () => 
+  Promise.all([CACHE_DIR, MEDIA_CACHE_DIR]
+    .map(dir => mkdir(dir, { recursive: true })));
 
 export const getHash = (filePath: string, modifiedTimeMs: number): string => {
   const hashInput = `${filePath}:${modifiedTimeMs}`;

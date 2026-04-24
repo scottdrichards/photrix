@@ -1,5 +1,5 @@
 import type http from "node:http";
-import { setBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
+import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 import { writeJson } from "../utils.ts";
 
 type TogglePayload = {
@@ -24,6 +24,7 @@ const readJsonBody = async <T>(req: http.IncomingMessage): Promise<T> => {
 export const statusBackgroundTasksRequestHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
+  { taskOrchestrator }: { taskOrchestrator: TaskOrchestrator },
 ) => {
   try {
     const payload = await readJsonBody<TogglePayload>(req);
@@ -32,7 +33,8 @@ export const statusBackgroundTasksRequestHandler = async (
       return;
     }
 
-    const enabled = setBackgroundTasksEnabled(payload.enabled);
+    taskOrchestrator.setProcessBackgroundTasks(payload.enabled);
+    const enabled = taskOrchestrator.getProcessBackgroundTasks();
     writeJson(res, 200, { enabled });
   } catch (error) {
     writeJson(res, 400, {

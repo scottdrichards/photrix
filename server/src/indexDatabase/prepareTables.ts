@@ -84,4 +84,8 @@ export const prepareTables = async (db: AsyncSqlite) => {
       await db.exec(`ALTER TABLE ${tableName} DROP COLUMN ${column}`);
     }
   }
+
+  // Refresh planner statistics so SQLite picks the right index for queries
+  // like ORDER BY COALESCE(...) LIMIT N (the `sort_date` expression index).
+  await db.exec("ANALYZE");
 };

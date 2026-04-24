@@ -37,8 +37,7 @@ export type NegotiationDeps = {
   getFileMetadata: (
     subPath: string,
   ) => Promise<
-    | { sizeInBytes?: number; duration?: number; videoCodec?: string }
-    | undefined
+    { sizeInBytes?: number; duration?: number; videoCodec?: string } | undefined
   >;
   isVideoFile: (subPath: string) => boolean;
   fileExists: (filePath: string) => Promise<boolean>;
@@ -71,7 +70,11 @@ export const negotiateVideoPlayback = async (
 
   // 2. CUDA available — can generate HLS on-the-fly
   if (await deps.isGpuAvailable()) {
-    return { mode: "hls", url: hlsUrl, reason: "Hardware-accelerated HLS encoding available" };
+    return {
+      mode: "hls",
+      url: hlsUrl,
+      reason: "Hardware-accelerated HLS encoding available",
+    };
   }
 
   // 3. No CUDA, no cached HLS — try raw/direct playback
@@ -85,16 +88,19 @@ export const negotiateVideoPlayback = async (
     };
   }
 
-  return { mode: "direct", url: directUrl, reason: "Direct playback — client supports codec" };
+  return {
+    mode: "direct",
+    url: directUrl,
+    reason: "Direct playback — client supports codec",
+  };
 };
 
-const buildDeps = (
-  database: IndexDatabase,
-  storageRoot: string,
-): NegotiationDeps => ({
+const buildDeps = (database: IndexDatabase, storageRoot: string): NegotiationDeps => ({
   hasCachedHLS: async (filePath: string) => {
     const multibitrate = await getMultibitrateHLSInfo(filePath);
-    if (multibitrate.exists) return true;
+    // complete = all variants encoded (.complete marker exists)
+    // initialized = structure exists but may still be encoding (don't count as "cached")
+    if (multibitrate.complete) return true;
     const singleBitrate = await getHLSInfo(filePath);
     return singleBitrate.exists;
   },

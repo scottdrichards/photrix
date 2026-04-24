@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { walkFiles } from "./fileHandling/fileUtils.ts";
-import { setBackgroundTasksEnabled } from "./common/backgroundTasksControl.ts";
+import { createTaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 
 const TEST_PORT = 3101;
 process.env.PORT = String(TEST_PORT);
@@ -53,9 +53,10 @@ describe("main.ts HTTP Server", () => {
   });
 
   beforeEach(async () => {
-    setBackgroundTasksEnabled(true);
     storagePath = mkdtempSync(path.join(os.tmpdir(), "photrix-main-spec-root-"));
-    process.env.INDEX_DB_LOCATION = mkdtempSync(path.join(os.tmpdir(), "photrix-main-spec-db-"));
+    process.env.INDEX_DB_LOCATION = mkdtempSync(
+      path.join(os.tmpdir(), "photrix-main-spec-db-"),
+    );
 
     mkdirSync(path.join(storagePath, "subFolder"), { recursive: true });
     writeFileSync(path.join(storagePath, "root.jpg"), "root");
@@ -68,10 +69,9 @@ describe("main.ts HTTP Server", () => {
     await database.addPaths(relativePaths);
 
     const { createServer } = await import("./createServer.ts");
-    const { createConversionWorker } = await import("./indexDatabase/conversionWorker.ts");
     server = await createServer(database, storagePath, {
       onRequest: () => {},
-      conversionWorker: createConversionWorker(),
+      taskOrchestrator: createTaskOrchestrator(database),
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -82,7 +82,6 @@ describe("main.ts HTTP Server", () => {
       server.close(() => resolve());
     });
     rmSync(storagePath, { recursive: true, force: true });
-    setBackgroundTasksEnabled(true);
   });
 
   it("returns health response", async () => {
@@ -182,6 +181,8 @@ describe("main.ts HTTP Server", () => {
 
     const statusResponse = await makeRequest(TEST_PORT, "/api/status");
     expect(statusResponse.status).toBe(200);
-    expect(JSON.parse(statusResponse.body).maintenance.backgroundTasksEnabled).toBe(false);
+    expect(JSON.parse(statusResponse.body).maintenance.backgroundTasksEnabled).toBe(
+      false,
+    );
   });
 });

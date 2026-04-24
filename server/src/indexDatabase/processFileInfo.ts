@@ -1,33 +1,32 @@
 import path from "node:path";
-import { getFastMediaDimensions, getFileInfo } from "../fileHandling/fileUtils.ts";
-import { waitForBackgroundTasksEnabled } from "../common/backgroundTasksControl.ts";
+import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { measureOperation } from "../observability/requestTrace.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
+import { stat } from "node:fs/promises";
+import { FileInfo } from "./fileRecord.type.ts";
 
-const stripLeadingSlash = (value: string) => value.replace(/^\\?\//, "");
-
-let isProcessingFileInfo = false;
+const getFileInfoMetadata = async (fullPath: string): Promise<FileInfo> => {
+  const stats = await stat(fullPath);
+  return {
+    sizeInBytes: stats.size,
+    created: new Date(stats.birthtimeMs),
+    modified: new Date(stats.mtimeMs),
+  };
+};
 
 export const startBackgroundProcessFileInfoMetadata = async (
   database: IndexDatabase,
+  waitForEnabled: () => Promise<void>,
   onComplete?: () => void,
 ) => {
-  if (isProcessingFileInfo) {
-    // Just for debugging - should never happen in practice
-    throw new Error("File info processing is already running");
-  }
-
-  isProcessingFileInfo = true;
-  const totalToProcess = await database.countFilesNeedingMetadataUpdate("info");
   let processedCount = 0;
+  let totalToProcessUpdated = 0;
   let restartAtMS = 0;
   let lastReportTime = Date.now();
   let lastReportCount = 0;
 
   const processAll = async () => {
     while (true) {
-      await waitForBackgroundTasksEnabled();
-
       const batchSize = 200;
       const items = await database.getFilesNeedingMetadataUpdate("info", batchSize);
       if (!items.length) {
@@ -36,25 +35,25 @@ export const startBackgroundProcessFileInfoMetadata = async (
         return;
       }
 
+      // Keep a moving lower-bound estimate without an expensive full-table COUNT(*).
+      totalToProcessUpdated = Math.max(
+        totalToProcessUpdated,
+        processedCount + items.length,
+      );
+
       for (const entry of items) {
-        await waitForBackgroundTasksEnabled();
+        await waitForEnabled();
 
         const { relativePath } = entry;
         try {
           await measureOperation(
             "metadata.fileInfo.processEntry",
             async () => {
-              const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
-
-              const fileInfo = await getFileInfo(fullPath);
-              const fastDimensions = await getFastMediaDimensions(fullPath);
-              const now = new Date();
-              const metadata = {
-                ...fileInfo,
-                ...fastDimensions,
-                infoProcessedAt: now.toISOString(),
-              };
-
+              const fullPath = path.join(
+                database.storagePath,
+                stripLeadingSlash(relativePath),
+              );
+              const metadata = await getFileInfoMetadata(fullPath);
               await database.addOrUpdateFileData(relativePath, metadata);
             },
             { category: "other", detail: relativePath, logWithoutRequest: true },
@@ -70,13 +69,16 @@ export const startBackgroundProcessFileInfoMetadata = async (
         const now = new Date();
         processedCount++;
         if (now.getTime() - lastReportTime > 1000) {
-          const percentComplete = ((processedCount / totalToProcess) * 100).toFixed(2);
+          const stableTotalToProcess = Math.max(totalToProcessUpdated, processedCount, 1);
+          const percentComplete = ((processedCount / stableTotalToProcess) * 100).toFixed(
+            2,
+          );
           const rate =
             (processedCount - lastReportCount) /
             ((now.getTime() - lastReportTime) / 1000);
           lastReportCount = processedCount;
           console.log(
-            `[metadata:file-info] ${percentComplete}% complete. ${rate.toFixed(2)} items/sec. Last processed: ${relativePath}`,
+            `[metadata:file-info] ${percentComplete}% complete (${processedCount}/${stableTotalToProcess}). ${rate.toFixed(2)} items/sec. Last processed: ${relativePath}`,
           );
           lastReportTime = now.getTime();
         }
@@ -90,7 +92,7 @@ export const startBackgroundProcessFileInfoMetadata = async (
     }
   };
 
-  processAll();
+  void processAll();
 
   const pause = (durationMS: number = 10_000) => {
     const localRestartMs = Date.now() + durationMS;

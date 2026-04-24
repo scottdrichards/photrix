@@ -161,10 +161,6 @@ const constraintToSQL = (
 
   if (typeof constraint === "object" && constraint !== null) {
     // Could be Range, StringSearch, or complex object
-    console.log(
-      `[filterToSQL] Object constraint for field "${String(field)}":`,
-      JSON.stringify(constraint),
-    );
 
     // Check for Range (has min/max)
     if ("min" in constraint || "max" in constraint) {
@@ -191,11 +187,16 @@ const constraintToSQL = (
       const folderConstraint = constraint as { folder: string; recursive?: boolean };
       const normalizedFolder = normalizeFolderPath(folderConstraint.folder);
       const escapedFolder = escapeLikeLiteral(normalizedFolder);
-      console.log(
-        `[filterToSQL] Folder constraint: folder="${folderConstraint.folder}", normalized="${normalizedFolder}", recursive=${folderConstraint.recursive}`,
-      );
 
       if (folderConstraint.recursive) {
+        // Special case: root recursive matches every row. Returning a WHERE
+        // clause makes SQLite prefer the folder index and full-set sort, which
+        // freezes the read worker on large libraries. Returning no WHERE lets
+        // the planner walk `sort_date` in order and stop at LIMIT.
+        if (normalizedFolder === "/") {
+          return { where: "", params: [] };
+        }
+
         return {
           where: `folder LIKE ? ESCAPE '\\'`,
           params: [`${escapedFolder}%`],

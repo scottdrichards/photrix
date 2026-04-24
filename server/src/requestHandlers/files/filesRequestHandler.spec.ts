@@ -4,8 +4,36 @@ import os from "node:os";
 import path from "node:path";
 import type http from "node:http";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
+import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";
 import { filesEndpointRequestHandler } from "./filesRequestHandler.ts";
-import { createConversionWorker } from "../../indexDatabase/conversionWorker.ts";
+
+const orchestrator: TaskOrchestrator = {
+  setProcessBackgroundTasks: () => {},
+  getProcessBackgroundTasks: () => true,
+  getQueueSummary: () => ({
+    completed: {
+      image: { count: 0, sizeBytes: 0 },
+      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+    },
+    active: {
+      image: { count: 0, sizeBytes: 0 },
+      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+    },
+    userBlocked: {
+      image: { count: 0, sizeBytes: 0 },
+      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+    },
+    userImplicit: {
+      image: { count: 0, sizeBytes: 0 },
+      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+    },
+    background: {
+      image: { count: 0, sizeBytes: 0 },
+      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
+    },
+  }),
+  addTask: () => {},
+};
 
 const createMockResponse = () => {
   let body = "";
@@ -44,7 +72,7 @@ describe("filesEndpointRequestHandler", () => {
       {
         database: {} as IndexDatabase,
         storageRoot: os.tmpdir(),
-        conversionWorker: createConversionWorker(),
+        orchestrator,
       },
     );
 
@@ -71,7 +99,7 @@ describe("filesEndpointRequestHandler", () => {
       {
         database: { queryFiles, raiseConversionPriority } as unknown as IndexDatabase,
         storageRoot: os.tmpdir(),
-        conversionWorker: createConversionWorker(),
+        orchestrator,
       },
     );
 
@@ -98,7 +126,7 @@ describe("filesEndpointRequestHandler", () => {
       {
         database: {} as IndexDatabase,
         storageRoot,
-        conversionWorker: createConversionWorker(),
+        orchestrator,
       },
     );
 
@@ -119,7 +147,7 @@ describe("filesEndpointRequestHandler", () => {
       {
         database: {} as IndexDatabase,
         storageRoot,
-        conversionWorker: createConversionWorker(),
+        orchestrator,
       },
     );
 
@@ -142,7 +170,7 @@ describe("filesEndpointRequestHandler", () => {
       {
         database: {} as IndexDatabase,
         storageRoot,
-        conversionWorker: createConversionWorker(),
+        orchestrator,
       },
     );
 

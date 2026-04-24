@@ -42,19 +42,27 @@ describe("processExifMetadata", () => {
         }
         return [];
       },
-      addOrUpdateFileData: async (relativePath: string, data: Record<string, unknown>) => {
+      addOrUpdateFileData: async (
+        relativePath: string,
+        data: Record<string, unknown>,
+      ) => {
         updates.push({ relativePath, data });
       },
     } as unknown as IndexDatabase;
 
-    const { startBackgroundProcessExifMetadata, isExifMetadataProcessingActive } = await import(
-      "./processExifMetadata.ts"
-    );
+    const {
+      processExifMetadata: startBackgroundProcessExifMetadata,
+      isExifMetadataProcessingActive,
+    } = await import("./processExifMetadata.ts");
 
     let completed = false;
-    startBackgroundProcessExifMetadata(db, () => {
-      completed = true;
-    });
+    startBackgroundProcessExifMetadata(
+      db,
+      () => Promise.resolve(),
+      () => {
+        completed = true;
+      },
+    );
 
     await wait(50);
 
@@ -69,7 +77,7 @@ describe("processExifMetadata", () => {
     expect(typeof byPath["bad.jpg"]?.exifProcessedAt).toBe("string");
   });
 
-  it("throws if a second run starts while processing is active", async () => {
+  it("returns early if a second run starts while processing is active", async () => {
     const gate = {
       promise: Promise.resolve(),
     };
@@ -96,14 +104,16 @@ describe("processExifMetadata", () => {
       addOrUpdateFileData: async () => undefined,
     } as unknown as IndexDatabase;
 
-    const { startBackgroundProcessExifMetadata } = await import("./processExifMetadata.ts");
-
-    startBackgroundProcessExifMetadata(db);
-
-    expect(() => startBackgroundProcessExifMetadata(db)).toThrow(
-      /already running/i,
+    const { processExifMetadata: startBackgroundProcessExifMetadata } = await import(
+      "./processExifMetadata.ts"
     );
 
-    await wait(10);
+    const firstRun = startBackgroundProcessExifMetadata(db, () => Promise.resolve());
+
+    await expect(
+      startBackgroundProcessExifMetadata(db, () => Promise.resolve()),
+    ).resolves.toBeUndefined();
+
+    await firstRun;
   });
 });

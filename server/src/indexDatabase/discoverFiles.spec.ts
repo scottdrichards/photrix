@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "@jest/globals";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileScanner } from "./fileScanner.ts";
+import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 
 const mkTempDir = async (prefix: string): Promise<string> =>
@@ -25,9 +25,7 @@ describe("discoverFiles", () => {
 
       const db = new IndexDatabase(rootDir);
       await db.init();
-      await new Promise<void>((resolve) => {
-        fileScanner(db, resolve);
-      });
+      await fileSystemScanFolder(db);
 
       const a = await db.getFileRecord("a.jpg");
       const b = await db.getFileRecord("nested/b.mp4");

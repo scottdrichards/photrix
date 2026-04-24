@@ -1,26 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import exifr from "exifr";
-import sharp from "sharp";
 import { readdirSync } from "node:fs";
-import { access, readFile, stat } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import { ExifMetadata, FileInfo } from "../indexDatabase/fileRecord.type.ts";
+import sharp from "sharp";
+import { ExifMetadata } from "../indexDatabase/fileRecord.type.ts";
 import { getVideoMetadata } from "../videoProcessing/getVideoMetadata.ts";
 import { mimeTypeForFilename } from "./mimeTypes.ts";
-
-export const getFileInfo = async (fullPath: string): Promise<FileInfo> => {
-  const stats = await stat(fullPath);
-
-  if (!stats.isFile()) {
-    throw new Error(`Path ${fullPath} is not a file`);
-  }
-
-  return {
-    sizeInBytes: stats.size,
-    created: new Date(stats.birthtimeMs),
-    modified: new Date(stats.mtimeMs),
-  };
-};
 
 export const getFastMediaDimensions = async (
   fullPath: string,
@@ -251,34 +237,29 @@ const exifFieldMapping = {
 } as const satisfies ExifFieldMapping;
 
 const mapRawExifToMetadata = (rawData: Record<string, unknown>) =>
-  Object.entries(exifFieldMapping).reduce(
-    (acc, [fileField, sourceOrSources]) => {
-      const sources = Array.isArray(sourceOrSources)
-        ? sourceOrSources
-        : [sourceOrSources];
+  Object.entries(exifFieldMapping).reduce((acc, [fileField, sourceOrSources]) => {
+    const sources = Array.isArray(sourceOrSources) ? sourceOrSources : [sourceOrSources];
 
-      const fields = sources
-        .map((source) => {
-          const { exifField, conversionFn } =
-            typeof source === "string" ? { exifField: source } : source;
-          const fieldArray = Array.isArray(exifField) ? exifField : [exifField];
-          const exifValue = fieldArray
-            .map((f) => rawData[f as keyof Record<string, unknown>])
-            .find((v) => v !== undefined);
-          if (exifValue === undefined) {
-            return null;
-          }
-          return [
-            fileField,
-            conversionFn ? conversionFn(exifValue, rawData) : exifValue,
-          ] as [string, ExifMetadata[keyof ExifMetadata]];
-        })
-        .filter((v): v is [string, ExifMetadata[keyof ExifMetadata]] => v !== null);
+    const fields = sources
+      .map((source) => {
+        const { exifField, conversionFn } =
+          typeof source === "string" ? { exifField: source } : source;
+        const fieldArray = Array.isArray(exifField) ? exifField : [exifField];
+        const exifValue = fieldArray
+          .map((f) => rawData[f as keyof Record<string, unknown>])
+          .find((v) => v !== undefined);
+        if (exifValue === undefined) {
+          return null;
+        }
+        return [
+          fileField,
+          conversionFn ? conversionFn(exifValue, rawData) : exifValue,
+        ] as [string, ExifMetadata[keyof ExifMetadata]];
+      })
+      .filter((v): v is [string, ExifMetadata[keyof ExifMetadata]] => v !== null);
 
-      return { ...acc, ...Object.fromEntries(fields) };
-    },
-    {} as Partial<ExifMetadata>,
-  );
+    return { ...acc, ...Object.fromEntries(fields) };
+  }, {} as Partial<ExifMetadata>);
 
 const parseRawExifData = async (
   fullPath: string,
@@ -363,11 +344,16 @@ export const getExifMetadataFromFile = async (
 const LIVE_PHOTO_VIDEO_EXTENSIONS = [".mov", ".MOV", ".mp4", ".MP4"];
 
 /** Checks for a sibling video file (same stem, video extension) — used to detect Apple Live Photos. */
-const findSiblingLivePhotoVideo = async (fullPath: string): Promise<string | undefined> => {
+const findSiblingLivePhotoVideo = async (
+  fullPath: string,
+): Promise<string | undefined> => {
   const dir = path.dirname(fullPath);
   const stem = path.basename(fullPath, path.extname(fullPath));
   for (const ext of LIVE_PHOTO_VIDEO_EXTENSIONS) {
-    const exists = await access(path.join(dir, stem + ext)).then(() => true, () => false);
+    const exists = await access(path.join(dir, stem + ext)).then(
+      () => true,
+      () => false,
+    );
     if (exists) return stem + ext;
   }
   return undefined;

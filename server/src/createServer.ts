@@ -14,14 +14,13 @@ import {
   measureOperation,
   runWithRequestTrace,
 } from "./observability/requestTrace.ts";
+import type { TaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import { writeJson } from "./utils.ts";
-import type { ConversionWorker } from "./indexDatabase/conversionWorker.ts";
 
 const PORT = process.env.PORT || 3000;
 
 type ServerOptions = {
-  onRequest: () => void;
-  conversionWorker: ConversionWorker;
+  taskOrchestrator: TaskOrchestrator;
 };
 
 // Monitors event-loop lag by scheduling a timer and measuring actual delay
@@ -39,22 +38,22 @@ const startEventLoopLagMonitor = () => {
   setInterval(check, 500).unref();
 };
 
-export const createServer = async (
+export const createServer = (
   database: IndexDatabase,
   storagePath: string,
   options: ServerOptions,
 ) => {
-  const { onRequest, conversionWorker } = options;
+  const { taskOrchestrator } = options;
   startEventLoopLagMonitor();
 
-  const server = http.createServer(async (req, res) => {
+  const server = http.createServer((req, res) => {
     const arrivalTime = process.hrtime.bigint();
     const requestIdHeader = req.headers["x-request-id"];
     const requestId = Array.isArray(requestIdHeader)
       ? requestIdHeader[0]
       : requestIdHeader;
 
-    await runWithRequestTrace(
+    void runWithRequestTrace(
       {
         method: req.method ?? "UNKNOWN",
         url: req.url ?? "",
@@ -81,7 +80,6 @@ export const createServer = async (
         res.once("finish", logRequestCompletion);
         res.once("close", logRequestCompletion);
 
-        onRequest();
         const currentRequestId = getCurrentRequestId();
         if (currentRequestId && !res.headersSent) {
           res.setHeader("X-Request-Id", currentRequestId);
@@ -112,7 +110,7 @@ export const createServer = async (
 
             await measureOperation(
               "request.route.health",
-              async () => writeJson(res, 200, payload),
+              () => writeJson(res, 200, payload),
               { category: "request", detail: "/api/health" },
             );
             return;
@@ -121,7 +119,12 @@ export const createServer = async (
           if (req.url?.startsWith("/api/status/stream") && req.method === "GET") {
             await measureOperation(
               "request.route.status.stream",
-              async () => statusRequestHandler(req, res, { database, stream: true }),
+              async () =>
+                statusRequestHandler(req, res, {
+                  database,
+                  stream: true,
+                  taskOrchestrator,
+                }),
               { category: "request", detail: "/api/status/stream" },
             );
             return;
@@ -130,7 +133,7 @@ export const createServer = async (
           if (req.url === "/api/status/background-tasks" && req.method === "POST") {
             await measureOperation(
               "request.route.status.backgroundTasks",
-              () => statusBackgroundTasksRequestHandler(req, res),
+              () => statusBackgroundTasksRequestHandler(req, res, { taskOrchestrator }),
               { category: "request", detail: "/api/status/background-tasks" },
             );
             return;
@@ -139,7 +142,12 @@ export const createServer = async (
           if (req.url?.startsWith("/api/status") && req.method === "GET") {
             await measureOperation(
               "request.route.status",
-              async () => statusRequestHandler(req, res, { database, stream: false }),
+              async () =>
+                statusRequestHandler(req, res, {
+                  database,
+                  stream: false,
+                  taskOrchestrator,
+                }),
               { category: "request", detail: "/api/status" },
             );
             return;
@@ -219,7 +227,7 @@ export const createServer = async (
                   {
                     database,
                     storageRoot: storagePath,
-                    conversionWorker,
+                    taskOrchestrator,
                   },
                 ),
               { category: "request", detail: "/api/files/*" },
@@ -230,7 +238,7 @@ export const createServer = async (
           // Default 404
           await measureOperation(
             "request.route.notFound",
-            async () => {
+            () => {
               res.writeHead(404, { "Content-Type": "application/json" });
               res.end(JSON.stringify({ error: "Not found" }));
             },
@@ -241,7 +249,7 @@ export const createServer = async (
           if (!res.headersSent) {
             await measureOperation(
               "request.route.unhandledError",
-              async () =>
+              () =>
                 writeJson(res, 500, {
                   error: "Internal server error",
                   message: error instanceof Error ? error.message : String(error),

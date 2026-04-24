@@ -14,18 +14,28 @@
 }
 
 .panelSurface {
+  left: auto;
+  right: 0;
   width: min(92vw, 440px);
+  max-width: calc(100vw - (var(--space-m) * 2));
   max-height: 70vh;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: var(--space-m);
+  box-sizing: border-box;
 }
 
 .mapPanelSurface {
+  left: auto;
+  right: 0;
   width: min(92vw, 620px);
+  max-width: calc(100vw - (var(--space-m) * 2));
   max-height: 80vh;
   overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 .panelSection {

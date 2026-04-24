@@ -10,40 +10,54 @@ import {
 } from "../../imageProcessing/convertImage.ts";
 import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
 import {
-  generateHLS,
-  getHLSInfo,
-  getHLSSegmentPath,
-} from "../../videoProcessing/generateHLS.ts";
-import {
   getMultibitrateHLSInfo,
   getVariantPlaylistPath,
   getVariantSegmentPath,
+  prepareMultibitrateHLSStructure,
 } from "../../videoProcessing/generateMultibitrateHLS.ts";
+import { waitForHlsFile } from "../../videoProcessing/hlsSegmentWatcher.ts";
 import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
 import { getVideoMetadata } from "../../videoProcessing/getVideoMetadata.ts";
-import {
-  StandardHeight,
-  parseToStandardHeight,
-} from "../../common/standardHeights.ts";
+import { StandardHeight, parseToStandardHeight } from "../../common/standardHeights.ts";
 import { measureOperation } from "../../observability/requestTrace.ts";
-import type { ConversionWorker } from "../../indexDatabase/conversionWorker.ts";
+import { scheduleWork } from "../../common/scheduleWork.ts";
+import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";
 import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../utils.ts";
 
-type Options = { database: IndexDatabase; storageRoot: string; conversionWorker: ConversionWorker };
+type Options = {
+  database: IndexDatabase;
+  storageRoot: string;
+  taskOrchestrator?: TaskOrchestrator;
+  orchestrator?: TaskOrchestrator;
+};
 
 export const filesEndpointRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
   res: http.ServerResponse,
-  { database, storageRoot, conversionWorker }: Options,
+  { database, storageRoot, taskOrchestrator, orchestrator }: Options,
 ) => {
   try {
+    const effectiveOrchestrator = taskOrchestrator ?? orchestrator;
+    if (!effectiveOrchestrator) {
+      writeJson(res, 500, { error: "Task orchestrator is required" });
+      return;
+    }
+
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathMatch = url.pathname.match(/^\/api\/files\/(.*)/);
     if (!pathMatch) return writeJson(res, 400, { error: "Bad request" });
     const subPath = decodeURIComponent(pathMatch[1]) || "/";
     if (subPath.endsWith("/")) return queryHandler(url, subPath, database, res);
-    await fileHandler(req, url, subPath, storageRoot, res, database, conversionWorker);
+    await fileHandler(
+      req,
+      url,
+      subPath,
+      storageRoot,
+      res,
+      database,
+      effectiveOrchestrator,
+    );
   } catch (error) {
     console.error("Error processing files request:", error);
     if (!res.headersSent)
@@ -158,51 +172,6 @@ const logQueueStatus = (label: string, subPath: string) => {
   console.log(`[filesRequest] ${label}: ${subPath}`);
 };
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Generates a synthetic VOD playlist based on known duration so the client
- * can begin requesting segments immediately while ffmpeg encodes them.
- */
-const generateSyntheticPlaylist = (
-  durationSeconds: number,
-  segmentDuration: number,
-): string => {
-  const numSegments = Math.max(1, Math.ceil(durationSeconds / segmentDuration));
-  const lines = [
-    "#EXTM3U",
-    "#EXT-X-VERSION:3",
-    `#EXT-X-TARGETDURATION:${Math.ceil(segmentDuration)}`,
-    "#EXT-X-MEDIA-SEQUENCE:0",
-    "#EXT-X-PLAYLIST-TYPE:VOD",
-    "#EXT-X-INDEPENDENT-SEGMENTS",
-  ];
-
-  for (let i = 0; i < numSegments; i++) {
-    const isLast = i === numSegments - 1;
-    const dur = isLast
-      ? Math.max(0.1, durationSeconds - i * segmentDuration)
-      : segmentDuration;
-    lines.push(`#EXTINF:${dur.toFixed(6)},`);
-    lines.push(`segment_${String(i).padStart(3, "0")}.ts`);
-  }
-
-  lines.push("#EXT-X-ENDLIST");
-  return lines.join("\n") + "\n";
-};
-
-const generateBootstrapEventPlaylist = (segmentDuration: number): string =>
-  [
-    "#EXTM3U",
-    "#EXT-X-VERSION:3",
-    `#EXT-X-TARGETDURATION:${Math.ceil(segmentDuration)}`,
-    "#EXT-X-MEDIA-SEQUENCE:0",
-    "#EXT-X-PLAYLIST-TYPE:EVENT",
-    "#EXT-X-INDEPENDENT-SEGMENTS",
-    `#EXTINF:${segmentDuration.toFixed(6)},`,
-    "segment_000.ts",
-  ].join("\n") + "\n";
-
 const getDurationHeader = (knownDuration: number | null | undefined) =>
   typeof knownDuration === "number" && Number.isFinite(knownDuration)
     ? { "X-Content-Duration": String(knownDuration) }
@@ -239,21 +208,11 @@ const streamHlsSegment = async (
   });
 };
 
-const fileExists = (p: string) => access(p).then(() => true, () => false);
-
-const waitForFile = async (
-  filePath: string,
-  maxWaitMs = 30_000,
-  pollIntervalMs = 200,
-): Promise<boolean> => {
-  let waited = 0;
-  while (!(await fileExists(filePath)) && waited < maxWaitMs) {
-    await sleep(pollIntervalMs);
-    waited += pollIntervalMs;
-  }
-  return fileExists(filePath);
-};
-
+const fileExists = (p: string) =>
+  access(p).then(
+    () => true,
+    () => false,
+  );
 
 type FileHandlingContext = {
   normalizedPath: string;
@@ -266,7 +225,7 @@ type FileHandlingContext = {
   isImage: boolean;
   isVideo: boolean;
   database: IndexDatabase;
-  conversionWorker: ConversionWorker;
+  taskOrchestrator: TaskOrchestrator;
 };
 
 const serveVideoThumb = async (
@@ -280,7 +239,7 @@ const serveVideoThumb = async (
     const cachedPath = await measureOperation(
       "generateVideoThumbnail",
       () =>
-        ctx.conversionWorker.submitActive(`videoThumb:${normalizedPath}:${height}`, () =>
+        scheduleWork(`videoThumb:${normalizedPath}:${height}`, () =>
           generateVideoThumbnail(normalizedPath, height, { priority: "userBlocked" }),
         ),
       { category: "conversion", detail: String(height) },
@@ -352,182 +311,116 @@ const tryHLSStream = async (
       }
     }
 
-    // Check if multi-bitrate HLS is pre-encoded
+    // Check if multi-bitrate HLS structure is initialized (master.m3u8 exists)
     const multibitrateInfo = await measureOperation(
       "getMultibitrateHLSInfo",
       () => getMultibitrateHLSInfo(normalizedPath),
       { category: "conversion" },
     );
-    const hasMultibitrate = multibitrateInfo.exists;
 
-    // If we have multi-bitrate HLS, serve from that
-    if (hasMultibitrate) {
-      // Serve variant segment
-      if (segment && variant) {
-        const variantHeight = parseInt(variant, 10);
-        const segmentPath = getVariantSegmentPath(
-          multibitrateInfo.hlsDir,
-          variantHeight,
-          segment,
-        );
-
-        if (!(await fileExists(segmentPath))) {
-          writeJson(res, 404, { error: "HLS segment not found" });
-          return true;
-        }
-        await streamHlsSegment(res, segmentPath, "statHlsVariantSegment");
+    // If not initialized, set up the directory structure immediately and queue FFmpeg.
+    // The master playlist is returned to the client right away; segments become available
+    // as FFmpeg encodes them and are served via the segment watcher.
+    if (!multibitrateInfo.initialized) {
+      if (!(await getGpuAcceleration())) {
+        writeJson(res, 422, {
+          error: "HLS not available",
+          message:
+            "No cached HLS and hardware acceleration is not available for on-the-fly encoding",
+        });
         return true;
       }
 
-      // Serve variant playlist
-      if (variant) {
-        const variantHeight = parseInt(variant, 10);
-        const variantPlaylistPath = getVariantPlaylistPath(
-          multibitrateInfo.hlsDir,
-          variantHeight,
-        );
+      // Create dirs + write master.m3u8 synchronously so the response is immediate
+      await prepareMultibitrateHLSStructure(normalizedPath);
 
-        if (!(await fileExists(variantPlaylistPath))) {
-          writeJson(res, 404, { error: "HLS variant playlist not found" });
-          return true;
-        }
-
-        const playlistContent = await measureOperation(
-          "readHlsVariantPlaylist",
-          () => readFile(variantPlaylistPath, "utf-8"),
-          { category: "file" },
-        );
-
-        // Rewrite segment paths to use API endpoint
-        const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}&segment=`;
-        const modifiedPlaylist = playlistContent.replace(
-          /^(segment_\d+\.ts)$/gm,
-          (match) => `${baseUrl}${match}`,
-        );
-        writeHlsPlaylistResponse(
-          res,
-          modifiedPlaylist,
-          "public, max-age=31536000",
-          knownDuration,
-        );
-        return true;
-      }
-
-      // Serve master playlist
-      let masterContent = await measureOperation(
-        "readHlsMasterPlaylist",
-        () => readFile(multibitrateInfo.masterPlaylistPath, "utf-8"),
-        { category: "file" },
+      // Queue HLS generation as a user-blocking task.
+      ctx.taskOrchestrator.addTask(
+        {
+          type: "hls",
+          relativePath: subPath,
+        },
+        "blocking",
       );
-
-      // Rewrite variant playlist paths to use API endpoint
-      const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=`;
-      masterContent = masterContent.replace(
-        /^(\d+)p\/playlist\.m3u8$/gm,
-        (_, variantHeight) => `${baseVariantUrl}${variantHeight}`,
-      );
-      writeHlsPlaylistResponse(res, masterContent, "public, max-age=31536000", knownDuration);
-      return true;
     }
 
-    // Fall back to on-demand single-stream HLS generation (requires hardware acceleration)
-    if (!(await getGpuAcceleration())) {
-      writeJson(res, 422, {
-        error: "HLS not available",
-        message: "No cached HLS and hardware acceleration is not available for on-the-fly encoding",
-      });
-      return true;
-    }
+    // Serve variant segment — wait for FFmpeg to write it if not ready yet
+    if (segment && variant) {
+      const variantHeight = parseInt(variant, 10);
+      const segmentPath = getVariantSegmentPath(
+        multibitrateInfo.hlsDir,
+        variantHeight,
+        segment,
+      );
 
-    const hlsInfo = await measureOperation(
-      "getHLSInfo",
-      () => getHLSInfo(normalizedPath, height),
-      { category: "conversion", detail: String(height) },
-    );
-
-    // Start ffmpeg in background before handling segment or playlist requests.
-    // This ensures encoding is running when segments are requested on-demand.
-    const generationPromise = ctx.conversionWorker.submitActive(
-      `hls:${normalizedPath}:${height}`,
-      () =>
-        generateHLS(normalizedPath, height, {
-          priority: "userBlocked",
-          contentDurationSeconds:
-            typeof knownDuration === "number" && Number.isFinite(knownDuration)
-              ? knownDuration
-              : undefined,
-        }),
-    );
-
-    let generationError: Error | undefined;
-    generationPromise.catch((err) => {
-      generationError = err instanceof Error ? err : new Error(String(err));
-      console.error(`[HLS] Background generation failed for ${subPath}:`, err);
-    });
-
-    // Serve individual segments on-demand — wait for ffmpeg to produce them
-    if (segment) {
-      const segmentPath = getHLSSegmentPath(hlsInfo.hlsDir, segment);
-
-      if (!(await waitForFile(segmentPath))) {
+      const available = await waitForHlsFile(multibitrateInfo.hlsDir, segmentPath);
+      if (!available) {
         writeJson(res, 404, { error: "HLS segment not found or timed out" });
         return true;
       }
-      await streamHlsSegment(res, segmentPath, "statHlsSegment");
+      await streamHlsSegment(res, segmentPath, "statHlsVariantSegment");
       return true;
     }
 
-    // Playlist request — serve immediately if possible
+    // Serve variant playlist — wait for FFmpeg to write it if not ready yet
+    if (variant) {
+      const variantHeight = parseInt(variant, 10);
+      const variantPlaylistPath = getVariantPlaylistPath(
+        multibitrateInfo.hlsDir,
+        variantHeight,
+      );
 
-    // If the real playlist already exists (encoding in progress or done), serve it
-    if (await fileExists(hlsInfo.playlistPath)) {
+      const available = await waitForHlsFile(
+        multibitrateInfo.hlsDir,
+        variantPlaylistPath,
+      );
+      if (!available) {
+        writeJson(res, 404, { error: "HLS variant playlist not found or timed out" });
+        return true;
+      }
+
       const playlistContent = await measureOperation(
-        "readHlsPlaylist",
-        () => readFile(hlsInfo.playlistPath, "utf-8"),
+        "readHlsVariantPlaylist",
+        () => readFile(variantPlaylistPath, "utf-8"),
         { category: "file" },
       );
-      const isDone = playlistContent.includes("#EXT-X-ENDLIST");
-      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&height=${height}&segment=`;
+
+      // Rewrite segment paths to use API endpoint
+      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}&segment=`;
       const modifiedPlaylist = playlistContent.replace(
         /^(segment_\d+\.ts)$/gm,
         (match) => `${baseUrl}${match}`,
       );
+      const isVariantDone = playlistContent.includes("#EXT-X-ENDLIST");
       writeHlsPlaylistResponse(
         res,
         modifiedPlaylist,
-        isDone ? "public, max-age=31536000" : "no-cache",
+        isVariantDone ? "public, max-age=31536000" : "no-cache",
         knownDuration,
       );
       return true;
     }
 
-    // If generation already failed, surface the error immediately
-    if (generationError) throw generationError;
-
-    // No real playlist yet — return a synthetic VOD playlist immediately
-    // so the client can start requesting segments as ffmpeg produces them
-    if (typeof knownDuration === "number" && Number.isFinite(knownDuration) && knownDuration > 0) {
-      console.log(`[HLS] Serving synthetic playlist for ${subPath} (duration=${knownDuration}s)`);
-      const hlsSegmentDuration = 2;
-      const synthetic = generateSyntheticPlaylist(knownDuration, hlsSegmentDuration);
-      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&height=${height}&segment=`;
-      const modifiedPlaylist = synthetic.replace(
-        /^(segment_\d+\.ts)$/gm,
-        (match) => `${baseUrl}${match}`,
-      );
-      writeHlsPlaylistResponse(res, modifiedPlaylist, "no-cache", knownDuration);
-      return true;
-    }
-
-    // No duration and no real playlist yet. Return a bootstrap EVENT playlist immediately
-    // so the client can request segment_000 while ffmpeg continues writing in background.
-    console.log(`[HLS] Serving bootstrap EVENT playlist for ${subPath}`);
-    const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&height=${height}&segment=`;
-    const bootstrap = generateBootstrapEventPlaylist(2).replace(
-      /^(segment_\d+\.ts)$/gm,
-      (match) => `${baseUrl}${match}`,
+    // Serve master playlist
+    let masterContent = await measureOperation(
+      "readHlsMasterPlaylist",
+      () => readFile(multibitrateInfo.masterPlaylistPath, "utf-8"),
+      { category: "file" },
     );
-    writeHlsPlaylistResponse(res, bootstrap, "no-cache", knownDuration);
+
+    // Rewrite variant playlist paths to use API endpoint
+    const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=`;
+    masterContent = masterContent.replace(
+      /^(\d+)p\/playlist\.m3u8$/gm,
+      (_, variantHeight) => `${baseVariantUrl}${variantHeight}`,
+    );
+    // Cache forever once complete; no-cache while encoding is in progress
+    writeHlsPlaylistResponse(
+      res,
+      masterContent,
+      multibitrateInfo.complete ? "public, max-age=31536000" : "no-cache",
+      knownDuration,
+    );
     return true;
   } catch (error) {
     console.error(`Error generating HLS stream for: ${subPath}`, error);
@@ -556,7 +449,7 @@ const tryImageVariant = async (ctx: FileHandlingContext) => {
     const cachedPath = await measureOperation(
       "convertImage",
       () =>
-        ctx.conversionWorker.submitActive(`thumbnail:${normalizedPath}:${height}`, () =>
+        scheduleWork(`thumbnail:${normalizedPath}:${height}`, () =>
           convertImage(normalizedPath, height, { priority: "userBlocked" }),
         ),
       { category: "conversion", detail: String(height) },
@@ -588,7 +481,7 @@ const fileHandler = async (
   storageRoot: string,
   res: http.ServerResponse,
   database: IndexDatabase,
-  conversionWorker: ConversionWorker,
+  taskOrchestrator: TaskOrchestrator,
 ) => {
   if (!subPath) {
     return writeJson(res, 400, { error: "Missing file path" });
@@ -644,7 +537,7 @@ const fileHandler = async (
     isImage,
     isVideo,
     database,
-    conversionWorker,
+    taskOrchestrator,
   };
 
   // HLS handler needs URL for segment parameter
