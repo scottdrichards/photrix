@@ -33,6 +33,19 @@
   display: block;
 }
 
+.zoomableMedia {
+  transform-origin: var(--zoom-origin-x, 50%) var(--zoom-origin-y, 50%);
+  transform: scale(1);
+  cursor: zoom-in;
+  transition: transform 180ms ease-out;
+  will-change: transform;
+}
+
+.zoomedMedia {
+  transform: scale(var(--zoom-scale, 2.5));
+  cursor: zoom-out;
+}
+
 .videoWrapper {
   max-width: 90%;
   max-height: 90%;

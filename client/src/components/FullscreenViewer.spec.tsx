@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { PhotoItem } from "../api";
 import { FullscreenViewer } from "./FullscreenViewer";
+import css from "./FullscreenViewer.module.css";
 
 const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
   bandwidthMbps: 20,
@@ -116,6 +117,79 @@ describe("FullscreenViewer", () => {
     expect(screen.getByRole("img", { name: "1.jpg" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(setSelected).toHaveBeenCalledWith(null);
+  });
+
+  it("zooms the photo around clicked coordinates", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto(),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    render(<FullscreenViewer />);
+
+    const image = screen.getByRole("img", { name: "1.jpg" });
+    vi.spyOn(image, "getBoundingClientRect").mockReturnValue({
+      x: 10,
+      y: 20,
+      left: 10,
+      top: 20,
+      right: 210,
+      bottom: 220,
+      width: 200,
+      height: 200,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.click(image, { clientX: 60, clientY: 80 });
+
+    expect(image).toHaveClass(css.zoomedMedia);
+    expect(image.style.getPropertyValue("--zoom-origin-x")).toBe("25%");
+    expect(image.style.getPropertyValue("--zoom-origin-y")).toBe("30%");
+
+    fireEvent.click(image, { clientX: 80, clientY: 90 });
+
+    expect(image).not.toHaveClass(css.zoomedMedia);
+    expect(image.style.getPropertyValue("--zoom-origin-x")).toBe("25%");
+    expect(image.style.getPropertyValue("--zoom-origin-y")).toBe("30%");
+  });
+
+  it("supports scroll zoom while already zoomed", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto(),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    render(<FullscreenViewer />);
+
+    const image = screen.getByRole("img", { name: "1.jpg" });
+    vi.spyOn(image, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 200,
+      bottom: 200,
+      width: 200,
+      height: 200,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.click(image, { clientX: 100, clientY: 100 });
+    expect(image).toHaveClass(css.zoomedMedia);
+    expect(image.style.getPropertyValue("--zoom-scale")).toBe("2.5");
+
+    fireEvent.wheel(image, { deltaY: -1 });
+    expect(image).toHaveClass(css.zoomedMedia);
+    expect(image.style.getPropertyValue("--zoom-scale")).toBe("2.75");
+
+    fireEvent.wheel(image, { deltaY: 1 });
+    expect(image.style.getPropertyValue("--zoom-scale")).toBe("2.5");
   });
 
   it("handles keyboard navigation and escape", () => {

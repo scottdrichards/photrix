@@ -7,6 +7,10 @@ import { useSelectionContext } from "./selection/SelectionContext";
 import css from "./FullscreenViewer.module.css";
 
 const SWIPE_THRESHOLD_PX = 60;
+const PHOTO_ZOOM_DEFAULT_SCALE = 2.5;
+const PHOTO_ZOOM_MIN_SCALE = 1;
+const PHOTO_ZOOM_MAX_SCALE = 6;
+const PHOTO_ZOOM_STEP = 0.25;
 
 type DefaultLoader = InstanceType<typeof Hls.DefaultConfig.loader>;
 type DefaultLoadArgs = Parameters<DefaultLoader["load"]>;
@@ -53,9 +57,21 @@ export function FullscreenViewer() {
   const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null);
   const [showLiveVideo, setShowLiveVideo] = useState(false);
+  const [photoZoom, setPhotoZoom] = useState({
+    isZoomed: false,
+    originXPercent: 50,
+    originYPercent: 50,
+    scale: PHOTO_ZOOM_DEFAULT_SCALE,
+  });
 
   useEffect(() => {
     setShowLiveVideo(false);
+    setPhotoZoom({
+      isZoomed: false,
+      originXPercent: 50,
+      originYPercent: 50,
+      scale: PHOTO_ZOOM_DEFAULT_SCALE,
+    });
   }, [photo?.path]);
 
   // HLS setup effect
@@ -331,6 +347,47 @@ export function FullscreenViewer() {
     selectPrevious();
   };
 
+  const handlePhotoClick = (e: React.MouseEvent<HTMLImageElement>) => {
+    if (photoZoom.isZoomed) {
+      setPhotoZoom((current) => ({ ...current, isZoomed: false }));
+      return;
+    }
+
+    const bounds = e.currentTarget.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) {
+      return;
+    }
+
+    const originXPercent = ((e.clientX - bounds.left) / bounds.width) * 100;
+    const originYPercent = ((e.clientY - bounds.top) / bounds.height) * 100;
+
+    setPhotoZoom({
+      isZoomed: true,
+      originXPercent: Math.min(Math.max(originXPercent, 0), 100),
+      originYPercent: Math.min(Math.max(originYPercent, 0), 100),
+      scale: PHOTO_ZOOM_DEFAULT_SCALE,
+    });
+  };
+
+  const handlePhotoWheel = (e: React.WheelEvent<HTMLImageElement>) => {
+    if (!photoZoom.isZoomed) {
+      return;
+    }
+
+    setPhotoZoom((current) => {
+      const direction = e.deltaY < 0 ? 1 : -1;
+      const nextScale = Math.min(
+        PHOTO_ZOOM_MAX_SCALE,
+        Math.max(PHOTO_ZOOM_MIN_SCALE, current.scale + direction * PHOTO_ZOOM_STEP),
+      );
+      return {
+        ...current,
+        scale: nextScale,
+        isZoomed: nextScale > PHOTO_ZOOM_MIN_SCALE,
+      };
+    });
+  };
+
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
     <dialog
@@ -398,7 +455,7 @@ export function FullscreenViewer() {
                 )}
               </>
             ) : showLiveVideo && photo.livePhotoUrl ? (
-              // eslint-disable-next-line jsx-a11y/media-has-caption
+               
               <video
                 key={photo.livePhotoUrl}
                 src={photo.livePhotoUrl}
@@ -409,7 +466,18 @@ export function FullscreenViewer() {
                 className={css.media}
               />
             ) : (
-              <img src={photo.fullUrl} alt={photo.name} className={css.media} />
+              <img
+                src={photo.fullUrl}
+                alt={photo.name}
+                className={`${css.media} ${css.zoomableMedia} ${photoZoom.isZoomed ? css.zoomedMedia : ""}`}
+                onClick={handlePhotoClick}
+                onWheel={handlePhotoWheel}
+                style={{
+                  "--zoom-origin-x": `${photoZoom.originXPercent}%`,
+                  "--zoom-origin-y": `${photoZoom.originYPercent}%`,
+                  "--zoom-scale": photoZoom.scale.toString(),
+                }}
+              />
             )}
           </div>
         </>
