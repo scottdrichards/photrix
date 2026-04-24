@@ -45,7 +45,12 @@ export const queryHandler = async (
   if (metadataParam) {
     try {
       // Try parsing as JSON array first
-      metadata = JSON.parse(metadataParam);
+      const parsed = JSON.parse(metadataParam) as unknown;
+      if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+        metadata = parsed;
+      } else {
+        throw new Error("Invalid metadata format");
+      }
     } catch {
       // Fall back to comma-separated string
       metadata = metadataParam

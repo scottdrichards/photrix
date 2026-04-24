@@ -230,4 +230,16 @@ describe("ThumbnailTile", () => {
     expect(image).toHaveAttribute("src", "http://localhost/a/1.jpg");
   });
 
+  it("displays filename for non-image files", () => {
+    const photo = createPhoto({
+      path: "a/document.pdf",
+      name: "document.pdf",
+      metadata: { mimeType: "application/pdf" },
+    });
+    render(<ThumbnailTile photo={photo} />);
+
+    expect(screen.getByText("document.pdf")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
 });

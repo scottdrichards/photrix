@@ -33,6 +33,14 @@ const getAspectRatio = (photo: PhotoItem): number => {
   return DEFAULT_RATIO;
 };
 
+const isDisplayableImage = (photo: PhotoItem): boolean => {
+  const mimeType = photo.metadata?.mimeType;
+  if (!mimeType) {
+    return true; // Assume displayable if no mime type info
+  }
+  return typeof mimeType === "string" && mimeType.toLowerCase().startsWith("image/");
+};
+
 type Props = {
   photo: PhotoItem;
 };
@@ -158,6 +166,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   const loading = isNearViewport ? "eager" : "lazy";
   const fetchPriority = isNearViewport ? "high" : "low";
   const thumbnailUrl = canRequestThumbnail ? photo.thumbnailUrl : undefined;
+  const isImage = isDisplayableImage(photo);
 
   return (
     <button
@@ -211,7 +220,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
             />
           )}
         </>
-      ) : (
+      ) : isImage ? (
         <img
           src={thumbnailUrl}
           alt={photo.name}
@@ -221,6 +230,10 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           style={{ opacity: isImageLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
           onLoad={handleImageLoad}
         />
+      ) : (
+        <div className={css.unknownFile}>
+          <span className={css.unknownFileName}>{photo.name}</span>
+        </div>
       )}
     </button>
   );

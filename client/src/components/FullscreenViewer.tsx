@@ -472,11 +472,13 @@ export function FullscreenViewer() {
                 className={`${css.media} ${css.zoomableMedia} ${photoZoom.isZoomed ? css.zoomedMedia : ""}`}
                 onClick={handlePhotoClick}
                 onWheel={handlePhotoWheel}
-                style={{
-                  "--zoom-origin-x": `${photoZoom.originXPercent}%`,
-                  "--zoom-origin-y": `${photoZoom.originYPercent}%`,
-                  "--zoom-scale": photoZoom.scale.toString(),
-                }}
+                style={
+                  {
+                    "--zoom-origin-x": `${photoZoom.originXPercent}%`,
+                    "--zoom-origin-y": `${photoZoom.originYPercent}%`,
+                    "--zoom-scale": photoZoom.scale.toString(),
+                  } as React.CSSProperties
+                }
               />
             )}
           </div>
