@@ -739,7 +739,7 @@ export class IndexDatabase {
     const mainSQL = `
       SELECT * FROM files
       ${whereClause ? `WHERE ${whereClause}` : ""}
-      ORDER BY COALESCE(dateTaken, created, modified) DESC, folder ASC, fileName ASC
+      ORDER BY COALESCE(dateTaken, created, modified) DESC
       LIMIT ? OFFSET ?
     `;
 
