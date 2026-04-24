@@ -76,8 +76,7 @@ export const tables = {
       },
       {
         name: "sort_date",
-        expression:
-          "COALESCE(dateTaken, created, modified) DESC",
+        expression: "COALESCE(dateTaken, created, modified) DESC",
       },
     ],
   },
