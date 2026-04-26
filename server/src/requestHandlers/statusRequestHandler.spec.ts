@@ -36,29 +36,6 @@ const createMockResponse = () => {
   };
 };
 
-const queueSummaryFixture = {
-  completed: {
-    image: { count: 0, sizeBytes: 0 },
-    video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-  },
-  active: {
-    image: { count: 0, sizeBytes: 0 },
-    video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-  },
-  userBlocked: {
-    image: { count: 0, sizeBytes: 0 },
-    video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-  },
-  userImplicit: {
-    image: { count: 0, sizeBytes: 0 },
-    video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-  },
-  background: {
-    image: { count: 0, sizeBytes: 0 },
-    video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-  },
-};
-
 afterEach(() => {
   jest.resetModules();
   jest.restoreAllMocks();
@@ -68,7 +45,7 @@ afterEach(() => {
 const alwaysEnabledOrchestrator: TaskOrchestrator = {
   setProcessBackgroundTasks: () => {},
   getProcessBackgroundTasks: () => true,
-  getQueueSummary: () => queueSummaryFixture,
+  getQueueSummary: () => ({}  as never),
   addTask: () => {},
 };
 
@@ -79,14 +56,11 @@ describe("statusRequestHandler", () => {
     const database = {
       getStatusCounts: () => ({
         allEntries: 10,
-        mediaEntries: 8,
-        missingInfo: 4,
-        missingDateTaken: 2,
-      }),
-      getMostRecentExifProcessedEntry: () => ({
-        folder: "/",
-        fileName: "img.jpg",
-        completedAt: "2026-03-05T00:00:00.000Z",
+        imageEntries: 7,
+        videoEntries: 1,
+        missingFileMetadata: 4,
+        missingMediaMetadata: 5,
+        missingThumbnails: 3,
       }),
     } as unknown as IndexDatabase;
 
@@ -98,40 +72,23 @@ describe("statusRequestHandler", () => {
 
     expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
     const payload = JSON.parse(getBody());
-    expect(payload.databaseSize).toBe(10);
-    expect(payload.pending).toEqual({ info: 4, exif: 2 });
-    expect(payload.progress.info).toEqual({ completed: 6, total: 10, percent: 0.6 });
-    expect(payload.progress.exif).toEqual({ completed: 6, total: 8, percent: 0.75 });
-    expect(payload.progress.overall).toEqual({
-      completed: 12,
-      total: 18,
-      percent: 12 / 18,
-    });
-    expect(payload.recent.exif.fileName).toBe("img.jpg");
+    expect(payload.files).toEqual({ total: 10, images: 7, videos: 1 });
+    expect(payload.pending).toEqual({ fileMetadata: 4, mediaMetadata: 5, thumbnails: 3 });
     expect(payload.maintenance.backgroundTasksEnabled).toBe(true);
-    expect(payload.queueSummary).toBeDefined();
-    expect(payload.queueSummary).toEqual(
-      expect.objectContaining({
-        completed: expect.any(Object),
-        active: expect.any(Object),
-        userBlocked: expect.any(Object),
-        userImplicit: expect.any(Object),
-        background: expect.any(Object),
-      }),
-    );
   });
 
-  it("reports exif worker idle when background processing is disabled", async () => {
+  it("reports backgroundTasksEnabled false when background processing is disabled", async () => {
     const { res, getBody } = createMockResponse();
 
     const database = {
       getStatusCounts: () => ({
         allEntries: 10,
-        mediaEntries: 8,
-        missingInfo: 4,
-        missingDateTaken: 2,
+        imageEntries: 8,
+        videoEntries: 0,
+        missingFileMetadata: 4,
+        missingMediaMetadata: 2,
+        missingThumbnails: 2,
       }),
-      getMostRecentExifProcessedEntry: () => null,
     } as unknown as IndexDatabase;
 
     const disabledOrchestrator: TaskOrchestrator = {
@@ -146,7 +103,6 @@ describe("statusRequestHandler", () => {
     });
 
     expect(JSON.parse(getBody()).maintenance).toEqual({
-      exifActive: false,
       backgroundTasksEnabled: false,
     });
   });
@@ -160,11 +116,12 @@ describe("statusRequestHandler", () => {
     const database = {
       getStatusCounts: () => ({
         allEntries: 1,
-        mediaEntries: 1,
-        missingInfo: 0,
-        missingDateTaken: 0,
+        imageEntries: 1,
+        videoEntries: 0,
+        missingFileMetadata: 0,
+        missingMediaMetadata: 0,
+        missingThumbnails: 0,
       }),
-      getMostRecentExifProcessedEntry: () => null,
     } as unknown as IndexDatabase;
 
     statusRequestHandler(req, res, {
@@ -177,7 +134,7 @@ describe("statusRequestHandler", () => {
     await flushMicrotasks();
     expect(getWrites().length).toBe(1);
 
-    jest.advanceTimersByTime(2000);
+    jest.advanceTimersByTime(500);
     await flushMicrotasks();
     expect(getWrites().length).toBe(2);
     expect(getWrites()[0]?.startsWith("data: ")).toBe(true);
@@ -202,13 +159,14 @@ describe("statusRequestHandler", () => {
           resolveStatus = () =>
             resolve({
               allEntries: 1,
-              mediaEntries: 1,
-              missingInfo: 0,
-              missingDateTaken: 0,
+              imageEntries: 1,
+              videoEntries: 0,
+              missingFileMetadata: 0,
+              missingMediaMetadata: 0,
+              missingThumbnails: 0,
             });
         });
       },
-      getMostRecentExifProcessedEntry: () => null,
     } as unknown as IndexDatabase;
 
     statusRequestHandler(req, res, {
@@ -219,14 +177,14 @@ describe("statusRequestHandler", () => {
 
     expect(statusCalls).toHaveLength(1);
 
-    jest.advanceTimersByTime(2_000);
+    jest.advanceTimersByTime(500);
     expect(statusCalls).toHaveLength(1);
 
     resolveStatus!();
     await flushMicrotasks();
     expect(getWrites()).toHaveLength(1);
 
-    jest.advanceTimersByTime(2_000);
+    jest.advanceTimersByTime(500);
     expect(statusCalls).toHaveLength(2);
 
     resolveStatus!();

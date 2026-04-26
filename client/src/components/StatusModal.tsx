@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { Film, Image } from "lucide-react";
 import {
   setBackgroundTasksEnabled,
   subscribeStatusStream,
   type ServerStatus,
 } from "../api";
-import { RecentActivity } from "./RecentActivity";
 import css from "./StatusModal.module.css";
 
 type StatusModalProps = {
@@ -12,137 +12,13 @@ type StatusModalProps = {
   onDismiss: () => void;
 };
 
-const summaryGroups = [
-  "completed",
-  "active",
-  "userBlocked",
-  "userImplicit",
-  "background",
-] as const;
-
-type QueueGroup = (typeof summaryGroups)[number];
-type QueueSummaryByMedia = ServerStatus["queueSummary"][QueueGroup];
-
-type QueueSegment = {
-  key: string;
-  widthPercent: number;
-  color: string;
-};
-
-const formatBytes = (sizeBytes: number) => {
-  if (sizeBytes <= 0) {
-    return "0 B";
-  }
-
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const unitIndex = Math.min(
-    Math.floor(Math.log(sizeBytes) / Math.log(1024)),
-    units.length - 1,
-  );
-  const value = sizeBytes / 1024 ** unitIndex;
-  const decimals = value < 10 && unitIndex > 0 ? 1 : 0;
-  return `${value.toFixed(decimals)} ${units[unitIndex]}`;
-};
-
-const getGroupLabel = (group: QueueGroup) => {
-  if (group === "userBlocked") {
-    return "userBlocked";
-  }
-  if (group === "userImplicit") {
-    return "userImplicit";
-  }
-  return group;
-};
-
-const getMediaColor = (group: QueueGroup, mediaType: "image" | "video") => {
-  const completedColors = {
-    image: "#2c7be5",
-    video: "#2e9d62",
-  };
-  const queuedColors = {
-    image: "#7fa6d8",
-    video: "#79b596",
-  };
-
-  if (group === "completed") {
-    return completedColors[mediaType];
-  }
-
-  return queuedColors[mediaType];
-};
-
-const getQueueSize = (summary: QueueSummaryByMedia) => {
-  return summary.image.sizeBytes + summary.video.sizeBytes;
-};
-
-const buildQueueVisualization = (summary: ServerStatus["queueSummary"]) => {
-  const totalBytes = summaryGroups.reduce(
-    (accumulator, group) => accumulator + getQueueSize(summary[group]),
-    0,
-  );
-
-  const separators = summaryGroups.slice(0, -1).reduce<number[]>((accumulator, group) => {
-    const nextValue = (accumulator.at(-1) ?? 0) + getQueueSize(summary[group]);
-    return [...accumulator, nextValue];
-  }, []);
-
-  if (totalBytes <= 0) {
-    return {
-      totalBytes,
-      segments: [] as QueueSegment[],
-      separatorsPercent: [] as number[],
-      groupBreakdown: summaryGroups.map((group) => ({
-        group,
-        sizeBytes: 0,
-      })),
-    };
-  }
-
-  const segments = summaryGroups.flatMap((group) => {
-    const imageBytes = summary[group].image.sizeBytes;
-    const videoBytes = summary[group].video.sizeBytes;
-
-    return [
-      {
-        key: `${group}-image`,
-        widthPercent: (imageBytes / totalBytes) * 100,
-        color: getMediaColor(group, "image"),
-      },
-      {
-        key: `${group}-video`,
-        widthPercent: (videoBytes / totalBytes) * 100,
-        color: getMediaColor(group, "video"),
-      },
-    ].filter((segment) => segment.widthPercent > 0);
-  });
-
-  return {
-    totalBytes,
-    segments,
-    separatorsPercent: separators
-      .map((boundaryBytes) => (boundaryBytes / totalBytes) * 100)
-      .filter((value) => value > 0 && value < 100),
-    groupBreakdown: summaryGroups.map((group) => ({
-      group,
-      sizeBytes: getQueueSize(summary[group]),
-    })),
-  };
-};
-
 export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
-  const [statusHistory, setStatusHistory] = useState<
-    Array<{ timestamp: number; status: ServerStatus }> | undefined
-  >(undefined);
+  const [status, setStatus] = useState<ServerStatus | undefined>(undefined);
   const [isTogglingBackgroundTasks, setIsTogglingBackgroundTasks] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
-  const status = statusHistory?.at(-1)?.status;
   const backgroundTasksEnabled = status?.maintenance.backgroundTasksEnabled ?? true;
-
-  const queueVisualization = status
-    ? buildQueueVisualization(status.queueSummary)
-    : undefined;
 
   useEffect(() => {
     if (isOpen) dialogRef.current?.showModal();
@@ -155,14 +31,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     }
     const unsubscribe = subscribeStatusStream(
       (data) => {
-        setStatusHistory((prev) => {
-          const newEntry = {
-            timestamp: Date.now(),
-            status: data,
-          };
-          const updated = [...(prev ?? []), newEntry];
-          return updated.slice(-5);
-        });
+        setStatus(data);
       },
       (error) => {
         console.error("Failed to receive status", error);
@@ -171,7 +40,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
 
     return () => {
       unsubscribe();
-      setStatusHistory(undefined);
+      setStatus(undefined);
       setIsTogglingBackgroundTasks(false);
       setToggleError(null);
     };
@@ -183,31 +52,11 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
 
     try {
       const response = await setBackgroundTasksEnabled(enabled);
-      setStatusHistory((prev) => {
-        if (!prev || prev.length === 0) {
-          return prev;
-        }
-
-        const next = [...prev];
-        const latestEntry = next[next.length - 1];
-
-        if (!latestEntry) {
-          return prev;
-        }
-
-        next[next.length - 1] = {
-          ...latestEntry,
-          status: {
-            ...latestEntry.status,
-            maintenance: {
-              ...latestEntry.status.maintenance,
-              backgroundTasksEnabled: response.enabled,
-            },
-          },
-        };
-
-        return next;
-      });
+      setStatus((prev) =>
+        prev
+          ? { ...prev, maintenance: { backgroundTasksEnabled: response.enabled } }
+          : prev,
+      );
     } catch (error) {
       setToggleError(
         error instanceof Error
@@ -223,7 +72,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     <dialog ref={dialogRef} onClose={onDismiss}>
       <div className={css.dialogBody}>
         <h2>Server Status</h2>
-        {!statusHistory && <progress />}
+        {!status && <progress />}
         {status && (
           <div className={css.container}>
             <div className={css.toggleRow}>
@@ -245,84 +94,35 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
 
             <div className={css.statsRow}>
               <span>
-                <span className={css.label}>Database Size:</span>
-                <span className={css.value}>
-                  {status.databaseSize.toLocaleString()} files
+                <span className={css.label}>Files:</span>
+                <span className={css.value}>{status.files.total.toLocaleString()}</span>
+                <span className={css.mediaCount}>
+                  <Image size={14} aria-label="Photos" />
+                  {status.files.images.toLocaleString()}
+                </span>
+                <span className={css.mediaCount}>
+                  <Film size={14} aria-label="Videos" />
+                  {status.files.videos.toLocaleString()}
                 </span>
               </span>
               <span>
-                <span className={css.label}>Scanned:</span>
+                <span className={css.label}>File metadata to scan:</span>
                 <span className={css.value}>
-                  {status.scannedFilesCount.toLocaleString()} files
+                  {status.pending.fileMetadata.toLocaleString()}
                 </span>
               </span>
               <span>
-                <span className={css.label}>EXIF worker:</span>
+                <span className={css.label}>Media metadata to scan:</span>
                 <span className={css.value}>
-                  {status.maintenance.exifActive ? "active" : "idle"}
+                  {status.pending.mediaMetadata.toLocaleString()}
                 </span>
               </span>
               <span>
-                <span className={css.label}>Queue:</span>
+                <span className={css.label}>Thumbnails to process:</span>
                 <span className={css.value}>
-                  {status.queues.pending.toLocaleString()} waiting /{" "}
-                  {status.queues.processing.toLocaleString()} processing
+                  {status.pending.thumbnails.toLocaleString()}
                 </span>
               </span>
-            </div>
-
-            {queueVisualization ? (
-              <div className={css.queueBarSection}>
-                <div className={css.queueBarHeader}>
-                  <span style={{ fontWeight: "var(--fw-semi)" }}>Queue by disk size</span>
-                  <span>{formatBytes(queueVisualization.totalBytes)} total</span>
-                </div>
-                <div className={css.queueBarTrack}>
-                  {queueVisualization.segments.map((segment) => (
-                    <div
-                      key={segment.key}
-                      className={css.queueSegment}
-                      style={{
-                        width: `${segment.widthPercent}%`,
-                        backgroundColor: segment.color,
-                      }}
-                    />
-                  ))}
-                  {queueVisualization.separatorsPercent.map((separator, index) => (
-                    <div
-                      key={`separator-${index}`}
-                      className={css.queueSeparator}
-                      style={{ left: `${separator}%` }}
-                    />
-                  ))}
-                </div>
-                <div className={css.queueAxis}>
-                  <span>0</span>
-                  <span>{formatBytes(queueVisualization.totalBytes)}</span>
-                </div>
-                <div className={css.queueLegend}>
-                  {queueVisualization.groupBreakdown.map((item) => (
-                    <span key={item.group} className={css.queueLegendItem}>
-                      <span
-                        className={css.queueLegendSwatch}
-                        style={{
-                          background: `linear-gradient(90deg, ${getMediaColor(item.group, "image")} 50%, ${getMediaColor(item.group, "video")} 50%)`,
-                        }}
-                      />
-                      <span>
-                        {getGroupLabel(item.group)}: {formatBytes(item.sizeBytes)}
-                      </span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            <span style={{ fontSize: "16px", fontWeight: "var(--fw-semi)" }}>
-              Recent activity
-            </span>
-            <div className={css.recentRow}>
-              <RecentActivity label="Last EXIF" entry={status.recent.exif} />
             </div>
           </div>
         )}
@@ -335,3 +135,4 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     </dialog>
   );
 };
+

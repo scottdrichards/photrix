@@ -148,62 +148,21 @@ export type FetchDateHistogramOptions = Omit<
   "page" | "pageSize" | "metadata"
 >;
 
-export interface ProgressEntry {
-  completed: number;
-  total: number;
-  percent: number;
-}
-
-export interface RecentMaintenance {
-  folder: string;
-  fileName: string;
-  completedAt: string;
-}
-
 export interface ServerStatus {
-  databaseSize: number;
-  scannedFilesCount: number;
-  queues: {
-    pending: number;
-    processing: number;
-  };
-  queueSummary: {
-    completed: QueueSummaryByMedia;
-    active: QueueSummaryByMedia;
-    userBlocked: QueueSummaryByMedia;
-    userImplicit: QueueSummaryByMedia;
-    background: QueueSummaryByMedia;
+  files: {
+    total: number;
+    images: number;
+    videos: number;
   };
   pending: {
-    info: number;
-    exif: number;
+    fileMetadata: number;
+    mediaMetadata: number;
+    thumbnails: number;
   };
   maintenance: {
-    exifActive: boolean;
-    backgroundTasksEnabled?: boolean;
-  };
-  progress: {
-    overall: ProgressEntry;
-    scanned: ProgressEntry;
-    info: ProgressEntry;
-    exif: ProgressEntry;
-  };
-  recent: {
-    exif: RecentMaintenance | null;
+    backgroundTasksEnabled: boolean;
   };
 }
-
-type QueueSummaryByMedia = {
-  image: {
-    count: number;
-    sizeBytes: number;
-  };
-  video: {
-    count: number;
-    sizeBytes: number;
-    durationMilliseconds: number;
-  };
-};
 
 export const subscribeStatusStream = (
   onUpdate: (status: ServerStatus) => void,

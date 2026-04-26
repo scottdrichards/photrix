@@ -1,9 +1,6 @@
 import http from "node:http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import type {
-  TaskOrchestrator,
-  TaskQueueSummary,
-} from "../taskOrchestrator/taskOrchestrator.ts";
+import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 
 type StatusRequestHandlerProps = {
   database: IndexDatabase;
@@ -11,88 +8,26 @@ type StatusRequestHandlerProps = {
   taskOrchestrator: TaskOrchestrator;
 };
 
-type ProgressEntry = {
-  completed: number;
-  total: number;
-  percent: number;
-};
-
-const toProgressEntry = (completed: number, total: number): ProgressEntry => {
-  if (total <= 0) {
-    return { completed: 0, total: 0, percent: 1 };
-  }
-
-  const safeCompleted = Math.min(Math.max(completed, 0), total);
-  return {
-    completed: safeCompleted,
-    total,
-    percent: safeCompleted / total,
-  };
-};
-
-const countQueueEntries = (queueSummary: TaskQueueSummary) => {
-  const pending =
-    queueSummary.userBlocked.image.count +
-    queueSummary.userBlocked.video.count +
-    queueSummary.userImplicit.image.count +
-    queueSummary.userImplicit.video.count +
-    queueSummary.background.image.count +
-    queueSummary.background.video.count;
-  const processing = queueSummary.active.image.count + queueSummary.active.video.count;
-  return { pending, processing };
-};
-
-const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
-  const start = Date.now();
-  const result = await fn();
-  console.log(`[status:timing] ${label}: ${Date.now() - start}ms`);
-  return result;
-};
-
 const getStatusPayload = async (
   database: IndexDatabase,
   taskOrchestrator: TaskOrchestrator,
 ) => {
-  const [statusCounts, lastExif, queueSummary] = await Promise.all([
-    timed("getStatusCounts", () => database.getStatusCounts()),
-    timed("getMostRecentExifProcessedEntry", () =>
-      database.getMostRecentExifProcessedEntry(),
-    ),
-    timed("getQueueSummary", async () => taskOrchestrator.getQueueSummary()),
-  ]);
-
-  const databaseSize = statusCounts.allEntries;
-  const mediaEntries = statusCounts.mediaEntries;
-  const pendingInfo = statusCounts.missingInfo;
-  const pendingExif = statusCounts.missingDateTaken;
-
-  const infoCompleted = Math.max(databaseSize - pendingInfo, 0);
-  const exifCompleted = Math.max(mediaEntries - pendingExif, 0);
-  const overallCompleted = infoCompleted + exifCompleted;
-  const overallTotal = databaseSize + mediaEntries;
+  const counts = await database.getStatusCounts();
   const backgroundTasksEnabled = taskOrchestrator.getProcessBackgroundTasks();
 
   return {
-    databaseSize,
-    scannedFilesCount: databaseSize,
+    files: {
+      total: counts.allEntries,
+      images: counts.imageEntries,
+      videos: counts.videoEntries,
+    },
     pending: {
-      info: pendingInfo,
-      exif: pendingExif,
+      fileMetadata: counts.missingFileMetadata,
+      mediaMetadata: counts.missingMediaMetadata,
+      thumbnails: counts.missingThumbnails,
     },
     maintenance: {
-      exifActive: backgroundTasksEnabled && pendingExif > 0,
       backgroundTasksEnabled,
-    },
-    queues: countQueueEntries(queueSummary),
-    queueSummary,
-    progress: {
-      overall: toProgressEntry(overallCompleted, overallTotal),
-      scanned: toProgressEntry(databaseSize, databaseSize),
-      info: toProgressEntry(infoCompleted, databaseSize),
-      exif: toProgressEntry(exifCompleted, mediaEntries),
-    },
-    recent: {
-      exif: lastExif,
     },
   };
 };
@@ -109,12 +44,7 @@ export const statusRequestHandler = async (
   const { database, stream, taskOrchestrator } = props;
 
   if (!stream) {
-    const statusStartTime = Date.now();
     const payload = await getStatusPayload(database, taskOrchestrator);
-    const elapsed = Date.now() - statusStartTime;
-    if (elapsed > 200) {
-      console.log(`[status] payload generation took ${elapsed}ms`);
-    }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(payload));
     return;
@@ -136,12 +66,7 @@ export const statusRequestHandler = async (
     if (updating) return;
     updating = true;
     try {
-      const statusStartTime = Date.now();
       const payload = await getStatusPayload(database, taskOrchestrator);
-      const elapsed = Date.now() - statusStartTime;
-      if (elapsed > 200) {
-        console.log(`[status] stream payload generation took ${elapsed}ms`);
-      }
       writeSSE(res, payload);
     } finally {
       updating = false;
@@ -149,7 +74,7 @@ export const statusRequestHandler = async (
   };
 
   sendUpdate();
-  const timer = setInterval(sendUpdate, 2_000);
+  const timer = setInterval(sendUpdate, 500);
 
   req.on("close", () => {
     clearInterval(timer);

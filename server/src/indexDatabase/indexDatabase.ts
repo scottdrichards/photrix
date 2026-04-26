@@ -211,32 +211,37 @@ export class IndexDatabase {
 
   async getStatusCounts(): Promise<{
     allEntries: number;
-    mediaEntries: number;
-    missingInfo: number;
-    missingDateTaken: number;
+    imageEntries: number;
+    videoEntries: number;
+    missingFileMetadata: number;
+    missingMediaMetadata: number;
+    missingThumbnails: number;
   }> {
     const row = await this.db.get<{
       allEntries: number | null;
-      mediaEntries: number | null;
-      missingInfo: number | null;
-      missingDateTaken: number | null;
+      imageEntries: number | null;
+      videoEntries: number | null;
+      missingFileMetadata: number | null;
+      missingMediaMetadata: number | null;
+      missingThumbnails: number | null;
     }>(
       `SELECT
          COUNT(*) AS allEntries,
-         SUM(CASE WHEN mimeType LIKE 'image/%' OR mimeType LIKE 'video/%' THEN 1 ELSE 0 END) AS mediaEntries,
-         SUM(CASE WHEN sizeInBytes IS NULL OR created IS NULL OR modified IS NULL THEN 1 ELSE 0 END) AS missingInfo,
-         SUM(CASE WHEN (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%')
-                    AND dateTaken IS NULL
-                    AND exifProcessedAt IS NULL
-                  THEN 1 ELSE 0 END) AS missingDateTaken
+         SUM(CASE WHEN mimeType LIKE 'image/%' THEN 1 ELSE 0 END) AS imageEntries,
+         SUM(CASE WHEN mimeType LIKE 'video/%' THEN 1 ELSE 0 END) AS videoEntries,
+         SUM(CASE WHEN sizeInBytes IS NULL OR created IS NULL OR modified IS NULL THEN 1 ELSE 0 END) AS missingFileMetadata,
+         SUM(CASE WHEN (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%') AND exifProcessedAt IS NULL THEN 1 ELSE 0 END) AS missingMediaMetadata,
+         SUM(CASE WHEN mimeType LIKE 'image/%' AND imageVariantsGeneratedAt IS NULL THEN 1 ELSE 0 END) AS missingThumbnails
        FROM files`,
     );
 
     return {
       allEntries: row?.allEntries ?? 0,
-      mediaEntries: row?.mediaEntries ?? 0,
-      missingInfo: row?.missingInfo ?? 0,
-      missingDateTaken: row?.missingDateTaken ?? 0,
+      imageEntries: row?.imageEntries ?? 0,
+      videoEntries: row?.videoEntries ?? 0,
+      missingFileMetadata: row?.missingFileMetadata ?? 0,
+      missingMediaMetadata: row?.missingMediaMetadata ?? 0,
+      missingThumbnails: row?.missingThumbnails ?? 0,
     };
   }
 
