@@ -1,6 +1,5 @@
 import http from "node:http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import { isExifMetadataProcessingActive } from "../indexDatabase/processExifMetadata.ts";
 import type {
   TaskOrchestrator,
   TaskQueueSummary,
@@ -71,6 +70,7 @@ const getStatusPayload = async (
   const exifCompleted = Math.max(mediaEntries - pendingExif, 0);
   const overallCompleted = infoCompleted + exifCompleted;
   const overallTotal = databaseSize + mediaEntries;
+  const backgroundTasksEnabled = taskOrchestrator.getProcessBackgroundTasks();
 
   return {
     databaseSize,
@@ -80,8 +80,8 @@ const getStatusPayload = async (
       exif: pendingExif,
     },
     maintenance: {
-      exifActive: isExifMetadataProcessingActive() || pendingExif > 0,
-      backgroundTasksEnabled: taskOrchestrator.getProcessBackgroundTasks(),
+      exifActive: backgroundTasksEnabled && pendingExif > 0,
+      backgroundTasksEnabled,
     },
     queues: countQueueEntries(queueSummary),
     queueSummary,

@@ -68,7 +68,7 @@ describe("processExifMetadata", () => {
 
     expect(completed).toBe(true);
     expect(isExifMetadataProcessingActive()).toBe(false);
-    expect(getExifMetadataFromFile).toHaveBeenCalledTimes(2);
+    expect(getExifMetadataFromFile).toHaveBeenCalledTimes(3);
 
     const byPath = Object.fromEntries(updates.map((u) => [u.relativePath, u.data]));
     expect(byPath["good.jpg"]?.cameraMake).toBe("Canon");

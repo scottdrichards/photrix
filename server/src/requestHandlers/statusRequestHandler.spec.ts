@@ -60,6 +60,8 @@ const queueSummaryFixture = {
 };
 
 afterEach(() => {
+  jest.resetModules();
+  jest.restoreAllMocks();
   jest.useRealTimers();
 });
 
@@ -117,6 +119,36 @@ describe("statusRequestHandler", () => {
         background: expect.any(Object),
       }),
     );
+  });
+
+  it("reports exif worker idle when background processing is disabled", async () => {
+    const { res, getBody } = createMockResponse();
+
+    const database = {
+      getStatusCounts: () => ({
+        allEntries: 10,
+        mediaEntries: 8,
+        missingInfo: 4,
+        missingDateTaken: 2,
+      }),
+      getMostRecentExifProcessedEntry: () => null,
+    } as unknown as IndexDatabase;
+
+    const disabledOrchestrator: TaskOrchestrator = {
+      ...alwaysEnabledOrchestrator,
+      getProcessBackgroundTasks: () => false,
+    };
+
+    await statusRequestHandler({} as http.IncomingMessage, res, {
+      database,
+      stream: false,
+      taskOrchestrator: disabledOrchestrator,
+    });
+
+    expect(JSON.parse(getBody()).maintenance).toEqual({
+      exifActive: false,
+      backgroundTasksEnabled: false,
+    });
   });
 
   it("streams SSE updates and closes on request close", async () => {
@@ -185,19 +217,15 @@ describe("statusRequestHandler", () => {
       taskOrchestrator: alwaysEnabledOrchestrator,
     });
 
-    // First sendUpdate is in flight (getStatusCounts hasn't resolved)
     expect(statusCalls).toHaveLength(1);
 
-    // Advance past the interval — should NOT start another update
     jest.advanceTimersByTime(2_000);
     expect(statusCalls).toHaveLength(1);
 
-    // Resolve the first call and flush microtasks
     resolveStatus!();
     await flushMicrotasks();
     expect(getWrites()).toHaveLength(1);
 
-    // Now the next interval tick should start a new update
     jest.advanceTimersByTime(2_000);
     expect(statusCalls).toHaveLength(2);
 
@@ -206,5 +234,39 @@ describe("statusRequestHandler", () => {
     expect(getWrites()).toHaveLength(2);
 
     req.emit("close");
+  });
+
+  it("starts both background metadata processors under orchestrator control", async () => {
+    const processExifMetadata = jest.fn(
+      async (_database: unknown, _waitForEnabled: () => Promise<void>) => undefined,
+    );
+    const startBackgroundProcessFileInfoMetadata = jest.fn(
+      async (_database: unknown, _waitForEnabled: () => Promise<void>) => undefined,
+    );
+
+    jest.unstable_mockModule("../indexDatabase/processExifMetadata.ts", () => ({
+      processExifMetadata,
+    }));
+    jest.unstable_mockModule("../indexDatabase/processFileInfo.ts", () => ({
+      startBackgroundProcessFileInfoMetadata,
+    }));
+
+    const { createTaskOrchestrator } = await import(
+      "../taskOrchestrator/taskOrchestrator.ts"
+    );
+
+    createTaskOrchestrator({
+      getNextBackgroundTask: () => new Promise(() => {}),
+    } as never);
+
+    expect(processExifMetadata).toHaveBeenCalledTimes(1);
+    expect(startBackgroundProcessFileInfoMetadata).toHaveBeenCalledTimes(1);
+
+    const [, waitForExifEnabled] = processExifMetadata.mock.calls[0] ?? [];
+    const [, waitForInfoEnabled] =
+      startBackgroundProcessFileInfoMetadata.mock.calls[0] ?? [];
+
+    expect(waitForExifEnabled).toEqual(expect.any(Function));
+    expect(waitForInfoEnabled).toEqual(expect.any(Function));
   });
 });

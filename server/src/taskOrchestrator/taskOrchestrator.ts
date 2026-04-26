@@ -4,6 +4,7 @@ import { standardHeights, type StandardHeight } from "../common/standardHeights.
 import { convertImage } from "../imageProcessing/convertImage.ts";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { processExifMetadata } from "../indexDatabase/processExifMetadata.ts";
+import { startBackgroundProcessFileInfoMetadata } from "../indexDatabase/processFileInfo.ts";
 import { generateMultibitrateHLS } from "../videoProcessing/generateMultibitrateHLS.ts";
 import { generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
 
@@ -207,6 +208,13 @@ export const createTaskOrchestrator = (db: IndexDatabase): TaskOrchestrator => {
     resolversSleeping.length = 0;
   };
 
+  const waitForBackgroundProcessing = () =>
+    processBackgroundTasks
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          resolversSleeping.push(resolve);
+        });
+
   const loop = async () => {
     console.log(`${orchestratorLogPrefix} Processing loop started`);
     while (true) {
@@ -236,9 +244,7 @@ export const createTaskOrchestrator = (db: IndexDatabase): TaskOrchestrator => {
           );
           // Don't poll the database while disabled; just sleep until woken
           // by an enqueued blocking/implied task or a flag change.
-          await new Promise<void>((resolve) => {
-            resolversSleeping.push(resolve);
-          });
+          await waitForBackgroundProcessing();
           continue;
         }
 
@@ -258,9 +264,7 @@ export const createTaskOrchestrator = (db: IndexDatabase): TaskOrchestrator => {
             );
           }
 
-          await new Promise<void>((resolve) => {
-            resolversSleeping.push(resolve);
-          });
+          await waitForBackgroundProcessing();
           continue;
         }
 
@@ -325,11 +329,8 @@ export const createTaskOrchestrator = (db: IndexDatabase): TaskOrchestrator => {
 
   void loop();
 
-  void processExifMetadata(db, () =>
-    processBackgroundTasks
-      ? Promise.resolve()
-      : new Promise<void>((resolve) => resolversSleeping.push(resolve)),
-  );
+  void processExifMetadata(db, waitForBackgroundProcessing);
+  void startBackgroundProcessFileInfoMetadata(db, waitForBackgroundProcessing);
 
   return {
     setProcessBackgroundTasks: (enabled: boolean) => {

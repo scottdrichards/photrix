@@ -24,8 +24,6 @@ const startServer = async () => {
   await fileSystemScanFolder(database);
 
   const taskOrchestrator = createTaskOrchestrator(database);
-
-  taskOrchestrator.setProcessBackgroundTasks(false);
   createServer(database, mediaRoot, {
     taskOrchestrator,
   });

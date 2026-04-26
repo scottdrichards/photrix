@@ -61,9 +61,6 @@ export const processExifMetadata = async (
                 );
                 const now = new Date();
                 try {
-                  if (!entry.sizeInBytes) {
-                    throw new Error("zero-byte file");
-                  }
                   const exif = await getExifMetadataFromFile(fullPath);
                   await database.addOrUpdateFileData(entry.relativePath, {
                     ...exif,
