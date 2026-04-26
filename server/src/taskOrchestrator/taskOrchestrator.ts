@@ -329,8 +329,27 @@ export const createTaskOrchestrator = (db: IndexDatabase): TaskOrchestrator => {
 
   void loop();
 
-  void processExifMetadata(db, waitForBackgroundProcessing);
-  void startBackgroundProcessFileInfoMetadata(db, waitForBackgroundProcessing);
+  let resolveFileMetadataComplete: (() => void) | undefined;
+  const fileMetadataComplete = new Promise<void>((resolve) => {
+    resolveFileMetadataComplete = resolve;
+  });
+
+  const completeFileMetadataPhase = () => {
+    resolveFileMetadataComplete?.();
+    resolveFileMetadataComplete = undefined;
+  };
+
+  const waitForMediaPhase = async () => {
+    await fileMetadataComplete;
+    await waitForBackgroundProcessing();
+  };
+
+  void processExifMetadata(db, waitForMediaPhase);
+  void startBackgroundProcessFileInfoMetadata(
+    db,
+    waitForBackgroundProcessing,
+    completeFileMetadataPhase,
+  );
 
   return {
     setProcessBackgroundTasks: (enabled: boolean) => {

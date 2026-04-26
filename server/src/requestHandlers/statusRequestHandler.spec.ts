@@ -45,7 +45,7 @@ afterEach(() => {
 const alwaysEnabledOrchestrator: TaskOrchestrator = {
   setProcessBackgroundTasks: () => {},
   getProcessBackgroundTasks: () => true,
-  getQueueSummary: () => ({}  as never),
+  getQueueSummary: () => ({}) as never,
   addTask: () => {},
 };
 

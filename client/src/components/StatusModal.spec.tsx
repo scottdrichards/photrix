@@ -27,6 +27,10 @@ describe("StatusModal", () => {
     setBackgroundTasksEnabledMock.mockReset();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("subscribes and renders streamed status data", async () => {
     const unsubscribe = vi.fn();
     let onUpdate: ((status: unknown) => void) | undefined;
@@ -118,6 +122,55 @@ describe("StatusModal", () => {
 
     expect(await screen.findByText(/Thumbnails to process:/)).toBeInTheDocument();
     expect(screen.getByText("42")).toBeInTheDocument();
+  });
+
+  it("estimates total remaining time from streamed progress", async () => {
+    const unsubscribe = vi.fn();
+    let onUpdate: ((status: unknown) => void) | undefined;
+
+    subscribeStatusStreamMock.mockImplementation((update) => {
+      onUpdate = update as (status: unknown) => void;
+      return unsubscribe;
+    });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
+
+    await act(async () => {
+      onUpdate?.(
+        makeStatus({ pending: { fileMetadata: 70, mediaMetadata: 20, thumbnails: 10 } }),
+      );
+    });
+
+    await act(async () => {
+      vi.setSystemTime(new Date("2026-01-01T00:00:10.000Z"));
+      onUpdate?.(
+        makeStatus({ pending: { fileMetadata: 63, mediaMetadata: 18, thumbnails: 9 } }),
+      );
+    });
+
+    expect(screen.getByText(/Estimated total time:/)).toBeInTheDocument();
+    expect(screen.getByText("1m 30s")).toBeInTheDocument();
+  });
+
+  it("shows complete when there is no pending work", async () => {
+    const unsubscribe = vi.fn();
+    let onUpdate: ((status: unknown) => void) | undefined;
+
+    subscribeStatusStreamMock.mockImplementation((update) => {
+      onUpdate = update as (status: unknown) => void;
+      return unsubscribe;
+    });
+
+    render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
+
+    await act(async () => {
+      onUpdate?.(makeStatus({ pending: { fileMetadata: 0, mediaMetadata: 0, thumbnails: 0 } }));
+    });
+
+    expect(screen.getByText(/Estimated total time:/)).toBeInTheDocument();
+    expect(screen.getByText("Complete")).toBeInTheDocument();
   });
 
   it("unsubscribes on unmount", () => {

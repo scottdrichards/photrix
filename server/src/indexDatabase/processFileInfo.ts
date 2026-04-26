@@ -5,6 +5,10 @@ import { IndexDatabase } from "./indexDatabase.ts";
 import { stat } from "node:fs/promises";
 import { FileInfo } from "./fileRecord.type.ts";
 
+let activeFileInfoProcessing = false;
+
+export const isFileInfoMetadataProcessingActive = () => activeFileInfoProcessing;
+
 const getFileInfoMetadata = async (fullPath: string): Promise<FileInfo> => {
   const stats = await stat(fullPath);
   return {
@@ -19,6 +23,11 @@ export const startBackgroundProcessFileInfoMetadata = async (
   waitForEnabled: () => Promise<void>,
   onComplete?: () => void,
 ) => {
+  if (activeFileInfoProcessing) {
+    return () => {};
+  }
+
+  activeFileInfoProcessing = true;
   let restartAtMS = 0;
 
   const processAll = async () => {
@@ -61,7 +70,9 @@ export const startBackgroundProcessFileInfoMetadata = async (
     }
   };
 
-  void processAll();
+  void processAll().finally(() => {
+    activeFileInfoProcessing = false;
+  });
 
   const pause = (durationMS: number = 10_000) => {
     const localRestartMs = Date.now() + durationMS;
