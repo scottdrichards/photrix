@@ -10,19 +10,19 @@ const getResourceRequirements = (task: Task): Partial<Record<Resources, number>>
     mediaMedatadata: { disk: 0.1 },
     diskInfo: { disk: 0.1 },
   };
-  return mappings[task.type] || {};
+  return task.type ? mappings[task.type] : {};
 };
 
 type Task = {
   fn: () => Promise<void>;
-  type: TaskType;
+  type?: TaskType;
 };
 
 export type TaskOrchestrator = {
   // Also implicates implied tasks
   setPerformBackgroundTasks: (enabled: boolean) => void;
   getPerformBackgroundTasks: () => boolean;
-  addTask: (task: Task, queue: QueueType) => void;
+  addTask: (fn: Task["fn"], queue: QueueType, opts?: Omit<Task, "fn">) => void;
   onQueueExhausted: (callback: () => void) => void;
 };
 
@@ -70,7 +70,7 @@ export const createTaskOrchestrator = (): TaskOrchestrator => {
     });
   };
 
-  let processBackgroundTasks = false;
+  let processBackgroundTasks = true;
 
   let onQueueExhausted: (() => void) | null = null;
 
@@ -139,7 +139,8 @@ export const createTaskOrchestrator = (): TaskOrchestrator => {
       }
     },
     getPerformBackgroundTasks: () => processBackgroundTasks,
-    addTask: (task: Task, queue: QueueType) => {
+    addTask: (fn: Task["fn"], queue: QueueType, opts?: Omit<Task, "fn">) => {
+      const task: Task = { fn, ...opts };
       queues[queue].push(task);
       if (processBackgroundTasks || queues["blocking"].length) {
         wakeUp?.();

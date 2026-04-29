@@ -12,11 +12,12 @@ const startServer = async () => {
 
   const mediaRoot = process.env.MEDIA_ROOT || "./exampleFolder";
   const database = new IndexDatabase(mediaRoot);
-  await (() => database.init())();
-
-  await fileSystemScanFolder(database);
+  await database.init();
 
   const taskOrchestrator = createTaskOrchestrator();
+  taskOrchestrator.addTask(async () => {
+    await fileSystemScanFolder(database);
+  }, "background");
   createServer(database, mediaRoot, {
     taskOrchestrator,
   });
