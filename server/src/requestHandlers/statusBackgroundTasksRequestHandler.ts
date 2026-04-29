@@ -33,8 +33,8 @@ export const statusBackgroundTasksRequestHandler = async (
       return;
     }
 
-    taskOrchestrator.setProcessBackgroundTasks(payload.enabled);
-    const enabled = taskOrchestrator.getProcessBackgroundTasks();
+    taskOrchestrator.setPerformBackgroundTasks(payload.enabled);
+    const enabled = taskOrchestrator.getPerformBackgroundTasks();
     writeJson(res, 200, { enabled });
   } catch (error) {
     writeJson(res, 400, {

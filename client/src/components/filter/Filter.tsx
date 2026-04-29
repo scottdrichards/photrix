@@ -132,7 +132,6 @@ export const Filter = () => {
         setFolders(folderList);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
-        console.error("Failed to load folders:", err);
       } finally {
         if (!abortController.signal.aborted) {
           setLoadingFolders(false);
@@ -183,7 +182,6 @@ export const Filter = () => {
         if ((error as Error).name === "AbortError") {
           return;
         }
-        console.error("Failed to load rating counts:", error);
         setRatingCounts({});
       } finally {
         if (!abortController.signal.aborted) {

@@ -2,7 +2,6 @@ import { spawn } from "child_process";
 import { mkdir, stat, writeFile, access } from "fs/promises";
 import { join } from "path";
 import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
-import { measureOperation } from "../observability/requestTrace.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
 import { getGpuAcceleration, type GpuAcceleration } from "./gpuAcceleration.ts";
 
@@ -173,7 +172,6 @@ const generateAllVariants = (
 
     const encoderLabel = gpu ? gpu.label : "software";
     if (isVerboseHlsLoggingEnabled()) {
-      console.log(`[HLS-ABR] Generating all variants (${encoderLabel}) for ${filePath}`);
     }
     const process = spawn("ffmpeg", args);
 
@@ -185,21 +183,15 @@ const generateAllVariants = (
     process.on("close", (code) => {
       if (code === 0) {
         if (isVerboseHlsLoggingEnabled()) {
-          console.log(`[HLS-ABR] All variants complete (${encoderLabel})`);
         }
         resolve();
         return;
       }
 
       if (gpu && gpu.isHardwareFailure(stderr)) {
-        console.warn(
-          `[HLS-ABR] ${gpu.label} encoding failed, falling back to software encoding`,
-        );
         generateAllVariants(filePath, hlsDir, null).then(resolve).catch(reject);
         return;
       }
-
-      console.error(`[HLS-ABR] All variants failed: ${stderr}`);
       reject(new Error("HLS ABR generation failed"));
     });
 
@@ -235,7 +227,6 @@ const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
   const masterPath = join(hlsDir, "master.m3u8");
   await writeFile(masterPath, lines.join("\n"), "utf-8");
   if (isVerboseHlsLoggingEnabled()) {
-    console.log(`[HLS-ABR] Created master playlist at ${masterPath}`);
   }
 };
 
@@ -292,29 +283,19 @@ export const generateMultibitrateHLS = async (filePath: string): Promise<string>
   await prepareMultibitrateHLSStructure(filePath);
 
   if (isVerboseHlsLoggingEnabled()) {
-    console.log(`[HLS-ABR] Generating multi-bitrate HLS for ${filePath}`);
   }
   const startTime = Date.now();
 
   const gpu = await getGpuAcceleration();
 
   // Encode all variants in one FFmpeg process
-  await measureOperation(
-    "generateHlsAllVariants",
-    () => generateAllVariants(filePath, hlsDir, gpu),
-    {
-      category: "conversion",
-      detail: "360p+720p+1080p",
-      logWithoutRequest: true,
-    },
-  );
+  await (() => generateAllVariants(filePath, hlsDir, gpu))();
 
   // Write the completion marker so future requests can skip encoding
   await writeFile(getCompleteMarkerPath(hlsDir), "", "utf-8");
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   if (isVerboseHlsLoggingEnabled()) {
-    console.log(`[HLS-ABR] Multi-bitrate HLS complete for ${filePath} in ${elapsed}s`);
   }
 
   return masterPath;

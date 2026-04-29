@@ -61,8 +61,6 @@ const buildPlaybackProfile = async (): Promise<VideoPlaybackProfile> => {
     bandwidthMbps: getNavigatorBandwidthEstimate(),
     hevcSupported,
   };
-
-  console.info("[Video] Playback profile (no startup bandwidth probe)", profile);
   return profile;
 };
 

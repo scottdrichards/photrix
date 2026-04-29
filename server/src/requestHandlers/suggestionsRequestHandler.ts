@@ -1,7 +1,6 @@
 import type * as http from "http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
-import { measureOperation } from "../observability/requestTrace.ts";
 import { writeJson } from "../utils.ts";
 
 type SuggestionsField =
@@ -74,33 +73,25 @@ export const suggestionsRequestHandler = async (
     const limit = Number.isFinite(limitParam) ? limitParam : 8;
 
     if (includeCounts) {
-      const suggestions = await measureOperation(
-        "queryFieldSuggestionsWithCounts",
-        () =>
-          database.queryFieldSuggestionsWithCounts({
-            field: fieldParam,
-            search: query,
-            filter,
-            limit,
-          }),
-        { category: "db", detail: `field=${fieldParam}` },
-      );
+      const suggestions = await (() =>
+        database.queryFieldSuggestionsWithCounts({
+          field: fieldParam,
+          search: query,
+          filter,
+          limit,
+        }))();
 
       writeJson(res, 200, { suggestions });
       return;
     }
 
-    const suggestions = await measureOperation(
-      "queryFieldSuggestions",
-      () =>
-        database.queryFieldSuggestions({
-          field: fieldParam,
-          search: query,
-          filter,
-          limit,
-        }),
-      { category: "db", detail: `field=${fieldParam}` },
-    );
+    const suggestions = await (() =>
+      database.queryFieldSuggestions({
+        field: fieldParam,
+        search: query,
+        filter,
+        limit,
+      }))();
 
     writeJson(res, 200, { suggestions });
   } catch (error) {

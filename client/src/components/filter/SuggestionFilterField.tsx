@@ -97,7 +97,6 @@ export const SuggestionFilterField = ({
         if ((error as Error).name === "AbortError") {
           return;
         }
-        console.error(`Failed to load ${field} suggestions:`, error);
         setSuggestions([]);
       } finally {
         if (!abortController.signal.aborted) {

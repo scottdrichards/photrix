@@ -100,14 +100,11 @@ const probeAmd = (): Promise<boolean> =>
 
 const detect = async (): Promise<GpuAcceleration | null> => {
   if (await probeNvidia()) {
-    console.log("[GPU] NVIDIA CUDA/NVENC hardware acceleration available");
     return NVIDIA;
   }
   if (await probeAmd()) {
-    console.log("[GPU] AMD AMF hardware acceleration available");
     return AMD;
   }
-  console.log("[GPU] No hardware acceleration available, using software encoding");
   return null;
 };
 

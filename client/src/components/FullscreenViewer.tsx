@@ -27,7 +27,6 @@ const safePlay = (video: HTMLVideoElement, logPrefix: string) => {
   const playResult = video.play();
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch((err) => {
-      console.log(logPrefix, err);
     });
   }
 };
@@ -109,13 +108,7 @@ export function FullscreenViewer() {
         });
         if (cancelled) return;
 
-        console.info("[Video] Server negotiation result", {
-          path: photo.path,
-          ...negotiation,
-        });
-
         if (negotiation.mode === "error") {
-          console.error("[Video] No compatible playback format", negotiation.reason);
           if (!cancelled) setVideoStatus("incompatible");
           // Fall back to full-res web-safe MP4 as last resort
           video.src = photo.fullUrl;
@@ -164,7 +157,6 @@ export function FullscreenViewer() {
                 const durationHeader = details.xhr.getResponseHeader("X-Content-Duration");
                 if (durationHeader) {
                   serverDuration = parseFloat(durationHeader);
-                  console.log("[HLS] Got server duration:", serverDuration);
                 }
               }
               originalOnSuccess(...onSuccessArgs);
@@ -220,7 +212,6 @@ export function FullscreenViewer() {
 
           hls.on(Hls.Events.ERROR, (event, data) => {
             if (data.fatal) {
-              console.error("[HLS] Fatal error:", data.type, data.details);
               clearInterval(durationInterval);
               if (photo.fullUrl) {
                 video.src = photo.fullUrl;
@@ -243,10 +234,6 @@ export function FullscreenViewer() {
 
         video.src = photo.fullUrl;
       } catch (error) {
-        console.error("[Video] Failed to resolve playback plan", {
-          path: photo.path,
-          error,
-        });
         video.src = photo.fullUrl;
         safePlay(video, "[Video] Autoplay prevented (fallback):");
       }

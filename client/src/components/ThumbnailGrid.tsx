@@ -61,7 +61,6 @@ const ThumbnailGridComponent = () => {
         if (err === "disposed") return;
         if (err.name === "AbortError") return;
         setError("Failed to fetch photos");
-        console.error("Failed to fetch photos:", err);
       })
       .finally(() => {
         setLoading(false);

@@ -316,9 +316,6 @@ export const getExifMetadataFromFile = async (
       return (await getVideoMetadata(fullPath)) as ExifMetadata;
     } catch (videoError) {
       const msg = videoError instanceof Error ? videoError.message : String(videoError);
-      console.warn(
-        `[exif] QuickTime-branded file failed video metadata for ${fullPath}: ${msg}. Ensure ffprobe is installed and on PATH.`,
-      );
       return {};
     }
   }

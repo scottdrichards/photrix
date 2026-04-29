@@ -27,7 +27,6 @@ export const generateWebSafeVideo = async (
 
   const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
   const encoderLabel = gpu ? gpu.label : "software";
-  console.log(`[VideoCache] Generating ${height}p web-safe video for ${filePath} (${encoderLabel})`);
   await new Promise<void>((resolve, reject) => {
         const args = [
           "-y",
@@ -51,8 +50,6 @@ export const generateWebSafeVideo = async (
           "+faststart",
           cachedPath,
         ];
-
-        console.log(`[VideoCache] ffmpeg (webSafe) args: ${JSON.stringify(args)}`);
         const process = spawn("ffmpeg", args);
 
         let stderr = "";
@@ -66,12 +63,10 @@ export const generateWebSafeVideo = async (
             resolve();
             return;
           }
-          console.error(`[VideoCache] FFmpeg web-safe conversion failed: ${stderr}`);
           reject(new Error(`Web-safe video generation failed: ${stderr}`));
         });
 
         process.on("error", (err) => {
-          console.error(`[VideoCache] Failed to start ffmpeg process: ${err.message}`);
           reject(err);
         });
       });

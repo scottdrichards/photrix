@@ -171,7 +171,6 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
         if ((err as Error).name === "AbortError") {
           return;
         }
-        console.error(err);
         setError((err as Error).message ?? "Failed to load date histogram");
         setBuckets([]);
         setMinDate(null);

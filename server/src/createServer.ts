@@ -11,7 +11,6 @@ import {
   bindCurrentRequestTrace,
   finishRequestTrace,
   getCurrentRequestId,
-  measureOperation,
   runWithRequestTrace,
 } from "./observability/requestTrace.ts";
 import type { TaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
@@ -23,31 +22,14 @@ type ServerOptions = {
   taskOrchestrator: TaskOrchestrator;
 };
 
-// Monitors event-loop lag by scheduling a timer and measuring actual delay
-const startEventLoopLagMonitor = () => {
-  if (process.env.VITEST_WORKER_ID || process.env.JEST_WORKER_ID) return;
-  let lastCheck = process.hrtime.bigint();
-  const check = () => {
-    const now = process.hrtime.bigint();
-    const lagMs = Number(now - lastCheck) / 1_000_000 - 500; // subtract the interval
-    if (lagMs > 50) {
-      console.warn(`[event-loop] lag: ${lagMs.toFixed(0)}ms`);
-    }
-    lastCheck = now;
-  };
-  setInterval(check, 500).unref();
-};
-
 export const createServer = (
   database: IndexDatabase,
   storagePath: string,
   options: ServerOptions,
 ) => {
   const { taskOrchestrator } = options;
-  startEventLoopLagMonitor();
 
   const server = http.createServer((req, res) => {
-    const arrivalTime = process.hrtime.bigint();
     const requestIdHeader = req.headers["x-request-id"];
     const requestId = Array.isArray(requestIdHeader)
       ? requestIdHeader[0]
@@ -60,14 +42,6 @@ export const createServer = (
         ...(requestId ? { requestId } : {}),
       },
       async () => {
-        const handlerStartTime = process.hrtime.bigint();
-        const queueMs = Number(handlerStartTime - arrivalTime) / 1_000_000;
-        if (queueMs > 20) {
-          console.warn(
-            `[event-loop] request queued ${queueMs.toFixed(0)}ms before handler: ${req.method} ${req.url}`,
-          );
-        }
-
         let requestLogged = false;
         const logRequestCompletion = bindCurrentRequestTrace(() => {
           if (requestLogged) {
@@ -108,107 +82,65 @@ export const createServer = (
               message: "Server is running",
             };
 
-            await measureOperation(
-              "request.route.health",
-              () => writeJson(res, 200, payload),
-              { category: "request", detail: "/api/health" },
-            );
+            writeJson(res, 200, payload);
             return;
           }
 
           if (req.url?.startsWith("/api/status/stream") && req.method === "GET") {
-            await measureOperation(
-              "request.route.status.stream",
-              async () =>
-                statusRequestHandler(req, res, {
-                  database,
-                  stream: true,
-                  taskOrchestrator,
-                }),
-              { category: "request", detail: "/api/status/stream" },
-            );
+            await statusRequestHandler(req, res, {
+              database,
+              stream: true,
+              taskOrchestrator,
+            });
             return;
           }
 
           if (req.url === "/api/status/background-tasks" && req.method === "POST") {
-            await measureOperation(
-              "request.route.status.backgroundTasks",
-              () => statusBackgroundTasksRequestHandler(req, res, { taskOrchestrator }),
-              { category: "request", detail: "/api/status/background-tasks" },
-            );
+            await statusBackgroundTasksRequestHandler(req, res, { taskOrchestrator });
             return;
           }
 
           if (req.url?.startsWith("/api/status") && req.method === "GET") {
-            await measureOperation(
-              "request.route.status",
-              async () =>
-                statusRequestHandler(req, res, {
-                  database,
-                  stream: false,
-                  taskOrchestrator,
-                }),
-              { category: "request", detail: "/api/status" },
-            );
+            await statusRequestHandler(req, res, {
+              database,
+              stream: false,
+              taskOrchestrator,
+            });
             return;
           }
 
           if (req.url?.startsWith("/api/network-probe") && req.method === "GET") {
-            await measureOperation(
-              "request.route.networkProbe",
-              () =>
-                networkProbeRequestHandler(
-                  req as http.IncomingMessage &
-                    Required<Pick<http.IncomingMessage, "url">>,
-                  res,
-                ),
-              { category: "request", detail: "/api/network-probe" },
+            networkProbeRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
             );
             return;
           }
 
           // Get folders endpoint - list subfolders at a given path
           if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
-            await measureOperation(
-              "request.route.folders",
-              () =>
-                foldersRequestHandler(
-                  req as http.IncomingMessage &
-                    Required<Pick<http.IncomingMessage, "url">>,
-                  res,
-                  { database },
-                ),
-              { category: "request", detail: "/api/folders/*" },
+            await foldersRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              { database },
             );
             return;
           }
 
           if (req.url?.startsWith("/api/suggestions") && req.method === "GET") {
-            await measureOperation(
-              "request.route.suggestions",
-              () =>
-                suggestionsRequestHandler(
-                  req as http.IncomingMessage &
-                    Required<Pick<http.IncomingMessage, "url">>,
-                  res,
-                  { database },
-                ),
-              { category: "request", detail: "/api/suggestions" },
+            await suggestionsRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              { database },
             );
             return;
           }
 
           if (req.url?.startsWith("/api/video/negotiate") && req.method === "GET") {
-            await measureOperation(
-              "request.route.video.negotiate",
-              () =>
-                videoNegotiationRequestHandler(
-                  req as http.IncomingMessage &
-                    Required<Pick<http.IncomingMessage, "url">>,
-                  res,
-                  { database, storageRoot: storagePath },
-                ),
-              { category: "request", detail: "/api/video/negotiate" },
+            await videoNegotiationRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              { database, storageRoot: storagePath },
             );
             return;
           }
@@ -217,45 +149,27 @@ export const createServer = (
           // Query mode REQUIRES trailing slash: /api/files/ or /api/files/subfolder/
           // File serving has NO trailing slash: /api/files/image.jpg
           if (req.url?.startsWith("/api/files/") && req.method === "GET") {
-            await measureOperation(
-              "request.route.files",
-              () =>
-                filesEndpointRequestHandler(
-                  req as http.IncomingMessage &
-                    Required<Pick<http.IncomingMessage, "url">>,
-                  res,
-                  {
-                    database,
-                    storageRoot: storagePath,
-                    taskOrchestrator,
-                  },
-                ),
-              { category: "request", detail: "/api/files/*" },
+            await filesEndpointRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              {
+                database,
+                storageRoot: storagePath,
+                taskOrchestrator,
+              },
             );
             return;
           }
 
           // Default 404
-          await measureOperation(
-            "request.route.notFound",
-            () => {
-              res.writeHead(404, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "Not found" }));
-            },
-            { category: "request", detail: "404" },
-          );
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Not found" }));
         } catch (error) {
-          console.error("[server] Unhandled request error", error);
           if (!res.headersSent) {
-            await measureOperation(
-              "request.route.unhandledError",
-              () =>
-                writeJson(res, 500, {
-                  error: "Internal server error",
-                  message: error instanceof Error ? error.message : String(error),
-                }),
-              { category: "request", detail: "500" },
-            );
+            writeJson(res, 500, {
+              error: "Internal server error",
+              message: error instanceof Error ? error.message : String(error),
+            });
             return;
           }
           res.destroy(error instanceof Error ? error : undefined);
@@ -264,9 +178,6 @@ export const createServer = (
     );
   });
 
-  server.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-    console.log(`Health check: http://localhost:${PORT}/health`);
-  });
+  server.listen(PORT);
   return server;
 };

@@ -43,10 +43,10 @@ afterEach(() => {
 });
 
 const alwaysEnabledOrchestrator: TaskOrchestrator = {
-  setProcessBackgroundTasks: () => {},
-  getProcessBackgroundTasks: () => true,
-  getQueueSummary: () => ({}) as never,
+  setPerformBackgroundTasks: () => {},
+  getPerformBackgroundTasks: () => true,
   addTask: () => {},
+  onQueueExhausted: () => {},
 };
 
 describe("statusRequestHandler", () => {
@@ -93,7 +93,7 @@ describe("statusRequestHandler", () => {
 
     const disabledOrchestrator: TaskOrchestrator = {
       ...alwaysEnabledOrchestrator,
-      getProcessBackgroundTasks: () => false,
+      getPerformBackgroundTasks: () => false,
     };
 
     await statusRequestHandler({} as http.IncomingMessage, res, {
@@ -192,39 +192,5 @@ describe("statusRequestHandler", () => {
     expect(getWrites()).toHaveLength(2);
 
     req.emit("close");
-  });
-
-  it("starts both background metadata processors under orchestrator control", async () => {
-    const processExifMetadata = jest.fn(
-      async (_database: unknown, _waitForEnabled: () => Promise<void>) => undefined,
-    );
-    const startBackgroundProcessFileInfoMetadata = jest.fn(
-      async (_database: unknown, _waitForEnabled: () => Promise<void>) => undefined,
-    );
-
-    jest.unstable_mockModule("../indexDatabase/processExifMetadata.ts", () => ({
-      processExifMetadata,
-    }));
-    jest.unstable_mockModule("../indexDatabase/processFileInfo.ts", () => ({
-      startBackgroundProcessFileInfoMetadata,
-    }));
-
-    const { createTaskOrchestrator } = await import(
-      "../taskOrchestrator/taskOrchestrator.ts"
-    );
-
-    createTaskOrchestrator({
-      getNextBackgroundTask: () => new Promise(() => {}),
-    } as never);
-
-    expect(processExifMetadata).toHaveBeenCalledTimes(1);
-    expect(startBackgroundProcessFileInfoMetadata).toHaveBeenCalledTimes(1);
-
-    const [, waitForExifEnabled] = processExifMetadata.mock.calls[0] ?? [];
-    const [, waitForInfoEnabled] =
-      startBackgroundProcessFileInfoMetadata.mock.calls[0] ?? [];
-
-    expect(waitForExifEnabled).toEqual(expect.any(Function));
-    expect(waitForInfoEnabled).toEqual(expect.any(Function));
   });
 });

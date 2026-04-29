@@ -34,9 +34,6 @@ const main = async () => {
   const sshKey = process.env.PHOTRIX_DEPLOY_SSH_KEY?.trim();
 
   if (process.env.PHOTRIX_DEPLOY_PASSWORD?.trim()) {
-    console.warn(
-      "[deploy] PHOTRIX_DEPLOY_PASSWORD is set but not used by scp. Use SSH keys or interactive password prompt.",
-    );
   }
 
   const absoluteSource = path.resolve(sourceDir);
@@ -45,14 +42,10 @@ const main = async () => {
   const destinationTarget = target.endsWith("/") ? target : `${target}/`;
   const destination = `${user}@${host}:${destinationTarget}`;
   const args = ["-r", "-P", port, ...(sshKey ? ["-i", sshKey] : []), path.join(absoluteSource, "."), destination];
-
-  console.log(`[deploy] Uploading ${absoluteSource} -> ${destination}`);
   await runScp(args);
-  console.log("[deploy] Done");
 };
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`[deploy] Failed: ${message}`);
   process.exit(1);
 });

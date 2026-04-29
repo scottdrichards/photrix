@@ -158,7 +158,6 @@ export const runWithRequestTrace = async <T>(
 
   return await requestTraceStorage.run(context, async () =>
     await otelContext.with(trace.setSpan(otelContext.active(), rootSpan), async () => {
-      console.log(`[request ${requestId}] -> ${meta.method} ${meta.url}`);
       return await fn();
     }),
   );
@@ -201,10 +200,6 @@ export const finishRequestTrace = (statusCode: number): void => {
     code: statusCode >= 500 ? SpanStatusCode.ERROR : SpanStatusCode.OK,
   });
   context.rootSpan.end();
-
-  console.log(
-    `[request ${context.requestId}] <- ${context.method} ${context.url} ${statusCode} ${formatDuration(totalDuration)} | ${categorySummary}${topSummary}`,
-  );
 };
 
 export const measureOperation = async <T>(
@@ -261,15 +256,11 @@ export const measureOperation = async <T>(
       if (durationMs >= getSpanLogThresholdMs()) {
         const indentation = "  ".repeat(Math.min(depth, 5));
         const suffix = detail ? ` (${detail})` : "";
-        console.log(
-          `[trace ${context.requestId}] ${indentation}${category}:${name}${suffix} ${formatDuration(durationMs)}`,
-        );
       }
     }
 
     if (logWithoutRequest && durationMs >= getSpanLogThresholdMs()) {
       const suffix = detail ? ` (${detail})` : "";
-      console.log(`[trace standalone] ${category}:${name}${suffix} ${formatDuration(durationMs)}`);
     }
   };
 
@@ -350,15 +341,11 @@ export const measureSyncOperation = <T>(
       if (durationMs >= getSpanLogThresholdMs()) {
         const indentation = "  ".repeat(Math.min(depth, 5));
         const suffix = detail ? ` (${detail})` : "";
-        console.log(
-          `[trace ${context.requestId}] ${indentation}${category}:${name}${suffix} ${formatDuration(durationMs)}`,
-        );
       }
     }
 
     if (logWithoutRequest && durationMs >= getSpanLogThresholdMs()) {
       const suffix = detail ? ` (${detail})` : "";
-      console.log(`[trace standalone] ${category}:${name}${suffix} ${formatDuration(durationMs)}`);
     }
   };
 

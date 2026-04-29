@@ -1,407 +1,152 @@
-import path from "node:path";
-import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
-import { standardHeights, type StandardHeight } from "../common/standardHeights.ts";
-import { convertImage } from "../imageProcessing/convertImage.ts";
-import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import { processExifMetadata } from "../indexDatabase/processExifMetadata.ts";
-import { startBackgroundProcessFileInfoMetadata } from "../indexDatabase/processFileInfo.ts";
-import { generateMultibitrateHLS } from "../videoProcessing/generateMultibitrateHLS.ts";
-import { generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
-
-type QueueSummaryByMedia = {
-  image: {
-    count: number;
-    sizeBytes: number;
-  };
-  video: {
-    count: number;
-    sizeBytes: number;
-    durationMilliseconds: number;
-  };
-};
-
-export type TaskQueueSummary = {
-  completed: QueueSummaryByMedia;
-  active: QueueSummaryByMedia;
-  userBlocked: QueueSummaryByMedia;
-  userImplicit: QueueSummaryByMedia;
-  background: QueueSummaryByMedia;
-};
-
-const queueSummaryGroups = [
-  "completed",
-  "active",
-  "userBlocked",
-  "userImplicit",
-  "background",
-] as const;
-
-type QueueSummaryGroup = (typeof queueSummaryGroups)[number];
-type QueueSummaryGroupWithoutCompleted = Exclude<QueueSummaryGroup, "completed">;
-
-type MediaType = "image" | "video";
 type QueueType = "blocking" | "implied" | "background";
+type Resources = "gpu" | "cpu" | "disk" | "network";
 
-export type HLSTask = {
-  type: "hls";
-  relativePath: string;
-  mediaType?: MediaType;
-};
+type TaskType = "imageConversion" | "videoConversion" | "mediaMedatadata" | "diskInfo";
 
-export type ImageConversionTask = {
-  type: "image";
-  relativePath: string;
-  height: StandardHeight[] | StandardHeight;
-  mediaType?: MediaType;
+const getResourceRequirements = (task: Task): Partial<Record<Resources, number>> => {
+  const mappings = {
+    imageConversion: { gpu: 0, cpu: 0.25 },
+    videoConversion: { gpu: 1, cpu: 0.1 },
+    mediaMedatadata: { disk: 0.1 },
+    diskInfo: { disk: 0.1 },
+  };
+  return mappings[task.type] || {};
 };
 
 type Task = {
-  type: "hls" | "image";
-  onComplete?: () => void;
-} & (HLSTask | ImageConversionTask);
+  fn: () => Promise<void>;
+  type: TaskType;
+};
 
 export type TaskOrchestrator = {
-  setProcessBackgroundTasks: (enabled: boolean) => void;
-  getProcessBackgroundTasks: () => boolean;
-  getQueueSummary: () => TaskQueueSummary;
-  addTask: (task: HLSTask | ImageConversionTask, queue?: "blocking" | "implied") => void;
+  // Also implicates implied tasks
+  setPerformBackgroundTasks: (enabled: boolean) => void;
+  getPerformBackgroundTasks: () => boolean;
+  addTask: (task: Task, queue: QueueType) => void;
+  onQueueExhausted: (callback: () => void) => void;
 };
 
-const emptyQueueSummaryByMedia: QueueSummaryByMedia = {
-  image: { count: 0, sizeBytes: 0 },
-  video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-};
-
-const emptyTaskQueueSummary = Object.fromEntries(
-  queueSummaryGroups.map((group) => [group, emptyQueueSummaryByMedia]),
-) as TaskQueueSummary;
-
-const orchestratorLogPrefix = "[orchestrator]";
-
-const describeTask = (task: Task) =>
-  `${task.type}:${task.relativePath}${
-    task.type === "image"
-      ? `:${Array.isArray(task.height) ? task.height.join(",") : task.height}`
-      : ""
-  }`;
-
-const summarizeQueueCounts = (
-  blockingTasks: Task[],
-  impliedTasks: Task[],
-  backgroundTasks: Task[],
-  activeTask: Task | null,
+const canRunTask = (
+  state: Record<Resources, number>,
+  requirements: Partial<Record<Resources, number>>,
 ) =>
-  `blocking=${blockingTasks.length}, implied=${impliedTasks.length}, background=${backgroundTasks.length}, active=${activeTask ? 1 : 0}`;
+  Object.entries(requirements).every(
+    ([resource, amount]) => state[resource as Resources] + (amount ?? 0) <= 1,
+  );
 
-const getTaskMediaType = (task: Task): MediaType =>
-  task.mediaType ?? (task.type === "hls" ? "video" : "image");
-
-const incrementSummary = (
-  summary: QueueSummaryByMedia,
-  mediaType: MediaType,
-  countDelta: number,
+const checkoutResources = (
+  state: Record<Resources, number>,
+  requirements: Partial<Record<Resources, number>>,
 ) => {
-  if (mediaType === "image") {
-    summary.image = {
-      ...summary.image,
-      count: summary.image.count + countDelta,
-    };
-    return;
-  }
-
-  summary.video = {
-    ...summary.video,
-    count: summary.video.count + countDelta,
-  };
+  Object.entries(requirements).forEach(([resource, amount]) => {
+    state[resource as Resources] += amount ?? 0;
+  });
 };
 
-const countTasksByMedia = (tasks: Task[]): QueueSummaryByMedia =>
-  tasks.reduce(
-    (summary, task) => {
-      incrementSummary(summary, getTaskMediaType(task), 1);
-      return summary;
-    },
-    {
-      ...emptyQueueSummaryByMedia,
-      image: { ...emptyQueueSummaryByMedia.image },
-      video: { ...emptyQueueSummaryByMedia.video },
-    },
-  );
-
-const runConversionTask = async (database: IndexDatabase, task: Task) => {
-  const { relativePath } = task;
-  console.log(
-    `${orchestratorLogPrefix} Running ${describeTask(task)}: loading file record`,
-  );
-  const record = await database.getFileRecord(relativePath);
-  if (!record) {
-    console.warn(`${orchestratorLogPrefix} No file record found for ${relativePath}`);
-    return;
-  }
-
-  const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
-  console.log(
-    `${orchestratorLogPrefix} Loaded file record for ${relativePath} mimeType=${record.mimeType ?? "unknown"}`,
-  );
-
-  switch (task.type) {
-    case "hls":
-      await generateMultibitrateHLS(fullPath);
-      return;
-    case "image":
-      for (const height of Array.isArray(task.height) ? task.height : [task.height]) {
-        if (record.mimeType?.startsWith("video/")) {
-          await generateVideoThumbnail(fullPath, height);
-          return;
-        }
-        await convertImage(fullPath, height);
-      }
-      return;
-  }
+const checkInResources = (
+  state: Record<Resources, number>,
+  requirements: Partial<Record<Resources, number>>,
+) => {
+  Object.entries(requirements).forEach(([resource, amount]) => {
+    state[resource as Resources] = Math.max(
+      state[resource as Resources] - (amount ?? 0),
+      0,
+    );
+  });
 };
 
-/** Gets the next set of image conversion tasks or HLS task from the database */
-const getNextBackgroundTasks = async (db: IndexDatabase): Promise<Task | null> => {
-  const backgroundTask = await db.getNextBackgroundTask();
-  if (!backgroundTask) return null;
-  if (backgroundTask.type === "imageVariants") {
-    return {
-      type: "image",
-      relativePath: backgroundTask.relativePath,
-      height: standardHeights.filter((h) => typeof h === "number"),
-      mediaType: backgroundTask.mimeType.startsWith("video/") ? "video" : "image",
-      onComplete: () => void db.markImageVariantsGenerated(backgroundTask.relativePath),
-    };
-  } else if (backgroundTask.type === "hls") {
-    return {
-      type: "hls",
-      relativePath: backgroundTask.relativePath,
-      mediaType: "video",
-      onComplete: () => void db.markHLSGenerated(backgroundTask.relativePath),
-    };
-  }
-  return null;
-};
-
-export const createTaskOrchestrator = (db: IndexDatabase): TaskOrchestrator => {
-  let processBackgroundTasks = true;
-  // Active (user-requested) and implied request stacks — processed LIFO
-  const blockingTasks: Task[] = [];
-  const impliedTasks: Task[] = [];
-  const backgroundTasks: Task[] = [];
-  const completedTasks: QueueSummaryByMedia = {
-    ...emptyQueueSummaryByMedia,
-    image: { ...emptyQueueSummaryByMedia.image },
-    video: { ...emptyQueueSummaryByMedia.video },
-  };
-  let activeTask: Task | null = null;
-
-  const resolversSleeping: Array<() => void> = [];
-
-  const wake = () => {
-    if (resolversSleeping.length > 0) {
-      console.log(
-        `${orchestratorLogPrefix} Waking ${resolversSleeping.length} sleeping loop resolver(s)`,
-      );
-    }
-    resolversSleeping.forEach((resolve) => resolve());
-    resolversSleeping.length = 0;
+export const createTaskOrchestrator = (): TaskOrchestrator => {
+  const queues: Record<QueueType, Task[]> = {
+    blocking: [],
+    implied: [],
+    background: [],
   };
 
-  const waitForBackgroundProcessing = () =>
-    processBackgroundTasks
-      ? Promise.resolve()
-      : new Promise<void>((resolve) => {
-          resolversSleeping.push(resolve);
-        });
+  let sleeping: Promise<void> | null = null;
+  let wakeUp: (() => void) | null = null;
+  const sleep = () => {
+    sleeping = new Promise((resolve) => {
+      wakeUp = resolve;
+    });
+  };
+
+  let processBackgroundTasks = false;
+
+  let onQueueExhausted: (() => void) | null = null;
+
+  const resourcesInUse: Record<Resources, number> = {
+    gpu: 0,
+    cpu: 0,
+    disk: 0,
+    network: 0,
+  };
 
   const loop = async () => {
-    console.log(`${orchestratorLogPrefix} Processing loop started`);
     while (true) {
-      let task: Task | null = null;
-      let queueType: QueueType | null = null;
+      await sleeping;
 
-      if (blockingTasks.length > 0) {
-        task = blockingTasks.pop() ?? null;
-        queueType = "blocking";
-      } else if (processBackgroundTasks && impliedTasks.length > 0) {
-        task = impliedTasks.pop() ?? null;
-        queueType = "implied";
-      } else if (processBackgroundTasks && backgroundTasks.length > 0) {
-        task = backgroundTasks.pop() ?? null;
-        queueType = "background";
-      }
-
-      if (!task) {
-        if (!processBackgroundTasks) {
-          console.log(
-            `${orchestratorLogPrefix} Idle: background processing disabled; ${summarizeQueueCounts(
-              blockingTasks,
-              impliedTasks,
-              backgroundTasks,
-              activeTask,
-            )}`,
-          );
-          // Don't poll the database while disabled; just sleep until woken
-          // by an enqueued blocking/implied task or a flag change.
-          await waitForBackgroundProcessing();
-          continue;
-        }
-
-        const backgroundLoadStartTime = Date.now();
-        const newBackgroundTasks = await getNextBackgroundTasks(db);
-        const backgroundLoadDurationMs = Date.now() - backgroundLoadStartTime;
-
-        if (!newBackgroundTasks) {
-          if (backgroundLoadDurationMs > 50 || !processBackgroundTasks) {
-            console.log(
-              `${orchestratorLogPrefix} No background task fetched (${backgroundLoadDurationMs}ms); sleeping; ${summarizeQueueCounts(
-                blockingTasks,
-                impliedTasks,
-                backgroundTasks,
-                activeTask,
-              )}`,
-            );
+      const [nextTask, requirements] = (() => {
+        for (const [queueType, tasks] of Object.entries(queues)) {
+          if (
+            !processBackgroundTasks &&
+            (queueType === "background" || queueType === "implied")
+          ) {
+            continue;
           }
-
-          await waitForBackgroundProcessing();
-          continue;
+          const taskIndex = tasks.findIndex((task) => {
+            const requirements = getResourceRequirements(task);
+            if (canRunTask(resourcesInUse, requirements)) {
+              return true;
+            }
+          });
+          if (taskIndex !== -1) {
+            const task = tasks.splice(taskIndex, 1)[0];
+            const requirements = getResourceRequirements(task);
+            return [task, requirements] as const;
+          }
         }
+        return [null, {}] as const;
+      })();
 
-        console.log(
-          `${orchestratorLogPrefix} Pulled background task ${describeTask(newBackgroundTasks)} (${backgroundLoadDurationMs}ms db fetch)`,
-        );
-
-        backgroundTasks.push(
-          ...(Array.isArray(newBackgroundTasks)
-            ? newBackgroundTasks
-            : [newBackgroundTasks]),
-        );
-
-        console.log(
-          `${orchestratorLogPrefix} Background queue updated: ${summarizeQueueCounts(
-            blockingTasks,
-            impliedTasks,
-            backgroundTasks,
-            activeTask,
-          )}`,
-        );
+      if (!nextTask) {
+        sleep();
+        onQueueExhausted?.();
         continue;
       }
 
-      try {
-        activeTask = task;
-        const taskStartTime = Date.now();
-        console.log(
-          `${orchestratorLogPrefix} Starting ${describeTask(task)} from ${queueType} queue; ${summarizeQueueCounts(
-            blockingTasks,
-            impliedTasks,
-            backgroundTasks,
-            activeTask,
-          )}`,
-        );
-
-        await runConversionTask(db, task);
-
-        task.onComplete?.();
-        incrementSummary(completedTasks, getTaskMediaType(task), 1);
-        console.log(
-          `${orchestratorLogPrefix} Completed ${describeTask(task)} in ${Date.now() - taskStartTime}ms`,
-        );
-      } catch (error) {
-        console.error(
-          `${orchestratorLogPrefix} Task failed (${task.type}) for ${task.relativePath}`,
-          error,
-        );
-      } finally {
-        console.log(
-          `${orchestratorLogPrefix} Clearing active task for ${describeTask(task)}; ${summarizeQueueCounts(
-            blockingTasks,
-            impliedTasks,
-            backgroundTasks,
-            activeTask,
-          )}`,
-        );
-        activeTask = null;
-      }
+      // We don't block because we want to support parallelism
+      checkoutResources(resourcesInUse, requirements);
+      nextTask
+        .fn()
+        .catch((err) => {
+          console.error(
+            "Error processing task. Tasks should handle their own errors.",
+            err,
+          );
+        })
+        .finally(() => {
+          checkInResources(resourcesInUse, requirements);
+        });
     }
   };
-
   void loop();
 
-  let resolveFileMetadataComplete: (() => void) | undefined;
-  const fileMetadataComplete = new Promise<void>((resolve) => {
-    resolveFileMetadataComplete = resolve;
-  });
-
-  const completeFileMetadataPhase = () => {
-    resolveFileMetadataComplete?.();
-    resolveFileMetadataComplete = undefined;
-  };
-
-  const waitForMediaPhase = async () => {
-    await fileMetadataComplete;
-    await waitForBackgroundProcessing();
-  };
-
-  void processExifMetadata(db, waitForMediaPhase);
-  void startBackgroundProcessFileInfoMetadata(
-    db,
-    waitForBackgroundProcessing,
-    completeFileMetadataPhase,
-  );
-
   return {
-    setProcessBackgroundTasks: (enabled: boolean) => {
-      console.log(
-        `${orchestratorLogPrefix} setProcessBackgroundTasks: ${processBackgroundTasks} -> ${enabled}`,
-      );
+    setPerformBackgroundTasks: (enabled: boolean) => {
       processBackgroundTasks = enabled;
       if (enabled) {
-        wake();
+        wakeUp?.();
       }
     },
-    getProcessBackgroundTasks: () => processBackgroundTasks,
-    getQueueSummary: () => {
-      const tasksByGroup = {
-        active: activeTask ? [activeTask] : [],
-        userBlocked: blockingTasks,
-        userImplicit: impliedTasks,
-        background: backgroundTasks,
-      } as const satisfies Record<QueueSummaryGroupWithoutCompleted, Task[]>;
-
-      const groupedSummary = Object.fromEntries(
-        Object.entries(tasksByGroup).map(([group, tasks]) => [
-          group,
-          countTasksByMedia(tasks),
-        ]),
-      ) as Pick<TaskQueueSummary, QueueSummaryGroupWithoutCompleted>;
-
-      return {
-        ...emptyTaskQueueSummary,
-        completed: {
-          ...completedTasks,
-        },
-        ...groupedSummary,
-      };
-    },
-    addTask: (task: Task, queue: "blocking" | "implied" = "blocking") => {
-      if (queue === "blocking") {
-        blockingTasks.push(task);
-      } else {
-        impliedTasks.push(task);
+    getPerformBackgroundTasks: () => processBackgroundTasks,
+    addTask: (task: Task, queue: QueueType) => {
+      queues[queue].push(task);
+      if (processBackgroundTasks || queues["blocking"].length) {
+        wakeUp?.();
       }
-
-      console.log(
-        `${orchestratorLogPrefix} Enqueued ${describeTask(task)} into ${queue}; ${summarizeQueueCounts(
-          blockingTasks,
-          impliedTasks,
-          backgroundTasks,
-          activeTask,
-        )}`,
-      );
-
-      wake();
+    },
+    onQueueExhausted: (callback: () => void) => {
+      onQueueExhausted = callback;
     },
   };
 };

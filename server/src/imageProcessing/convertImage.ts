@@ -5,8 +5,6 @@ import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
-import { measureOperation } from "../observability/requestTrace.ts";
-
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 
 // Helper function to ensure cache directory exists
@@ -153,85 +151,77 @@ export class ImageConversionError extends Error {
 const generateImage = async (
   inputPath: string,
   outputs: Array<{ path: string; height: StandardHeight }>,
-): Promise<void> =>
-  measureOperation(
-    "pythonImageProcess",
-    () =>
-      new Promise((resolve, reject) => {
-        const args = [
-          scriptPath,
-          inputPath,
-          "--outputs",
-          JSON.stringify(
-            outputs.map((o) => ({
-              path: o.path,
-              height: o.height === "original" ? null : o.height,
-            })),
-          ),
-        ];
+): Promise<void> => {
+  const args = [
+    scriptPath,
+    inputPath,
+    "--outputs",
+    JSON.stringify(
+      outputs.map((o) => ({
+        path: o.path,
+        height: o.height === "original" ? null : o.height,
+      })),
+    ),
+  ];
 
-        // Resolve a real python executable (Windows Store shim `python.exe` will not work).
-        void resolvePythonInvocation()
-          .then(({ command, baseArgs }) => {
-            const process = spawn(command, [...baseArgs, ...args], { windowsHide: true });
+  // Resolve a real python executable (Windows Store shim `python.exe` will not work).
+  return new Promise((resolve, reject) => {
+    void resolvePythonInvocation()
+      .then(({ command, baseArgs }) => {
+        const process = spawn(command, [...baseArgs, ...args], { windowsHide: true });
 
-            let stderr = "";
+        let stderr = "";
 
-            process.stderr.on("data", (data) => {
-              stderr += data.toString();
-            });
+        process.stderr.on("data", (data) => {
+          stderr += data.toString();
+        });
 
-            process.on("close", (code) => {
-              if (code === 0) {
-                resolve();
-                return;
-              }
+        process.on("close", (code) => {
+          if (code === 0) {
+            resolve();
+            return;
+          }
 
-              const normalizedError =
-                stderr.trim() || `Python exited with code ${code ?? "unknown"}`;
-              const isCorrupt =
-                /unexpected end of file/i.test(normalizedError) ||
-                /invalid input/i.test(normalizedError);
-              const isMissingDependency =
-                /modulenotfounderror/i.test(normalizedError) ||
-                /no module named/i.test(normalizedError);
+          const normalizedError =
+            stderr.trim() || `Python exited with code ${code ?? "unknown"}`;
+          const isCorrupt =
+            /unexpected end of file/i.test(normalizedError) ||
+            /invalid input/i.test(normalizedError);
+          const isMissingDependency =
+            /modulenotfounderror/i.test(normalizedError) ||
+            /no module named/i.test(normalizedError);
 
-              const baseMessage = isCorrupt
-                ? `Corrupt or unreadable image ${inputPath}: ${normalizedError}`
-                : `Image conversion failed for ${inputPath}: ${normalizedError}`;
+          const baseMessage = isCorrupt
+            ? `Corrupt or unreadable image ${inputPath}: ${normalizedError}`
+            : `Image conversion failed for ${inputPath}: ${normalizedError}`;
 
-              const message = isMissingDependency
-                ? `${baseMessage}\n\nPython dependencies may be missing. Try: pip install -r server/src/imageProcessing/requirements.txt`
-                : baseMessage;
+          const message = isMissingDependency
+            ? `${baseMessage}\n\nPython dependencies may be missing. Try: pip install -r server/src/imageProcessing/requirements.txt`
+            : baseMessage;
 
-              console.error(
-                `[ImageCache] Python script failed (${code ?? "unknown"}): ${baseMessage}`,
-              );
-              reject(
-                new ImageConversionError(
-                  message,
-                  inputPath,
-                  normalizedError,
-                  code ?? undefined,
-                ),
-              );
-            });
+          console.error(
+            `[ImageCache] Python script failed (${code ?? "unknown"}): ${baseMessage}`,
+          );
+          reject(
+            new ImageConversionError(
+              message,
+              inputPath,
+              normalizedError,
+              code ?? undefined,
+            ),
+          );
+        });
 
-            process.on("error", (err) => {
-              console.error(`[ImageCache] Failed to start python process: ${err.message}`);
-              reject(err);
-            });
-          })
-          .catch((error) => {
-            reject(error);
-          });
-      }),
-    {
-      category: "conversion",
-      detail: outputs.map((output) => String(output.height)).join(","),
-      logWithoutRequest: true,
-    },
-  );
+        process.on("error", (err) => {
+          console.error(`[ImageCache] Failed to start python process: ${err.message}`);
+          reject(err);
+        });
+      })
+      .catch((error) => {
+        reject(error);
+      });
+  });
+};
 
 /**
  * Creates a converted image at the specified height, caching the result.
@@ -246,18 +236,16 @@ export const convertImage = async (
   await stat(filePath);
   const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
 
-  const cachedExists = await access(cachedPath).then(() => true, () => false);
+  const cachedExists = await access(cachedPath).then(
+    () => true,
+    () => false,
+  );
   if (cachedExists) {
     return cachedPath;
   }
 
   await ensureCacheDir(cachedPath);
-  console.log(`[ImageCache] Generating ${height} for ${filePath}`);
-  await measureOperation(
-    "convertImage",
-    () => generateImage(filePath, [{ path: cachedPath, height }]),
-    { category: "conversion", detail: String(height), logWithoutRequest: true },
-  );
+  await (() => generateImage(filePath, [{ path: cachedPath, height }]))();
   return cachedPath;
 };
 
@@ -272,7 +260,10 @@ export const convertImageToMultipleSizes = async (
   const existChecks = await Promise.all(
     heights.map(async (height) => {
       const p = getMirroredCachedFilePath(filePath, height, "jpg");
-      const exists = await access(p).then(() => true, () => false);
+      const exists = await access(p).then(
+        () => true,
+        () => false,
+      );
       return { height, path: p, exists };
     }),
   );
@@ -283,16 +274,5 @@ export const convertImageToMultipleSizes = async (
   }
 
   await Promise.all(outputs.map((o) => ensureCacheDir(o.path)));
-  console.log(
-    `[ImageCache] Generating sizes ${outputs.map((o) => o.height).join(", ")} for ${filePath}`,
-  );
-  await measureOperation(
-    "convertImageToMultipleSizes",
-    () => generateImage(filePath, outputs),
-    {
-      category: "conversion",
-      detail: outputs.map((output) => String(output.height)).join(","),
-      logWithoutRequest: true,
-    },
-  );
+  await (() => generateImage(filePath, outputs))();
 };

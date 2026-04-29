@@ -10,31 +10,10 @@ import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.t
 import { getMirroredCachedFilePath } from "../../common/cacheUtils.ts";
 
 const baseOrchestrator: TaskOrchestrator = {
-  setProcessBackgroundTasks: () => {},
-  getProcessBackgroundTasks: () => true,
-  getQueueSummary: () => ({
-    completed: {
-      image: { count: 0, sizeBytes: 0 },
-      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-    },
-    active: {
-      image: { count: 0, sizeBytes: 0 },
-      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-    },
-    userBlocked: {
-      image: { count: 0, sizeBytes: 0 },
-      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-    },
-    userImplicit: {
-      image: { count: 0, sizeBytes: 0 },
-      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-    },
-    background: {
-      image: { count: 0, sizeBytes: 0 },
-      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-    },
-  }),
+  setPerformBackgroundTasks: () => {},
+  getPerformBackgroundTasks: () => true,
   addTask: () => {},
+  onQueueExhausted: () => {},
 };
 
 const createStreamingResponse = () => {
@@ -204,13 +183,16 @@ describe("filesRequestHandler representation paths", () => {
           getFileRecord: jest.fn(async () => ({ duration: 30 })),
         } as unknown as IndexDatabase,
         storageRoot,
-        orchestrator,
+        taskOrchestrator: orchestrator,
       },
     );
 
     expect(prepareMultibitrateHLSStructure).toHaveBeenCalled();
     expect(addTask).toHaveBeenCalledWith(
-      { type: "hls", relativePath: "clip.mp4" },
+      expect.objectContaining({
+        type: "videoConversion",
+        fn: expect.any(Function),
+      }),
       "blocking",
     );
     expect((res.writeHead as jest.Mock).mock.calls.at(-1)?.[0]).toBe(200);

@@ -85,7 +85,6 @@ const AppContent = () => {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
       }
-      console.error("Native share failed", error);
     } finally {
       setIsSharing(false);
     }

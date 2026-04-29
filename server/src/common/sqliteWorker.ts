@@ -124,7 +124,6 @@ parentPort!.on("message", (msg: WorkerMessage) => {
 
     parentPort!.postMessage({ id: msg.id, result });
   } catch (error) {
-    console.error(`[sqlite-worker:${workerLabel}] ${msg.op}#${msg.id} failed`, error);
     parentPort!.postMessage({
       id: msg.id,
       error: error instanceof Error ? error.message : String(error),

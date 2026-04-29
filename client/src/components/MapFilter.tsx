@@ -102,7 +102,6 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
         if ((err as Error).name === "AbortError") {
           return;
         }
-        console.error(err);
         setError((err as Error).message ?? "Failed to load map data");
       } finally {
         if (!controller.signal.aborted) {

@@ -89,12 +89,10 @@ export class AsyncSqlite {
     });
 
     worker.on("error", (error) => {
-      console.error(`[async-sqlite] ${label} worker error`, error);
       this.rejectAllPending(error);
     });
 
     worker.on("messageerror", (error) => {
-      console.error(`[async-sqlite] ${label} worker message error`, error);
       this.rejectAllPending(
         new Error(`AsyncSqlite ${label} worker message error: ${error.message}`),
       );
@@ -102,9 +100,6 @@ export class AsyncSqlite {
 
     worker.on("exit", (code) => {
       if (this.pending.size === 0) return;
-      console.warn(
-        `[async-sqlite] ${label} worker exited with code ${code} while requests were pending`,
-      );
       this.rejectAllPending(
         new Error(
           `AsyncSqlite ${label} worker exited with code ${code} while requests were pending`,

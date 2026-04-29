@@ -38,7 +38,6 @@ export const startTelemetry = async (): Promise<void> => {
 
   telemetryStartPromise = Promise.resolve(telemetrySdk.start())
     .then(() => {
-      console.log(`[telemetry] OpenTelemetry enabled -> ${getTracesEndpoint()}`);
     })
     .catch((error) => {
       telemetryStartPromise = null;

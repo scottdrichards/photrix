@@ -12,8 +12,6 @@ export const fileSystemScanFolder = async (
 ) => {
   const base = path.join(database.storagePath, subFolder ?? "");
 
-  console.log(`[fileWatcher] Discovering existing files in ${base}`);
-
   const batchSize = 500;
   let scannedFilesCount = 0;
 
@@ -23,12 +21,5 @@ export const fileSystemScanFolder = async (
     );
     await database.addPaths(relativePathsBatch);
     scannedFilesCount += relativePathsBatch.length;
-    console.log(
-      `[fileWatcher] Discovered ${scannedFilesCount.toLocaleString()} files... Current: ${relativePathsBatch.at(-1)}`,
-    );
   }
-
-  console.log(
-    `[fileWatcher] Completed discovering ${scannedFilesCount.toLocaleString()} files`,
-  );
 };

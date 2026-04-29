@@ -152,7 +152,6 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
         setEstimatedTimeText(getEstimatedTimeText(data, nextEstimateTracker, nowMs));
       },
       (error) => {
-        console.error("Failed to receive status", error);
       },
     );
 

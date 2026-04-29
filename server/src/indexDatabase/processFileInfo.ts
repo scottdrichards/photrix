@@ -1,83 +1,50 @@
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
-import { measureOperation } from "../observability/requestTrace.ts";
-import { IndexDatabase } from "./indexDatabase.ts";
-import { stat } from "node:fs/promises";
 import { FileInfo } from "./fileRecord.type.ts";
+import { IndexDatabase } from "./indexDatabase.ts";
 
-let activeFileInfoProcessing = false;
+const batchSize = 200;
 
-export const isFileInfoMetadataProcessingActive = () => activeFileInfoProcessing;
-
-const getFileInfoMetadata = async (fullPath: string): Promise<FileInfo> => {
-  const stats = await stat(fullPath);
-  return {
+const getFileInfoMetadata = async (fullPath: string): Promise<FileInfo> =>
+  stat(fullPath).then((stats) => ({
     sizeInBytes: stats.size,
     created: new Date(stats.birthtimeMs),
     modified: new Date(stats.mtimeMs),
-  };
-};
+  }));
 
-export const startBackgroundProcessFileInfoMetadata = async (
+/**
+ *
+ * @param database
+ * @param waitForEnabled Should return a promise that can indefinitely block the current loop
+ * @param onComplete Called
+ * @returns
+ */
+export const processFileInfoMetadata = async (
   database: IndexDatabase,
   waitForEnabled: () => Promise<void>,
   onComplete?: () => void,
 ) => {
-  if (activeFileInfoProcessing) {
-    return () => {};
-  }
+  while (true) {
+    const items = await database.getFilesNeedingMetadataUpdate("info", batchSize);
 
-  activeFileInfoProcessing = true;
-  let restartAtMS = 0;
-
-  const processAll = async () => {
-    while (true) {
-      const batchSize = 200;
-      const items = await database.getFilesNeedingMetadataUpdate("info", batchSize);
-      if (!items.length) {
-        onComplete?.();
-        return;
-      }
-
-      for (const entry of items) {
-        await waitForEnabled();
-
-        const { relativePath } = entry;
-        try {
-          await measureOperation(
-            "metadata.fileInfo.processEntry",
-            async () => {
-              const fullPath = path.join(
-                database.storagePath,
-                stripLeadingSlash(relativePath),
-              );
-              const metadata = await getFileInfoMetadata(fullPath);
-              await database.addOrUpdateFileData(relativePath, metadata);
-            },
-            { category: "other", detail: relativePath, logWithoutRequest: true },
-          );
-        } catch {
-          await database.addOrUpdateFileData(relativePath, {
-            infoProcessedAt: new Date().toISOString(),
-          });
-        }
-
-        while (restartAtMS && restartAtMS > Date.now()) {
-          const timeoutDuration = restartAtMS - Date.now();
-          await new Promise((resolve) => setTimeout(resolve, timeoutDuration));
-        }
-      }
+    if (items.length === 0) {
+      onComplete?.();
+      break;
     }
-  };
 
-  void processAll().finally(() => {
-    activeFileInfoProcessing = false;
-  });
+    for (const entry of items) {
+      await waitForEnabled();
 
-  const pause = (durationMS: number = 10_000) => {
-    const localRestartMs = Date.now() + durationMS;
-    restartAtMS = Math.max(restartAtMS, localRestartMs);
-  };
-
-  return pause;
+      const { relativePath } = entry;
+      const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
+      await getFileInfoMetadata(fullPath)
+        .then((metadata) => database.addOrUpdateFileData(relativePath, metadata))
+        .catch((e: unknown) => {
+          if (typeof e === "object" && !!e && "code" in e && e.code === "ENOENT") {
+            return database.removeFile(relativePath);
+          }
+        });
+    }
+  }
 };

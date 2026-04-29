@@ -1,7 +1,6 @@
 import path from "node:path";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { getExifMetadataFromFile } from "../fileHandling/fileUtils.ts";
-import { measureOperation } from "../observability/requestTrace.ts";
 import { batch } from "../utils.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 
@@ -39,34 +38,28 @@ export const processExifMetadata = async (
 
         await Promise.all(
           chunk.map(async (entry) => {
-            await measureOperation(
-              "metadata.exif.processEntry",
-              async () => {
-                const { relativePath } = entry;
-                const fullPath = path.join(
-                  database.storagePath,
-                  stripLeadingSlash(relativePath),
-                );
-                const now = new Date();
-                try {
-                  const exif = await getExifMetadataFromFile(fullPath);
-                  await database.addOrUpdateFileData(entry.relativePath, {
-                    ...exif,
-                    exifProcessedAt: now.toISOString(),
-                  });
-                } catch {
-                  const errorDate = new Date();
-                  await database.addOrUpdateFileData(entry.relativePath, {
-                    exifProcessedAt: errorDate.toISOString(),
-                  });
-                }
-              },
-              { category: "other", detail: entry.relativePath, logWithoutRequest: true },
-            );
+            await (async () => {
+              const { relativePath } = entry;
+              const fullPath = path.join(
+                database.storagePath,
+                stripLeadingSlash(relativePath),
+              );
+              const now = new Date();
+              try {
+                const exif = await getExifMetadataFromFile(fullPath);
+                await database.addOrUpdateFileData(entry.relativePath, {
+                  ...exif,
+                  exifProcessedAt: now.toISOString(),
+                });
+              } catch {
+                const errorDate = new Date();
+                await database.addOrUpdateFileData(entry.relativePath, {
+                  exifProcessedAt: errorDate.toISOString(),
+                });
+              }
+            })();
           }),
         );
-
-
       }
     }
   };

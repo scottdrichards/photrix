@@ -28,7 +28,6 @@ describe("convertImage", () => {
 
   it("should convert and rotate the image correctly", async () => {
     if (!fs.existsSync(testImagePath)) {
-      console.warn("Skipping test: Test image not found at " + testImagePath);
       return;
     }
 

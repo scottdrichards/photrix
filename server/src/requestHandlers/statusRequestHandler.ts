@@ -13,7 +13,7 @@ const getStatusPayload = async (
   taskOrchestrator: TaskOrchestrator,
 ) => {
   const counts = await database.getStatusCounts();
-  const backgroundTasksEnabled = taskOrchestrator.getProcessBackgroundTasks();
+  const backgroundTasksEnabled = taskOrchestrator.getPerformBackgroundTasks();
 
   return {
     files: {

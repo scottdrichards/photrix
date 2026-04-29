@@ -8,31 +8,10 @@ import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.t
 import { filesEndpointRequestHandler } from "./filesRequestHandler.ts";
 
 const orchestrator: TaskOrchestrator = {
-  setProcessBackgroundTasks: () => {},
-  getProcessBackgroundTasks: () => true,
-  getQueueSummary: () => ({
-    completed: {
-      image: { count: 0, sizeBytes: 0 },
-      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-    },
-    active: {
-      image: { count: 0, sizeBytes: 0 },
-      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-    },
-    userBlocked: {
-      image: { count: 0, sizeBytes: 0 },
-      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-    },
-    userImplicit: {
-      image: { count: 0, sizeBytes: 0 },
-      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-    },
-    background: {
-      image: { count: 0, sizeBytes: 0 },
-      video: { count: 0, sizeBytes: 0, durationMilliseconds: 0 },
-    },
-  }),
+  setPerformBackgroundTasks: () => {},
+  getPerformBackgroundTasks: () => true,
   addTask: () => {},
+  onQueueExhausted: () => {},
 };
 
 const createMockResponse = () => {

@@ -47,14 +47,10 @@ describe("requestTrace", () => {
         requestId: "trace-test-id",
       },
       async () => {
-        const value = await measureOperation(
-          "nested-operation",
-          async () => {
+        const value = await (async () => {
             nestedRequestId = getCurrentRequestId();
             return 42;
-          },
-          { category: "db", detail: "unit-test" },
-        );
+          })();
 
         expect(value).toBe(42);
         finishRequestTrace(200);
@@ -141,7 +137,7 @@ describe("requestTrace", () => {
     });
 
     await otelContext.with(trace.setSpan(otelContext.active(), parentSpan), async () => {
-      await measureOperation("standalone-operation", async () => 42, { category: "other" });
+      await (async () => 42)();
     });
 
     const standaloneCall = calls.find(({ name }) => name === "standalone-operation");

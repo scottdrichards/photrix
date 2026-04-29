@@ -1,6 +1,6 @@
 import * as http from "http";
 import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
-import { stat, readFile, access } from "fs/promises";
+import { stat, readFile } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { createReadStream, type Stats } from "fs";
 import path from "path/win32";
@@ -10,6 +10,7 @@ import {
 } from "../../imageProcessing/convertImage.ts";
 import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
 import {
+  generateMultibitrateHLS,
   getMultibitrateHLSInfo,
   getVariantPlaylistPath,
   getVariantSegmentPath,
@@ -19,8 +20,6 @@ import { waitForHlsFile } from "../../videoProcessing/hlsSegmentWatcher.ts";
 import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
 import { getVideoMetadata } from "../../videoProcessing/getVideoMetadata.ts";
 import { StandardHeight, parseToStandardHeight } from "../../common/standardHeights.ts";
-import { measureOperation } from "../../observability/requestTrace.ts";
-import { scheduleWork } from "../../common/scheduleWork.ts";
 import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";
 import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../utils.ts";
@@ -28,21 +27,15 @@ import { writeJson } from "../../utils.ts";
 type Options = {
   database: IndexDatabase;
   storageRoot: string;
-  taskOrchestrator?: TaskOrchestrator;
-  orchestrator?: TaskOrchestrator;
+  taskOrchestrator: TaskOrchestrator;
 };
 
 export const filesEndpointRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
   res: http.ServerResponse,
-  { database, storageRoot, taskOrchestrator, orchestrator }: Options,
+  { database, storageRoot, taskOrchestrator }: Options,
 ) => {
   try {
-    const effectiveOrchestrator = taskOrchestrator ?? orchestrator;
-    if (!effectiveOrchestrator) {
-      writeJson(res, 500, { error: "Task orchestrator is required" });
-      return;
-    }
 
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathMatch = url.pathname.match(/^\/api\/files\/(.*)/);
@@ -56,10 +49,9 @@ export const filesEndpointRequestHandler = async (
       storageRoot,
       res,
       database,
-      effectiveOrchestrator,
+      taskOrchestrator,
     );
   } catch (error) {
-    console.error("Error processing files request:", error);
     if (!res.headersSent)
       writeJson(res, 500, {
         error: "Internal server error",
@@ -119,7 +111,6 @@ const streamFile = (
     range ? { start: range.start, end: range.end } : undefined,
   );
   fileStream.on("error", (error) => {
-    console.error("Error streaming file:", error);
     res.destroy(error);
   });
   fileStream.pipe(res);
@@ -148,7 +139,6 @@ const streamStaticFile = (
 
   const fileStream = createReadStream(filePath);
   fileStream.on("error", (error) => {
-    console.error("Error streaming cached file:", error);
     res.destroy(error);
   });
   fileStream.pipe(res);
@@ -166,10 +156,6 @@ const streamCachedFile = (
     size,
     cacheControl,
   });
-};
-
-const logQueueStatus = (label: string, subPath: string) => {
-  console.log(`[filesRequest] ${label}: ${subPath}`);
 };
 
 const getDurationHeader = (knownDuration: number | null | undefined) =>
@@ -195,11 +181,8 @@ const writeHlsPlaylistResponse = (
 const streamHlsSegment = async (
   res: http.ServerResponse,
   segmentPath: string,
-  metricName: string,
 ) => {
-  const segmentStats = await measureOperation(metricName, () => stat(segmentPath), {
-    category: "file",
-  });
+  const segmentStats = await stat(segmentPath);
   streamStaticFile(segmentPath, {
     res,
     contentType: "video/mp2t",
@@ -207,12 +190,6 @@ const streamHlsSegment = async (
     cacheControl: "public, max-age=31536000",
   });
 };
-
-const fileExists = (p: string) =>
-  access(p).then(
-    () => true,
-    () => false,
-  );
 
 type FileHandlingContext = {
   normalizedPath: string;
@@ -231,31 +208,17 @@ type FileHandlingContext = {
 const serveVideoThumb = async (
   ctx: FileHandlingContext,
   height: StandardHeight,
-  label: string,
 ) => {
-  const { normalizedPath, subPath, res } = ctx;
+  const { normalizedPath, res } = ctx;
   try {
-    logQueueStatus(label, subPath);
-    const cachedPath = await measureOperation(
-      "generateVideoThumbnail",
-      () =>
-        scheduleWork(`videoThumb:${normalizedPath}:${height}`, () =>
-          generateVideoThumbnail(normalizedPath, height, { priority: "userBlocked" }),
-        ),
-      { category: "conversion", detail: String(height) },
-    );
-    const cachedStats = await measureOperation(
-      "statCachedVideoThumbnail",
-      () => stat(cachedPath),
-      { category: "file" },
-    );
+    const cachedPath = await generateVideoThumbnail(normalizedPath, height, { priority: "userBlocked" });
+    const cachedStats = await stat(cachedPath);
     streamCachedFile(res, cachedPath, {
       contentType: "image/jpeg",
       size: cachedStats.size,
     });
     return true;
-  } catch (error) {
-    console.error(`Error generating video thumbnail for: ${subPath}`, error);
+  } catch {
     return false;
   }
 };
@@ -266,16 +229,13 @@ const tryVideoThumbnail = (ctx: FileHandlingContext) => {
   const wantsThumb = isPreview || ctx.representation === "webSafe" || ctx.needsResize;
   if (!wantsThumb) return false;
   const height = isPreview ? 320 : ctx.height;
-  const label = isPreview
-    ? "Requesting preview thumbnail"
-    : `Requesting ${ctx.height} thumbnail for video`;
-  return serveVideoThumb(ctx, height, label);
+  return serveVideoThumb(ctx, height);
 };
 
 const tryHLSStream = async (
   ctx: FileHandlingContext & { url: URL },
 ): Promise<boolean> => {
-  const { isVideo, representation, normalizedPath, subPath, height, res, url, database } =
+  const { isVideo, representation, normalizedPath, subPath, res, url, database } =
     ctx;
   if (!isVideo || representation !== "hls") return false;
 
@@ -283,26 +243,13 @@ const tryHLSStream = async (
   const variant = url.searchParams.get("variant"); // e.g., "360" or "720"
 
   try {
-    logQueueStatus(
-      `Requesting HLS ${segment ? `segment ${segment}` : variant ? `${variant}p variant` : "playlist"}`,
-      subPath,
-    );
-
     // Get duration from database, falling back to ffprobe if not indexed yet
-    const fileRecord = await measureOperation(
-      "getFileRecord",
-      () => database.getFileRecord(subPath),
-      { category: "db", detail: "duration" },
-    );
+    const fileRecord = await database.getFileRecord(subPath);
     let knownDuration = fileRecord?.duration;
 
     if (typeof knownDuration !== "number" || !Number.isFinite(knownDuration)) {
       try {
-        const probed = await measureOperation(
-          "ffprobeDuration",
-          () => getVideoMetadata(normalizedPath),
-          { category: "conversion", detail: "ffprobe" },
-        );
+        const probed = await getVideoMetadata(normalizedPath);
         if (typeof probed.duration === "number" && Number.isFinite(probed.duration)) {
           knownDuration = probed.duration;
         }
@@ -312,11 +259,7 @@ const tryHLSStream = async (
     }
 
     // Check if multi-bitrate HLS structure is initialized (master.m3u8 exists)
-    const multibitrateInfo = await measureOperation(
-      "getMultibitrateHLSInfo",
-      () => getMultibitrateHLSInfo(normalizedPath),
-      { category: "conversion" },
-    );
+    const multibitrateInfo = await getMultibitrateHLSInfo(normalizedPath);
 
     // If not initialized, set up the directory structure immediately and queue FFmpeg.
     // The master playlist is returned to the client right away; segments become available
@@ -337,8 +280,11 @@ const tryHLSStream = async (
       // Queue HLS generation as a user-blocking task.
       ctx.taskOrchestrator.addTask(
         {
-          type: "hls",
-          relativePath: subPath,
+          type: "videoConversion",
+          fn: async () => {
+            await generateMultibitrateHLS(normalizedPath);
+            await database.markHLSGenerated(subPath);
+          },
         },
         "blocking",
       );
@@ -358,7 +304,7 @@ const tryHLSStream = async (
         writeJson(res, 404, { error: "HLS segment not found or timed out" });
         return true;
       }
-      await streamHlsSegment(res, segmentPath, "statHlsVariantSegment");
+      await streamHlsSegment(res, segmentPath);
       return true;
     }
 
@@ -379,11 +325,7 @@ const tryHLSStream = async (
         return true;
       }
 
-      const playlistContent = await measureOperation(
-        "readHlsVariantPlaylist",
-        () => readFile(variantPlaylistPath, "utf-8"),
-        { category: "file" },
-      );
+      const playlistContent = await readFile(variantPlaylistPath, "utf-8");
 
       // Rewrite segment paths to use API endpoint
       const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}&segment=`;
@@ -402,11 +344,7 @@ const tryHLSStream = async (
     }
 
     // Serve master playlist
-    let masterContent = await measureOperation(
-      "readHlsMasterPlaylist",
-      () => readFile(multibitrateInfo.masterPlaylistPath, "utf-8"),
-      { category: "file" },
-    );
+    let masterContent = await readFile(multibitrateInfo.masterPlaylistPath, "utf-8");
 
     // Rewrite variant playlist paths to use API endpoint
     const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=`;
@@ -423,7 +361,6 @@ const tryHLSStream = async (
     );
     return true;
   } catch (error) {
-    console.error(`Error generating HLS stream for: ${subPath}`, error);
     writeJson(res, 500, {
       error: "HLS generation failed",
       message: error instanceof Error ? error.message : String(error),
@@ -438,27 +375,14 @@ const tryImageVariant = async (ctx: FileHandlingContext) => {
     needsResize,
     isImage,
     normalizedPath,
-    subPath,
     height,
     res,
   } = ctx;
   if (!(needsFormatChange || needsResize) || !isImage) return false;
 
   try {
-    logQueueStatus(`Requesting ${height} image`, subPath);
-    const cachedPath = await measureOperation(
-      "convertImage",
-      () =>
-        scheduleWork(`thumbnail:${normalizedPath}:${height}`, () =>
-          convertImage(normalizedPath, height, { priority: "userBlocked" }),
-        ),
-      { category: "conversion", detail: String(height) },
-    );
-    const cachedStats = await measureOperation(
-      "statCachedImage",
-      () => stat(cachedPath),
-      { category: "file" },
-    );
+    const cachedPath = await convertImage(normalizedPath, height, { priority: "userBlocked" });
+    const cachedStats = await stat(cachedPath);
     streamCachedFile(res, cachedPath, {
       contentType: "image/jpeg",
       size: cachedStats.size,
@@ -469,7 +393,6 @@ const tryImageVariant = async (ctx: FileHandlingContext) => {
       writeJson(res, 422, { error: "Invalid image", message: error.message });
       return true;
     }
-    console.error(`Error generating image for: ${subPath}`, error);
     return false;
   }
 };
@@ -493,24 +416,17 @@ const fileHandler = async (
     return writeJson(res, 403, { error: "Access denied" });
   }
 
-  const fileStats: Stats | null = await measureOperation(
-    "statRequestedFile",
-    async () => {
-      try {
-        const stats = await stat(normalizedPath);
-        if (!stats.isFile()) {
-          return null;
-        }
-        return stats;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return null;
-        }
-        throw error;
-      }
-    },
-    { category: "file" },
-  );
+  let fileStats: Stats | null = null;
+  try {
+    const stats = await stat(normalizedPath);
+    if (stats.isFile()) {
+      fileStats = stats;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
   if (!fileStats) {
     return writeJson(res, 404, { error: "File not found" });
   }

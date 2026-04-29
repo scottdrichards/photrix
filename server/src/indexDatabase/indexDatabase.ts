@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { CACHE_DIR } from "../common/cacheUtils.ts";
 import { AsyncSqlite } from "../common/asyncSqlite.ts";
@@ -18,7 +18,6 @@ import {
 } from "./rowFileRecordConversionFunctions.ts";
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
-import { measureOperation } from "../observability/requestTrace.ts";
 import { prepareTables } from "./prepareTables.ts";
 
 const filesNeedingMetadataUpdateFilter = (
@@ -40,9 +39,6 @@ export class IndexDatabase {
     const envDbLocation = process.env.INDEX_DB_LOCATION?.trim();
     const databaseDirectory = envDbLocation || CACHE_DIR;
     this.dbFilePath = path.join(path.resolve(databaseDirectory), "index.db");
-    console.log(
-      `[IndexDatabase] dbFilePath=${this.dbFilePath} (INDEX_DB_LOCATION env=${envDbLocation ?? "<unset>"})`,
-    );
 
     const directoryPath = path.dirname(this.dbFilePath);
     const rootPath = path.parse(directoryPath).root;
@@ -51,7 +47,11 @@ export class IndexDatabase {
     }
 
     this.db = await AsyncSqlite.open(this.dbFilePath, {
-      pragmas: ["journal_mode = WAL"],
+      pragmas: [
+        "journal_mode = WAL",
+        "synchronous = NORMAL",
+        "wal_autocheckpoint = 1000",
+      ],
       customFunctions: [
         { name: "REGEXP", options: { deterministic: true }, type: "regexp" },
         {
@@ -63,12 +63,8 @@ export class IndexDatabase {
     });
 
     await prepareTables(this.db);
-    console.log(`[IndexDatabase] Database opened at ${this.dbFilePath}`);
 
-    const count = await this.db.get<{ count: number }>(
-      "SELECT COUNT(*) as count FROM files",
-    );
-    console.log(`[IndexDatabase] Contains ${count?.count ?? 0} entries`);
+    await this.db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
   }
 
   private async runInsert(
@@ -731,11 +727,8 @@ export class IndexDatabase {
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
 
     const countSQL = `SELECT COUNT(*) as count FROM files ${whereClause ? `WHERE ${whereClause}` : ""}`;
-    const countResult = await measureOperation(
-      "queryFiles.count",
-      () => this.db.get<{ count: number }>(countSQL, ...whereParams),
-      { category: "db" },
-    );
+    const countResult = await (() =>
+      this.db.get<{ count: number }>(countSQL, ...whereParams))();
     const total = countResult?.count ?? 0;
 
     // The `idx_files_sort_date` expression index covers this ORDER BY exactly
@@ -748,12 +741,8 @@ export class IndexDatabase {
       LIMIT ? OFFSET ?
     `;
 
-    const rows = await measureOperation(
-      "queryFiles.rows",
-      () =>
-        this.db.all<Record<string, unknown>>(mainSQL, ...whereParams, pageSize, offset),
-      { category: "db", detail: `limit=${pageSize} offset=${offset}` },
-    );
+    const rows = await (() =>
+      this.db.all<Record<string, unknown>>(mainSQL, ...whereParams, pageSize, offset))();
 
     const matchedFiles = rows.map((v) =>
       rowToFileRecord(v as Record<string, string | number>, metadata),
@@ -864,6 +853,36 @@ export class IndexDatabase {
       "SELECT COUNT(*) as count FROM files",
     );
     return result?.count ?? 0;
+  }
+
+  async optimize(): Promise<void> {
+    await this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    await this.db.exec("PRAGMA optimize");
+    await this.db.exec("VACUUM");
+  }
+
+  async getOnDiskSize(): Promise<{
+    mainDb: number;
+    walFile: number;
+    shmFile: number;
+    total: number;
+  }> {
+    const getFileSize = async (filePath: string): Promise<number> => {
+      try {
+        const fileStat = await stat(filePath);
+        return fileStat.size;
+      } catch {
+        return 0;
+      }
+    };
+
+    const [mainDb, walFile, shmFile] = await Promise.all([
+      getFileSize(this.dbFilePath),
+      getFileSize(`${this.dbFilePath}-wal`),
+      getFileSize(`${this.dbFilePath}-shm`),
+    ]);
+
+    return { mainDb, walFile, shmFile, total: mainDb + walFile + shmFile };
   }
 
   /**
