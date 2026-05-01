@@ -127,6 +127,63 @@ describe("getExifMetadataFromFile", () => {
     expect(result.dimensionWidth).toBe(expected.width);
     expect(result.dimensionHeight).toBe(expected.height);
   });
+
+  it("handles unknown file format by reading only header bytes (no full-file load)", async () => {
+    const dir = tmpDir();
+    const unknownFile = path.join(dir, "unknown.bin");
+    // Write data that is not a recognized image format
+    writeFileSync(unknownFile, Buffer.from("UNKNOWN_FORMAT_HEADER_ONLY_SMALL"));
+
+    const result = await getExifMetadataFromFile(unknownFile);
+    expect(result).toEqual({});
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("handles large malformed file without OOM by reading header only", async () => {
+    const dir = tmpDir();
+    const largeFile = path.join(dir, "large_malformed.bin");
+    // Write 50MB file with malformed header
+    const chunkSize = 1024 * 1024; // 1MB
+    const chunks = 50;
+
+    const header = Buffer.alloc(chunkSize);
+    header.write("INVALID_FORMAT_XXXX".padEnd(12, "Y"), 0);
+    writeFileSync(largeFile, header);
+
+    for (let i = 1; i < chunks; i++) {
+      const chunk = Buffer.alloc(chunkSize).fill(0);
+      writeFileSync(largeFile, chunk, { flag: "a" });
+    }
+
+    // Should complete without memory spike (header-only read, not full file)
+    const result = await getExifMetadataFromFile(largeFile);
+    expect(result).toEqual({});
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("handles file smaller than 12 bytes gracefully", async () => {
+    const dir = tmpDir();
+    const smallFile = path.join(dir, "tiny.bin");
+    writeFileSync(smallFile, Buffer.from("short"));
+
+    const result = await getExifMetadataFromFile(smallFile);
+    expect(result).toEqual({});
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("handles zero-byte file gracefully", async () => {
+    const dir = tmpDir();
+    const emptyFile = path.join(dir, "empty.bin");
+    writeFileSync(emptyFile, Buffer.alloc(0));
+
+    const result = await getExifMetadataFromFile(emptyFile);
+    expect(result).toEqual({});
+
+    await rm(dir, { recursive: true, force: true });
+  });
 });
 
 describe("getFastMediaDimensions", () => {

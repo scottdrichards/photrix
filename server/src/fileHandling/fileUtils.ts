@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import exifr from "exifr";
 import { readdirSync } from "node:fs";
-import { access, readFile } from "node:fs/promises";
+import { access, open } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { ExifMetadata } from "../indexDatabase/fileRecord.type.ts";
@@ -285,10 +285,16 @@ const parseRawExifData = async (
       throw error;
     }
 
-    const fileBuffer = await readFile(fullPath);
-    const brand = fileBuffer.subarray(8, 12).toString("ascii").trim().toLowerCase();
-    const quicktimeBrand = brand === "qt" || brand === "moov";
-    return { rawData: {}, quicktimeBrand };
+    const fileHandle = await open(fullPath, "r");
+    try {
+      const header = Buffer.alloc(12);
+      await fileHandle.read(header, 0, header.length, 0);
+      const brand = header.subarray(8, 12).toString("ascii").trim().toLowerCase();
+      const quicktimeBrand = brand === "qt" || brand === "moov";
+      return { rawData: {}, quicktimeBrand };
+    } finally {
+      await fileHandle.close();
+    }
   }
 };
 
