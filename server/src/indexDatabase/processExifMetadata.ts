@@ -3,70 +3,110 @@ import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { getExifMetadataFromFile } from "../fileHandling/fileUtils.ts";
 import { batch } from "../utils.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
+import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 
 const dbBatchSize = 200;
 const parallelism = 4;
 
-let activeExifProcessing = false;
-
-export const isExifMetadataProcessingActive = () => activeExifProcessing;
-
 /**
- * Processes pending EXIF metadata updates.
- * Returns early without running when EXIF processing is already active.
+ * Processes pending EXIF metadata updates with pause/resume/cancel controls.
  */
-export const processExifMetadata = async (
-  database: IndexDatabase,
-  waitForEnabled: () => Promise<void>,
-  onComplete?: () => void,
-) => {
-  if (activeExifProcessing) {
-    return;
-  }
+export const processExifMetadata = (database: IndexDatabase): TaskRunner => {
+  let state: "running" | "paused" | "cancelled" | "complete" = "running";
+  let resumeSignal: (() => void) | null = null;
 
-  activeExifProcessing = true;
+  const cancelledError = new Error("EXIF metadata processing cancelled");
 
-  const processAllBatches = async () => {
+  const waitUntilResumed = async () => {
+    if (state !== "paused") {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      resumeSignal = resolve;
+    });
+  };
+
+  const completion: Promise<void> = (async () => {
     while (true) {
+      // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
+      if (state === "cancelled") {
+        throw cancelledError;
+      }
+
       const items = await database.getFilesNeedingMetadataUpdate("exif", dbBatchSize);
       if (!items.length) {
+        state = "complete";
         return;
       }
 
       for (const chunk of batch(items, parallelism)) {
-        await waitForEnabled();
+        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
+        if (state === "cancelled") {
+          throw cancelledError;
+        }
+
+        await waitUntilResumed();
+        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
+        if (state === "cancelled") {
+          throw cancelledError;
+        }
 
         await Promise.all(
           chunk.map(async (entry) => {
-            await (async () => {
-              const { relativePath } = entry;
-              const fullPath = path.join(
-                database.storagePath,
-                stripLeadingSlash(relativePath),
-              );
-              const now = new Date();
-              try {
-                const exif = await getExifMetadataFromFile(fullPath);
-                await database.addOrUpdateFileData(entry.relativePath, {
-                  ...exif,
-                  exifProcessedAt: now.toISOString(),
-                });
-              } catch {
-                const errorDate = new Date();
-                await database.addOrUpdateFileData(entry.relativePath, {
-                  exifProcessedAt: errorDate.toISOString(),
-                });
-              }
-            })();
+            const { relativePath } = entry;
+            const fullPath = path.join(
+              database.storagePath,
+              stripLeadingSlash(relativePath),
+            );
+            const now = new Date();
+            try {
+              const exif = await getExifMetadataFromFile(fullPath);
+              await database.addOrUpdateFileData(entry.relativePath, {
+                ...exif,
+                exifProcessedAt: now.toISOString(),
+              });
+            } catch {
+              const errorDate = new Date();
+              await database.addOrUpdateFileData(entry.relativePath, {
+                exifProcessedAt: errorDate.toISOString(),
+              });
+            }
           }),
         );
       }
     }
+  })();
+
+  return {
+    pause: () => {
+      if (state === "running") {
+        state = "paused";
+      }
+    },
+    resume: () => {
+      if (state === "paused") {
+        state = "running";
+      }
+      resumeSignal?.();
+      resumeSignal = null;
+      return Promise.resolve();
+    },
+    cancel: () => {
+      state = "cancelled";
+      resumeSignal?.();
+      resumeSignal = null;
+    },
+    getStatus: async () => {
+      const counts = await database.getStatusCounts();
+      const totalEligible = counts.imageEntries + counts.videoEntries;
+      const done = Math.max(0, totalEligible - counts.missingMediaMetadata);
+      return {
+        state,
+        itemsProcessed: done,
+        total: totalEligible,
+        portionComplete: totalEligible > 0 ? done / totalEligible : undefined,
+      };
+    },
+    onComplete: () => completion,
   };
-
-  await processAllBatches().finally(() => {
-    activeExifProcessing = false;
-  });
-
-  onComplete?.();
 };

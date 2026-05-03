@@ -2,6 +2,8 @@ import "dotenv/config";
 import { initializeCacheDirectories } from "./common/cacheUtils.ts";
 import { createServer } from "./createServer.ts";
 import { fileSystemScanFolder } from "./indexDatabase/fileSystemScanFolder.ts";
+import { processExifMetadata } from "./indexDatabase/processExifMetadata.ts";
+import { processFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { measureOperation } from "./observability/requestTrace.ts";
 import { startTelemetry } from "./observability/telemetry.ts";
@@ -15,9 +17,34 @@ const startServer = async () => {
   await database.init();
 
   const taskOrchestrator = createTaskOrchestrator();
-  taskOrchestrator.addTask(async () => {
-    await fileSystemScanFolder(database);
-  }, "background");
+
+  taskOrchestrator.addTask(
+    {
+      name: "File system scan",
+      start: () => fileSystemScanFolder(database),
+      type: "diskInfo",
+    },
+    "background",
+  );
+
+  taskOrchestrator.addTask(
+    {
+      name: "File metadata processing",
+      start: () => processFileInfoMetadata(database),
+      type: "mediaMedatadata",
+    },
+    "background",
+  );
+
+  taskOrchestrator.addTask(
+    {
+      name: "EXIF metadata processing",
+      start: () => processExifMetadata(database),
+      type: "mediaMedatadata",
+    },
+    "background",
+  );
+
   createServer(database, mediaRoot, {
     taskOrchestrator,
   });

@@ -151,7 +151,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
         setStatus(data);
         setEstimatedTimeText(getEstimatedTimeText(data, nextEstimateTracker, nowMs));
       },
-      (error) => {
+      (_error) => {
       },
     );
 

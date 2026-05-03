@@ -191,7 +191,7 @@ describe("filesRequestHandler representation paths", () => {
     expect(addTask).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "videoConversion",
-        fn: expect.any(Function),
+        start: expect.any(Function),
       }),
       "blocking",
     );

@@ -36,21 +36,12 @@ export const filesEndpointRequestHandler = async (
   { database, storageRoot, taskOrchestrator }: Options,
 ) => {
   try {
-
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathMatch = url.pathname.match(/^\/api\/files\/(.*)/);
     if (!pathMatch) return writeJson(res, 400, { error: "Bad request" });
     const subPath = decodeURIComponent(pathMatch[1]) || "/";
     if (subPath.endsWith("/")) return queryHandler(url, subPath, database, res);
-    await fileHandler(
-      req,
-      url,
-      subPath,
-      storageRoot,
-      res,
-      database,
-      taskOrchestrator,
-    );
+    await fileHandler(req, url, subPath, storageRoot, res, database, taskOrchestrator);
   } catch (error) {
     if (!res.headersSent)
       writeJson(res, 500, {
@@ -178,10 +169,7 @@ const writeHlsPlaylistResponse = (
   res.end(playlistContent);
 };
 
-const streamHlsSegment = async (
-  res: http.ServerResponse,
-  segmentPath: string,
-) => {
+const streamHlsSegment = async (res: http.ServerResponse, segmentPath: string) => {
   const segmentStats = await stat(segmentPath);
   streamStaticFile(segmentPath, {
     res,
@@ -205,13 +193,12 @@ type FileHandlingContext = {
   taskOrchestrator: TaskOrchestrator;
 };
 
-const serveVideoThumb = async (
-  ctx: FileHandlingContext,
-  height: StandardHeight,
-) => {
+const serveVideoThumb = async (ctx: FileHandlingContext, height: StandardHeight) => {
   const { normalizedPath, res } = ctx;
   try {
-    const cachedPath = await generateVideoThumbnail(normalizedPath, height, { priority: "userBlocked" });
+    const cachedPath = await generateVideoThumbnail(normalizedPath, height, {
+      priority: "userBlocked",
+    });
     const cachedStats = await stat(cachedPath);
     streamCachedFile(res, cachedPath, {
       contentType: "image/jpeg",
@@ -235,8 +222,7 @@ const tryVideoThumbnail = (ctx: FileHandlingContext) => {
 const tryHLSStream = async (
   ctx: FileHandlingContext & { url: URL },
 ): Promise<boolean> => {
-  const { isVideo, representation, normalizedPath, subPath, res, url, database } =
-    ctx;
+  const { isVideo, representation, normalizedPath, subPath, res, url, database } = ctx;
   if (!isVideo || representation !== "hls") return false;
 
   const segment = url.searchParams.get("segment");
@@ -280,10 +266,19 @@ const tryHLSStream = async (
       // Queue HLS generation as a user-blocking task.
       ctx.taskOrchestrator.addTask(
         {
+          name: "HLS generation",
           type: "videoConversion",
-          fn: async () => {
-            await generateMultibitrateHLS(normalizedPath);
-            await database.markHLSGenerated(subPath);
+          start: () => {
+            const promise = (async () => {
+              await generateMultibitrateHLS(normalizedPath);
+              await database.markHLSGenerated(subPath);
+            })();
+
+            return {
+              onComplete: async () => {
+                await promise;
+              },
+            };
           },
         },
         "blocking",
@@ -370,18 +365,13 @@ const tryHLSStream = async (
 };
 
 const tryImageVariant = async (ctx: FileHandlingContext) => {
-  const {
-    needsFormatChange,
-    needsResize,
-    isImage,
-    normalizedPath,
-    height,
-    res,
-  } = ctx;
+  const { needsFormatChange, needsResize, isImage, normalizedPath, height, res } = ctx;
   if (!(needsFormatChange || needsResize) || !isImage) return false;
 
   try {
-    const cachedPath = await convertImage(normalizedPath, height, { priority: "userBlocked" });
+    const cachedPath = await convertImage(normalizedPath, height, {
+      priority: "userBlocked",
+    });
     const cachedStats = await stat(cachedPath);
     streamCachedFile(res, cachedPath, {
       contentType: "image/jpeg",

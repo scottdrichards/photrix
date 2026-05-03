@@ -3,6 +3,7 @@ import path from "node:path";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { FileInfo } from "./fileRecord.type.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
+import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 
 const batchSize = 200;
 
@@ -14,37 +15,92 @@ const getFileInfoMetadata = async (fullPath: string): Promise<FileInfo> =>
   }));
 
 /**
- *
- * @param database
- * @param waitForEnabled Should return a promise that can indefinitely block the current loop
- * @param onComplete Called
- * @returns
+ * Processes pending file metadata updates (size, created, modified) with pause/resume/cancel controls.
  */
-export const processFileInfoMetadata = async (
-  database: IndexDatabase,
-  waitForEnabled: () => Promise<void>,
-  onComplete?: () => void,
-) => {
-  while (true) {
-    const items = await database.getFilesNeedingMetadataUpdate("info", batchSize);
+export const processFileInfoMetadata = (database: IndexDatabase): TaskRunner => {
+  let state: "running" | "paused" | "cancelled" | "complete" = "running";
+  let resumeSignal: (() => void) | null = null;
 
-    if (items.length === 0) {
-      onComplete?.();
-      break;
+  const cancelledError = new Error("File metadata processing cancelled");
+
+  const waitUntilResumed = async () => {
+    if (state !== "paused") {
+      return;
     }
+    await new Promise<void>((resolve) => {
+      resumeSignal = resolve;
+    });
+  };
 
-    for (const entry of items) {
-      await waitForEnabled();
+  const completion: Promise<void> = (async () => {
+    while (true) {
+      // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
+      if (state === "cancelled") {
+        throw cancelledError;
+      }
 
-      const { relativePath } = entry;
-      const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
-      await getFileInfoMetadata(fullPath)
-        .then((metadata) => database.addOrUpdateFileData(relativePath, metadata))
-        .catch((e: unknown) => {
-          if (typeof e === "object" && !!e && "code" in e && e.code === "ENOENT") {
-            return database.removeFile(relativePath);
-          }
-        });
+      const items = await database.getFilesNeedingMetadataUpdate("info", batchSize);
+
+      if (items.length === 0) {
+        state = "complete";
+        return;
+      }
+
+      for (const entry of items) {
+        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
+        if (state === "cancelled") {
+          throw cancelledError;
+        }
+
+        await waitUntilResumed();
+        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
+        if (state === "cancelled") {
+          throw cancelledError;
+        }
+
+        const { relativePath } = entry;
+        const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
+        await getFileInfoMetadata(fullPath)
+          .then((metadata) => database.addOrUpdateFileData(relativePath, metadata))
+          .catch((e: unknown) => {
+            if (typeof e === "object" && !!e && "code" in e && e.code === "ENOENT") {
+              return database.removeFile(relativePath);
+            }
+          });
+      }
     }
-  }
+  })();
+
+  return {
+    pause: () => {
+      if (state === "running") {
+        state = "paused";
+      }
+    },
+    resume: () => {
+      if (state === "paused") {
+        state = "running";
+      }
+      resumeSignal?.();
+      resumeSignal = null;
+      return Promise.resolve();
+    },
+    cancel: () => {
+      state = "cancelled";
+      resumeSignal?.();
+      resumeSignal = null;
+    },
+    getStatus: async () => {
+      const counts = await database.getStatusCounts();
+      const totalEligible = counts.allEntries;
+      const done = Math.max(0, totalEligible - counts.missingFileMetadata);
+      return {
+        state,
+        itemsProcessed: done,
+        total: totalEligible,
+        portionComplete: totalEligible > 0 ? done / totalEligible : undefined,
+      };
+    },
+    onComplete: () => completion,
+  };
 };

@@ -38,7 +38,7 @@ export const fileSystemMonitorFolder = (db: IndexDatabase) => {
         return;
       }
       if (stats.isDirectory()) {
-        await fileSystemScanFolder(db, absolutePath);
+        await fileSystemScanFolder(db, absolutePath).onComplete();
         return;
       }
     } catch {

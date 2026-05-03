@@ -265,7 +265,7 @@ const parseRawExifData = async (
   fullPath: string,
 ): Promise<{ rawData: Record<string, unknown>; quicktimeBrand: boolean }> => {
   try {
-    const rawData = await exifr.parse(fullPath, {
+    const rawData: unknown = await exifr.parse(fullPath, {
       translateValues: false,
       xmp: true,
       ifd0: {},

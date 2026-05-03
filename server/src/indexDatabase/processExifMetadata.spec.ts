@@ -10,17 +10,21 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-describe("processExifMetadata", () => {
-  it("reports inactive by default", async () => {
-    const { isExifMetadataProcessingActive } = await import("./processExifMetadata.ts");
-    expect(isExifMetadataProcessingActive()).toBe(false);
+const createDeferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
   });
+  return { promise, resolve };
+};
 
-  it("processes files, marks failures, and completes", async () => {
+describe("processExifMetadata", () => {
+  it("processes files and completes", async () => {
     const getExifMetadataFromFile = jest
       .fn()
       .mockResolvedValueOnce({ cameraMake: "Canon" })
-      .mockRejectedValueOnce(new Error("bad metadata"));
+      .mockRejectedValueOnce(new Error("bad metadata"))
+      .mockResolvedValueOnce({ focalLength: 35 });
 
     jest.unstable_mockModule("../fileHandling/fileUtils.ts", () => ({
       getExifMetadataFromFile,
@@ -30,14 +34,22 @@ describe("processExifMetadata", () => {
     let callCount = 0;
     const db = {
       storagePath: path.join(os.tmpdir(), "photrix-exif-test"),
+      getStatusCounts: () => ({
+        allEntries: 3,
+        imageEntries: 3,
+        videoEntries: 0,
+        missingFileMetadata: 0,
+        missingMediaMetadata: 3,
+        missingThumbnails: 0,
+      }),
       countFilesNeedingMetadataUpdate: () => 3,
       getFilesNeedingMetadataUpdate: () => {
         callCount += 1;
         if (callCount === 1) {
           return [
             { relativePath: "good.jpg", sizeInBytes: 100 },
-            { relativePath: "zero.jpg", sizeInBytes: 0 },
             { relativePath: "bad.jpg", sizeInBytes: 100 },
+            { relativePath: "ok.jpg", sizeInBytes: 100 },
           ];
         }
         return [];
@@ -50,70 +62,156 @@ describe("processExifMetadata", () => {
       },
     } as unknown as IndexDatabase;
 
-    const {
-      processExifMetadata: startBackgroundProcessExifMetadata,
-      isExifMetadataProcessingActive,
-    } = await import("./processExifMetadata.ts");
+    const { processExifMetadata } = await import("./processExifMetadata.ts");
 
-    let completed = false;
-    startBackgroundProcessExifMetadata(
-      db,
-      () => Promise.resolve(),
-      () => {
-        completed = true;
-      },
-    );
+    const runner = processExifMetadata(db);
+    await runner.onComplete();
 
-    await wait(50);
-
-    expect(completed).toBe(true);
-    expect(isExifMetadataProcessingActive()).toBe(false);
     expect(getExifMetadataFromFile).toHaveBeenCalledTimes(3);
 
     const byPath = Object.fromEntries(updates.map((u) => [u.relativePath, u.data]));
     expect(byPath["good.jpg"]?.cameraMake).toBe("Canon");
     expect(typeof byPath["good.jpg"]?.exifProcessedAt).toBe("string");
-    expect(typeof byPath["zero.jpg"]?.exifProcessedAt).toBe("string");
     expect(typeof byPath["bad.jpg"]?.exifProcessedAt).toBe("string");
+    expect(byPath["ok.jpg"]?.focalLength).toBe(35);
   });
 
-  it("returns early if a second run starts while processing is active", async () => {
-    const gate = {
-      promise: Promise.resolve(),
-    };
+  it("supports pause and resume during processing", async () => {
+    const gate = createDeferred();
+    let processedFiles = 0;
 
-    const getExifMetadataFromFile = jest.fn(() => gate.promise);
+    const getExifMetadataFromFile = jest.fn(async () => {
+      processedFiles += 1;
+      await gate.promise;
+      return { cameraMake: "Canon" };
+    });
 
     jest.unstable_mockModule("../fileHandling/fileUtils.ts", () => ({
       getExifMetadataFromFile,
     }));
 
     const db = {
-      storagePath: path.join(os.tmpdir(), "photrix-exif-test-busy"),
-      countFilesNeedingMetadataUpdate: () => 1,
+      storagePath: path.join(os.tmpdir(), "photrix-exif-pause-test"),
+      getStatusCounts: () => ({
+        allEntries: 5,
+        imageEntries: 5,
+        videoEntries: 0,
+        missingFileMetadata: 0,
+        missingMediaMetadata: 5,
+        missingThumbnails: 0,
+      }),
+      countFilesNeedingMetadataUpdate: () => 5,
       getFilesNeedingMetadataUpdate: (() => {
         let called = false;
         return () => {
-          if (called) {
-            return [];
-          }
+          if (called) return [];
           called = true;
-          return [{ relativePath: "one.jpg", sizeInBytes: 100 }];
+          return Array.from({ length: 5 }, (_, i) => ({
+            relativePath: `file${i}.jpg`,
+            sizeInBytes: 100,
+          }));
         };
       })(),
       addOrUpdateFileData: async () => undefined,
     } as unknown as IndexDatabase;
 
-    const { processExifMetadata: startBackgroundProcessExifMetadata } = await import(
-      "./processExifMetadata.ts"
-    );
+    const { processExifMetadata } = await import("./processExifMetadata.ts");
 
-    const firstRun = startBackgroundProcessExifMetadata(db, () => Promise.resolve());
+    const runner = processExifMetadata(db);
+    await wait(20);
+    runner.pause?.();
+    const initialCount = processedFiles;
+    await wait(20);
+    expect(processedFiles).toBe(initialCount);
+    await runner.resume?.();
+    gate.resolve();
+    await runner.onComplete();
+    expect(processedFiles).toBe(5);
+  });
 
-    await expect(
-      startBackgroundProcessExifMetadata(db, () => Promise.resolve()),
-    ).resolves.toBeUndefined();
+  it("cancels processing and rejects onComplete", async () => {
+    const gate = createDeferred();
 
-    await firstRun;
+    const getExifMetadataFromFile = jest.fn(async () => {
+      await gate.promise;
+      return { cameraMake: "Canon" };
+    });
+
+    jest.unstable_mockModule("../fileHandling/fileUtils.ts", () => ({
+      getExifMetadataFromFile,
+    }));
+
+    const db = {
+      storagePath: path.join(os.tmpdir(), "photrix-exif-cancel-test"),
+      getStatusCounts: () => ({
+        allEntries: 2,
+        imageEntries: 2,
+        videoEntries: 0,
+        missingFileMetadata: 0,
+        missingMediaMetadata: 2,
+        missingThumbnails: 0,
+      }),
+      countFilesNeedingMetadataUpdate: () => 2,
+      getFilesNeedingMetadataUpdate: () => [
+        { relativePath: "file1.jpg", sizeInBytes: 100 },
+        { relativePath: "file2.jpg", sizeInBytes: 100 },
+      ],
+      addOrUpdateFileData: async () => undefined,
+    } as unknown as IndexDatabase;
+
+    const { processExifMetadata } = await import("./processExifMetadata.ts");
+
+    const runner = processExifMetadata(db);
+    await wait(10);
+    runner.cancel?.();
+    gate.resolve();
+    await expect(runner.onComplete()).rejects.toThrow("cancelled");
+  });
+
+  it("reports progress from persisted baseline done count", async () => {
+    const getExifMetadataFromFile = jest.fn(async () => ({ cameraMake: "Canon" }));
+
+    jest.unstable_mockModule("../fileHandling/fileUtils.ts", () => ({
+      getExifMetadataFromFile,
+    }));
+
+    let callCount = 0;
+    let missingMediaMetadata = 2;
+    const db = {
+      storagePath: path.join(os.tmpdir(), "photrix-exif-baseline-test"),
+      getStatusCounts: () => ({
+        allEntries: 10,
+        imageEntries: 8,
+        videoEntries: 2,
+        missingFileMetadata: 0,
+        missingMediaMetadata,
+        missingThumbnails: 0,
+      }),
+      countFilesNeedingMetadataUpdate: () => 2,
+      getFilesNeedingMetadataUpdate: () => {
+        callCount += 1;
+        if (callCount === 1) {
+          return [
+            { relativePath: "a.jpg", sizeInBytes: 100 },
+            { relativePath: "b.jpg", sizeInBytes: 100 },
+          ];
+        }
+        return [];
+      },
+      addOrUpdateFileData: async () => {
+        missingMediaMetadata = Math.max(0, missingMediaMetadata - 1);
+      },
+    } as unknown as IndexDatabase;
+
+    const { processExifMetadata } = await import("./processExifMetadata.ts");
+    const runner = processExifMetadata(db);
+    await runner.onComplete();
+
+    await expect(runner.getStatus?.()).resolves.toMatchObject({
+      state: "complete",
+      itemsProcessed: 10,
+      total: 10,
+      portionComplete: 1,
+    });
   });
 });

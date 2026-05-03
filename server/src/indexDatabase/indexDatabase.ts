@@ -731,13 +731,12 @@ export class IndexDatabase {
       this.db.get<{ count: number }>(countSQL, ...whereParams))();
     const total = countResult?.count ?? 0;
 
-    // The `idx_files_sort_date` expression index covers this ORDER BY exactly
-    // (verified via EXPLAIN: "SCAN files USING INDEX idx_files_sort_date").
+    // Sort by whether date is not null (non-null first), then by date descending
     const offset = (page - 1) * pageSize;
     const mainSQL = `
       SELECT * FROM files
       ${whereClause ? `WHERE ${whereClause}` : ""}
-      ORDER BY COALESCE(dateTaken, created, modified) DESC
+      ORDER BY (COALESCE(dateTaken, created, modified) IS NOT NULL) DESC, COALESCE(dateTaken, created, modified) DESC
       LIMIT ? OFFSET ?
     `;
 
