@@ -60,7 +60,9 @@ describe("processFileInfoMetadata", () => {
   });
 
   it("marks infoProcessedAt on non-ENOENT stat failure", async () => {
-    const stat = jest.fn().mockRejectedValue(Object.assign(new Error("EPERM"), { code: "EPERM" }));
+    const stat = jest
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("EPERM"), { code: "EPERM" }));
 
     jest.unstable_mockModule("node:fs/promises", () => ({ stat }));
 

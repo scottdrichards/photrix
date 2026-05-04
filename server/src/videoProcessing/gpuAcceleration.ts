@@ -33,7 +33,7 @@ const NVIDIA: GpuAcceleration = {
 
 const AMD: GpuAcceleration = {
   vendor: "amd",
-  hwaccelArgs: [],
+  hwaccelArgs: ["-hwaccel", "d3d11va"],
   h264Codec: "h264_amf",
   label: "AMD AMF",
   isHardwareFailure: (stderr) => {

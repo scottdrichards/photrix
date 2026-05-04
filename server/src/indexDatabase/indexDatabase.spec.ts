@@ -206,7 +206,9 @@ describe("IndexDatabase", () => {
 
   it("keeps missing date fields nullish in query results", async () => {
     await withTempDb(async (db) => {
-      await db.addFile(createRecord("no-dates.jpg", { exifProcessedAt: "2026-01-01T00:00:00.000Z" }));
+      await db.addFile(
+        createRecord("no-dates.jpg", { exifProcessedAt: "2026-01-01T00:00:00.000Z" }),
+      );
 
       const result = await db.queryFiles({
         filter: {},

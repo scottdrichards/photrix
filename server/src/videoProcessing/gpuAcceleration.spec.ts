@@ -66,7 +66,7 @@ describe("gpuAcceleration", () => {
     expect(gpu).not.toBeNull();
     expect(gpu!.vendor).toBe("amd");
     expect(gpu!.h264Codec).toBe("h264_amf");
-    expect(gpu!.hwaccelArgs).toEqual([]);
+    expect(gpu!.hwaccelArgs).toEqual(["-hwaccel", "d3d11va"]);
     expect(gpu!.label).toContain("AMD");
   });
 
