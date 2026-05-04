@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Film, X } from "lucide-react";
+import { Film, Info, X } from "lucide-react";
 import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
 import { negotiateVideoPlayback } from "../api";
@@ -39,6 +39,26 @@ const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
   incompatible: "No Compatible Stream",
 };
 
+const formatMetadataValue = (value: unknown): string => {
+  if (value === null) {
+    return "null";
+  }
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable value]";
+  }
+};
+
 export function FullscreenViewer() {
   const {
     selected: selectedPhoto,
@@ -56,6 +76,7 @@ export function FullscreenViewer() {
   const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null);
   const [showLiveVideo, setShowLiveVideo] = useState(false);
+  const [showFileInfo, setShowFileInfo] = useState(false);
   const [photoZoom, setPhotoZoom] = useState({
     isZoomed: false,
     originXPercent: 50,
@@ -375,6 +396,10 @@ export function FullscreenViewer() {
     });
   };
 
+  const metadataEntries = Object.entries(photo?.metadata ?? {}).filter(
+    ([, value]) => value !== undefined,
+  );
+
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
     <dialog
@@ -385,25 +410,7 @@ export function FullscreenViewer() {
       onClick={handleBackdropClick}
     >
       {photo && (
-        <>
-          <button
-            onClick={() => setSelected(null)}
-            className={css.closeButton}
-            aria-label="Close"
-          >
-            <X size={24} />
-          </button>
-                    {photo.mediaType !== "video" && photo.livePhotoUrl && (
-                      <button
-                        type="button"
-                        onClick={() => setShowLiveVideo((v) => !v)}
-                        className={css.livePhotoButton}
-                        aria-label={showLiveVideo ? "Show photo" : "Play live photo"}
-                        title={showLiveVideo ? "Show photo" : "Play live photo"}
-                      >
-                        <Film size={20} />
-                      </button>
-                    )}
+        <div className={css.viewerLayout}>
           {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
           <div
             className={css.container}
@@ -411,6 +418,35 @@ export function FullscreenViewer() {
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
           >
+            <div className={css.topRightActions}>
+              <button
+                type="button"
+                onClick={() => setShowFileInfo((current) => !current)}
+                className={css.infoButton}
+                aria-label={showFileInfo ? "Hide file info" : "Show file info"}
+                title={showFileInfo ? "Hide file info" : "Show file info"}
+              >
+                <Info size={22} />
+              </button>
+              <button
+                onClick={() => setSelected(null)}
+                className={css.closeButton}
+                aria-label="Close"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            {photo.mediaType !== "video" && photo.livePhotoUrl && (
+              <button
+                type="button"
+                onClick={() => setShowLiveVideo((v) => !v)}
+                className={css.livePhotoButton}
+                aria-label={showLiveVideo ? "Show photo" : "Play live photo"}
+                title={showLiveVideo ? "Show photo" : "Play live photo"}
+              >
+                <Film size={20} />
+              </button>
+            )}
             {photo.mediaType === "video" ? (
               <>
                 <div
@@ -442,7 +478,6 @@ export function FullscreenViewer() {
                 )}
               </>
             ) : showLiveVideo && photo.livePhotoUrl ? (
-               
               <video
                 key={photo.livePhotoUrl}
                 src={photo.livePhotoUrl}
@@ -469,7 +504,35 @@ export function FullscreenViewer() {
               />
             )}
           </div>
-        </>
+          {showFileInfo && (
+            <aside className={css.infoSidebar} aria-label="File info panel">
+              <h3 className={css.infoTitle}>File info</h3>
+              <dl className={css.infoList}>
+                <div className={css.infoRow}>
+                  <dt>Path</dt>
+                  <dd>{photo.path}</dd>
+                </div>
+                <div className={css.infoRow}>
+                  <dt>Filename</dt>
+                  <dd>{photo.name}</dd>
+                </div>
+              </dl>
+              <h4 className={css.infoSubtitle}>Metadata</h4>
+              {metadataEntries.length === 0 ? (
+                <p className={css.infoEmpty}>No metadata available.</p>
+              ) : (
+                <dl className={css.infoList}>
+                  {metadataEntries.map(([key, value]) => (
+                    <div className={css.infoRow} key={key}>
+                      <dt>{key}</dt>
+                      <dd>{formatMetadataValue(value)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </aside>
+          )}
+        </div>
       )}
     </dialog>
   );

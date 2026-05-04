@@ -4,35 +4,6 @@ import { batch } from "../utils.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 
-const scanProgressIntervalMs = 250;
-
-const fitLineToTerminalWidth = (line: string) => {
-  if (!process.stdout.isTTY) {
-    return line;
-  }
-
-  const maxWidth = Math.max(1, process.stdout.columns - 1);
-  return line.length > maxWidth
-    ? line.slice(0, maxWidth - 3) + "..."
-    : line + " ".repeat(maxWidth - line.length);
-};
-
-const renderScanProgress = (
-  scannedItemsCount: number,
-  currentItem: string,
-  state: "first" | "continuing" | "last",
-) => {
-  const prefix = state === "first" ? "" : "\u001b[2F";
-  const countMessage = `Found ${scannedItemsCount.toLocaleString()} items`;
-  const itemMessage =
-    state === "last" ? "Scan complete!" : `Current item: ${currentItem}`;
-
-  const message = [countMessage, itemMessage]
-    .map((m) => fitLineToTerminalWidth(m) + "\n")
-    .join("");
-  process.stdout.write(prefix + message);
-};
-
 /**
  * Does an entire scan of the files in the database's storage path and adds them to the database.
  */
@@ -44,7 +15,6 @@ export const fileSystemScanFolder = (
 
   const batchSize = 500;
   let scannedFilesCount = 0;
-  let lastProgressRenderTime = 0;
   let currentItem = "";
 
   let state: "running" | "paused" | "cancelled" | "complete" = "running";
@@ -80,22 +50,10 @@ export const fileSystemScanFolder = (
       await database.addPaths(relativePathsBatch);
       scannedFilesCount += relativePathsBatch.length;
       currentItem = relativePathsBatch[relativePathsBatch.length - 1] ?? currentItem;
-
-      const now = Date.now();
-      if (now - lastProgressRenderTime >= scanProgressIntervalMs) {
-        const firstRun = lastProgressRenderTime === 0;
-        renderScanProgress(
-          scannedFilesCount,
-          relativePathsBatch[relativePathsBatch.length - 1],
-          firstRun ? "first" : "continuing",
-        );
-        lastProgressRenderTime = now;
-      }
     }
 
     // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
     if (state !== "cancelled") {
-      renderScanProgress(scannedFilesCount, "", "last");
       state = "complete";
       return;
     }

@@ -119,6 +119,58 @@ describe("FullscreenViewer", () => {
     expect(setSelected).toHaveBeenCalledWith(null);
   });
 
+  it("shows file info and keeps the info panel open across close/open", () => {
+    const setSelected = vi.fn();
+    const selectedRef: { current: PhotoItem | null } = {
+      current: createPhoto({
+        path: "folder-a/1.jpg",
+        name: "1.jpg",
+        metadata: {
+          mimeType: "image/jpeg",
+          dimensionWidth: 4032,
+          dimensionHeight: 3024,
+        },
+      }),
+    };
+
+    useSelectionContextMock.mockImplementation(() => ({
+      selected: selectedRef.current,
+      selectionMode: false,
+      setSelected,
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    }));
+
+    const { rerender } = render(<FullscreenViewer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show file info" }));
+
+    expect(screen.getByText("Path")).toBeInTheDocument();
+    expect(screen.getByText("folder-a/1.jpg")).toBeInTheDocument();
+    expect(screen.getByText("Filename")).toBeInTheDocument();
+    expect(screen.getByText("1.jpg")).toBeInTheDocument();
+    expect(screen.getByText("mimeType")).toBeInTheDocument();
+    expect(screen.getByText("image/jpeg")).toBeInTheDocument();
+
+    selectedRef.current = null;
+    rerender(<FullscreenViewer />);
+
+    selectedRef.current = createPhoto({
+      path: "folder-b/2.jpg",
+      name: "2.jpg",
+      metadata: {
+        cameraModel: "A7R V",
+      },
+    });
+    rerender(<FullscreenViewer />);
+
+    expect(screen.getByRole("button", { name: "Hide file info" })).toBeInTheDocument();
+    expect(screen.getByText("folder-b/2.jpg")).toBeInTheDocument();
+    expect(screen.getByText("2.jpg")).toBeInTheDocument();
+    expect(screen.getByText("cameraModel")).toBeInTheDocument();
+    expect(screen.getByText("A7R V")).toBeInTheDocument();
+  });
+
   it("zooms the photo around clicked coordinates", () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto(),
@@ -229,7 +281,7 @@ describe("FullscreenViewer", () => {
     });
 
     const { container } = render(<FullscreenViewer />);
-    const swipeContainer = container.querySelector("dialog div");
+    const swipeContainer = container.querySelector(`.${css.container}`);
     expect(swipeContainer).not.toBeNull();
 
     fireEvent.touchStart(swipeContainer!, {

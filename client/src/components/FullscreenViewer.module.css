@@ -18,12 +18,19 @@
 
 .container {
   display: flex;
-  width: 100%;
-  height: 100%;
+  flex: 1;
   align-items: center;
   justify-content: center;
   position: relative;
   z-index: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.viewerLayout {
+  display: flex;
+  width: 100%;
+  height: 100%;
 }
 
 .media {
@@ -60,12 +67,18 @@
   display: block;
 }
 
-.closeButton {
+.topRightActions {
   position: absolute;
   top: var(--space-m);
   right: var(--space-m);
-  color: var(--fg-inv);
+  display: flex;
+  gap: var(--space-xs);
   z-index: 100;
+}
+
+.closeButton,
+.infoButton {
+  color: var(--fg-inv);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -75,7 +88,8 @@
   align-items: center;
 }
 
-.closeButton:hover {
+.closeButton:hover,
+.infoButton:hover {
   background-color: rgba(255, 255, 255, 0.1);
 }
 
@@ -109,4 +123,71 @@
   background-color: rgba(0, 0, 0, 0.55);
   pointer-events: none;
   z-index: 100;
+}
+
+.infoSidebar {
+  width: min(34vw, 380px);
+  min-width: 260px;
+  max-width: 45vw;
+  height: 100%;
+  color: var(--fg-inv);
+  background: linear-gradient(180deg, rgba(18, 20, 24, 0.94), rgba(10, 11, 14, 0.96));
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  padding: calc(var(--space-m) + 40px) var(--space-m) var(--space-m);
+  overflow-y: auto;
+}
+
+.infoTitle {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.infoSubtitle {
+  margin: var(--space-m) 0 var(--space-s);
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.infoList {
+  margin: var(--space-s) 0 0;
+  padding: 0;
+}
+
+.infoRow {
+  margin: 0;
+  padding: var(--space-xs) 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.infoRow dt {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.infoRow dd {
+  margin: 4px 0 0;
+  color: rgba(255, 255, 255, 0.95);
+  word-break: break-word;
+}
+
+.infoEmpty {
+  margin: var(--space-xs) 0 0;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+@media (max-width: 900px) {
+  .viewerLayout {
+    flex-direction: column;
+  }
+
+  .infoSidebar {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    height: 40%;
+    border-left: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+  }
 }
