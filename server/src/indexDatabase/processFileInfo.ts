@@ -60,13 +60,28 @@ export const processFileInfoMetadata = (database: IndexDatabase): TaskRunner => 
 
         const { relativePath } = entry;
         const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
-        await getFileInfoMetadata(fullPath)
-          .then((metadata) => database.addOrUpdateFileData(relativePath, metadata))
-          .catch((e: unknown) => {
-            if (typeof e === "object" && !!e && "code" in e && e.code === "ENOENT") {
-              return database.removeFile(relativePath);
-            }
+        const infoProcessedAt = new Date().toISOString();
+        try {
+          const metadata = await getFileInfoMetadata(fullPath);
+          await database.addOrUpdateFileData(relativePath, {
+            ...metadata,
+            infoProcessedAt,
           });
+        } catch (error: unknown) {
+          if (
+            typeof error === "object" &&
+            !!error &&
+            "code" in error &&
+            error.code === "ENOENT"
+          ) {
+            await database.removeFile(relativePath);
+            continue;
+          }
+
+          await database.addOrUpdateFileData(relativePath, {
+            infoProcessedAt,
+          });
+        }
       }
     }
   })();

@@ -249,7 +249,7 @@ export class IndexDatabase {
     const row = await this.db.get<{
       folder: string;
       fileName: string;
-      exifProcessedAt: string;
+      exifProcessedAt: number | null;
     }>(
       `SELECT folder, fileName, exifProcessedAt
        FROM files
@@ -265,7 +265,7 @@ export class IndexDatabase {
     return {
       folder: row.folder,
       fileName: row.fileName,
-      completedAt: row.exifProcessedAt,
+      completedAt: new Date(row.exifProcessedAt as unknown as number).toISOString(),
     };
   }
 
@@ -736,7 +736,11 @@ export class IndexDatabase {
     const mainSQL = `
       SELECT * FROM files
       ${whereClause ? `WHERE ${whereClause}` : ""}
-      ORDER BY (COALESCE(dateTaken, created, modified) IS NOT NULL) DESC, COALESCE(dateTaken, created, modified) DESC
+      ORDER BY
+        (COALESCE(dateTaken, created, modified) IS NOT NULL) DESC,
+        COALESCE(dateTaken, created, modified) DESC,
+        folder ASC,
+        fileName ASC
       LIMIT ? OFFSET ?
     `;
 

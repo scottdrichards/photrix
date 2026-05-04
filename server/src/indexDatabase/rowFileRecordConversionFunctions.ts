@@ -5,11 +5,14 @@ import { normalizeFolderPath } from "./utils/pathUtils.ts";
  * Converts a database row to a FileRecord by parsing JSON fields and reconstructing nested objects
  */
 export const rowToFileRecord = (
-  row: Record<string, string | number>,
+  row: Record<string, string | number | null>,
   wantedFields: Array<keyof FileRecord> | "all" = "all",
 ): FileRecord => {
-  const date = (v: string | number) => new Date(v);
+  const date = (v: string | number | null) =>
+    v === null || v === undefined ? undefined : new Date(v);
   const json = (v: string) => JSON.parse(v);
+  const processedAtToIso = (v: string | number | null) =>
+    v === null || v === undefined ? undefined : new Date(v).toISOString();
 
   // folder and fileName come from the row
   const folder = normalizeFolderPath(row.folder as string);
@@ -44,6 +47,11 @@ export const rowToFileRecord = (
     ["aiTags", json],
     "locationLatitude",
     "locationLongitude",
+    ["infoProcessedAt", processedAtToIso],
+    ["exifProcessedAt", processedAtToIso],
+    ["imageVariantsGeneratedAt", processedAtToIso],
+    ["hlsGeneratedAt", processedAtToIso],
+    ["aiMetadataProcessedAt", processedAtToIso],
   ] as const;
 
   const wantedConversions =
@@ -61,6 +69,9 @@ export const rowToFileRecord = (
       return { field, rowValue, conversionFn };
     })
     .reduce((acc, { field, rowValue, conversionFn }) => {
+      if (rowValue === null || rowValue === undefined) {
+        return acc;
+      }
       if (!conversionFn) {
         return { ...acc, [field]: rowValue };
       }
@@ -106,7 +117,7 @@ export const fileRecordToColumnNamesAndValues = (
 
   // File Info
   if (entry.infoProcessedAt) {
-    addColumn("infoProcessedAt", entry.infoProcessedAt);
+    addColumn("infoProcessedAt", new Date(entry.infoProcessedAt).getTime());
     addColumn("sizeInBytes", entry.sizeInBytes);
     addColumn(
       "created",
@@ -120,7 +131,7 @@ export const fileRecordToColumnNamesAndValues = (
 
   // EXIF Metadata
   if (entry.exifProcessedAt) {
-    addColumn("exifProcessedAt", entry.exifProcessedAt);
+    addColumn("exifProcessedAt", new Date(entry.exifProcessedAt).getTime());
     addColumn(
       "dateTaken",
       entry.dateTaken instanceof Date ? entry.dateTaken.getTime() : entry.dateTaken,
@@ -150,7 +161,7 @@ export const fileRecordToColumnNamesAndValues = (
 
   // AI Metadata
   if (entry.aiMetadataProcessedAt) {
-    addColumn("aiMetadataProcessedAt", entry.aiMetadataProcessedAt);
+    addColumn("aiMetadataProcessedAt", new Date(entry.aiMetadataProcessedAt).getTime());
     addColumn("aiDescription", entry.aiDescription);
     addColumn("aiTags", JSON.stringify(entry.aiTags));
   }

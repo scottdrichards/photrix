@@ -203,4 +203,43 @@ describe("IndexDatabase", () => {
       ]);
     });
   });
+
+  it("keeps missing date fields nullish in query results", async () => {
+    await withTempDb(async (db) => {
+      await db.addFile(createRecord("no-dates.jpg", { exifProcessedAt: "2026-01-01T00:00:00.000Z" }));
+
+      const result = await db.queryFiles({
+        filter: {},
+        metadata: ["created", "modified", "dateTaken"],
+        pageSize: 10,
+        page: 1,
+      });
+
+      const row = result.items.find((item) => item.fileName === "no-dates.jpg");
+
+      expect(row).toBeDefined();
+      expect(row?.created).toBeUndefined();
+      expect(row?.modified).toBeUndefined();
+      expect(row?.dateTaken).toBeUndefined();
+    });
+  });
+
+  it("sorts all-null date items deterministically by path", async () => {
+    await withTempDb(async (db) => {
+      await db.addFile(createRecord("z-last.jpg"));
+      await db.addFile(createRecord("a-first.jpg"));
+
+      const result = await db.queryFiles({
+        filter: {},
+        metadata: ["dateTaken"],
+        pageSize: 10,
+        page: 1,
+      });
+
+      expect(result.items.map((item) => item.fileName)).toEqual([
+        "a-first.jpg",
+        "z-last.jpg",
+      ]);
+    });
+  });
 });
