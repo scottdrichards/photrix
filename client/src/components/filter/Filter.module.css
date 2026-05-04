@@ -103,3 +103,10 @@
 .folderCard:hover {
   background-color: var(--bg1-hover);
 }
+
+.folderIcon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

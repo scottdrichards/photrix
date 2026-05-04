@@ -302,7 +302,9 @@ export const Filter = () => {
                       role="button"
                       tabIndex={0}
                     >
-                      <Folder size={20} />
+                      <span className={css.folderIcon}>
+                        <Folder size={20} />
+                      </span>
                       <span>{folder}</span>
                     </div>
                   ))}
