@@ -1,13 +1,10 @@
 # Getting Started
 
-Deployment checklist for Photrix.
-
-For a concrete Nginx deployment example (serve client build + proxy `/api/`), see `documentation/DEPLOY_NGINX.md`.
+Development and deployment setup for Photrix.
 
 ## 1) Prerequisites
 
-- Reverse proxy is configured in front of server
-- Public host: `photrix.scottdrichards.com`
+- Reverse proxy is configured in front of server (for production deployment)
 
 ## 2) Install
 
