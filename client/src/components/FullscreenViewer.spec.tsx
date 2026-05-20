@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import React from "react";
 import type { PhotoItem } from "../api";
 import { FullscreenViewer } from "./FullscreenViewer";
 import css from "./FullscreenViewer.module.css";
@@ -57,6 +58,10 @@ vi.mock("hls.js", () => ({
     on = hlsOnMock;
     destroy = hlsDestroyMock;
   },
+}));
+
+vi.mock("./MiniMap", () => ({
+  MiniMap: () => <div data-testid="mini-map">mini-map</div>,
 }));
 
 const createPhoto = (overrides: Partial<PhotoItem> = {}): PhotoItem => ({

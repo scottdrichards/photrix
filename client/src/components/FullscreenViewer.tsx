@@ -4,6 +4,7 @@ import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
 import { negotiateVideoPlayback } from "../api";
 import { useSelectionContext } from "./selection/SelectionContext";
+import { MiniMap } from "./MiniMap";
 import css from "./FullscreenViewer.module.css";
 
 const SWIPE_THRESHOLD_PX = 60;
@@ -71,7 +72,7 @@ export function FullscreenViewer() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
-  const durationIntervalRef = useRef<number | null>(null);
+
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null);
@@ -102,10 +103,6 @@ export function FullscreenViewer() {
     let cancelled = false;
 
     const destroyHls = () => {
-      if (durationIntervalRef.current !== null) {
-        clearInterval(durationIntervalRef.current);
-        durationIntervalRef.current = null;
-      }
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -174,10 +171,13 @@ export function FullscreenViewer() {
                   ? (callbackContext as { type?: string }).type
                   : undefined;
 
-              if (requestType === "manifest" && details?.xhr) {
+              if ((requestType === "manifest" || requestType === "level") && details?.xhr) {
                 const durationHeader = details.xhr.getResponseHeader("X-Content-Duration");
                 if (durationHeader) {
-                  serverDuration = parseFloat(durationHeader);
+                  const parsed = parseFloat(durationHeader);
+                  if (Number.isFinite(parsed) && parsed > 0) {
+                    serverDuration = parsed;
+                  }
                 }
               }
               originalOnSuccess(...onSuccessArgs);
@@ -208,40 +208,50 @@ export function FullscreenViewer() {
 
           const getDuration = () => serverDuration ?? knownDuration ?? video.duration;
 
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            safePlay(video, "[HLS] Autoplay prevented:");
-          });
-
-          const durationInterval = setInterval(() => {
+          // Apply known duration to the MediaSource so the scrubber shows total length
+          // even while the event playlist is still growing (no #EXT-X-ENDLIST yet).
+          // Called after buffer appends (when updating is guaranteed false) and after
+          // each variant playlist load — both are more reliable than a polling interval.
+          // Unsubscribes once duration is successfully set to avoid redundant invocations.
+          const applyKnownDuration = () => {
             const dur = getDuration();
-            if (dur && Number.isFinite(dur) && dur > 0 && hls.media && hls.media.duration !== dur) {
-              try {
-                const media = hls.media as HlsMediaWithSource | null;
-                const mediaSource = media?.mediaSource;
-                if (
-                  mediaSource &&
-                  mediaSource.readyState === "open" &&
-                  !mediaSource.updating
-                ) {
-                  mediaSource.duration = dur;
-                }
-              } catch {
-                // Ignore - duration setting may not be allowed
-              }
+            if (!(dur && Number.isFinite(dur) && dur > 0)) return;
+            const media = hls.media as HlsMediaWithSource | null;
+            const mediaSource = media?.mediaSource;
+            if (
+              !mediaSource ||
+              mediaSource.readyState !== "open" ||
+              mediaSource.updating
+            ) return;
+            if (media.duration === dur) return;
+            try {
+              mediaSource.duration = dur;
+              // Successfully set duration; stop listening to avoid redundant calls
+              hls.off(Hls.Events.MANIFEST_PARSED, manifestParsedHandler);
+              hls.off(Hls.Events.LEVEL_LOADED, applyKnownDuration);
+              hls.off(Hls.Events.BUFFER_APPENDED, applyKnownDuration);
+            } catch {
+              // Setting duration may not be permitted at this moment; keep listening
             }
-          }, 1000);
+          };
+
+          const manifestParsedHandler = () => {
+            safePlay(video, "[HLS] Autoplay prevented:");
+            applyKnownDuration();
+          };
+
+          hls.on(Hls.Events.MANIFEST_PARSED, manifestParsedHandler);
+          hls.on(Hls.Events.LEVEL_LOADED, applyKnownDuration);
+          hls.on(Hls.Events.BUFFER_APPENDED, applyKnownDuration);
 
           hls.on(Hls.Events.ERROR, (event, data) => {
             if (data.fatal) {
-              clearInterval(durationInterval);
               if (photo.fullUrl) {
                 video.src = photo.fullUrl;
                 safePlay(video, "[HLS] Autoplay prevented (fallback):");
               }
             }
           });
-
-          durationIntervalRef.current = durationInterval;
           hlsRef.current = hls;
           return;
         }
@@ -524,6 +534,10 @@ export function FullscreenViewer() {
                   <dd>{photo.name}</dd>
                 </div>
               </dl>
+              <MiniMap
+                latitude={photo.metadata?.locationLatitude}
+                longitude={photo.metadata?.locationLongitude}
+              />
               <h4 className={css.infoSubtitle}>Metadata</h4>
               {metadataEntries.length === 0 ? (
                 <p className={css.infoEmpty}>No metadata available.</p>
