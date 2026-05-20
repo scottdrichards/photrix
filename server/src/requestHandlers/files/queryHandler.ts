@@ -23,21 +23,22 @@ export const queryHandler = async (
   const southParam = url.searchParams.get("south");
   const aggregate = url.searchParams.get("aggregate");
 
-  const pathFilter: QueryOptions["filter"] = directoryPath
-    ? {
-        folder: {
-          folder: directoryPath,
-          recursive: includeSubfolders,
-        },
-      }
-    : {};
-
-  const filter = filterParam
-    ? {
-        operation: "and" as const,
-        conditions: [pathFilter, JSON.parse(filterParam) as QueryOptions["filter"]],
-      }
-    : pathFilter;
+  const filter = {
+    operation: "and" as const,
+    conditions: [
+      ...(directoryPath || includeSubfolders
+        ? [
+            {
+              folder: {
+                folder: directoryPath ?? "/",
+                recursive: includeSubfolders,
+              },
+            },
+          ]
+        : []),
+      ...(filterParam ? [JSON.parse(filterParam) as QueryOptions["filter"]] : []),
+    ],
+  };
 
   // Parse metadata (comma-separated list or JSON array)
   let metadata: Array<string> = [];

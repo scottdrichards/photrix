@@ -44,7 +44,7 @@ describe("generateMultibitrateHLS", () => {
     expect(out).toBe(masterPath);
   });
 
-  it("generates all 3 variants in a single FFmpeg process and writes .complete marker", async () => {
+  it("generates all 4 variants in a single FFmpeg process and writes .complete marker", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-success-"));
     process.env.CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
@@ -85,15 +85,16 @@ describe("generateMultibitrateHLS", () => {
     });
 
     expect(masterPath).toBe(getMasterPlaylistPath(hlsDir));
-    // 1 GPU detection call + 1 combined encode call (all 3 variants in one process)
+    // 1 GPU detection call + 1 combined encode call (all 4 variants in one process)
     expect(spawnMock).toHaveBeenCalledTimes(2);
 
     const encodeArgs = spawnMock.mock.calls[1]?.[1] as string[];
-    // All 3 scale filters are in the single filter_complex argument
+    // All 4 scale filters are in the single filter_complex argument
     const filterComplex = encodeArgs[encodeArgs.indexOf("-filter_complex") + 1] ?? "";
     expect(filterComplex).toContain("scale=-2:360");
     expect(filterComplex).toContain("scale=-2:720");
     expect(filterComplex).toContain("scale=-2:1080");
+    expect(filterComplex).toContain("scale=-2:2160");
     expect(filterComplex).toContain("fps=30");
 
     // .complete marker should exist
@@ -122,8 +123,8 @@ describe("generateMultibitrateHLS", () => {
           return;
         }
 
-        // Software fallback — write all 3 output playlists
-        // (last arg is the 1080p output, but dirs for 360p/720p should exist)
+        // Software fallback — write output playlists
+        // (last arg is the 2160p output, but dirs for lower variants should exist)
         const playlistPath = args.at(-1);
         if (playlistPath) {
           mkdirSync(path.dirname(playlistPath), { recursive: true });

@@ -92,6 +92,39 @@ describe("filesEndpointRequestHandler", () => {
     });
   });
 
+  it("omits the root path filter for recursive root queries with an explicit filter", async () => {
+    const { res } = createMockResponse();
+    const queryFiles = jest.fn(async () => ({
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 200,
+    }));
+
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/?includeSubfolders=true&filter=%7B%22mimeType%22%3A%7B%22startsWith%22%3A%22video%2F%22%7D%7D&page=1&pageSize=200",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      {
+        database: { queryFiles } as unknown as IndexDatabase,
+        storageRoot: os.tmpdir(),
+        orchestrator,
+      },
+    );
+
+    expect(queryFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filter: {
+          mimeType: {
+            startsWith: "video/",
+          },
+        },
+      }),
+    );
+  });
+
   it("returns 403 for path traversal attempt", async () => {
     const { res, getBody } = createMockResponse();
     const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-root-"));

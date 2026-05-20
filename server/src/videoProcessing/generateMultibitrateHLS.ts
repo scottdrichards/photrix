@@ -5,7 +5,7 @@ import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
 import { getGpuAcceleration, type GpuAcceleration } from "./gpuAcceleration.ts";
 
-/** HLS quality variants: 360p fast-start, 720p standard, 1080p quality — all at 30fps */
+/** HLS quality variants: 360p fast-start, 720p standard, 1080p quality, 2160p 4K — all at 30fps */
 const HLS_VARIANTS = [
   { height: 360, bitrate: 800_000, maxrate: "1M", bufsize: "1.5M", audioBitrate: "96k" },
   { height: 720, bitrate: 2_500_000, maxrate: "4M", bufsize: "4M", audioBitrate: "128k" },
@@ -15,6 +15,13 @@ const HLS_VARIANTS = [
     maxrate: "8M",
     bufsize: "8M",
     audioBitrate: "128k",
+  },
+  {
+    height: 2160,
+    bitrate: 12_000_000,
+    maxrate: "15M",
+    bufsize: "18M",
+    audioBitrate: "192k",
   },
 ] as const;
 
@@ -104,7 +111,7 @@ export const getMultibitrateHLSInfo = async (
 
 /**
  * Generates all variant streams in a single FFmpeg process using filter_complex split.
- * Decodes the source once and encodes 360p/720p/1080p in parallel.
+ * Decodes the source once and encodes 360p/720p/1080p/2160p in parallel.
  * Falls back to software encoding if GPU acceleration fails.
  */
 const generateAllVariants = (
@@ -204,6 +211,7 @@ const VARIANT_RESOLUTIONS: Record<number, string> = {
   360: "640x360",
   720: "1280x720",
   1080: "1920x1080",
+  2160: "3840x2160",
 };
 
 /**
@@ -260,8 +268,8 @@ export const prepareMultibitrateHLSStructure = async (
 };
 
 /**
- * Generates multi-bitrate HLS (360p + 720p + 1080p @ 30fps) using a single FFmpeg process.
- * All three variants are encoded in parallel via filter_complex split.
+ * Generates multi-bitrate HLS (360p + 720p + 1080p + 2160p @ 30fps) using a single FFmpeg process.
+ * All variants are encoded in parallel via filter_complex split.
  *
  * The master playlist is written before FFmpeg starts (via prepareMultibitrateHLSStructure)
  * so clients can begin requesting segments immediately while encoding is in progress.
