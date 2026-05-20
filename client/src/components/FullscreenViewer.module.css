@@ -54,8 +54,10 @@
 }
 
 .videoWrapper {
-  max-width: 90%;
-  max-height: 90%;
+  width: min(90vw, calc(90vh * var(--video-ar, 1.7778)));
+  max-width: 90vw;
+  max-height: 90vh;
+  height: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -64,6 +66,7 @@
 .videoMedia {
   width: 100%;
   height: 100%;
+  object-fit: contain;
   display: block;
 }
 

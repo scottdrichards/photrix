@@ -451,7 +451,14 @@ export function FullscreenViewer() {
               <>
                 <div
                   className={css.videoWrapper}
-                  style={videoAspectRatio ? { aspectRatio: videoAspectRatio } : undefined}
+                  style={
+                    videoAspectRatio
+                      ? ({
+                          aspectRatio: videoAspectRatio,
+                          "--video-ar": videoAspectRatio,
+                        } as React.CSSProperties)
+                      : undefined
+                  }
                 >
                   <video
                     ref={videoRef}
