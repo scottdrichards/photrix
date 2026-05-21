@@ -189,12 +189,8 @@ const constraintToSQL = (
       const escapedFolder = escapeLikeLiteral(normalizedFolder);
 
       if (folderConstraint.recursive) {
-        // Special case: root recursive matches every row. Returning a WHERE
-        // clause makes SQLite prefer the folder index and full-set sort, which
-        // freezes the read worker on large libraries. Returning no WHERE lets
-        // the planner walk `sort_date` in order and stop at LIMIT.
         if (normalizedFolder === "/") {
-          return { where: "", params: [] };
+          return null;
         }
 
         return {

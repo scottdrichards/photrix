@@ -35,6 +35,11 @@ describe("filterToSQL", () => {
     expect(result.params).toEqual(["/albums/2024/%"]);
   });
 
+  it("omits where clause for root recursive folder filter", () => {
+    const result = filterToSQL({ folder: { folder: "/", recursive: true } });
+    expect(result).toEqual({ where: "", params: [] });
+  });
+
   it("builds json-array contains lookup for tags", () => {
     const result = filterToSQL({ tags: "family" });
     expect(result.where).toContain("json_each(tags)");
