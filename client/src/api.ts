@@ -188,6 +188,7 @@ export const subscribeStatusStream = (
 
 const DEFAULT_METADATA_KEYS = [
   "mimeType",
+  "regions",
   "dimensionWidth",
   "dimensionHeight",
   "dateTaken",

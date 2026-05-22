@@ -1,12 +1,12 @@
 import {
-  Camera,
-  Calendar,
-  Folder,
-  Image,
-  MapPin,
-  User,
-  Star,
-} from "lucide-react";
+  Calendar24Regular,
+  Camera24Regular,
+  Folder24Regular,
+  Image24Regular,
+  Location24Regular,
+  Person24Regular,
+  Star24Regular,
+} from "@fluentui/react-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Spinner } from "../../Spinner";
 import css from "./Filter.module.css";
@@ -250,7 +250,7 @@ export const Filter = () => {
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "folders" || isFolderFilterActive ? "btn-primary" : "btn-subtle"}`}
           onClick={() => setActivePanel(activePanel === "folders" ? null : "folders")}
         >
-          <Folder size={20} />
+          <Folder24Regular fontSize={20} />
         </button>
         {activePanel === "folders" && (
           <div className={`popover-surface ${css.panelSurface}`}>
@@ -303,7 +303,7 @@ export const Filter = () => {
                       tabIndex={0}
                     >
                       <span className={css.folderIcon}>
-                        <Folder size={20} />
+                        <Folder24Regular fontSize={20} />
                       </span>
                       <span>{folder}</span>
                     </div>
@@ -326,7 +326,7 @@ export const Filter = () => {
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "type" || isMediaTypeFilterActive ? "btn-primary" : "btn-subtle"}`}
           onClick={() => setActivePanel(activePanel === "type" ? null : "type")}
         >
-          <Image size={20} />
+          <Image24Regular fontSize={20} />
         </button>
         {activePanel === "type" && (
           <div className={`popover-surface ${css.panelSurface}`}>
@@ -357,7 +357,7 @@ export const Filter = () => {
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "people" || isPeopleFilterActive ? "btn-primary" : "btn-subtle"}`}
           onClick={() => setActivePanel(activePanel === "people" ? null : "people")}
         >
-          <User size={20} />
+          <Person24Regular fontSize={20} />
         </button>
         {activePanel === "people" && (
           <div className={`popover-surface ${css.panelSurface}`}>
@@ -392,7 +392,7 @@ export const Filter = () => {
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "gear" || isGearFilterActive ? "btn-primary" : "btn-subtle"}`}
           onClick={() => setActivePanel(activePanel === "gear" ? null : "gear")}
         >
-          <Camera size={20} />
+          <Camera24Regular fontSize={20} />
         </button>
         {activePanel === "gear" && (
           <div className={`popover-surface ${css.panelSurface}`}>
@@ -446,7 +446,7 @@ export const Filter = () => {
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "rating" || isRatingFilterActive ? "btn-primary" : "btn-subtle"}`}
           onClick={() => setActivePanel(activePanel === "rating" ? null : "rating")}
         >
-          <Star size={20} />
+          <Star24Regular fontSize={20} />
         </button>
         {activePanel === "rating" && (
           <div className={`popover-surface ${css.panelSurface}`}>
@@ -461,9 +461,9 @@ export const Filter = () => {
                     title={`${star} star${star > 1 ? "s" : ""}`}
                   >
                     {ratingValue !== null && star <= ratingValue ? (
-                      <Star size={24} fill="currentColor" />
+                      <Star24Regular fontSize={24} primaryFill="currentColor" />
                     ) : (
-                      <Star size={24} />
+                      <Star24Regular fontSize={24} />
                     )}
                   </button>
                 ))}
@@ -508,7 +508,7 @@ export const Filter = () => {
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "date" || isDateFilterActive ? "btn-primary" : "btn-subtle"}`}
           onClick={() => setActivePanel(activePanel === "date" ? null : "date")}
         >
-          <Calendar size={20} />
+          <Calendar24Regular fontSize={20} />
         </button>
         {activePanel === "date" && (
           <div className={`popover-surface ${css.panelSurface}`}>
@@ -526,7 +526,7 @@ export const Filter = () => {
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "map" || isMapFilterActive ? "btn-primary" : "btn-subtle"}`}
           onClick={() => setActivePanel(activePanel === "map" ? null : "map")}
         >
-          <MapPin size={20} />
+          <Location24Regular fontSize={20} />
         </button>
         {activePanel === "map" && (
           <div className={`popover-surface ${css.mapPanelSurface}`}>

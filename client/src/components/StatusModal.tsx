@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Film, Image } from "lucide-react";
+import { Filmstrip24Regular, Image24Regular } from "@fluentui/react-icons";
 import {
   setBackgroundTasksEnabled,
   subscribeStatusStream,
@@ -216,11 +216,11 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                 <span className={css.label}>Files:</span>
                 <span className={css.value}>{status.files.total.toLocaleString()}</span>
                 <span className={css.mediaCount}>
-                  <Image size={14} aria-label="Photos" />
+                  <Image24Regular fontSize={14} aria-label="Photos" />
                   {status.files.images.toLocaleString()}
                 </span>
                 <span className={css.mediaCount}>
-                  <Film size={14} aria-label="Videos" />
+                  <Filmstrip24Regular fontSize={14} aria-label="Videos" />
                   {status.files.videos.toLocaleString()}
                 </span>
               </span>

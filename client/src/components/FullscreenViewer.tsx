@@ -1,5 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { Film, Info, X } from "lucide-react";
+import { SVGProps, useEffect, useMemo, useRef, useState } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import {
+  Dismiss24Regular,
+  Filmstrip24Regular,
+  Info24Regular,
+  ScanPerson24Regular,
+} from "@fluentui/react-icons";
 import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
 import { negotiateVideoPlayback } from "../api";
@@ -24,10 +30,10 @@ type HlsMediaWithSource = HTMLMediaElement & {
   mediaSource?: MediaSource & { updating?: boolean };
 };
 
-const safePlay = (video: HTMLVideoElement, logPrefix: string) => {
+const safePlay = (video: HTMLVideoElement, _logPrefix: string) => {
   const playResult = video.play();
   if (playResult && typeof playResult.catch === "function") {
-    playResult.catch((err) => {
+    playResult.catch((_err) => {
     });
   }
 };
@@ -38,6 +44,15 @@ const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
   hls: "HLS",
   direct: "Raw Video",
   incompatible: "No Compatible Stream",
+};
+
+type FaceRegion = {
+  area: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 };
 
 const formatMetadataValue = (value: unknown): string => {
@@ -60,6 +75,129 @@ const formatMetadataValue = (value: unknown): string => {
   }
 };
 
+
+const toFaceRegions = (raw: unknown): FaceRegion[] => {
+  const unwrapJsonString = (value: unknown): unknown => {
+    let current = value;
+    while (typeof current === "string") {
+      try {
+        current = JSON.parse(current);
+      } catch {
+        return current;
+      }
+    }
+    return current;
+  };
+
+  const unwrapped = unwrapJsonString(raw);
+
+  if (!Array.isArray(unwrapped)) {
+    return [];
+  }
+
+  return unwrapped
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    .map((entry) => {
+      const area = entry.area;
+      if (!area || typeof area !== "object") {
+        return null;
+      }
+
+      const areaRecord = area as Record<string, unknown>;
+      const x = areaRecord.x;
+      const y = areaRecord.y;
+      const width = areaRecord.width;
+      const height = areaRecord.height;
+
+      if (
+        typeof x !== "number" ||
+        typeof y !== "number" ||
+        typeof width !== "number" ||
+        typeof height !== "number"
+      ) {
+        return null;
+      }
+
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+        return null;
+      }
+
+      if (width <= 0 || height <= 0) {
+        return null;
+      }
+      
+      const clampToUnit = (value: number) => Math.min(Math.max(value, 0), 1);
+      return {
+        area: {
+          x: clampToUnit(x),
+          y: clampToUnit(y),
+          width: clampToUnit(width),
+          height: clampToUnit(height),
+        },
+      };
+    })
+    .filter((entry): entry is FaceRegion => entry !== null);
+};
+;
+
+
+const faceRegionToSVGProps = (
+  { area }: FaceRegion,
+  aspectRatio = 1,
+): SVGProps<SVGRectElement> => {
+    const FACE_MASK_PADDING_RATIO = 0.16;
+    const width = area.width;
+    const height = area.height;
+    const padding = Math.max(width, height) * FACE_MASK_PADDING_RATIO;
+    const left = area.x - width / 2 - padding;
+    const top = area.y - height / 2 - padding;
+
+    const FACE_MASK_CORNER_RATIO = 0.42;
+    const rectWidth = width + padding * 2;
+    const rectHeight = height + padding * 2;
+    const radius = Math.min(rectWidth, rectHeight) * FACE_MASK_CORNER_RATIO;
+    return {
+      x: left,
+      y: top,
+      width: rectWidth,
+      height: rectHeight,
+      rx: radius,
+      ry: radius * aspectRatio,
+    };
+};
+
+const FaceRects: React.FC<{
+  regions: FaceRegion[];
+  aspectRatio?: number;
+} & SVGProps<SVGRectElement>> = ({ regions, aspectRatio = 1, ...svgProps }) =>
+  regions.map((region, index) => (
+    <rect {...{ ...faceRegionToSVGProps(region, aspectRatio), ...svgProps }} key={index} />
+  ));
+  
+      
+const toFaceMaskImage = (FaceRects: React.ReactNode): string | null => {
+  if (!FaceRects) {
+    return null;
+  }
+    
+  const featherStdDev = 0.003;
+  const svg = renderToStaticMarkup(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1" preserveAspectRatio="none">
+      <defs>
+        <filter id="face-feather" x="-25%" y="-25%" width="150%" height="150%">
+          <feGaussianBlur stdDeviation={featherStdDev} />
+        </filter>
+      </defs>
+      <rect x="0" y="0" width="1" height="1" fill="white" />
+      <g filter="url(#face-feather)">
+        {FaceRects}
+      </g>
+    </svg>,
+  );
+  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
+};
+
+
 export function FullscreenViewer() {
   const {
     selected: selectedPhoto,
@@ -76,8 +214,11 @@ export function FullscreenViewer() {
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null);
+  const [photoAspectRatio, setPhotoAspectRatio] = useState(1);
   const [showLiveVideo, setShowLiveVideo] = useState(false);
   const [showFileInfo, setShowFileInfo] = useState(false);
+  const [showFaces, setShowFaces] = useState(false);
+  const [isFaceOverlayMounted, setIsFaceOverlayMounted] = useState(false);
   const [photoZoom, setPhotoZoom] = useState({
     isZoomed: false,
     originXPercent: 50,
@@ -87,6 +228,8 @@ export function FullscreenViewer() {
 
   useEffect(() => {
     setShowLiveVideo(false);
+    setShowFaces(false);
+    setPhotoAspectRatio(1);
     setPhotoZoom({
       isZoomed: false,
       originXPercent: 50,
@@ -264,7 +407,7 @@ export function FullscreenViewer() {
         }
 
         video.src = photo.fullUrl;
-      } catch (error) {
+      } catch {
         video.src = photo.fullUrl;
         safePlay(video, "[Video] Autoplay prevented (fallback):");
       }
@@ -410,6 +553,49 @@ export function FullscreenViewer() {
     ([, value]) => value !== undefined,
   );
 
+  
+  const faceRegions = useMemo(
+    () => toFaceRegions(photo?.metadata?.regions),
+    [photo?.metadata?.regions],
+  );
+
+  const faceMaskImage = useMemo(
+    () => toFaceMaskImage(<FaceRects regions={faceRegions} aspectRatio={photoAspectRatio} fill="black" />),
+    [faceRegions, photoAspectRatio],
+  );
+
+  const faceToggleDisabled = photo?.mediaType === "video" || faceMaskImage === null;
+  const canRenderFaceOverlay = !faceToggleDisabled && !showLiveVideo && !!faceMaskImage;
+  const showFaceOverlay = canRenderFaceOverlay && showFaces;
+  const shouldRenderFaceOverlay = showFaceOverlay || isFaceOverlayMounted;
+
+  useEffect(() => {
+    if (showFaceOverlay) {
+      setIsFaceOverlayMounted(true);
+      return;
+    }
+
+    if (!isFaceOverlayMounted) {
+      return;
+    }
+
+    const FADE_DURATION_MS = 140;
+    const timeout = window.setTimeout(() => {
+      setIsFaceOverlayMounted(false);
+    }, FADE_DURATION_MS);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [showFaceOverlay, isFaceOverlayMounted]);
+
+  const zoomStyle = {
+    "--zoom-origin-x": `${photoZoom.originXPercent}%`,
+    "--zoom-origin-y": `${photoZoom.originYPercent}%`,
+    "--zoom-scale": photoZoom.isZoomed ? photoZoom.scale.toString() : "1",
+    "--zoom-cursor": photoZoom.isZoomed ? "zoom-out" : "zoom-in",
+  } as React.CSSProperties;
+
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
     <dialog
@@ -431,19 +617,29 @@ export function FullscreenViewer() {
             <div className={css.topRightActions}>
               <button
                 type="button"
+                onClick={() => setShowFaces((current) => !current)}
+                className={css.faceButton}
+                aria-label={showFaces ? "Hide faces" : "Show faces"}
+                title={showFaces ? "Hide faces" : "Show faces"}
+                disabled={faceToggleDisabled}
+              >
+                <ScanPerson24Regular />
+              </button>
+              <button
+                type="button"
                 onClick={() => setShowFileInfo((current) => !current)}
                 className={css.infoButton}
                 aria-label={showFileInfo ? "Hide file info" : "Show file info"}
                 title={showFileInfo ? "Hide file info" : "Show file info"}
               >
-                <Info size={22} />
+                <Info24Regular />
               </button>
               <button
                 onClick={() => setSelected(null)}
                 className={css.closeButton}
                 aria-label="Close"
               >
-                <X size={24} />
+                <Dismiss24Regular />
               </button>
             </div>
             {photo.mediaType !== "video" && photo.livePhotoUrl && (
@@ -454,7 +650,7 @@ export function FullscreenViewer() {
                 aria-label={showLiveVideo ? "Show photo" : "Play live photo"}
                 title={showLiveVideo ? "Show photo" : "Play live photo"}
               >
-                <Film size={20} />
+                <Filmstrip24Regular />
               </button>
             )}
             {photo.mediaType === "video" ? (
@@ -505,20 +701,49 @@ export function FullscreenViewer() {
                 className={css.media}
               />
             ) : (
-              <img
-                src={photo.fullUrl}
-                alt={photo.name}
-                className={`${css.media} ${css.zoomableMedia} ${photoZoom.isZoomed ? css.zoomedMedia : ""}`}
-                onClick={handlePhotoClick}
-                onWheel={handlePhotoWheel}
-                style={
-                  {
-                    "--zoom-origin-x": `${photoZoom.originXPercent}%`,
-                    "--zoom-origin-y": `${photoZoom.originYPercent}%`,
-                    "--zoom-scale": photoZoom.scale.toString(),
-                  } as React.CSSProperties
-                }
-              />
+              <div className={css.photoFrame} style={zoomStyle}>
+                {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */}
+                <img
+                  src={photo.fullUrl}
+                  alt={photo.name}
+                  className={photoZoom.isZoomed ? `${css.photoMedia} ${css.zoomedMedia}` : css.photoMedia}
+                  onClick={handlePhotoClick}
+                  onWheel={handlePhotoWheel}
+                  onLoad={(e) => {
+                    const { naturalWidth, naturalHeight } = e.currentTarget;
+                    if (naturalWidth > 0 && naturalHeight > 0) {
+                      setPhotoAspectRatio(naturalWidth / naturalHeight);
+                    }
+                  }}
+                  style={zoomStyle}
+                />
+                {shouldRenderFaceOverlay && (
+                  <>
+                    <div
+                      className={`${css.faceBackdropLayer} ${showFaceOverlay ? css.faceOverlayVisible : ""}`}
+                      style={{
+                        maskImage: faceMaskImage,
+                        WebkitMaskImage: faceMaskImage,
+                      } as React.CSSProperties}
+                      aria-hidden="true"
+                    />
+                    <svg
+                      className={`${css.faceFrameLayer} ${showFaceOverlay ? css.faceOverlayVisible : ""}`}
+                      viewBox="0 0 1 1"
+                      preserveAspectRatio="none"
+                      width="100%"
+                      height="100%"
+                      aria-hidden="true"
+                    >
+                      <FaceRects
+                        regions={faceRegions}
+                        aspectRatio={photoAspectRatio}
+                        className={css.faceFrameRect}
+                      />
+                    </svg>
+                  </>
+                )}
+              </div>
             )}
           </div>
           {showFileInfo && (

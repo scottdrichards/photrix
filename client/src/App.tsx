@@ -1,4 +1,4 @@
-import { Info } from "lucide-react";
+import { Info24Regular } from "@fluentui/react-icons";
 import { useEffect, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
@@ -135,7 +135,7 @@ const AppContent = () => {
             className="btn btn-subtle"
             onClick={() => setIsStatusOpen(true)}
           >
-            <Info size={20} />
+            <Info24Regular fontSize={20} />
             Status
           </button>
         </div>

@@ -17,8 +17,8 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,jsx,json,css,scss,md,mjs,cjs}\" \"*.{json,md}\" \"vite.config.ts\" \"eslint.config.mjs\""
   },
   "dependencies": {
+    "@fluentui/react-icons": "^2.0.327",
     "hls.js": "^1.6.15",
-    "lucide-react": "^0.468.0",
     "ol": "^9.2.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

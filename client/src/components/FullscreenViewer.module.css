@@ -40,17 +40,16 @@
   display: block;
 }
 
-.zoomableMedia {
+.photoFrame > :is(.photoMedia, .faceBackdropLayer) {
   transform-origin: var(--zoom-origin-x, 50%) var(--zoom-origin-y, 50%);
-  transform: scale(1);
-  cursor: zoom-in;
+  transform: scale(var(--zoom-scale, 1));
+  cursor: var(--zoom-cursor, zoom-in);
   transition: transform 180ms ease-out;
   will-change: transform;
 }
 
 .zoomedMedia {
-  transform: scale(var(--zoom-scale, 2.5));
-  cursor: zoom-out;
+  cursor: var(--zoom-cursor, zoom-out);
 }
 
 .videoWrapper {
@@ -70,6 +69,66 @@
   display: block;
 }
 
+.photoFrame {
+  position: relative;
+  line-height: 0;
+  display: inline-block;
+  width: fit-content;
+  max-width: 90vw;
+  max-height: 90vh;
+}
+
+.photoMedia {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  display: block;
+}
+
+.faceBackdropLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  background: rgba(0, 0, 0, 0.05);
+  backdrop-filter: blur(clamp(0.3px, 0.1vmin, 12px)) brightness(0.75);
+  mask-mode: luminance;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: 100% 100%;
+  transition: opacity 140ms ease-out;
+}
+
+.faceFrameLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  transform-origin: var(--zoom-origin-x, 50%) var(--zoom-origin-y, 50%);
+  transform: scale(var(--zoom-scale, 1));
+  opacity: 0;
+  filter: none;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+  transition:
+    transform 180ms ease-out,
+    opacity 140ms ease-out;
+}
+
+.faceOverlayVisible {
+  opacity: 1;
+}
+
+.faceFrameRect {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.45);
+  stroke-width: calc(2px / var(--zoom-scale, 1));
+  vector-effect: non-scaling-stroke;
+  shape-rendering: geometricPrecision;
+}
+
 .topRightActions {
   position: absolute;
   top: var(--space-m);
@@ -80,7 +139,8 @@
 }
 
 .closeButton,
-.infoButton {
+.infoButton,
+.faceButton {
   color: var(--fg-inv);
   background: transparent;
   border: none;
@@ -92,8 +152,14 @@
 }
 
 .closeButton:hover,
-.infoButton:hover {
+.infoButton:hover,
+.faceButton:hover {
   background-color: rgba(255, 255, 255, 0.1);
+}
+
+.faceButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .livePhotoButton {

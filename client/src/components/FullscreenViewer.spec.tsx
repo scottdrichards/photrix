@@ -176,6 +176,68 @@ describe("FullscreenViewer", () => {
     expect(screen.getByText("A7R V")).toBeInTheDocument();
   });
 
+  it("toggles face overlays for photo regions", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        metadata: {
+          regions: [
+            {
+              name: "Person A",
+              area: {
+                x: 0.5,
+                y: 0.6,
+                width: 0.4,
+                height: 0.4,
+              },
+            },
+            {
+              name: "Person B",
+              area: {
+                x: 0.7,
+                y: 0.3,
+                width: 0.2,
+                height: 0.2,
+              },
+            },
+          ],
+        },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+
+    expect(container.querySelectorAll(`.${css.faceBackdropLayer}`)).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show faces" }));
+
+    const layers = container.querySelectorAll(`.${css.faceBackdropLayer}`);
+    expect(layers).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Hide faces" })).toBeInTheDocument();
+    expect(
+      (layers[0] as HTMLElement).style.maskImage,
+    ).toContain("data:image/svg+xml");
+  });
+
+  it("disables face toggle for video media items", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        mediaType: "video",
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    render(<FullscreenViewer />);
+
+    expect(screen.getByRole("button", { name: "Show faces" })).toBeDisabled();
+  });
+
   it("zooms the photo around clicked coordinates", () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto(),
