@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import App from "./App";
 
 const useSelectionContextMock = vi.fn();
+const useSyncUrlWithFilterMock = vi.fn();
 const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
   bandwidthMbps: 20,
   hevcSupported: true,
@@ -14,6 +15,10 @@ vi.mock("./components/filter/Filter", () => ({
 
 vi.mock("./components/filter/FilterContext", () => ({
   FilterProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("./hooks/useSyncUrlWithFilter", () => ({
+  useSyncUrlWithFilter: (...args: unknown[]) => useSyncUrlWithFilterMock(...args),
 }));
 
 vi.mock("./components/selection/SelectionContext", () => ({
@@ -42,6 +47,7 @@ vi.mock("./videoPlaybackProfile", () => ({
 describe("App", () => {
   beforeEach(() => {
     useSelectionContextMock.mockReset();
+    useSyncUrlWithFilterMock.mockReset();
     probeVideoPlaybackProfileMock.mockClear();
   });
 
@@ -58,6 +64,10 @@ describe("App", () => {
     render(<App />);
 
     expect(probeVideoPlaybackProfileMock).toHaveBeenCalledTimes(1);
+    expect(useSyncUrlWithFilterMock).toHaveBeenCalledWith(
+      "library",
+      expect.any(Function),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
 
     expect(setSelectionMode).toHaveBeenCalledWith(true);

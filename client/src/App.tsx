@@ -11,13 +11,17 @@ import {
   SelectionProvider,
   useSelectionContext,
 } from "./components/selection/SelectionContext";
+import { useSyncUrlWithFilter } from "./hooks/useSyncUrlWithFilter";
 import { probeVideoPlaybackProfile } from "./videoPlaybackProfile";
 
 const AppContent = () => {
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [view, setView] = useState<"library">("library");
   const { clearSelection, selectedItems, selectionMode, setSelectionMode } =
     useSelectionContext();
+
+  useSyncUrlWithFilter(view, setView);
 
   useEffect(() => {
     void probeVideoPlaybackProfile();
