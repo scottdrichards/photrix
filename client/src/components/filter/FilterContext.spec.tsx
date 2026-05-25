@@ -1,8 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { FilterProvider, useFilterContext } from "./FilterContext";
+import { FilterProvider, useFilter } from "./FilterContext";
 
 const FilterContextHarness = () => {
-  const { filter, setFilter } = useFilterContext();
+  const { filter, setFilter } = useFilter();
 
   return (
     <>

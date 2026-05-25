@@ -17,7 +17,7 @@ import { fetchGeotaggedPhotos } from "../api";
 import type { GeoPoint } from "../api";
 import type { GeoBoundsLike as GeoBounds } from "../../../shared/filter-contract/src";
 import { markerStyle } from "./MapFilter.styles";
-import { useFilterContext } from "./filter/FilterContext";
+import { useFilter } from "./filter/FilterContext";
 
 type MapFilterProps = {
   compact?: boolean;
@@ -47,7 +47,7 @@ const maybeBoundsEqual = (
 };
 
 export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
-  const { filter, setFilter } = useFilterContext();
+  const { filter, setFilter } = useFilter();
   const { locationBounds } = filter;
   const normalizedLocationBounds = locationBounds ?? undefined;
 

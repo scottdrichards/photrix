@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useFilterContext } from "../components/filter/FilterContext";
+import { useFilter } from "../components/filter/FilterContext";
 
 export type ViewMode = "library";
 
@@ -7,7 +7,7 @@ export const useSyncUrlWithFilter = (
   view: ViewMode,
   setView: (v: ViewMode) => void,
 ): void => {
-  const { filter, setFilter } = useFilterContext();
+  const { filter, setFilter } = useFilter();
   const currentPath = filter.path?.replace(/\/$/, "") ?? "";
 
   // Sync URL when filter or view changes

@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 import { fetchPhotos } from "../api";
 import { Spinner } from "../Spinner";
-import { useFilterContext } from "./filter/FilterContext";
+import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { ThumbnailTile } from "./ThumbnailTile";
 import css from "./ThumbnailGrid.module.css";
@@ -10,7 +10,7 @@ import css from "./ThumbnailGrid.module.css";
 const PAGE_SIZE = 200;
 
 const ThumbnailGridComponent = () => {
-  const { filter } = useFilterContext();
+  const { filter } = useFilter();
   const { setItems } = useSelectionContext();
   const [page, setPage] = useState(1);
   const [data, setData] = useState<{

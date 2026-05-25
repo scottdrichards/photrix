@@ -3,7 +3,7 @@ import { Spinner } from "../Spinner";
 import css from "./DateHistogram.module.css";
 import { fetchDateHistogram } from "../api";
 import type { DateHistogramBucket } from "../api";
-import { useFilterContext } from "./filter/FilterContext";
+import { useFilter } from "./filter/FilterContext";
 
 type Range = { start: number; end: number } | null;
 
@@ -77,7 +77,7 @@ const buildTicks = (
 };
 
 export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
-  const { filter, setFilter } = useFilterContext();
+  const { filter, setFilter } = useFilter();
   const {
     includeSubfolders,
     path,

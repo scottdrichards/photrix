@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Filter } from "./Filter";
-import { FilterProvider, useFilterContext } from "./FilterContext";
+import { FilterProvider, useFilter } from "./FilterContext";
 
 const fetchFoldersMock = vi.fn();
 const fetchSuggestionsWithCountsMock = vi.fn();
@@ -24,12 +24,12 @@ vi.mock("../MapFilter", () => ({
 }));
 
 const FilterStateProbe = () => {
-  const { filter } = useFilterContext();
+  const { filter } = useFilter();
   return <pre data-testid="filter-state">{JSON.stringify(filter)}</pre>;
 };
 
 const FilterStateMutator = () => {
-  const { setFilter } = useFilterContext();
+  const { setFilter } = useFilter();
 
   return (
     <button

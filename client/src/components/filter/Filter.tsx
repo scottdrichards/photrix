@@ -15,7 +15,7 @@ import type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
 import { DateHistogram } from "../DateHistogram";
 import { MapFilter } from "../MapFilter";
 import { OptionListWithCounts } from "./OptionListWithCounts";
-import { useFilterContext } from "./FilterContext";
+import { useFilter } from "./FilterContext";
 import { SuggestionFilterField } from "./SuggestionFilterField";
 
 type FilterPanel =
@@ -29,7 +29,7 @@ type FilterPanel =
 
 export const Filter = () => {
   const filterBarRef = useRef<HTMLDivElement>(null);
-  const { filter, setFilter } = useFilterContext();
+  const { filter, setFilter } = useFilter();
   const {
     includeSubfolders,
     ratingFilter,

@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { FilterProvider, useFilterContext } from "../components/filter/FilterContext";
+import { FilterProvider, useFilter } from "../components/filter/FilterContext";
 import { useSyncUrlWithFilter, type ViewMode } from "./useSyncUrlWithFilter";
 
 const SyncHarness = ({ initialView = "library" as ViewMode } = {}) => {
   const [view, setView] = useState<ViewMode>(initialView);
   useSyncUrlWithFilter(view, setView);
-  const { filter, setFilter } = useFilterContext();
+  const { filter, setFilter } = useFilter();
 
   useEffect(() => {
     setFilter({ includeSubfolders: true, path: "" });
