@@ -1,5 +1,4 @@
-import { SVGProps, useEffect, useMemo, useRef, useState } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { useEffect, useRef, useState } from "react";
 import {
   Dismiss24Regular,
   Filmstrip24Regular,
@@ -9,6 +8,7 @@ import {
 import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
 import { negotiateVideoPlayback } from "../api";
+import { FaceOverlay } from "./FaceOverlay";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { MiniMap } from "./MiniMap";
 import css from "./FullscreenViewer.module.css";
@@ -46,13 +46,17 @@ const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
   incompatible: "No Compatible Stream",
 };
 
-type FaceRegion = {
-  area: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
+const hasPotentialFaceRegions = (regions: unknown) => {
+  if (Array.isArray(regions)) {
+    return regions.length > 0;
+  }
+
+  if (typeof regions === "string") {
+    const normalized = regions.trim();
+    return normalized.length > 0 && normalized !== "[]";
+  }
+
+  return false;
 };
 
 const formatMetadataValue = (value: unknown): string => {
@@ -75,129 +79,6 @@ const formatMetadataValue = (value: unknown): string => {
   }
 };
 
-
-const toFaceRegions = (raw: unknown): FaceRegion[] => {
-  const unwrapJsonString = (value: unknown): unknown => {
-    let current = value;
-    while (typeof current === "string") {
-      try {
-        current = JSON.parse(current);
-      } catch {
-        return current;
-      }
-    }
-    return current;
-  };
-
-  const unwrapped = unwrapJsonString(raw);
-
-  if (!Array.isArray(unwrapped)) {
-    return [];
-  }
-
-  return unwrapped
-    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
-    .map((entry) => {
-      const area = entry.area;
-      if (!area || typeof area !== "object") {
-        return null;
-      }
-
-      const areaRecord = area as Record<string, unknown>;
-      const x = areaRecord.x;
-      const y = areaRecord.y;
-      const width = areaRecord.width;
-      const height = areaRecord.height;
-
-      if (
-        typeof x !== "number" ||
-        typeof y !== "number" ||
-        typeof width !== "number" ||
-        typeof height !== "number"
-      ) {
-        return null;
-      }
-
-      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
-        return null;
-      }
-
-      if (width <= 0 || height <= 0) {
-        return null;
-      }
-      
-      const clampToUnit = (value: number) => Math.min(Math.max(value, 0), 1);
-      return {
-        area: {
-          x: clampToUnit(x),
-          y: clampToUnit(y),
-          width: clampToUnit(width),
-          height: clampToUnit(height),
-        },
-      };
-    })
-    .filter((entry): entry is FaceRegion => entry !== null);
-};
-;
-
-
-const faceRegionToSVGProps = (
-  { area }: FaceRegion,
-  aspectRatio = 1,
-): SVGProps<SVGRectElement> => {
-    const FACE_MASK_PADDING_RATIO = 0.16;
-    const width = area.width;
-    const height = area.height;
-    const padding = Math.max(width, height) * FACE_MASK_PADDING_RATIO;
-    const left = area.x - width / 2 - padding;
-    const top = area.y - height / 2 - padding;
-
-    const FACE_MASK_CORNER_RATIO = 0.42;
-    const rectWidth = width + padding * 2;
-    const rectHeight = height + padding * 2;
-    const radius = Math.min(rectWidth, rectHeight) * FACE_MASK_CORNER_RATIO;
-    return {
-      x: left,
-      y: top,
-      width: rectWidth,
-      height: rectHeight,
-      rx: radius,
-      ry: radius * aspectRatio,
-    };
-};
-
-const FaceRects: React.FC<{
-  regions: FaceRegion[];
-  aspectRatio?: number;
-} & SVGProps<SVGRectElement>> = ({ regions, aspectRatio = 1, ...svgProps }) =>
-  regions.map((region, index) => (
-    <rect {...{ ...faceRegionToSVGProps(region, aspectRatio), ...svgProps }} key={index} />
-  ));
-  
-      
-const toFaceMaskImage = (FaceRects: React.ReactNode): string | null => {
-  if (!FaceRects) {
-    return null;
-  }
-    
-  const featherStdDev = 0.003;
-  const svg = renderToStaticMarkup(
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1" preserveAspectRatio="none">
-      <defs>
-        <filter id="face-feather" x="-25%" y="-25%" width="150%" height="150%">
-          <feGaussianBlur stdDeviation={featherStdDev} />
-        </filter>
-      </defs>
-      <rect x="0" y="0" width="1" height="1" fill="white" />
-      <g filter="url(#face-feather)">
-        {FaceRects}
-      </g>
-    </svg>,
-  );
-  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
-};
-
-
 export function FullscreenViewer() {
   const {
     selected: selectedPhoto,
@@ -218,7 +99,7 @@ export function FullscreenViewer() {
   const [showLiveVideo, setShowLiveVideo] = useState(false);
   const [showFileInfo, setShowFileInfo] = useState(false);
   const [showFaces, setShowFaces] = useState(false);
-  const [isFaceOverlayMounted, setIsFaceOverlayMounted] = useState(false);
+  const [hasFaceOverlayData, setHasFaceOverlayData] = useState(false);
   const [photoZoom, setPhotoZoom] = useState({
     isZoomed: false,
     originXPercent: 50,
@@ -227,8 +108,14 @@ export function FullscreenViewer() {
   });
 
   useEffect(() => {
+    const hasRegions =
+      photo !== null &&
+      photo.mediaType !== "video" &&
+      hasPotentialFaceRegions(photo.metadata?.regions);
+
     setShowLiveVideo(false);
     setShowFaces(false);
+    setHasFaceOverlayData(hasRegions);
     setPhotoAspectRatio(1);
     setPhotoZoom({
       isZoomed: false,
@@ -554,40 +441,7 @@ export function FullscreenViewer() {
   );
 
   
-  const faceRegions = useMemo(
-    () => toFaceRegions(photo?.metadata?.regions),
-    [photo?.metadata?.regions],
-  );
-
-  const faceMaskImage = useMemo(
-    () => toFaceMaskImage(<FaceRects regions={faceRegions} aspectRatio={photoAspectRatio} fill="black" />),
-    [faceRegions, photoAspectRatio],
-  );
-
-  const faceToggleDisabled = photo?.mediaType === "video" || faceMaskImage === null;
-  const canRenderFaceOverlay = !faceToggleDisabled && !showLiveVideo && !!faceMaskImage;
-  const showFaceOverlay = canRenderFaceOverlay && showFaces;
-  const shouldRenderFaceOverlay = showFaceOverlay || isFaceOverlayMounted;
-
-  useEffect(() => {
-    if (showFaceOverlay) {
-      setIsFaceOverlayMounted(true);
-      return;
-    }
-
-    if (!isFaceOverlayMounted) {
-      return;
-    }
-
-    const FADE_DURATION_MS = 140;
-    const timeout = window.setTimeout(() => {
-      setIsFaceOverlayMounted(false);
-    }, FADE_DURATION_MS);
-
-    return () => {
-      window.clearTimeout(timeout);
-    };
-  }, [showFaceOverlay, isFaceOverlayMounted]);
+  const faceToggleDisabled = photo?.mediaType === "video" || !hasFaceOverlayData;
 
   const zoomStyle = {
     "--zoom-origin-x": `${photoZoom.originXPercent}%`,
@@ -717,31 +571,11 @@ export function FullscreenViewer() {
                   }}
                   style={zoomStyle}
                 />
-                {shouldRenderFaceOverlay && (
-                  <>
-                    <div
-                      className={`${css.faceBackdropLayer} ${showFaceOverlay ? css.faceOverlayVisible : ""}`}
-                      style={{
-                        maskImage: faceMaskImage,
-                        WebkitMaskImage: faceMaskImage,
-                      } as React.CSSProperties}
-                      aria-hidden="true"
-                    />
-                    <svg
-                      className={`${css.faceFrameLayer} ${showFaceOverlay ? css.faceOverlayVisible : ""}`}
-                      viewBox="0 0 1 1"
-                      preserveAspectRatio="none"
-                      width="100%"
-                      height="100%"
-                      aria-hidden="true"
-                    >
-                      <FaceRects
-                        regions={faceRegions}
-                        aspectRatio={photoAspectRatio}
-                        className={css.faceFrameRect}
-                      />
-                    </svg>
-                  </>
+                {showFaces && (
+                  <FaceOverlay
+                    regionsRaw={photo.metadata?.regions}
+                    aspectRatio={photoAspectRatio}
+                  />
                 )}
               </div>
             )}
