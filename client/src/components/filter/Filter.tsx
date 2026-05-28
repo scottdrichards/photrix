@@ -5,6 +5,7 @@ import {
   Image24Regular,
   Location24Regular,
   Person24Regular,
+  ScanPerson24Regular,
   Star24Regular,
 } from "@fluentui/react-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -21,6 +22,7 @@ import { SuggestionFilterField } from "./SuggestionFilterField";
 type FilterPanel =
   | "folders"
   | "type"
+  | "faceScan"
   | "people"
   | "gear"
   | "rating"
@@ -34,6 +36,7 @@ export const Filter = () => {
     includeSubfolders,
     ratingFilter,
     mediaTypeFilter,
+    hasFaceScanData,
     path,
     peopleInImageFilter,
     cameraModelFilter,
@@ -67,6 +70,7 @@ export const Filter = () => {
   const currentPath = path?.replace(/\/$/, "");
   const isFolderFilterActive = Boolean(currentPath) || includeSubfolders === false;
   const isMediaTypeFilterActive = Boolean(mediaTypeFilter && mediaTypeFilter !== "all");
+  const isFaceScanFilterActive = Boolean(hasFaceScanData);
   const isPeopleFilterActive = selectedPeople.length > 0;
   const isGearFilterActive =
     selectedCameraModels.length > 0 || selectedLensModels.length > 0;
@@ -101,6 +105,10 @@ export const Filter = () => {
 
   const handleMediaTypeChange = (type: MediaTypeFilter) => {
     setFilter({ mediaTypeFilter: type });
+  };
+
+  const handleFaceScanFilterToggle = () => {
+    setFilter({ hasFaceScanData: !isFaceScanFilterActive });
   };
 
   const arrayFilterSetter = useCallback(
@@ -346,6 +354,19 @@ export const Filter = () => {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Face scan data */}
+      <div className="popover-anchor">
+        <button
+          title="Face scan data"
+          aria-label="Face scan data filter"
+          aria-pressed={isFaceScanFilterActive}
+          className={`btn btn-icon ${css.filterIconButton} ${isFaceScanFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={handleFaceScanFilterToggle}
+        >
+          <ScanPerson24Regular fontSize={20} />
+        </button>
       </div>
 
       {/* People */}

@@ -152,6 +152,28 @@ describe("Filter", () => {
     });
   });
 
+  it("toggles filter for items with face scan data", async () => {
+    renderFilter();
+
+    const button = screen.getByRole("button", { name: "Face scan data filter" });
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("filter-state").textContent).toContain(
+        '"hasFaceScanData":true',
+      );
+    });
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("filter-state").textContent).toContain(
+        '"hasFaceScanData":false',
+      );
+    });
+  });
+
   it("shows rating counts and applies selected rating", async () => {
     const localizedTwelveThousand = new Intl.NumberFormat().format(12000);
     fetchSuggestionsWithCountsMock.mockImplementation(
