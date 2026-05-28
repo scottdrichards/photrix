@@ -86,6 +86,7 @@ export const MetadataGroups = {
     "livePhotoVideoFileName",
   ],
   aiMetadata: ["aiDescription", "aiTags"],
+  faces: [],
 } as const satisfies Record<string, AllMetaData[keyof AllMetaData][]>;
 
 /** Undefined means "I don't know", null means "I know there is no value
@@ -94,6 +95,7 @@ export const MetadataGroups = {
 export type FileRecord = BaseFileRecord &
   Partial<AllMetaData> & {
     [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null;
+    facesLastErrorAt?: string | null;
   };
 
 ///////////////////////////////////////////

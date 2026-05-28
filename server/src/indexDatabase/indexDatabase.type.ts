@@ -1,20 +1,25 @@
 import { FileRecord } from "./fileRecord.type.ts";
 import type {
+  FileQueryExtraField,
+  FilterElement as SharedFilterElement,
   RecordFilterCondition,
-  RecordFilterElement,
 } from "../../../shared/filter-contract/src/index.ts";
 export type { Range, StringSearch } from "../../../shared/filter-contract/src/index.ts";
 
-export type FilterField = keyof FileRecord | "relativePath";
+export type FilterField = keyof FileRecord | FileQueryExtraField;
 
-export type FilterCondition = RecordFilterCondition<FileRecord, "relativePath">;
+type BaseFilterCondition = RecordFilterCondition<FileRecord, "relativePath">;
+
+export type FilterCondition = BaseFilterCondition & {
+  hasFaces?: boolean | null;
+};
 
 export type LogicalFilter = Extract<
-  RecordFilterElement<FileRecord, "relativePath">,
+  SharedFilterElement<FilterCondition>,
   { operation: "and" | "or" }
 >;
 
-export type FilterElement = RecordFilterElement<FileRecord, "relativePath">;
+export type FilterElement = SharedFilterElement<FilterCondition>;
 
 export type QueryOptions = {
   filter: FilterElement;

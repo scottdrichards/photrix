@@ -91,7 +91,7 @@
   z-index: 2;
   pointer-events: none;
   opacity: 0;
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(0, 0, 0, 0.22);
   backdrop-filter: blur(clamp(0.3px, 0.1vmin, 12px)) brightness(0.75);
   mask-mode: luminance;
   mask-repeat: no-repeat;
@@ -122,11 +122,12 @@
 }
 
 .faceFrameRect {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.45);
-  stroke-width: calc(2px / var(--zoom-scale, 1));
+  fill: rgba(11, 150, 226, 0.1);
+  stroke: rgba(140, 226, 255, 0.95);
+  stroke-width: calc(2.5px / var(--zoom-scale, 1));
   vector-effect: non-scaling-stroke;
   shape-rendering: geometricPrecision;
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.5));
 }
 
 .topRightActions {

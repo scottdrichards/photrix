@@ -22,8 +22,30 @@ import { prepareTables } from "./prepareTables.ts";
 
 const filesNeedingMetadataUpdateFilter = (
   metadataGroupName: keyof typeof MetadataGroups,
-) =>
-  `${metadataGroupName}ProcessedAt IS NULL OR ${metadataGroupName}ProcessedAt < modified`;
+) => {
+  const base = `${metadataGroupName}ProcessedAt IS NULL OR ${metadataGroupName}ProcessedAt < modified`;
+  // Face detection only applies to images. Other metadata groups still cover
+  // both images and videos.
+  if (metadataGroupName === "faces") {
+    return `(${base}) AND mimeType LIKE 'image/%' AND exifProcessedAt IS NOT NULL`;
+  }
+  return base;
+};
+
+const personIdFromName = (name: string) => {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  let hash = 2166136261;
+  for (let i = 0; i < normalized.length; i += 1) {
+    hash ^= normalized.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return hash >>> 1 || 1;
+};
 
 export class IndexDatabase {
   public readonly storagePath: string;
@@ -132,12 +154,16 @@ export class IndexDatabase {
         sql: `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`,
         params: columns.values,
       },
+      {
+        sql: "UPDATE faces SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
+        params: [newFolder, newFile, oldFolder, oldFile],
+      },
     ]);
   }
 
   async addOrUpdateFileData(
     relativePath: string,
-    fileData: Partial<FileRecord>,
+    fileData: Partial<FileRecord> & { facesLastErrorAt?: string | null },
   ): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
     const execute = async () => {
@@ -212,6 +238,7 @@ export class IndexDatabase {
     missingFileMetadata: number;
     missingMediaMetadata: number;
     missingThumbnails: number;
+    missingFaceDetection: number;
   }> {
     const row = await this.db.get<{
       allEntries: number | null;
@@ -220,6 +247,7 @@ export class IndexDatabase {
       missingFileMetadata: number | null;
       missingMediaMetadata: number | null;
       missingThumbnails: number | null;
+      missingFaceDetection: number | null;
     }>(
       `SELECT
          COUNT(*) AS allEntries,
@@ -227,7 +255,8 @@ export class IndexDatabase {
          SUM(CASE WHEN mimeType LIKE 'video/%' THEN 1 ELSE 0 END) AS videoEntries,
          SUM(CASE WHEN sizeInBytes IS NULL OR created IS NULL OR modified IS NULL THEN 1 ELSE 0 END) AS missingFileMetadata,
          SUM(CASE WHEN (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%') AND exifProcessedAt IS NULL THEN 1 ELSE 0 END) AS missingMediaMetadata,
-         SUM(CASE WHEN mimeType LIKE 'image/%' AND imageVariantsGeneratedAt IS NULL THEN 1 ELSE 0 END) AS missingThumbnails
+         SUM(CASE WHEN mimeType LIKE 'image/%' AND imageVariantsGeneratedAt IS NULL THEN 1 ELSE 0 END) AS missingThumbnails,
+         SUM(CASE WHEN mimeType LIKE 'image/%' AND facesProcessedAt IS NULL THEN 1 ELSE 0 END) AS missingFaceDetection
        FROM files`,
     );
 
@@ -238,6 +267,7 @@ export class IndexDatabase {
       missingFileMetadata: row?.missingFileMetadata ?? 0,
       missingMediaMetadata: row?.missingMediaMetadata ?? 0,
       missingThumbnails: row?.missingThumbnails ?? 0,
+      missingFaceDetection: row?.missingFaceDetection ?? 0,
     };
   }
 
@@ -303,6 +333,185 @@ export class IndexDatabase {
     };
   }
 
+  /**
+   * Persists face detection results for a single file: replaces any existing
+   * face rows for that file with the supplied list (possibly empty) and stamps
+   * `facesProcessedAt` on the files row so the orchestrator knows the image has
+   * been processed.
+   *
+   * Storing an empty list is intentional — it represents "scanned, no faces".
+   * `facesProcessedAt IS NULL` still represents "not yet scanned".
+   */
+  async saveFaceDetectionResult(
+    relativePath: string,
+    faces: Array<{
+      box: { x: number; y: number; width: number; height: number };
+      confidence: number;
+      embedding: Float64Array;
+    }>,
+    detectedAt: Date = new Date(),
+  ): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    const detectedAtMs = detectedAt.getTime();
+
+    const statements: Array<{ sql: string; params: unknown[] }> = [
+      {
+        sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
+        params: [folder, fileName],
+      },
+    ];
+
+    for (const face of faces) {
+      const embeddingBuffer = Buffer.from(
+        face.embedding.buffer,
+        face.embedding.byteOffset,
+        face.embedding.byteLength,
+      );
+      statements.push({
+        sql: `INSERT INTO faces
+                (folder, fileName, boxX, boxY, boxWidth, boxHeight, confidence, embedding, detectedAt)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [
+          folder,
+          fileName,
+          face.box.x,
+          face.box.y,
+          face.box.width,
+          face.box.height,
+          face.confidence,
+          embeddingBuffer,
+          detectedAtMs,
+        ],
+      });
+    }
+
+    statements.push({
+      sql: "UPDATE files SET facesProcessedAt = ?, facesLastErrorAt = NULL WHERE folder = ? AND fileName = ?",
+      params: [detectedAtMs, folder, fileName],
+    });
+
+    await this.db.transaction(statements);
+  }
+
+  async saveFacesFromMetadataRegions(
+    relativePath: string,
+    regions: Array<{
+      name?: string;
+      area?: { x: number; y: number; width: number; height: number };
+    }>,
+    detectedAt: Date = new Date(),
+  ): Promise<void> {
+    const faces = regions
+      .filter(
+        (
+          region,
+        ): region is {
+          name?: string;
+          area: { x: number; y: number; width: number; height: number };
+        } =>
+          Boolean(region?.area) &&
+          typeof region.area?.x === "number" &&
+          typeof region.area?.y === "number" &&
+          typeof region.area?.width === "number" &&
+          typeof region.area?.height === "number" &&
+          region.area.width > 0 &&
+          region.area.height > 0,
+      )
+      .map((region) => ({
+        box: region.area,
+        personId: typeof region.name === "string" ? personIdFromName(region.name) : null,
+      }));
+
+    if (!faces.length) {
+      return;
+    }
+
+    const { folder, fileName } = splitPath(relativePath);
+    const detectedAtMs = detectedAt.getTime();
+    const statements: Array<{ sql: string; params: unknown[] }> = [
+      {
+        sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
+        params: [folder, fileName],
+      },
+      ...faces.map((face) => ({
+        sql: `INSERT INTO faces
+                (folder, fileName, boxX, boxY, boxWidth, boxHeight, confidence, embedding, personId, detectedAt)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [
+          folder,
+          fileName,
+          face.box.x,
+          face.box.y,
+          face.box.width,
+          face.box.height,
+          1,
+          Buffer.alloc(0),
+          face.personId,
+          detectedAtMs,
+        ],
+      })),
+      {
+        sql: "UPDATE files SET facesProcessedAt = ? WHERE folder = ? AND fileName = ?",
+        params: [detectedAtMs, folder, fileName],
+      },
+    ];
+
+    await this.db.transaction(statements);
+  }
+
+  /** Returns face rows for a file in insertion order. Empty array means scanned-no-faces. */
+  async getFacesForFile(relativePath: string): Promise<
+    Array<{
+      id: number;
+      box: { x: number; y: number; width: number; height: number };
+      confidence: number;
+      embedding: Float64Array;
+      personId: number | null;
+      detectedAt: number;
+    }>
+  > {
+    const { folder, fileName } = splitPath(relativePath);
+    const rows = await this.db.all<{
+      id: number;
+      boxX: number;
+      boxY: number;
+      boxWidth: number;
+      boxHeight: number;
+      confidence: number;
+      embedding: Buffer;
+      personId: number | null;
+      detectedAt: number;
+    }>(
+      `SELECT id, boxX, boxY, boxWidth, boxHeight, confidence, embedding, personId, detectedAt
+       FROM faces
+       WHERE folder = ? AND fileName = ?
+       ORDER BY id`,
+      folder,
+      fileName,
+    );
+
+    return rows.map((row) => {
+      // Defensive copy: SQLite BLOB buffers may not be 8-byte aligned which
+      // would cause `new Float64Array(buffer, offset, length)` to throw.
+      // Copying into a fresh Uint8Array gives us an aligned ArrayBuffer.
+      const aligned = new Uint8Array(row.embedding.byteLength);
+      aligned.set(row.embedding);
+      return {
+        id: row.id,
+        box: {
+          x: row.boxX,
+          y: row.boxY,
+          width: row.boxWidth,
+          height: row.boxHeight,
+        },
+        confidence: row.confidence,
+        embedding: new Float64Array(aligned.buffer),
+        personId: row.personId,
+        detectedAt: row.detectedAt,
+      };
+    });
+  }
+
   async addPaths(paths: string[]): Promise<void> {
     if (!paths.length) return;
     const pathStatements = paths.map((relativePath) => {
@@ -323,18 +532,28 @@ export class IndexDatabase {
       "DELETE FROM files WHERE folder = ? AND fileName = ?",
       [folder, fileName],
     );
+    await this.db.run("DELETE FROM faces WHERE folder = ? AND fileName = ?", [
+      folder,
+      fileName,
+    ]);
     return result.changes === 1;
   }
 
   async removePaths(paths: string[]): Promise<void> {
     if (!paths.length) return;
 
-    const statements = paths.map((relativePath) => {
+    const statements = paths.flatMap((relativePath) => {
       const { folder, fileName } = splitPath(relativePath);
-      return {
-        sql: "DELETE FROM files WHERE folder = ? AND fileName = ?",
-        params: [folder, fileName] as unknown[],
-      };
+      return [
+        {
+          sql: "DELETE FROM files WHERE folder = ? AND fileName = ?",
+          params: [folder, fileName] as unknown[],
+        },
+        {
+          sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
+          params: [folder, fileName] as unknown[],
+        },
+      ];
     });
 
     await this.db.transaction(statements);
@@ -342,10 +561,15 @@ export class IndexDatabase {
 
   async removeFolder(relativePath: string): Promise<void> {
     const base = normalizeFolderPath(relativePath);
+    const likePattern = `${escapeLikeLiteral(base)}%`;
     const statements = [
       {
         sql: "DELETE FROM files WHERE folder LIKE ? ESCAPE '\\'",
-        params: [`${escapeLikeLiteral(base)}%`],
+        params: [likePattern],
+      },
+      {
+        sql: "DELETE FROM faces WHERE folder LIKE ? ESCAPE '\\'",
+        params: [likePattern],
       },
     ];
     await this.db.transaction(statements);
@@ -376,9 +600,17 @@ export class IndexDatabase {
     // (`exifProcessedAt < modified`) requires a full table scan that freezes the
     // synchronous read worker for many seconds on large libraries. Stale-mtime
     // detection is handled by the rescan path instead of this hot polling loop.
+    const mimeFilter =
+      metadataGroupName === "faces"
+        ? " AND mimeType LIKE 'image/%' AND exifProcessedAt IS NOT NULL"
+        : "";
+    const orderBy =
+      metadataGroupName === "faces"
+        ? " ORDER BY facesLastErrorAt IS NOT NULL, facesLastErrorAt, folder, fileName"
+        : "";
     const rows = await this.db.all<Record<string, unknown>>(
       `SELECT folder, fileName, mimeType, sizeInBytes, ${metadataGroupName}ProcessedAt FROM files
-       WHERE ${metadataGroupName}ProcessedAt IS NULL
+       WHERE ${metadataGroupName}ProcessedAt IS NULL${mimeFilter}${orderBy}
        LIMIT ?`,
       limit,
     );

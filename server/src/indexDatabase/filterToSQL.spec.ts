@@ -83,4 +83,20 @@ describe("filterToSQL", () => {
     expect(result.where).toBe("(cameraMake = ?) OR (cameraMake = ?)");
     expect(result.params).toEqual(["Canon", "Nikon"]);
   });
+
+  it("filters for files that have at least one face row", () => {
+    const result = filterToSQL({ hasFaces: true });
+    expect(result.where).toBe(
+      "EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName)",
+    );
+    expect(result.params).toEqual([]);
+  });
+
+  it("filters for files without face rows", () => {
+    const result = filterToSQL({ hasFaces: false });
+    expect(result.where).toBe(
+      "NOT EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName)",
+    );
+    expect(result.params).toEqual([]);
+  });
 });

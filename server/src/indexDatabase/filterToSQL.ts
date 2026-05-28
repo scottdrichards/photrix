@@ -74,6 +74,27 @@ const constraintToSQL = (
   constraint: FilterCondition[FilterField],
 ): SQLPart | null => {
   const fieldName = String(field);
+
+  if (fieldName === "hasFaces") {
+    if (constraint === true) {
+      return {
+        where:
+          "EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName)",
+        params: [],
+      };
+    }
+
+    if (constraint === false) {
+      return {
+        where:
+          "NOT EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName)",
+        params: [],
+      };
+    }
+
+    return null;
+  }
+
   const sqlField = fieldName === "relativePath" ? "(folder || fileName)" : fieldName;
   const isStringArrayJsonField = stringArrayJsonFields.has(fieldName);
 

@@ -222,6 +222,26 @@ describe("FullscreenViewer", () => {
     ).toContain("data:image/svg+xml");
   });
 
+  it("renders face rectangles from stringified regions metadata", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        metadata: {
+          regions:
+            '[{"name":"Scott Douglas Richards","type":"Face","area":{"x":0.48237,"y":0.15012,"width":0.08638,"height":0.15357},"rotation":-0.08126},{"type":"Face","area":{"x":0.25385,"y":0.37243,"width":0.09242,"height":0.1643},"rotation":-0.0916},{"type":"Face","area":{"x":0.76768,"y":0.58686,"width":0.14158,"height":0.25171},"rotation":0.23}]',
+        },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    fireEvent.click(screen.getByRole("button", { name: "Show faces" }));
+
+    expect(container.querySelectorAll(`.${css.faceFrameRect}`)).toHaveLength(3);
+  });
+
   it("disables face toggle for video media items", () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto({

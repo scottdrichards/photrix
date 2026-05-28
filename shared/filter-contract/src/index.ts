@@ -56,6 +56,8 @@ export type LogicalFilter<TCondition> = {
 
 export type FilterElement<TCondition> = TCondition | LogicalFilter<TCondition>;
 
+export type FileQueryExtraField = "relativePath" | "hasFaces";
+
 type FilterConstraintForValue<TField extends string, TValue> =
   | null
   | (TField extends "relativePath"
@@ -122,6 +124,7 @@ export type ClientFilterState = Partial<{
   includeSubfolders: boolean;
   path: string;
   mediaTypeFilter: MediaTypeFilter;
+  hasFaceScanData: boolean;
   peopleInImageFilter: string[] | null;
   cameraModelFilter: string[] | null;
   lensFilter: string[] | null;
@@ -143,13 +146,17 @@ export const FIELD_METADATA = {
   locationBounds: { nullable: true, supportsArray: false },
   dateRange: { nullable: true, supportsArray: false },
   mediaTypeFilter: { nullable: false, supportsArray: false },
+  hasFaceScanData: { nullable: false, supportsArray: false },
 } as const;
 
 /**
  * Maps a ClientFilterState field value to its API-accepted type.
  * Array fields accept collapsed `string | string[]`; dateRange uses DateRangeFilter.
  */
-type ApiFieldType<K extends keyof typeof FIELD_METADATA, TClientValue> = (typeof FIELD_METADATA)[K] extends {
+type ApiFieldType<
+  K extends keyof typeof FIELD_METADATA,
+  TClientValue,
+> = (typeof FIELD_METADATA)[K] extends {
   supportsArray: true;
 }
   ? string[] | string
@@ -162,10 +169,9 @@ type ApiFieldType<K extends keyof typeof FIELD_METADATA, TClientValue> = (typeof
  * Nullable/array semantics come from FIELD_METADATA — no manual duplication.
  */
 export type ApiFilterOptions = {
-  [K in keyof typeof FIELD_METADATA]?: ApiFieldType<
-    K,
-    K extends keyof ClientFilterState ? ClientFilterState[K] : never
-  > | ((typeof FIELD_METADATA)[K] extends { nullable: true } ? null : never);
+  [K in keyof typeof FIELD_METADATA]?:
+    | ApiFieldType<K, K extends keyof ClientFilterState ? ClientFilterState[K] : never>
+    | ((typeof FIELD_METADATA)[K] extends { nullable: true } ? null : never);
 };
 
 /**
@@ -179,8 +185,26 @@ export const filterFieldCapabilities = Object.fromEntries(
       supportsArray: FIELD_METADATA[field].supportsArray,
       allowsNullState: FIELD_METADATA[field].nullable,
     },
-  ])
+  ]),
 ) as Record<
   keyof typeof FIELD_METADATA,
   { supportsArray: boolean; allowsNullState: boolean }
 >;
+
+export type BackgroundTaskStatus = {
+  id: string;
+  name: string;
+  queue: "background" | "implied";
+  state: "queued" | "running" | "paused" | "cancelled" | "complete";
+  itemsProcessed?: number;
+  total?: number;
+  portionComplete?: number;
+  description?: string;
+};
+
+export type ServerStatus = {
+  backgroundTasks: BackgroundTaskStatus[];
+  maintenance: {
+    backgroundTasksEnabled: boolean;
+  };
+};

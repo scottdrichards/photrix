@@ -32,9 +32,8 @@ export const processFileInfoMetadata = (database: IndexDatabase): TaskRunner => 
     });
   };
 
-  const completion: Promise<void> = (async () => {
+  const exec = async () => {
     while (true) {
-      // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
       if (state === "cancelled") {
         throw cancelledError;
       }
@@ -84,7 +83,9 @@ export const processFileInfoMetadata = (database: IndexDatabase): TaskRunner => 
         }
       }
     }
-  })();
+  };
+
+  const completion = exec();
 
   return {
     pause: () => {

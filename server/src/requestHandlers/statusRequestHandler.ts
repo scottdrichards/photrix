@@ -1,31 +1,17 @@
 import http from "node:http";
-import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 
 type StatusRequestHandlerProps = {
-  database: IndexDatabase;
   stream: boolean;
   taskOrchestrator: TaskOrchestrator;
 };
 
-const getStatusPayload = async (
-  database: IndexDatabase,
-  taskOrchestrator: TaskOrchestrator,
-) => {
-  const counts = await database.getStatusCounts();
+const getStatusPayload = async (taskOrchestrator: TaskOrchestrator) => {
   const backgroundTasksEnabled = taskOrchestrator.getPerformBackgroundTasks();
+  const backgroundTasks = await taskOrchestrator.getBackgroundTaskStatus();
 
   return {
-    files: {
-      total: counts.allEntries,
-      images: counts.imageEntries,
-      videos: counts.videoEntries,
-    },
-    pending: {
-      fileMetadata: counts.missingFileMetadata,
-      mediaMetadata: counts.missingMediaMetadata,
-      thumbnails: counts.missingThumbnails,
-    },
+    backgroundTasks,
     maintenance: {
       backgroundTasksEnabled,
     },
@@ -41,10 +27,10 @@ export const statusRequestHandler = async (
   res: http.ServerResponse,
   props: StatusRequestHandlerProps,
 ) => {
-  const { database, stream, taskOrchestrator } = props;
+  const { stream, taskOrchestrator } = props;
 
   if (!stream) {
-    const payload = await getStatusPayload(database, taskOrchestrator);
+    const payload = await getStatusPayload(taskOrchestrator);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(payload));
     return;
@@ -66,7 +52,7 @@ export const statusRequestHandler = async (
     if (updating) return;
     updating = true;
     try {
-      const payload = await getStatusPayload(database, taskOrchestrator);
+      const payload = await getStatusPayload(taskOrchestrator);
       writeSSE(res, payload);
     } finally {
       updating = false;

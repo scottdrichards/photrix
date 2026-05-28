@@ -144,6 +144,39 @@ describe("IndexDatabase", () => {
     });
   });
 
+  it("only returns face tasks after EXIF processing is complete", async () => {
+    await withTempDb(async (db) => {
+      await db.addPaths(["no-exif.jpg", "with-exif.jpg"]);
+      await db.addOrUpdateFileData("with-exif.jpg", {
+        exifProcessedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      const needingFaces = await db.getFilesNeedingMetadataUpdate("faces", 10);
+
+      expect(needingFaces.map((f) => f.relativePath)).toEqual(["/with-exif.jpg"]);
+    });
+  });
+
+  it("prioritizes unattempted face scans ahead of failed ones", async () => {
+    await withTempDb(async (db) => {
+      await db.addPaths(["fresh.jpg", "failed.jpg"]);
+      await db.addOrUpdateFileData("fresh.jpg", {
+        exifProcessedAt: "2026-01-01T00:00:00.000Z",
+      });
+      await db.addOrUpdateFileData("failed.jpg", {
+        exifProcessedAt: "2026-01-01T00:00:00.000Z",
+        facesLastErrorAt: "2026-01-02T00:00:00.000Z",
+      });
+
+      const needingFaces = await db.getFilesNeedingMetadataUpdate("faces", 10);
+
+      expect(needingFaces.map((f) => f.relativePath)).toEqual([
+        "/fresh.jpg",
+        "/failed.jpg",
+      ]);
+    });
+  });
+
   it("returns most recent exif processed entry", async () => {
     await withTempDb(async (db) => {
       await db.addFile(
@@ -242,6 +275,149 @@ describe("IndexDatabase", () => {
         "a-first.jpg",
         "z-last.jpg",
       ]);
+    });
+  });
+
+  describe("face detection persistence", () => {
+    const makeEmbedding = (seed: number) => {
+      const arr = new Float64Array(128);
+      for (let i = 0; i < arr.length; i += 1) {
+        arr[i] = Math.sin(seed + i) * 0.1;
+      }
+      return arr;
+    };
+
+    it("round-trips face rows including float64 embedding values", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("portraits/two.jpg"));
+
+        const embedding1 = makeEmbedding(1);
+        const embedding2 = makeEmbedding(2);
+        await db.saveFaceDetectionResult(
+          "portraits/two.jpg",
+          [
+            {
+              box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+              confidence: 0.91,
+              embedding: embedding1,
+            },
+            {
+              box: { x: 0.5, y: 0.6, width: 0.1, height: 0.1 },
+              confidence: 0.77,
+              embedding: embedding2,
+            },
+          ],
+          new Date("2026-03-15T12:00:00.000Z"),
+        );
+
+        const rows = await db.getFacesForFile("portraits/two.jpg");
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]?.box).toEqual({ x: 0.1, y: 0.2, width: 0.3, height: 0.4 });
+        expect(rows[0]?.confidence).toBeCloseTo(0.91, 5);
+        expect(rows[0]?.personId).toBeNull();
+        expect(rows[0]?.detectedAt).toBe(new Date("2026-03-15T12:00:00.000Z").getTime());
+        expect(rows[0]?.embedding).toBeInstanceOf(Float64Array);
+        expect(rows[0]?.embedding.length).toBe(128);
+        expect(Array.from(rows[0]!.embedding)).toEqual(Array.from(embedding1));
+        expect(Array.from(rows[1]!.embedding)).toEqual(Array.from(embedding2));
+
+        const record = await db.getFileRecord("portraits/two.jpg");
+        expect(record?.facesProcessedAt).toBe("2026-03-15T12:00:00.000Z");
+      });
+    });
+
+    it("stores an empty face list as scanned-no-faces", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("empty.jpg"));
+        await db.saveFaceDetectionResult(
+          "empty.jpg",
+          [],
+          new Date("2026-04-01T00:00:00.000Z"),
+        );
+
+        const rows = await db.getFacesForFile("empty.jpg");
+        expect(rows).toEqual([]);
+
+        const record = await db.getFileRecord("empty.jpg");
+        expect(record?.facesProcessedAt).toBe("2026-04-01T00:00:00.000Z");
+      });
+    });
+
+    it("saves EXIF regions into face rows and keeps person ids stable by name", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("metadata-faces.jpg"));
+
+        await db.saveFacesFromMetadataRegions("metadata-faces.jpg", [
+          {
+            name: "Scott",
+            area: { x: 0.2, y: 0.3, width: 0.1, height: 0.1 },
+          },
+          {
+            name: "Scott",
+            area: { x: 0.6, y: 0.4, width: 0.15, height: 0.15 },
+          },
+          {
+            name: "Taylor",
+            area: { x: 0.7, y: 0.7, width: 0.12, height: 0.12 },
+          },
+        ]);
+
+        const rows = await db.getFacesForFile("metadata-faces.jpg");
+        expect(rows).toHaveLength(3);
+        expect(rows[0]?.embedding.length).toBe(0);
+        expect(rows[0]?.personId).toBe(rows[1]?.personId);
+        expect(rows[0]?.personId).not.toBe(rows[2]?.personId);
+      });
+    });
+
+    it("replaces previously-saved face rows on re-scan", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("rescan.jpg"));
+
+        await db.saveFaceDetectionResult("rescan.jpg", [
+          {
+            box: { x: 0, y: 0, width: 0.1, height: 0.1 },
+            confidence: 0.5,
+            embedding: makeEmbedding(10),
+          },
+        ]);
+        expect(await db.getFacesForFile("rescan.jpg")).toHaveLength(1);
+
+        await db.saveFaceDetectionResult("rescan.jpg", [
+          {
+            box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
+            confidence: 0.8,
+            embedding: makeEmbedding(20),
+          },
+          {
+            box: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 },
+            confidence: 0.9,
+            embedding: makeEmbedding(30),
+          },
+        ]);
+
+        const rows = await db.getFacesForFile("rescan.jpg");
+        expect(rows).toHaveLength(2);
+        expect(rows[0]?.confidence).toBeCloseTo(0.8, 5);
+        expect(rows[1]?.confidence).toBeCloseTo(0.9, 5);
+      });
+    });
+
+    it("reports missingFaceDetection in status counts and clears it after save", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("a.jpg"));
+        await db.addFile(createRecord("b.jpg"));
+
+        const before = await db.getStatusCounts();
+        expect(before.imageEntries).toBe(2);
+        expect(before.missingFaceDetection).toBe(2);
+
+        await db.saveFaceDetectionResult("a.jpg", []);
+
+        const after = await db.getStatusCounts();
+        expect(after.missingFaceDetection).toBe(1);
+      });
     });
   });
 });

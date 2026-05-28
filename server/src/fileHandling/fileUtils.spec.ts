@@ -114,6 +114,91 @@ describe("getExifMetadataFromFile", () => {
     expect(result.dimensionHeight).toBe(2000);
   });
 
+  it("parses escaped JSON regions strings that use width/height keys", async () => {
+    jest.resetModules();
+
+    const imagePath = path.join(tmpDir(), "escaped-regions.jpg");
+    writeFileSync(imagePath, "not-a-real-image");
+
+    const escapedRegions = JSON.stringify([
+      {
+        Name: "Scott Douglas Richards",
+        Type: "Face",
+        Area: { x: 0.48237, y: 0.15012, width: 0.08638, height: 0.15357 },
+        Rotation: -0.08126,
+      },
+    ]);
+
+    jest.unstable_mockModule("exifr", () => ({
+      default: {
+        parse: jest.fn(async () => ({
+          Regions: escapedRegions,
+        })),
+      },
+    }));
+
+    jest.unstable_mockModule("sharp", () => ({
+      default: jest.fn(() => ({
+        metadata: async () => ({ width: 3000, height: 2000, orientation: 1 }),
+      })),
+    }));
+
+    const { getExifMetadataFromFile: getExifMetadataFromFileWithMocks } = await import(
+      "./fileUtils.ts"
+    );
+    const result = await getExifMetadataFromFileWithMocks(imagePath);
+
+    expect(result.regions).toEqual([
+      {
+        name: "Scott Douglas Richards",
+        type: "Face",
+        area: { x: 0.48237, y: 0.15012, width: 0.08638, height: 0.15357 },
+        rotation: -0.08126,
+      },
+    ]);
+  });
+
+  it("transforms regions to post-orientation coordinates", async () => {
+    jest.resetModules();
+
+    const imagePath = path.join(tmpDir(), "orientation-regions.jpg");
+    writeFileSync(imagePath, "not-a-real-image");
+
+    jest.unstable_mockModule("exifr", () => ({
+      default: {
+        parse: jest.fn(async () => ({
+          Orientation: 6,
+          Regions: {
+            RegionList: [
+              {
+                Type: "Face",
+                Area: { x: 0.2, y: 0.3, width: 0.1, height: 0.2 },
+              },
+            ],
+          },
+        })),
+      },
+    }));
+
+    jest.unstable_mockModule("sharp", () => ({
+      default: jest.fn(() => ({
+        metadata: async () => ({ width: 3000, height: 2000, orientation: 6 }),
+      })),
+    }));
+
+    const { getExifMetadataFromFile: getExifMetadataFromFileWithMocks } = await import(
+      "./fileUtils.ts"
+    );
+    const result = await getExifMetadataFromFileWithMocks(imagePath);
+
+    expect(result.regions).toEqual([
+      {
+        type: "Face",
+        area: { x: 0.7, y: 0.2, width: 0.2, height: 0.1 },
+      },
+    ]);
+  });
+
   it("matches decoded dimensions for _MG_0475 regression fixture when present", async () => {
     const fixturePath = resolveExamplePath("_MG_0475.cr2.jpg");
     if (!existsSync(fixturePath)) {

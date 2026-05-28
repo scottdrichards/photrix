@@ -11,6 +11,7 @@ Development and deployment setup for Photrix.
 ```bash
 npm --prefix server install
 npm --prefix client install
+npm --prefix server run face:python:install
 ```
 
 ## 3) Configure environment

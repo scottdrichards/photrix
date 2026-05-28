@@ -12,6 +12,7 @@ import { getMirroredCachedFilePath } from "../../common/cacheUtils.ts";
 const baseOrchestrator: TaskOrchestrator = {
   setPerformBackgroundTasks: () => {},
   getPerformBackgroundTasks: () => true,
+  getBackgroundTaskStatus: async () => [],
   addTask: () => {},
   onQueueExhausted: () => {},
 };

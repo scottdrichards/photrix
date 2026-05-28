@@ -52,6 +52,8 @@ export const rowToFileRecord = (
     ["imageVariantsGeneratedAt", processedAtToIso],
     ["hlsGeneratedAt", processedAtToIso],
     ["aiMetadataProcessedAt", processedAtToIso],
+    ["facesProcessedAt", processedAtToIso],
+    ["facesLastErrorAt", processedAtToIso],
   ] as const;
 
   const wantedConversions =
@@ -164,6 +166,17 @@ export const fileRecordToColumnNamesAndValues = (
     addColumn("aiMetadataProcessedAt", new Date(entry.aiMetadataProcessedAt).getTime());
     addColumn("aiDescription", entry.aiDescription);
     addColumn("aiTags", JSON.stringify(entry.aiTags));
+  }
+
+  // Face detection state — actual face rows live in the `faces` table; here we
+  // only persist the marker timestamp on the files row so the orchestrator can
+  // identify images that still need scanning.
+  if (entry.facesProcessedAt) {
+    addColumn("facesProcessedAt", new Date(entry.facesProcessedAt).getTime());
+  }
+
+  if (entry.facesLastErrorAt) {
+    addColumn("facesLastErrorAt", new Date(entry.facesLastErrorAt).getTime());
   }
 
   // Validate that names and values are in sync

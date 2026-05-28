@@ -1,9 +1,11 @@
 import type {
   ApiFilterOptions,
+  BackgroundTaskStatus,
   DateRangeFilter,
   GeoBoundsLike as GeoBounds,
   MediaTypeFilter,
   RatingFilter,
+  ServerStatus as SharedServerStatus,
 } from "../../shared/filter-contract/src";
 export type { DateRangeFilter, GeoBounds };
 
@@ -83,6 +85,7 @@ export interface FetchPhotosOptions {
   signal?: AbortSignal;
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
+  hasFaceScanData?: ApiFilterOptions["hasFaceScanData"];
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
@@ -109,6 +112,7 @@ export type FetchSuggestionsOptions = {
   path?: string;
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
+  hasFaceScanData?: ApiFilterOptions["hasFaceScanData"];
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
@@ -148,21 +152,13 @@ export type FetchDateHistogramOptions = Omit<
   "page" | "pageSize" | "metadata"
 >;
 
-export interface ServerStatus {
-  files: {
-    total: number;
-    images: number;
-    videos: number;
-  };
-  pending: {
-    fileMetadata: number;
-    mediaMetadata: number;
-    thumbnails: number;
-  };
-  maintenance: {
-    backgroundTasksEnabled: boolean;
-  };
-}
+export type ProgressEntry = {
+  completed: number;
+  total: number;
+  percent: number;
+};
+
+export type ServerStatus = SharedServerStatus;
 
 export const subscribeStatusStream = (
   onUpdate: (status: ServerStatus) => void,
@@ -278,6 +274,7 @@ const dateRangeToFilter = (dateRange?: DateRangeFilter | null) => {
 type BuildFiltersInput = {
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
+  hasFaceScanData?: ApiFilterOptions["hasFaceScanData"];
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
@@ -328,6 +325,7 @@ const addStringFilter = (
 const buildFilters = ({
   ratingFilter,
   mediaTypeFilter,
+  hasFaceScanData,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -361,6 +359,14 @@ const buildFilters = ({
           conditions: [{ mimeType: null }, { mimeType: { notStartsWith: "video/" } }],
         },
       ],
+    });
+  }
+
+  if (hasFaceScanData) {
+    filters.push({ mimeType: { startsWith: "image/" } });
+    filters.push({
+      operation: "or",
+      conditions: [{ hasFaces: true }, { regions: { includes: '"area"' } }],
     });
   }
 
@@ -413,6 +419,7 @@ const buildSuggestionParams = ({
   path,
   ratingFilter,
   mediaTypeFilter,
+  hasFaceScanData,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -427,6 +434,7 @@ const buildSuggestionParams = ({
   path: string;
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
+  hasFaceScanData?: ApiFilterOptions["hasFaceScanData"];
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
@@ -451,6 +459,7 @@ const buildSuggestionParams = ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
+    hasFaceScanData,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -592,6 +601,7 @@ export const fetchPhotos = async ({
   signal,
   ratingFilter,
   mediaTypeFilter = "all",
+  hasFaceScanData,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -609,6 +619,7 @@ export const fetchPhotos = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
+    hasFaceScanData,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -643,6 +654,7 @@ export const fetchGeotaggedPhotos = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
+  hasFaceScanData,
   dateRange,
   peopleInImageFilter,
   cameraModelFilter,
@@ -670,6 +682,7 @@ export const fetchGeotaggedPhotos = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
+    hasFaceScanData,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -724,6 +737,7 @@ export const fetchDateRange = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
+  hasFaceScanData,
   locationBounds,
   peopleInImageFilter,
   cameraModelFilter,
@@ -742,6 +756,7 @@ export const fetchDateRange = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
+    hasFaceScanData,
     locationBounds,
     dateRange: null,
     peopleInImageFilter,
@@ -768,6 +783,7 @@ export const fetchDateHistogram = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
+  hasFaceScanData,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -784,6 +800,7 @@ export const fetchDateHistogram = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
+    hasFaceScanData,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -826,6 +843,7 @@ export const fetchSuggestions = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
+  hasFaceScanData,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -846,6 +864,7 @@ export const fetchSuggestions = async ({
     path,
     ratingFilter,
     mediaTypeFilter,
+    hasFaceScanData,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -871,6 +890,7 @@ export const fetchSuggestionsWithCounts = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
+  hasFaceScanData,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -891,6 +911,7 @@ export const fetchSuggestionsWithCounts = async ({
     path,
     ratingFilter,
     mediaTypeFilter,
+    hasFaceScanData,
     locationBounds,
     dateRange,
     peopleInImageFilter,

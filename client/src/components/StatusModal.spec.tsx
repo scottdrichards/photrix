@@ -15,8 +15,18 @@ vi.mock("../api", async () => {
 });
 
 const makeStatus = (overrides?: Record<string, unknown>) => ({
-  files: { total: 10, images: 7, videos: 1 },
-  pending: { fileMetadata: 2, mediaMetadata: 5, thumbnails: 3 },
+  backgroundTasks: [
+    {
+      id: "background:file-system-scan",
+      name: "File system scan",
+      queue: "background",
+      state: "running",
+      itemsProcessed: 25,
+      total: 100,
+      portionComplete: 0.25,
+      description: "scanning /photos",
+    },
+  ],
   maintenance: { backgroundTasksEnabled: true },
   ...overrides,
 });
@@ -48,11 +58,10 @@ describe("StatusModal", () => {
       onUpdate?.(makeStatus());
     });
 
-    expect(await screen.findByText(/Files:/)).toBeInTheDocument();
-    expect(screen.getByText("10")).toBeInTheDocument();
-    expect(screen.getByText(/File metadata to scan:/)).toBeInTheDocument();
-    expect(screen.getByText(/Media metadata to scan:/)).toBeInTheDocument();
-    expect(screen.getByText(/Thumbnails to process:/)).toBeInTheDocument();
+    expect(await screen.findByText(/Background tasks/)).toBeInTheDocument();
+    expect(screen.getByText("File system scan")).toBeInTheDocument();
+    expect(screen.getByText("25%")).toBeInTheDocument();
+    expect(screen.getByText(/25 \/ 100 items/)).toBeInTheDocument();
   });
 
   it("calls onDismiss when Close is clicked", () => {
@@ -116,15 +125,28 @@ describe("StatusModal", () => {
     render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
 
     await act(async () => {
-      onUpdate?.(makeStatus({ pending: { fileMetadata: 2, mediaMetadata: 5, thumbnails: 5 } }));
-      onUpdate?.(makeStatus({ pending: { fileMetadata: 2, mediaMetadata: 5, thumbnails: 42 } }));
+      onUpdate?.(
+        makeStatus({
+          backgroundTasks: [
+            {
+              id: "background:file-system-scan",
+              name: "File system scan",
+              queue: "background",
+              state: "running",
+              itemsProcessed: 42,
+              total: 100,
+              portionComplete: 0.42,
+            },
+          ],
+        }),
+      );
     });
 
-    expect(await screen.findByText(/Thumbnails to process:/)).toBeInTheDocument();
+    expect(await screen.findByText(/Background tasks/)).toBeInTheDocument();
     expect(screen.getByText("42")).toBeInTheDocument();
   });
 
-  it("estimates total remaining time from streamed progress", async () => {
+  it("renders queued tasks without progress metadata", async () => {
     const unsubscribe = vi.fn();
     let onUpdate: ((status: unknown) => void) | undefined;
 
@@ -132,45 +154,25 @@ describe("StatusModal", () => {
       onUpdate = update as (status: unknown) => void;
       return unsubscribe;
     });
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-
     render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
 
     await act(async () => {
       onUpdate?.(
-        makeStatus({ pending: { fileMetadata: 70, mediaMetadata: 20, thumbnails: 10 } }),
+        makeStatus({
+          backgroundTasks: [
+            {
+              id: "background:face-detection",
+              name: "Face detection",
+              queue: "background",
+              state: "queued",
+            },
+          ],
+        }),
       );
     });
 
-    await act(async () => {
-      vi.setSystemTime(new Date("2026-01-01T00:00:10.000Z"));
-      onUpdate?.(
-        makeStatus({ pending: { fileMetadata: 63, mediaMetadata: 18, thumbnails: 9 } }),
-      );
-    });
-
-    expect(screen.getByText(/Estimated total time:/)).toBeInTheDocument();
-    expect(screen.getByText("1m 30s")).toBeInTheDocument();
-  });
-
-  it("shows complete when there is no pending work", async () => {
-    const unsubscribe = vi.fn();
-    let onUpdate: ((status: unknown) => void) | undefined;
-
-    subscribeStatusStreamMock.mockImplementation((update) => {
-      onUpdate = update as (status: unknown) => void;
-      return unsubscribe;
-    });
-
-    render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
-
-    await act(async () => {
-      onUpdate?.(makeStatus({ pending: { fileMetadata: 0, mediaMetadata: 0, thumbnails: 0 } }));
-    });
-
-    expect(screen.getByText(/Estimated total time:/)).toBeInTheDocument();
-    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(await screen.findByText("Face detection")).toBeInTheDocument();
+    expect(screen.getByText(/State: Queued/)).toBeInTheDocument();
   });
 
   it("unsubscribes on unmount", () => {

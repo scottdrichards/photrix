@@ -16,7 +16,7 @@ type FaceOverlayProps = {
   aspectRatio: number;
 };
 
-const toFaceRegions = (raw: unknown): FaceRegion[] => {
+export const parseFaceRegions = (raw: unknown): FaceRegion[] => {
   const unwrapJsonString = (value: unknown): unknown => {
     let current = value;
     while (typeof current === "string") {
@@ -45,7 +45,10 @@ const toFaceRegions = (raw: unknown): FaceRegion[] => {
       }
 
       const areaRecord = area as Record<string, unknown>;
-      const { x, y, width, height } = areaRecord;
+      const x = areaRecord.x;
+      const y = areaRecord.y;
+      const width = areaRecord.width ?? areaRecord.w;
+      const height = areaRecord.height ?? areaRecord.h;
 
       if (
         typeof x !== "number" ||
@@ -136,7 +139,7 @@ export function FaceOverlay({
   regionsRaw,
   aspectRatio,
 }: FaceOverlayProps) {
-  const faceRegions = useMemo(() => toFaceRegions(regionsRaw), [regionsRaw]);
+  const faceRegions = useMemo(() => parseFaceRegions(regionsRaw), [regionsRaw]);
   const faceMaskImage = useMemo(
     () => toFaceMaskImage(<FaceRects regions={faceRegions} aspectRatio={aspectRatio} fill="black" />),
     [aspectRatio, faceRegions],

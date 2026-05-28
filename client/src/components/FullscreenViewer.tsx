@@ -8,7 +8,7 @@ import {
 import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
 import { negotiateVideoPlayback } from "../api";
-import { FaceOverlay } from "./FaceOverlay";
+import { FaceOverlay, parseFaceRegions } from "./FaceOverlay";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { MiniMap } from "./MiniMap";
 import css from "./FullscreenViewer.module.css";
@@ -44,19 +44,6 @@ const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
   hls: "HLS",
   direct: "Raw Video",
   incompatible: "No Compatible Stream",
-};
-
-const hasPotentialFaceRegions = (regions: unknown) => {
-  if (Array.isArray(regions)) {
-    return regions.length > 0;
-  }
-
-  if (typeof regions === "string") {
-    const normalized = regions.trim();
-    return normalized.length > 0 && normalized !== "[]";
-  }
-
-  return false;
 };
 
 const formatMetadataValue = (value: unknown): string => {
@@ -111,7 +98,7 @@ export function FullscreenViewer() {
     const hasRegions =
       photo !== null &&
       photo.mediaType !== "video" &&
-      hasPotentialFaceRegions(photo.metadata?.regions);
+      parseFaceRegions(photo.metadata?.regions).length > 0;
 
     setShowLiveVideo(false);
     setShowFaces(false);

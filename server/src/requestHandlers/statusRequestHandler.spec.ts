@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import type http from "node:http";
-import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 import { statusRequestHandler } from "./statusRequestHandler.ts";
 
@@ -45,6 +44,7 @@ afterEach(() => {
 const alwaysEnabledOrchestrator: TaskOrchestrator = {
   setPerformBackgroundTasks: () => {},
   getPerformBackgroundTasks: () => true,
+  getBackgroundTaskStatus: async () => [],
   addTask: () => {},
   onQueueExhausted: () => {},
 };
@@ -53,43 +53,44 @@ describe("statusRequestHandler", () => {
   it("returns JSON status payload for non-stream mode", async () => {
     const { res, getBody } = createMockResponse();
 
-    const database = {
-      getStatusCounts: () => ({
-        allEntries: 10,
-        imageEntries: 7,
-        videoEntries: 1,
-        missingFileMetadata: 4,
-        missingMediaMetadata: 5,
-        missingThumbnails: 3,
-      }),
-    } as unknown as IndexDatabase;
+    const taskOrchestrator: TaskOrchestrator = {
+      ...alwaysEnabledOrchestrator,
+      getBackgroundTaskStatus: async () => [
+        {
+          id: "background:file-scan",
+          name: "File system scan",
+          queue: "background",
+          state: "running",
+          itemsProcessed: 33,
+          total: 100,
+          portionComplete: 0.33,
+        },
+      ],
+    };
 
     await statusRequestHandler({} as http.IncomingMessage, res, {
-      database,
       stream: false,
-      taskOrchestrator: alwaysEnabledOrchestrator,
+      taskOrchestrator,
     });
 
     expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
     const payload = JSON.parse(getBody());
-    expect(payload.files).toEqual({ total: 10, images: 7, videos: 1 });
-    expect(payload.pending).toEqual({ fileMetadata: 4, mediaMetadata: 5, thumbnails: 3 });
+    expect(payload.backgroundTasks).toEqual([
+      {
+        id: "background:file-scan",
+        name: "File system scan",
+        queue: "background",
+        state: "running",
+        itemsProcessed: 33,
+        total: 100,
+        portionComplete: 0.33,
+      },
+    ]);
     expect(payload.maintenance.backgroundTasksEnabled).toBe(true);
   });
 
   it("reports backgroundTasksEnabled false when background processing is disabled", async () => {
     const { res, getBody } = createMockResponse();
-
-    const database = {
-      getStatusCounts: () => ({
-        allEntries: 10,
-        imageEntries: 8,
-        videoEntries: 0,
-        missingFileMetadata: 4,
-        missingMediaMetadata: 2,
-        missingThumbnails: 2,
-      }),
-    } as unknown as IndexDatabase;
 
     const disabledOrchestrator: TaskOrchestrator = {
       ...alwaysEnabledOrchestrator,
@@ -97,7 +98,6 @@ describe("statusRequestHandler", () => {
     };
 
     await statusRequestHandler({} as http.IncomingMessage, res, {
-      database,
       stream: false,
       taskOrchestrator: disabledOrchestrator,
     });
@@ -113,19 +113,7 @@ describe("statusRequestHandler", () => {
     const req = new EventEmitter() as http.IncomingMessage;
     const { res, getWrites } = createMockResponse();
 
-    const database = {
-      getStatusCounts: () => ({
-        allEntries: 1,
-        imageEntries: 1,
-        videoEntries: 0,
-        missingFileMetadata: 0,
-        missingMediaMetadata: 0,
-        missingThumbnails: 0,
-      }),
-    } as unknown as IndexDatabase;
-
     statusRequestHandler(req, res, {
-      database,
       stream: true,
       taskOrchestrator: alwaysEnabledOrchestrator,
     });
@@ -152,27 +140,19 @@ describe("statusRequestHandler", () => {
     let resolveStatus: (() => void) | undefined;
     const statusCalls: number[] = [];
 
-    const database = {
-      getStatusCounts: () => {
+    const taskOrchestrator: TaskOrchestrator = {
+      ...alwaysEnabledOrchestrator,
+      getBackgroundTaskStatus: () => {
         statusCalls.push(Date.now());
         return new Promise((resolve) => {
-          resolveStatus = () =>
-            resolve({
-              allEntries: 1,
-              imageEntries: 1,
-              videoEntries: 0,
-              missingFileMetadata: 0,
-              missingMediaMetadata: 0,
-              missingThumbnails: 0,
-            });
+          resolveStatus = () => resolve([]);
         });
       },
-    } as unknown as IndexDatabase;
+    };
 
     statusRequestHandler(req, res, {
-      database,
       stream: true,
-      taskOrchestrator: alwaysEnabledOrchestrator,
+      taskOrchestrator,
     });
 
     expect(statusCalls).toHaveLength(1);

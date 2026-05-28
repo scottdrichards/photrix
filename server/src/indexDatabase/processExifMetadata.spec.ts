@@ -22,7 +22,15 @@ describe("processExifMetadata", () => {
   it("processes files and completes", async () => {
     const getExifMetadataFromFile = jest
       .fn()
-      .mockResolvedValueOnce({ cameraMake: "Canon" })
+      .mockResolvedValueOnce({
+        cameraMake: "Canon",
+        regions: [
+          {
+            name: "Scott",
+            area: { x: 0.5, y: 0.5, width: 0.2, height: 0.2 },
+          },
+        ],
+      })
       .mockRejectedValueOnce(new Error("bad metadata"))
       .mockResolvedValueOnce({ focalLength: 35 });
 
@@ -31,6 +39,7 @@ describe("processExifMetadata", () => {
     }));
 
     const updates: Array<{ relativePath: string; data: Record<string, unknown> }> = [];
+    const metadataFaceWrites: Array<{ relativePath: string; regions: unknown[] }> = [];
     let callCount = 0;
     const db = {
       storagePath: path.join(os.tmpdir(), "photrix-exif-test"),
@@ -60,6 +69,12 @@ describe("processExifMetadata", () => {
       ) => {
         updates.push({ relativePath, data });
       },
+      saveFacesFromMetadataRegions: async (
+        relativePath: string,
+        regions: unknown[],
+      ) => {
+        metadataFaceWrites.push({ relativePath, regions });
+      },
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -74,6 +89,8 @@ describe("processExifMetadata", () => {
     expect(typeof byPath["good.jpg"]?.exifProcessedAt).toBe("string");
     expect(typeof byPath["bad.jpg"]?.exifProcessedAt).toBe("string");
     expect(byPath["ok.jpg"]?.focalLength).toBe(35);
+    expect(metadataFaceWrites).toHaveLength(1);
+    expect(metadataFaceWrites[0]?.relativePath).toBe("good.jpg");
   });
 
   it("supports pause and resume during processing", async () => {
@@ -113,6 +130,7 @@ describe("processExifMetadata", () => {
         };
       })(),
       addOrUpdateFileData: async () => undefined,
+      saveFacesFromMetadataRegions: async () => undefined,
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -157,6 +175,7 @@ describe("processExifMetadata", () => {
         { relativePath: "file2.jpg", sizeInBytes: 100 },
       ],
       addOrUpdateFileData: async () => undefined,
+      saveFacesFromMetadataRegions: async () => undefined,
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -201,6 +220,7 @@ describe("processExifMetadata", () => {
       addOrUpdateFileData: async () => {
         missingMediaMetadata = Math.max(0, missingMediaMetadata - 1);
       },
+      saveFacesFromMetadataRegions: async () => undefined,
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");

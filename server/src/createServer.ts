@@ -88,7 +88,6 @@ export const createServer = (
 
           if (req.url?.startsWith("/api/status/stream") && req.method === "GET") {
             await statusRequestHandler(req, res, {
-              database,
               stream: true,
               taskOrchestrator,
             });
@@ -102,7 +101,6 @@ export const createServer = (
 
           if (req.url?.startsWith("/api/status") && req.method === "GET") {
             await statusRequestHandler(req, res, {
-              database,
               stream: false,
               taskOrchestrator,
             });

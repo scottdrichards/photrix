@@ -75,7 +75,8 @@ describe("api", () => {
       includeSubfolders: true,
       path: "trip/",
       ratingFilter: { rating: 3, atLeast: true },
-      mediaTypeFilter: "video",
+      mediaTypeFilter: "all",
+      hasFaceScanData: true,
       peopleInImageFilter: [" Sam ", "sam", "Taylor"],
       cameraModelFilter: ["EOS R6"],
       lensFilter: ["RF 24-70mm"],
@@ -99,7 +100,14 @@ describe("api", () => {
     expect(filter.conditions).toEqual(
       expect.arrayContaining([
         { rating: { min: 3 } },
-        { mimeType: { startsWith: "video/" } },
+        { mimeType: { startsWith: "image/" } },
+        {
+          operation: "or",
+          conditions: [
+            { hasFaces: true },
+            { regions: { includes: '"area"' } },
+          ],
+        },
         { personInImage: ["Sam", "sam", "Taylor"] },
         { cameraModel: ["EOS R6"] },
         { lens: ["RF 24-70mm"] },
@@ -191,6 +199,10 @@ describe("api", () => {
       allowsNullState: true,
     });
     expect(filterFieldCapabilities.mediaTypeFilter).toEqual({
+      supportsArray: false,
+      allowsNullState: false,
+    });
+    expect(filterFieldCapabilities.hasFaceScanData).toEqual({
       supportsArray: false,
       allowsNullState: false,
     });

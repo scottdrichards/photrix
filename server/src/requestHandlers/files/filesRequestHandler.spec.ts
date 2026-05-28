@@ -10,6 +10,7 @@ import { filesEndpointRequestHandler } from "./filesRequestHandler.ts";
 const orchestrator: TaskOrchestrator = {
   setPerformBackgroundTasks: () => {},
   getPerformBackgroundTasks: () => true,
+  getBackgroundTaskStatus: async () => [],
   addTask: () => {},
   onQueueExhausted: () => {},
 };

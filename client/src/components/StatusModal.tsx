@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Filmstrip24Regular, Image24Regular } from "@fluentui/react-icons";
 import {
+  type BackgroundTaskStatus,
   setBackgroundTasksEnabled,
   subscribeStatusStream,
   type ServerStatus,
 } from "../api";
+import { ProgressItem } from "./ProgressItem";
 import css from "./StatusModal.module.css";
 
 type StatusModalProps = {
@@ -12,121 +13,42 @@ type StatusModalProps = {
   onDismiss: () => void;
 };
 
-type PendingSample = {
-  totalPending: number;
-  capturedAtMs: number;
-};
+const clampUnit = (value: number) => Math.max(0, Math.min(1, value));
 
-type EstimateTracker = {
-  lastSample: PendingSample | null;
-  smoothedRatePerSecond: number | null;
-  lastProgressAtMs: number | null;
-};
+const capitalize = (value: string) => value[0]?.toUpperCase() + value.slice(1);
 
-const INITIAL_ESTIMATE_TRACKER: EstimateTracker = {
-  lastSample: null,
-  smoothedRatePerSecond: null,
-  lastProgressAtMs: null,
-};
-
-const ETA_RATE_SMOOTHING = 0.35;
-const ETA_MAX_STALE_MS = 30_000;
-
-const getTotalPending = (status: ServerStatus) =>
-  status.pending.fileMetadata + status.pending.mediaMetadata + status.pending.thumbnails;
-
-const updateEstimateTracker = (
-  tracker: EstimateTracker,
-  status: ServerStatus,
-  capturedAtMs: number,
-): EstimateTracker => {
-  const totalPending = getTotalPending(status);
-  const nextSample: PendingSample = { totalPending, capturedAtMs };
-
-  if (!tracker.lastSample) {
-    return {
-      ...tracker,
-      lastSample: nextSample,
-    };
+const toProgress = (task: BackgroundTaskStatus) => {
+  if (task.total == null || task.itemsProcessed == null || task.total <= 0) {
+    return null;
   }
 
-  const elapsedSeconds = (capturedAtMs - tracker.lastSample.capturedAtMs) / 1000;
-  if (elapsedSeconds <= 0) {
-    return {
-      ...tracker,
-      lastSample: nextSample,
-    };
-  }
-
-  const completedCount = tracker.lastSample.totalPending - totalPending;
-  if (completedCount <= 0) {
-    return {
-      ...tracker,
-      lastSample: nextSample,
-    };
-  }
-
-  const measuredRate = completedCount / elapsedSeconds;
-  const smoothedRatePerSecond = tracker.smoothedRatePerSecond
-    ? tracker.smoothedRatePerSecond +
-      (measuredRate - tracker.smoothedRatePerSecond) * ETA_RATE_SMOOTHING
-    : measuredRate;
+  const percent =
+    task.portionComplete != null
+      ? clampUnit(task.portionComplete)
+      : clampUnit(task.itemsProcessed / task.total);
 
   return {
-    lastSample: nextSample,
-    smoothedRatePerSecond,
-    lastProgressAtMs: capturedAtMs,
+    completed: task.itemsProcessed,
+    total: task.total,
+    percent,
   };
 };
 
-const formatDuration = (seconds: number) => {
-  const roundedSeconds = Math.max(1, Math.round(seconds));
+const buildTaskDetail = (task: BackgroundTaskStatus) => {
+  const detailParts = [
+    `Queue: ${capitalize(task.queue)}`,
+    task.state !== "running" ? `State: ${capitalize(task.state)}` : null,
+    task.description ?? null,
+  ].filter(Boolean);
 
-  if (roundedSeconds < 60) {
-    return `${roundedSeconds}s`;
-  }
-
-  if (roundedSeconds < 3600) {
-    const minutes = Math.floor(roundedSeconds / 60);
-    const remainingSeconds = roundedSeconds % 60;
-    return `${minutes}m ${remainingSeconds}s`;
-  }
-
-  const hours = Math.floor(roundedSeconds / 3600);
-  const remainingMinutes = Math.floor((roundedSeconds % 3600) / 60);
-  return `${hours}h ${remainingMinutes}m`;
-};
-
-const getEstimatedTimeText = (
-  status: ServerStatus,
-  tracker: EstimateTracker,
-  nowMs: number,
-) => {
-  const totalPending = getTotalPending(status);
-  if (totalPending === 0) {
-    return "Complete";
-  }
-
-  if (!tracker.smoothedRatePerSecond || tracker.smoothedRatePerSecond <= 0) {
-    return "Calculating...";
-  }
-
-  const lastProgressAge =
-    tracker.lastProgressAtMs === null ? Number.POSITIVE_INFINITY : nowMs - tracker.lastProgressAtMs;
-  if (lastProgressAge > ETA_MAX_STALE_MS) {
-    return "Calculating...";
-  }
-
-  return formatDuration(totalPending / tracker.smoothedRatePerSecond);
+  return detailParts.length > 0 ? detailParts.join(" • ") : undefined;
 };
 
 export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   const [status, setStatus] = useState<ServerStatus | undefined>(undefined);
   const [isTogglingBackgroundTasks, setIsTogglingBackgroundTasks] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
-  const [estimatedTimeText, setEstimatedTimeText] = useState("Calculating...");
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const estimateTrackerRef = useRef<EstimateTracker>(INITIAL_ESTIMATE_TRACKER);
 
   const backgroundTasksEnabled = status?.maintenance.backgroundTasksEnabled ?? true;
 
@@ -141,15 +63,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     }
     const unsubscribe = subscribeStatusStream(
       (data) => {
-        const nowMs = Date.now();
-        const nextEstimateTracker = updateEstimateTracker(
-          estimateTrackerRef.current,
-          data,
-          nowMs,
-        );
-        estimateTrackerRef.current = nextEstimateTracker;
         setStatus(data);
-        setEstimatedTimeText(getEstimatedTimeText(data, nextEstimateTracker, nowMs));
       },
       (_error) => {
       },
@@ -158,8 +72,6 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     return () => {
       unsubscribe();
       setStatus(undefined);
-      setEstimatedTimeText("Calculating...");
-      estimateTrackerRef.current = INITIAL_ESTIMATE_TRACKER;
       setIsTogglingBackgroundTasks(false);
       setToggleError(null);
     };
@@ -211,41 +123,35 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
               {toggleError ? <span className={css.errorText}>{toggleError}</span> : null}
             </div>
 
-            <div className={css.statsRow}>
-              <span>
-                <span className={css.label}>Files:</span>
-                <span className={css.value}>{status.files.total.toLocaleString()}</span>
-                <span className={css.mediaCount}>
-                  <Image24Regular fontSize={14} aria-label="Photos" />
-                  {status.files.images.toLocaleString()}
-                </span>
-                <span className={css.mediaCount}>
-                  <Filmstrip24Regular fontSize={14} aria-label="Videos" />
-                  {status.files.videos.toLocaleString()}
-                </span>
-              </span>
-              <span>
-                <span className={css.label}>File metadata to scan:</span>
-                <span className={css.value}>
-                  {status.pending.fileMetadata.toLocaleString()}
-                </span>
-              </span>
-              <span>
-                <span className={css.label}>Media metadata to scan:</span>
-                <span className={css.value}>
-                  {status.pending.mediaMetadata.toLocaleString()}
-                </span>
-              </span>
-              <span>
-                <span className={css.label}>Thumbnails to process:</span>
-                <span className={css.value}>
-                  {status.pending.thumbnails.toLocaleString()}
-                </span>
-              </span>
-              <span>
-                <span className={css.label}>Estimated total time:</span>
-                <span className={css.value}>{estimatedTimeText}</span>
-              </span>
+            <div className={css.taskList}>
+              <span className={css.label}>Background tasks</span>
+              {status.backgroundTasks.length === 0 ? (
+                <span className={css.emptyText}>No background tasks running or queued.</span>
+              ) : (
+                status.backgroundTasks.map((task) => {
+                  const progress = toProgress(task);
+                  const detail = buildTaskDetail(task);
+
+                  if (progress) {
+                    return (
+                      <ProgressItem
+                        key={task.id}
+                        label={task.name}
+                        progress={progress}
+                        detail={detail}
+                        summaryLabel="items"
+                      />
+                    );
+                  }
+
+                  return (
+                    <div className={css.taskRow} key={task.id}>
+                      <span className={css.value}>{task.name}</span>
+                      {detail ? <small>{detail}</small> : null}
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         )}

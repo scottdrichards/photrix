@@ -1,6 +1,8 @@
 import "dotenv/config";
 import { initializeCacheDirectories } from "./common/cacheUtils.ts";
 import { createServer } from "./createServer.ts";
+import { detectFacesWithInsightFace } from "./faceDetection/insightFaceDetector.ts";
+import { processFaceDetection } from "./faceDetection/processFaceDetection.ts";
 import { fileSystemScanFolder } from "./indexDatabase/fileSystemScanFolder.ts";
 import { processExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { processFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
@@ -41,6 +43,15 @@ const startServer = async () => {
       name: "EXIF metadata processing",
       start: () => processExifMetadata(database),
       type: "mediaMedatadata",
+    },
+    "background",
+  );
+
+  taskOrchestrator.addTask(
+    {
+      name: "Face detection",
+      start: () => processFaceDetection(database, detectFacesWithInsightFace),
+      type: "faceDetection",
     },
     "background",
   );

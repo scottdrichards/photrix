@@ -127,12 +127,31 @@ const normalizeRegionArea = (area: unknown) => {
     return undefined;
   }
 
-  const areaRecord = area as { x?: unknown; y?: unknown; w?: unknown; h?: unknown };
+  const areaRecord = area as {
+    x?: unknown;
+    y?: unknown;
+    w?: unknown;
+    h?: unknown;
+    width?: unknown;
+    height?: unknown;
+  };
+  const width =
+    typeof areaRecord.w === "number"
+      ? areaRecord.w
+      : typeof areaRecord.width === "number"
+        ? areaRecord.width
+        : undefined;
+  const height =
+    typeof areaRecord.h === "number"
+      ? areaRecord.h
+      : typeof areaRecord.height === "number"
+        ? areaRecord.height
+        : undefined;
   if (
     typeof areaRecord.x !== "number" ||
     typeof areaRecord.y !== "number" ||
-    typeof areaRecord.w !== "number" ||
-    typeof areaRecord.h !== "number"
+    typeof width !== "number" ||
+    typeof height !== "number"
   ) {
     return undefined;
   }
@@ -140,28 +159,79 @@ const normalizeRegionArea = (area: unknown) => {
   return {
     x: areaRecord.x,
     y: areaRecord.y,
-    width: areaRecord.w,
-    height: areaRecord.h,
+    width,
+    height,
   };
 };
 
-const extractRegions = (regionsSource: unknown) => {
-  const regionListValue =
-    regionsSource && typeof regionsSource === "object"
-      ? (regionsSource as { RegionList?: unknown }).RegionList
-      : undefined;
+const clampToUnit = (value: number) => Math.min(Math.max(value, 0), 1);
 
-  if (!Array.isArray(regionListValue)) {
+const transformRegionByOrientation = (
+  area: { x: number; y: number; width: number; height: number },
+  orientation: number,
+) => {
+  const { x, y, width, height } = area;
+
+  switch (orientation) {
+    case 2:
+      return { x: 1 - x, y, width, height };
+    case 3:
+      return { x: 1 - x, y: 1 - y, width, height };
+    case 4:
+      return { x, y: 1 - y, width, height };
+    case 5:
+      return { x: y, y: x, width: height, height: width };
+    case 6:
+      return { x: 1 - y, y: x, width: height, height: width };
+    case 7:
+      return { x: 1 - y, y: 1 - x, width: height, height: width };
+    case 8:
+      return { x: y, y: 1 - x, width: height, height: width };
+    case 1:
+    default:
+      return { x, y, width, height };
+  }
+};
+
+const unwrapJsonString = (value: unknown): unknown => {
+  let current = value;
+  while (typeof current === "string") {
+    try {
+      current = JSON.parse(current);
+    } catch {
+      return current;
+    }
+  }
+  return current;
+};
+
+const toRegionList = (regionsSource: unknown): unknown[] => {
+  const unwrapped = unwrapJsonString(regionsSource);
+  if (Array.isArray(unwrapped)) {
+    return unwrapped;
+  }
+
+  if (!unwrapped || typeof unwrapped !== "object") {
     return [];
   }
 
-  return regionListValue
+  const regionList = (unwrapped as { RegionList?: unknown }).RegionList;
+  const regionListUnwrapped = unwrapJsonString(regionList);
+  return Array.isArray(regionListUnwrapped) ? regionListUnwrapped : [];
+};
+
+const extractRegions = (regionsSource: unknown, rawData: Record<string, unknown>) => {
+  const orientation = toFiniteNumber(rawData.Orientation) ?? 1;
+  return toRegionList(regionsSource)
     .filter(
       (entry): entry is Record<string, unknown> =>
         Boolean(entry) && typeof entry === "object",
     )
     .map((entry) => {
       const normalizedArea = normalizeRegionArea(entry.Area);
+      const transformedArea = normalizedArea
+        ? transformRegionByOrientation(normalizedArea, orientation)
+        : undefined;
 
       const name = typeof entry.Name === "string" ? entry.Name.trim() : undefined;
       const type = typeof entry.Type === "string" ? entry.Type.trim() : undefined;
@@ -170,7 +240,16 @@ const extractRegions = (regionsSource: unknown) => {
       return {
         ...(name ? { name } : {}),
         ...(type ? { type } : {}),
-        ...(normalizedArea ? { area: normalizedArea } : {}),
+        ...(transformedArea
+          ? {
+              area: {
+                x: clampToUnit(transformedArea.x),
+                y: clampToUnit(transformedArea.y),
+                width: clampToUnit(transformedArea.width),
+                height: clampToUnit(transformedArea.height),
+              },
+            }
+          : {}),
         ...(rotation !== undefined ? { rotation } : {}),
       };
     });

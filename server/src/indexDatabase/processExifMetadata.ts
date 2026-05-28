@@ -65,6 +65,13 @@ export const processExifMetadata = (database: IndexDatabase): TaskRunner => {
                 ...exif,
                 exifProcessedAt: now.toISOString(),
               });
+              if (Array.isArray(exif.regions) && exif.regions.length > 0) {
+                await database.saveFacesFromMetadataRegions(
+                  entry.relativePath,
+                  exif.regions,
+                  now,
+                );
+              }
             } catch {
               const errorDate = new Date();
               await database.addOrUpdateFileData(entry.relativePath, {

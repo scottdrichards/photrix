@@ -4,7 +4,7 @@
   gap: var(--space-m);
 }
 
-.statsRow {
+.taskList {
   display: flex;
   flex-direction: column;
   gap: var(--space-s);
@@ -18,18 +18,24 @@
   margin-left: var(--space-s);
 }
 
-.mediaCount {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-xs);
-  margin-left: var(--space-m);
-  color: var(--fg2);
-}
-
 .toggleRow {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+}
+
+.taskRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  border: 1px solid var(--stroke1);
+  border-radius: var(--radius-md);
+  background-color: var(--bg2);
+  padding: var(--space-m);
+}
+
+.emptyText {
+  color: var(--fg3);
 }
 
 .errorText {

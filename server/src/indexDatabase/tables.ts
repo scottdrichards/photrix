@@ -55,6 +55,8 @@ export const tables = {
       { name: "exifProcessedAt", type: "INTEGER", indexExpression: true },
       { name: "imageVariantsGeneratedAt", type: "INTEGER", indexExpression: true },
       { name: "hlsGeneratedAt", type: "INTEGER", indexExpression: true },
+      { name: "facesProcessedAt", type: "INTEGER", indexExpression: true },
+      { name: "facesLastErrorAt", type: "INTEGER", indexExpression: true },
     ],
     compositeIndexes: [
       {
@@ -75,8 +77,34 @@ export const tables = {
           "mimeType LIKE 'video/%' AND hlsGeneratedAt IS NULL AND exifProcessedAt IS NOT NULL",
       },
       {
+        name: "idx_images_needing_faces",
+        expression: "mimeType, facesProcessedAt",
+        where: "mimeType LIKE 'image/%' AND facesProcessedAt IS NULL",
+      },
+      {
         name: "sort_date",
         expression: "COALESCE(dateTaken, created, modified) DESC",
+      },
+    ],
+  },
+  faces: {
+    columns: [
+      { name: "id", type: "INTEGER", isPrimaryKey: true },
+      { name: "folder", type: "TEXT" },
+      { name: "fileName", type: "TEXT" },
+      { name: "boxX", type: "REAL" },
+      { name: "boxY", type: "REAL" },
+      { name: "boxWidth", type: "REAL" },
+      { name: "boxHeight", type: "REAL" },
+      { name: "confidence", type: "REAL" },
+      { name: "embedding", type: "BLOB" },
+      { name: "personId", type: "INTEGER", indexExpression: true },
+      { name: "detectedAt", type: "INTEGER" },
+    ],
+    compositeIndexes: [
+      {
+        name: "by_file",
+        expression: "folder, fileName",
       },
     ],
   },
