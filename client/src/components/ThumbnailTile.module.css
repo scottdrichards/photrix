@@ -10,7 +10,7 @@
   flex-basis: calc(var(--thumbnail-size) * var(--ratio));
   flex-grow: var(--ratio);
   flex-shrink: 1;
-  max-width: min(100%, calc(var(--thumbnail-size) * var(--ratio) * 1.5));
+  max-width: 100%;
   transition-property: transform, box-shadow;
   transition-duration: var(--dur-fast);
   transition-timing-function: var(--ease-accel);
@@ -107,4 +107,12 @@
   word-break: break-word;
   font-size: 0.875rem;
   line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  .tile {
+    min-width: 100%;
+    flex-basis: 100%;
+    flex-grow: 1;
+  }
 }
