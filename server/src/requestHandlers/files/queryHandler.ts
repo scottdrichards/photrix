@@ -82,6 +82,30 @@ export const queryHandler = async (
     return;
   }
 
+  if (aggregate === "people") {
+    const people = await (() =>
+      database.queryFaceClusters({
+        filter,
+      }))();
+    writeJson(res, 200, people);
+    return;
+  }
+
+  if (aggregate === "peopleClusterDetail") {
+    const clusterId = url.searchParams.get("clusterId");
+    if (!clusterId) {
+      writeJson(res, 400, { error: "Missing clusterId parameter" });
+      return;
+    }
+    const detail = await (() =>
+      database.getFaceClusterDetail({
+        filter,
+        clusterId,
+      }))();
+    writeJson(res, 200, detail);
+    return;
+  }
+
   if (cluster) {
     const parsedClusterSize = clusterSizeParam
       ? Number.parseFloat(clusterSizeParam)

@@ -122,12 +122,21 @@
 }
 
 .faceFrameRect {
-  fill: rgba(11, 150, 226, 0.1);
-  stroke: rgba(140, 226, 255, 0.95);
+  fill: transparent;
   stroke-width: calc(2.5px / var(--zoom-scale, 1));
   vector-effect: non-scaling-stroke;
   shape-rendering: geometricPrecision;
   filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.5));
+}
+
+.exifFaceFrameRect {
+  fill: rgba(11, 150, 226, 0.1);
+  stroke: rgba(140, 226, 255, 0.95);
+}
+
+.faceTableFrameRect {
+  fill: rgba(255, 166, 0, 0.1);
+  stroke: rgba(255, 201, 79, 0.95);
 }
 
 .topRightActions {

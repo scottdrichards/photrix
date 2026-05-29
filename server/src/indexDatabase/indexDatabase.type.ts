@@ -58,6 +58,43 @@ export type GeoClusterResult = {
   total: number;
 };
 
+export type FaceClusterBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type FaceClusterFace = {
+  path: string;
+  fileName: string;
+  box: FaceClusterBox;
+  mimeType: string | null;
+  dimensionWidth: number | null;
+  dimensionHeight: number | null;
+  regions: string | null;
+};
+
+export type FaceClusterSummary = {
+  id: string;
+  count: number;
+  representative: FaceClusterFace;
+};
+
+export type FaceCluster = FaceClusterSummary & {
+  faces: FaceClusterFace[];
+};
+
+export type FaceClusterResult = {
+  clusters: FaceClusterSummary[];
+  totalFaces: number;
+  totalClusters: number;
+};
+
+export type FaceClusterDetailResult = {
+  cluster: FaceCluster | null;
+};
+
 export type DateHistogramBucket = {
   start: number;
   end: number;

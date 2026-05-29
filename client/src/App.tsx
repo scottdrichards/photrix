@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
 import { FullscreenViewer } from "./components/FullscreenViewer";
+import { PeopleView } from "./components/PeopleView";
 import { StatusModal } from "./components/StatusModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { Filter } from "./components/filter/Filter";
@@ -11,13 +12,22 @@ import {
   SelectionProvider,
   useSelectionContext,
 } from "./components/selection/SelectionContext";
-import { useSyncUrlWithFilter } from "./hooks/useSyncUrlWithFilter";
+import { useSyncUrlWithFilter, type ViewMode } from "./hooks/useSyncUrlWithFilter";
 import { probeVideoPlaybackProfile } from "./videoPlaybackProfile";
+
+const initialViewFromUrl = (): ViewMode => {
+  if (typeof window === "undefined") {
+    return "library";
+  }
+  return new URLSearchParams(window.location.search).get("view") === "people"
+    ? "people"
+    : "library";
+};
 
 const AppContent = () => {
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
-  const [view, setView] = useState<"library">("library");
+  const [view, setView] = useState<ViewMode>(initialViewFromUrl);
   const { clearSelection, selectedItems, selectionMode, setSelectionMode } =
     useSelectionContext();
 
@@ -26,6 +36,13 @@ const AppContent = () => {
   useEffect(() => {
     void probeVideoPlaybackProfile();
   }, []);
+
+  useEffect(() => {
+    if (view !== "library" && selectionMode) {
+      setSelectionMode(false);
+      clearSelection();
+    }
+  }, [clearSelection, selectionMode, setSelectionMode, view]);
 
   const canUseNativeShare =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
@@ -103,8 +120,28 @@ const AppContent = () => {
         </div>
 
         <div className={css.headerActions}>
+          <div className={css.viewToggle} role="tablist" aria-label="Current view">
+            <button
+              type="button"
+              className={`btn btn-subtle ${view === "library" ? css.viewToggleActive : ""}`}
+              onClick={() => setView("library")}
+              role="tab"
+              aria-selected={view === "library"}
+            >
+              Thumbnails
+            </button>
+            <button
+              type="button"
+              className={`btn btn-subtle ${view === "people" ? css.viewToggleActive : ""}`}
+              onClick={() => setView("people")}
+              role="tab"
+              aria-selected={view === "people"}
+            >
+              People
+            </button>
+          </div>
           <Filter />
-          {selectionMode ? (
+          {view === "library" && selectionMode ? (
             <>
               <small>{selectedItems.length} selected</small>
               <button
@@ -126,14 +163,14 @@ const AppContent = () => {
                 Done
               </button>
             </>
-          ) : (
+          ) : view === "library" ? (
             <button
               onClick={() => handleSelectionModeChange(true)}
               className="btn btn-subtle"
             >
               Select
             </button>
-          )}
+          ) : null}
           <button
             title="Server Status"
             className="btn btn-subtle"
@@ -147,7 +184,7 @@ const AppContent = () => {
 
       <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
 
-      <ThumbnailGrid />
+      {view === "library" ? <ThumbnailGrid /> : <PeopleView />}
       <FullscreenViewer />
     </div>
   );

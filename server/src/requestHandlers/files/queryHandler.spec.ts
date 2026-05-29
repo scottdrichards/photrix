@@ -75,6 +75,60 @@ describe("queryHandler", () => {
     expect(JSON.parse(getBody())).toEqual(histogram);
   });
 
+  it("returns people aggregate response", async () => {
+    const { res, getBody } = createMockResponse();
+    const database = {
+      queryFaceClusters: jest.fn(() => ({
+        clusters: [
+          {
+            id: "person-1",
+            count: 2,
+            representative: {
+              path: "/a.jpg",
+              fileName: "a.jpg",
+              box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+              mimeType: "image/jpeg",
+              dimensionWidth: 1000,
+              dimensionHeight: 800,
+            },
+            faces: [],
+          },
+        ],
+        totalFaces: 2,
+        totalClusters: 1,
+      })),
+    } as unknown as IndexDatabase;
+
+    await queryHandler(
+      new URL("http://localhost/api/files/?aggregate=people"),
+      "/",
+      database,
+      res,
+    );
+
+    expect(database.queryFaceClusters).toHaveBeenCalled();
+    expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
+    expect(JSON.parse(getBody())).toEqual({
+      clusters: [
+        {
+          id: "person-1",
+          count: 2,
+          representative: {
+            path: "/a.jpg",
+            fileName: "a.jpg",
+            box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+            mimeType: "image/jpeg",
+            dimensionWidth: 1000,
+            dimensionHeight: 800,
+          },
+          faces: [],
+        },
+      ],
+      totalFaces: 2,
+      totalClusters: 1,
+    });
+  });
+
   it("returns cluster response with parsed bounds and default cluster size", async () => {
     const { res, getBody } = createMockResponse();
     const database = {
@@ -94,7 +148,10 @@ describe("queryHandler", () => {
     );
 
     expect(database.queryGeoClusters).toHaveBeenCalledWith({
-      filter: { folder: { folder: "/photos", recursive: false } },
+      filter: {
+        operation: "and",
+        conditions: [{ folder: { folder: "/photos", recursive: false } }],
+      },
       clusterSize: 0.00002,
       bounds: { west: -1, east: 1, north: 2, south: -2 },
     });

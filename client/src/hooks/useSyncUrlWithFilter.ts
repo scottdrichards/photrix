@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useFilter } from "../components/filter/FilterContext";
 
-export type ViewMode = "library";
+export type ViewMode = "library" | "people";
 
 export const useSyncUrlWithFilter = (
   view: ViewMode,
@@ -16,14 +16,19 @@ export const useSyncUrlWithFilter = (
     if (filter.includeSubfolders === false) {
       params.set("includeSubfolders", "false");
     }
+    if (view !== "library") {
+      params.set("view", view);
+    }
 
     const currentSearch = new URLSearchParams(window.location.search);
     const currentPathname = window.location.pathname.slice(1);
     const currentInclude = currentSearch.get("includeSubfolders") !== "false";
+    const currentView = currentSearch.get("view") === "people" ? "people" : "library";
 
     if (
       decodeURIComponent(currentPathname) !== currentPath ||
-      currentInclude !== filter.includeSubfolders
+      currentInclude !== filter.includeSubfolders ||
+      currentView !== view
     ) {
       const queryString = params.toString() ? `?${params.toString()}` : "";
       const encodedPath = currentPath
@@ -42,7 +47,7 @@ export const useSyncUrlWithFilter = (
         path: path ? `${path}/` : "",
         includeSubfolders: params.get("includeSubfolders") !== "false",
       });
-      setView("library");
+      setView(params.get("view") === "people" ? "people" : "library");
     };
 
     window.addEventListener("popstate", handlePopState);

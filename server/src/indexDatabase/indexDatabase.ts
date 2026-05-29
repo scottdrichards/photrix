@@ -7,6 +7,9 @@ import { MetadataGroups, type FileRecord } from "./fileRecord.type.ts";
 import { filterToSQL } from "./filterToSQL.ts";
 import {
   type DateHistogramResult,
+  type FaceClusterDetailResult,
+  type FaceClusterFace,
+  type FaceClusterResult,
   type FilterElement,
   type GeoClusterResult,
   type QueryOptions,
@@ -27,7 +30,7 @@ const filesNeedingMetadataUpdateFilter = (
   // Face detection only applies to images. Other metadata groups still cover
   // both images and videos.
   if (metadataGroupName === "faces") {
-    return `(${base}) AND mimeType LIKE 'image/%' AND exifProcessedAt IS NOT NULL`;
+    return `(${base}) AND mimeType LIKE 'image/%'`;
   }
   return base;
 };
@@ -45,6 +48,70 @@ const personIdFromName = (name: string) => {
   }
 
   return hash >>> 1 || 1;
+};
+
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+
+const toCenterBoxFromTopLeft = (box: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) => {
+  const width = clamp01(box.width);
+  const height = clamp01(box.height);
+  const x = clamp01(box.x + width / 2);
+  const y = clamp01(box.y + height / 2);
+  return { x, y, width, height };
+};
+
+const normalizeCenterArea = (area: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) => {
+  const width = clamp01(area.width);
+  const height = clamp01(area.height);
+  const x = clamp01(area.x);
+  const y = clamp01(area.y);
+  return { x, y, width, height };
+};
+
+const DEFAULT_FACE_CLUSTER_SIMILARITY = 0.62;
+
+const alignEmbeddingBuffer = (buffer: Buffer) => {
+  const aligned = new Uint8Array(buffer.byteLength);
+  aligned.set(buffer);
+  return new Float64Array(aligned.buffer);
+};
+
+const toUnitVector = (vector: Float64Array): Float64Array | null => {
+  let magnitudeSquared = 0;
+  for (let i = 0; i < vector.length; i += 1) {
+    const value = vector[i] ?? 0;
+    magnitudeSquared += value * value;
+  }
+
+  if (magnitudeSquared <= 0) {
+    return null;
+  }
+
+  const magnitude = Math.sqrt(magnitudeSquared);
+  const normalized = new Float64Array(vector.length);
+  for (let i = 0; i < vector.length; i += 1) {
+    normalized[i] = (vector[i] ?? 0) / magnitude;
+  }
+  return normalized;
+};
+
+const cosineSimilarity = (left: Float64Array, right: Float64Array) => {
+  const length = Math.min(left.length, right.length);
+  let dot = 0;
+  for (let i = 0; i < length; i += 1) {
+    dot += (left[i] ?? 0) * (right[i] ?? 0);
+  }
+  return dot;
 };
 
 export class IndexDatabase {
@@ -367,6 +434,7 @@ export class IndexDatabase {
         face.embedding.byteOffset,
         face.embedding.byteLength,
       );
+      const centeredBox = toCenterBoxFromTopLeft(face.box);
       statements.push({
         sql: `INSERT INTO faces
                 (folder, fileName, boxX, boxY, boxWidth, boxHeight, confidence, embedding, detectedAt)
@@ -374,10 +442,10 @@ export class IndexDatabase {
         params: [
           folder,
           fileName,
-          face.box.x,
-          face.box.y,
-          face.box.width,
-          face.box.height,
+          centeredBox.x,
+          centeredBox.y,
+          centeredBox.width,
+          centeredBox.height,
           face.confidence,
           embeddingBuffer,
           detectedAtMs,
@@ -418,7 +486,7 @@ export class IndexDatabase {
           region.area.height > 0,
       )
       .map((region) => ({
-        box: region.area,
+        box: normalizeCenterArea(region.area),
         personId: typeof region.name === "string" ? personIdFromName(region.name) : null,
       }));
 
@@ -948,6 +1016,230 @@ export class IndexDatabase {
       clusters: rows,
       total,
     };
+  }
+
+  async queryFaceClusters(options: {
+    filter: QueryOptions["filter"];
+    similarityThreshold?: number;
+  }): Promise<FaceClusterResult> {
+    const { filter, similarityThreshold = DEFAULT_FACE_CLUSTER_SIMILARITY } = options;
+
+    const clusterData = await this.computeFaceClusters(filter, similarityThreshold);
+
+    // Return only summaries (without faces array) for performance
+    const clusters = clusterData.sortedClusters.map((cluster) => ({
+      id: cluster.id,
+      count: cluster.count,
+      representative: cluster.representative,
+    }));
+
+    const totalFaces = clusterData.sortedClusters.reduce(
+      (sum, cluster) => sum + cluster.count,
+      0,
+    );
+
+    return {
+      clusters,
+      totalFaces,
+      totalClusters: clusters.length,
+    };
+  }
+
+  async getFaceClusterDetail(options: {
+    filter: QueryOptions["filter"];
+    clusterId: string;
+    similarityThreshold?: number;
+  }): Promise<FaceClusterDetailResult> {
+    const {
+      filter,
+      clusterId,
+      similarityThreshold = DEFAULT_FACE_CLUSTER_SIMILARITY,
+    } = options;
+
+    const clusterData = await this.computeFaceClusters(filter, similarityThreshold);
+    const cluster = clusterData.sortedClusters.find((c) => c.id === clusterId);
+
+    if (!cluster) {
+      return { cluster: null };
+    }
+
+    return {
+      cluster: {
+        id: cluster.id,
+        count: cluster.count,
+        representative: cluster.representative,
+        faces: cluster.faces,
+      },
+    };
+  }
+
+  private async computeFaceClusters(
+    filter: QueryOptions["filter"],
+    similarityThreshold: number,
+  ): Promise<{
+    sortedClusters: Array<{
+      id: string;
+      count: number;
+      representative: FaceClusterFace;
+      faces: FaceClusterFace[];
+    }>;
+  }> {
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    const normalizedThreshold = Math.min(Math.max(similarityThreshold, -1), 1);
+
+    const rows = await this.db.all<{
+      folder: string;
+      fileName: string;
+      boxX: number;
+      boxY: number;
+      boxWidth: number;
+      boxHeight: number;
+      embedding: Buffer;
+      mimeType: string | null;
+      dimensionWidth: number | null;
+      dimensionHeight: number | null;
+      regions: string | null;
+    }>(
+      `WITH filtered_files AS (
+         SELECT folder, fileName
+         FROM files
+         ${whereClause ? `WHERE ${whereClause}` : ""}
+       )
+       SELECT
+         faces.folder,
+         faces.fileName,
+         faces.boxX,
+         faces.boxY,
+         faces.boxWidth,
+         faces.boxHeight,
+         faces.embedding,
+         files.mimeType,
+         files.dimensionsWidth AS dimensionWidth,
+         files.dimensionsHeight AS dimensionHeight,
+         files.regions
+       FROM faces
+       JOIN filtered_files
+         ON filtered_files.folder = faces.folder
+        AND filtered_files.fileName = faces.fileName
+       JOIN files
+         ON files.folder = faces.folder
+        AND files.fileName = faces.fileName
+       WHERE LENGTH(faces.embedding) > 0
+       ORDER BY faces.folder, faces.fileName, faces.id`,
+      ...whereParams,
+    );
+
+    type FaceRow = {
+      path: string;
+      fileName: string;
+      box: { x: number; y: number; width: number; height: number };
+      mimeType: string | null;
+      dimensionWidth: number | null;
+      dimensionHeight: number | null;
+      regions: string | null;
+      vector: Float64Array;
+    };
+
+    type MutableCluster = {
+      faces: FaceRow[];
+      centroid: Float64Array;
+    };
+
+    const clusters: MutableCluster[] = [];
+
+    for (const row of rows) {
+      const alignedEmbedding = alignEmbeddingBuffer(row.embedding);
+      const unitVector = toUnitVector(alignedEmbedding);
+      if (!unitVector) {
+        continue;
+      }
+
+      const nextFace: FaceRow = {
+        path: joinPath(row.folder, row.fileName),
+        fileName: row.fileName,
+        box: {
+          x: row.boxX,
+          y: row.boxY,
+          width: row.boxWidth,
+          height: row.boxHeight,
+        },
+        mimeType: row.mimeType,
+        dimensionWidth: row.dimensionWidth,
+        dimensionHeight: row.dimensionHeight,
+        regions: row.regions,
+        vector: unitVector,
+      };
+
+      let bestClusterIndex = -1;
+      let bestSimilarity = -2;
+
+      for (let i = 0; i < clusters.length; i += 1) {
+        const similarity = cosineSimilarity(unitVector, clusters[i].centroid);
+        if (similarity > bestSimilarity) {
+          bestSimilarity = similarity;
+          bestClusterIndex = i;
+        }
+      }
+
+      if (bestClusterIndex < 0 || bestSimilarity < normalizedThreshold) {
+        clusters.push({ faces: [nextFace], centroid: unitVector });
+        continue;
+      }
+
+      const cluster = clusters[bestClusterIndex];
+      const previousCount = cluster.faces.length;
+      cluster.faces.push(nextFace);
+
+      const updatedCentroid = new Float64Array(cluster.centroid.length);
+      for (let i = 0; i < cluster.centroid.length; i += 1) {
+        updatedCentroid[i] =
+          ((cluster.centroid[i] ?? 0) * previousCount + (unitVector[i] ?? 0)) /
+          (previousCount + 1);
+      }
+
+      cluster.centroid = toUnitVector(updatedCentroid) ?? updatedCentroid;
+    }
+
+    const sortedClusters = clusters
+      .map((cluster, index) => {
+        const withScores = cluster.faces.map((face) => ({
+          face,
+          similarity: cosineSimilarity(face.vector, cluster.centroid),
+        }));
+        withScores.sort((left, right) => right.similarity - left.similarity);
+
+        const representativeFace = withScores[0]?.face;
+        if (!representativeFace) {
+          return null;
+        }
+
+        return {
+          id: `person-${index + 1}`,
+          count: cluster.faces.length,
+          representative: {
+            path: representativeFace.path,
+            fileName: representativeFace.fileName,
+            box: representativeFace.box,
+            mimeType: representativeFace.mimeType,
+            dimensionWidth: representativeFace.dimensionWidth,
+            dimensionHeight: representativeFace.dimensionHeight,
+            regions: representativeFace.regions,
+          },
+          faces: withScores.map(({ face }) => ({
+            path: face.path,
+            fileName: face.fileName,
+            box: face.box,
+            mimeType: face.mimeType,
+            dimensionWidth: face.dimensionWidth,
+            dimensionHeight: face.dimensionHeight,
+            regions: face.regions,
+          })),
+        };
+      })
+      .filter((cluster): cluster is NonNullable<typeof cluster> => Boolean(cluster))
+      .sort((left, right) => right.count - left.count || left.id.localeCompare(right.id));
+
+    return { sortedClusters };
   }
 
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(

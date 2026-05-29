@@ -2,6 +2,7 @@ import {
   createFallbackPhoto,
   fetchFolders,
   fetchGeotaggedPhotos,
+  fetchPeopleClusters,
   fetchPhotos,
   setBackgroundTasksEnabled,
   fetchSuggestions,
@@ -164,6 +165,46 @@ describe("api", () => {
         count: 2,
       },
     ]);
+  });
+
+  it("fetchPeopleClusters returns clusters sorted by count from the API", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        clusters: [
+          {
+            id: "person-1",
+            count: 3,
+            representative: {
+              path: "/trip/a.jpg",
+              fileName: "a.jpg",
+              box: { x: 0.2, y: 0.1, width: 0.3, height: 0.4 },
+              mimeType: "image/jpeg",
+              dimensionWidth: 1200,
+              dimensionHeight: 800,
+            },
+          },
+        ],
+        totalFaces: 3,
+        totalClusters: 1,
+      }),
+    } as Response);
+
+    const result = await fetchPeopleClusters({
+      includeSubfolders: true,
+      path: "trip/",
+    });
+
+    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const url = new URL(calledUrl, window.location.origin);
+    expect(url.pathname).toBe("/api/files/trip/");
+    expect(url.searchParams.get("aggregate")).toBe("people");
+    expect(result.totalFaces).toBe(3);
+    expect(result.totalClusters).toBe(1);
+    expect(result.clusters[0]?.count).toBe(3);
+    expect(result.clusters[0]?.representative.photo.path).toBe("/trip/a.jpg");
+    // Summaries should not have faces
+    expect(result.clusters[0]?.faces).toBeUndefined();
   });
 
   it("does not serialize nullable array UI state as API filter conditions", async () => {

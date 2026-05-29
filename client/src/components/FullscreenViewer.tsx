@@ -8,7 +8,7 @@ import {
 import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
 import { negotiateVideoPlayback } from "../api";
-import { FaceOverlay, parseFaceRegions } from "./FaceOverlay";
+import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes } from "./FaceOverlay";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { MiniMap } from "./MiniMap";
 import css from "./FullscreenViewer.module.css";
@@ -95,14 +95,18 @@ export function FullscreenViewer() {
   });
 
   useEffect(() => {
-    const hasRegions =
+    const hasFaceRegions =
       photo !== null &&
       photo.mediaType !== "video" &&
       parseFaceRegions(photo.metadata?.regions).length > 0;
+    const hasFaceTableBoxes =
+      photo !== null &&
+      photo.mediaType !== "video" &&
+      parseFaceTableBoxes(photo.metadata?.faceTableBoxes).length > 0;
 
     setShowLiveVideo(false);
     setShowFaces(false);
-    setHasFaceOverlayData(hasRegions);
+    setHasFaceOverlayData(hasFaceRegions || hasFaceTableBoxes);
     setPhotoAspectRatio(1);
     setPhotoZoom({
       isZoomed: false,
@@ -561,6 +565,7 @@ export function FullscreenViewer() {
                 {showFaces && (
                   <FaceOverlay
                     regionsRaw={photo.metadata?.regions}
+                    faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
                     aspectRatio={photoAspectRatio}
                   />
                 )}

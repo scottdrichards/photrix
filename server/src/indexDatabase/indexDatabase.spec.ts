@@ -313,7 +313,8 @@ describe("IndexDatabase", () => {
         const rows = await db.getFacesForFile("portraits/two.jpg");
 
         expect(rows).toHaveLength(2);
-        expect(rows[0]?.box).toEqual({ x: 0.1, y: 0.2, width: 0.3, height: 0.4 });
+        expect(rows[0]?.box).toEqual({ x: 0.25, y: 0.4, width: 0.3, height: 0.4 });
+        expect(rows[1]?.box).toEqual({ x: 0.55, y: 0.65, width: 0.1, height: 0.1 });
         expect(rows[0]?.confidence).toBeCloseTo(0.91, 5);
         expect(rows[0]?.personId).toBeNull();
         expect(rows[0]?.detectedAt).toBe(new Date("2026-03-15T12:00:00.000Z").getTime());
@@ -365,6 +366,9 @@ describe("IndexDatabase", () => {
 
         const rows = await db.getFacesForFile("metadata-faces.jpg");
         expect(rows).toHaveLength(3);
+        expect(rows[0]?.box).toEqual({ x: 0.2, y: 0.3, width: 0.1, height: 0.1 });
+        expect(rows[1]?.box).toEqual({ x: 0.6, y: 0.4, width: 0.15, height: 0.15 });
+        expect(rows[2]?.box).toEqual({ x: 0.7, y: 0.7, width: 0.12, height: 0.12 });
         expect(rows[0]?.embedding.length).toBe(0);
         expect(rows[0]?.personId).toBe(rows[1]?.personId);
         expect(rows[0]?.personId).not.toBe(rows[2]?.personId);
@@ -417,6 +421,73 @@ describe("IndexDatabase", () => {
 
         const after = await db.getStatusCounts();
         expect(after.missingFaceDetection).toBe(1);
+      });
+    });
+
+    it("clusters face vectors and picks a center-like representative", async () => {
+      await withTempDb(async (db) => {
+        const unit = (values: number[]) => {
+          const arr = new Float64Array(128);
+          values.forEach((value, index) => {
+            arr[index] = value;
+          });
+          return arr;
+        };
+
+        await db.addFile(createRecord("people/a-1.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(createRecord("people/a-2.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(createRecord("people/a-3.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(createRecord("people/b-1.jpg", { dimensionsWidth: 2000 }));
+
+        await db.saveFaceDetectionResult("people/a-1.jpg", [
+          {
+            box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
+            confidence: 0.9,
+            embedding: unit([1, 0, 0]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/a-2.jpg", [
+          {
+            box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
+            confidence: 0.9,
+            embedding: unit([0.98, 0.05, 0]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/a-3.jpg", [
+          {
+            box: { x: 0.3, y: 0.3, width: 0.2, height: 0.2 },
+            confidence: 0.9,
+            embedding: unit([0.97, 0.06, 0]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/b-1.jpg", [
+          {
+            box: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 },
+            confidence: 0.9,
+            embedding: unit([0, 1, 0]),
+          },
+        ]);
+
+        // Test queryFaceClusters returns summaries without faces
+        const result = await db.queryFaceClusters({ filter: {} });
+
+        expect(result.totalFaces).toBe(4);
+        expect(result.totalClusters).toBe(2);
+        expect(result.clusters[0]?.count).toBe(3);
+        expect(result.clusters[1]?.count).toBe(1);
+        expect(result.clusters[0]?.representative.path).toBe("/people/a-2.jpg");
+        // Summaries should not have faces
+        expect(result.clusters[0]?.faces).toBeUndefined();
+
+        // Test getFaceClusterDetail returns full cluster with faces
+        const detailResult = await db.getFaceClusterDetail({
+          filter: {},
+          clusterId: result.clusters[0]!.id,
+        });
+
+        expect(detailResult.cluster).not.toBeNull();
+        expect(detailResult.cluster?.faces).toHaveLength(3);
+        expect(detailResult.cluster?.id).toBe(result.clusters[0]!.id);
       });
     });
   });

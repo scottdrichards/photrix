@@ -13,28 +13,30 @@ type FaceRegion = {
 
 type FaceOverlayProps = {
   regionsRaw: unknown;
+  faceTableBoxesRaw?: unknown;
   aspectRatio: number;
 };
 
-export const parseFaceRegions = (raw: unknown): FaceRegion[] => {
-  const unwrapJsonString = (value: unknown): unknown => {
-    let current = value;
-    while (typeof current === "string") {
-      try {
-        current = JSON.parse(current);
-      } catch {
-        return current;
-      }
+const unwrapJsonString = (value: unknown): unknown => {
+  let current = value;
+  while (typeof current === "string") {
+    try {
+      current = JSON.parse(current);
+    } catch {
+      return current;
     }
-    return current;
-  };
+  }
+  return current;
+};
+
+const clampToUnit = (value: number) => Math.min(Math.max(value, 0), 1);
+
+export const parseFaceRegions = (raw: unknown): FaceRegion[] => {
 
   const unwrapped = unwrapJsonString(raw);
   if (!Array.isArray(unwrapped)) {
     return [];
   }
-
-  const clampToUnit = (value: number) => Math.min(Math.max(value, 0), 1);
 
   return unwrapped
     .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
@@ -49,6 +51,49 @@ export const parseFaceRegions = (raw: unknown): FaceRegion[] => {
       const y = areaRecord.y;
       const width = areaRecord.width ?? areaRecord.w;
       const height = areaRecord.height ?? areaRecord.h;
+
+      if (
+        typeof x !== "number" ||
+        typeof y !== "number" ||
+        typeof width !== "number" ||
+        typeof height !== "number"
+      ) {
+        return null;
+      }
+
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+        return null;
+      }
+
+      if (width <= 0 || height <= 0) {
+        return null;
+      }
+
+      return {
+        area: {
+          x: clampToUnit(x),
+          y: clampToUnit(y),
+          width: clampToUnit(width),
+          height: clampToUnit(height),
+        },
+      };
+    })
+    .filter((entry): entry is FaceRegion => entry !== null);
+};
+
+export const parseFaceTableBoxes = (raw: unknown): FaceRegion[] => {
+  const unwrapped = unwrapJsonString(raw);
+  if (!Array.isArray(unwrapped)) {
+    return [];
+  }
+
+  return unwrapped
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    .map((entry) => {
+      const x = entry.x;
+      const y = entry.y;
+      const width = entry.width;
+      const height = entry.height;
 
       if (
         typeof x !== "number" ||
@@ -137,12 +182,18 @@ const toFaceMaskImage = (faceRects: React.ReactNode): string | null => {
 
 export function FaceOverlay({
   regionsRaw,
+  faceTableBoxesRaw,
   aspectRatio,
 }: FaceOverlayProps) {
-  const faceRegions = useMemo(() => parseFaceRegions(regionsRaw), [regionsRaw]);
+  const exifFaceRegions = useMemo(() => parseFaceRegions(regionsRaw), [regionsRaw]);
+  const tableFaceRegions = useMemo(() => parseFaceTableBoxes(faceTableBoxesRaw), [faceTableBoxesRaw]);
+  const allRegions = useMemo(
+    () => [...exifFaceRegions, ...tableFaceRegions],
+    [exifFaceRegions, tableFaceRegions],
+  );
   const faceMaskImage = useMemo(
-    () => toFaceMaskImage(<FaceRects regions={faceRegions} aspectRatio={aspectRatio} fill="black" />),
-    [aspectRatio, faceRegions],
+    () => toFaceMaskImage(<FaceRects regions={allRegions} aspectRatio={aspectRatio} fill="black" />),
+    [allRegions, aspectRatio],
   );
 
   if (!faceMaskImage) {
@@ -167,7 +218,16 @@ export function FaceOverlay({
         height="100%"
         aria-hidden="true"
       >
-        <FaceRects regions={faceRegions} aspectRatio={aspectRatio} className={css.faceFrameRect} />
+        <FaceRects
+          regions={exifFaceRegions}
+          aspectRatio={aspectRatio}
+          className={`${css.faceFrameRect} ${css.exifFaceFrameRect}`}
+        />
+        <FaceRects
+          regions={tableFaceRegions}
+          aspectRatio={aspectRatio}
+          className={`${css.faceFrameRect} ${css.faceTableFrameRect}`}
+        />
       </svg>
     </>
   );

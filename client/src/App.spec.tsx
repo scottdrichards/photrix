@@ -30,6 +30,10 @@ vi.mock("./components/ThumbnailGrid", () => ({
   ThumbnailGrid: () => <div data-testid="thumbnail-grid">grid</div>,
 }));
 
+vi.mock("./components/PeopleView", () => ({
+  PeopleView: () => <div data-testid="people-view">people</div>,
+}));
+
 vi.mock("./components/FullscreenViewer", () => ({
   FullscreenViewer: () => <div data-testid="fullscreen-viewer">viewer</div>,
 }));
@@ -87,6 +91,21 @@ describe("App", () => {
     expect(screen.getByTestId("status-modal")).toHaveTextContent("closed");
     fireEvent.click(screen.getByRole("button", { name: "Status" }));
     expect(screen.getByTestId("status-modal")).toHaveTextContent("open");
+  });
+
+  it("switches between thumbnail and people views", () => {
+    useSelectionContextMock.mockReturnValue({
+      clearSelection: vi.fn(),
+      selectedItems: [],
+      selectionMode: false,
+      setSelectionMode: vi.fn(),
+    });
+
+    render(<App />);
+
+    expect(screen.getByTestId("thumbnail-grid")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "People" }));
+    expect(screen.getByTestId("people-view")).toBeInTheDocument();
   });
 
   it("exits selection mode from Done button", () => {

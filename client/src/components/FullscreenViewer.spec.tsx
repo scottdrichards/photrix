@@ -242,6 +242,60 @@ describe("FullscreenViewer", () => {
     expect(container.querySelectorAll(`.${css.faceFrameRect}`)).toHaveLength(3);
   });
 
+  it("enables and renders face overlay from face table boxes", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        metadata: {
+          faceTableBoxes: [{ x: 0.2, y: 0.3, width: 0.15, height: 0.2 }],
+        },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    const faceToggle = screen.getByRole("button", { name: "Show faces" });
+
+    expect(faceToggle).toBeEnabled();
+    fireEvent.click(faceToggle);
+
+    expect(container.querySelectorAll(`.${css.faceTableFrameRect}`)).toHaveLength(1);
+    expect(container.querySelectorAll(`.${css.exifFaceFrameRect}`)).toHaveLength(0);
+  });
+
+  it("renders exif and face-table overlays with different classes", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        metadata: {
+          regions: [
+            {
+              type: "Face",
+              area: {
+                x: 0.4,
+                y: 0.4,
+                width: 0.2,
+                height: 0.2,
+              },
+            },
+          ],
+          faceTableBoxes: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.2 }],
+        },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    fireEvent.click(screen.getByRole("button", { name: "Show faces" }));
+
+    expect(container.querySelectorAll(`.${css.exifFaceFrameRect}`)).toHaveLength(1);
+    expect(container.querySelectorAll(`.${css.faceTableFrameRect}`)).toHaveLength(1);
+  });
+
   it("disables face toggle for video media items", () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto({

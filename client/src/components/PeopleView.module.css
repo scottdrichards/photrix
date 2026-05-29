@@ -1,0 +1,144 @@
+.peopleView {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-m);
+}
+
+.summaryRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-s);
+}
+
+.summaryRow h3 {
+  margin: 0;
+}
+
+.summaryRow small {
+  color: var(--fg3);
+}
+
+.spinnerWrap {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-l);
+}
+
+.clusterList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--space-s);
+}
+
+.clusterButton {
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  background: var(--bg1);
+  padding: var(--space-xs);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  align-items: center;
+  cursor: pointer;
+}
+
+.clusterButton:hover {
+  border-color: var(--stroke3);
+}
+
+.clusterButtonSelected {
+  border-color: var(--brand);
+  box-shadow: inset 0 0 0 1px var(--brand);
+}
+
+.clusterFaceWrap {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg3);
+  position: relative;
+}
+
+.clusterFaceImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform-origin: center center;
+}
+
+.clusterLabel {
+  font-size: 0.85rem;
+  color: var(--fg2);
+}
+
+.personDetail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-m);
+}
+
+.personDetailHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-m);
+}
+
+.backButton {
+  background: none;
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-s);
+  cursor: pointer;
+  color: var(--fg1);
+  font-size: 0.9rem;
+}
+
+.backButton:hover {
+  border-color: var(--stroke3);
+  background: var(--bg2);
+}
+
+.personDetailCount {
+  color: var(--fg3);
+  font-size: 0.9rem;
+}
+
+.faceGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--space-s);
+}
+
+.faceThumbButton {
+  border: 1px solid var(--stroke2);
+  background: var(--bg1);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs);
+  cursor: pointer;
+}
+
+.faceThumbButton:hover {
+  border-color: var(--stroke3);
+}
+
+.faceThumbButtonSelected {
+  border-color: var(--brand);
+  box-shadow: inset 0 0 0 1px var(--brand);
+}
+
+.faceThumbViewport {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg3);
+}
+
+.faceThumbImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform-origin: center center;
+}

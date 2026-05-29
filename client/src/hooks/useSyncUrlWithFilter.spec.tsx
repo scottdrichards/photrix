@@ -67,4 +67,23 @@ describe("useSyncUrlWithFilter", () => {
       expect(screen.getByTestId("include")).toHaveTextContent("false");
     });
   });
+
+  it("syncs view mode to and from the URL", async () => {
+    render(
+      <FilterProvider>
+        <SyncHarness initialView="people" />
+      </FilterProvider>,
+    );
+
+    await waitFor(() => {
+      expect(window.location.search).toContain("view=people");
+    });
+
+    window.history.pushState(null, "", "/library?view=people");
+    fireEvent.popState(window);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view")).toHaveTextContent("people");
+    });
+  });
 });

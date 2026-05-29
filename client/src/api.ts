@@ -69,6 +69,38 @@ export type DateHistogramResult = {
   grouping: "day" | "month";
 };
 
+export type FaceBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type ClusterFace = {
+  photo: PhotoItem;
+  box: FaceBox;
+};
+
+export type PersonCluster = {
+  id: string;
+  count: number;
+  representative: ClusterFace;
+};
+
+export type PersonClusterWithFaces = PersonCluster & {
+  faces: ClusterFace[];
+};
+
+export type PeopleClustersResult = {
+  clusters: PersonCluster[];
+  totalFaces: number;
+  totalClusters: number;
+};
+
+export type PersonClusterDetailResult = {
+  cluster: PersonClusterWithFaces | null;
+};
+
 export interface ApiPhotoResponse {
   items: ApiPhotoItem[];
   total: number;
@@ -148,6 +180,11 @@ export type FetchDateRangeOptions = Omit<
 >;
 
 export type FetchDateHistogramOptions = Omit<
+  FetchPhotosOptions,
+  "page" | "pageSize" | "metadata"
+>;
+
+export type FetchPeopleClustersOptions = Omit<
   FetchPhotosOptions,
   "page" | "pageSize" | "metadata"
 >;
@@ -730,6 +767,200 @@ export const fetchGeotaggedPhotos = async ({
   const truncated = payload.total > coveredCount;
 
   return { points, total: payload.total, truncated };
+};
+
+export const fetchPeopleClusters = async ({
+  includeSubfolders = false,
+  path = "",
+  ratingFilter,
+  mediaTypeFilter = "all",
+  hasFaceScanData,
+  locationBounds,
+  dateRange,
+  peopleInImageFilter,
+  cameraModelFilter,
+  lensFilter,
+  signal,
+}: FetchPeopleClustersOptions = {}): Promise<PeopleClustersResult> => {
+  const params = new URLSearchParams();
+  params.set("aggregate", "people");
+  if (includeSubfolders) {
+    params.set("includeSubfolders", "true");
+  }
+
+  const filters = buildFilters({
+    ratingFilter,
+    mediaTypeFilter,
+    hasFaceScanData,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+    cameraModelFilter,
+    lensFilter,
+  });
+
+  if (filters.length > 0) {
+    const filterObj =
+      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    params.set("filter", JSON.stringify(filterObj));
+  }
+
+  const url = buildFilesQueryUrl(path, params);
+  const payload = await fetchJsonOrThrow<{
+    clusters: Array<{
+      id: string;
+      count: number;
+      representative: {
+        path: string;
+        fileName: string;
+        box: FaceBox;
+        mimeType: string | null;
+        dimensionWidth: number | null;
+        dimensionHeight: number | null;
+        regions: string | null;
+      };
+    }>;
+    totalFaces: number;
+    totalClusters: number;
+  }>(url, "fetch people clusters", { signal });
+
+  const toClusterFace = (face: {
+    path: string;
+    fileName: string;
+    box: FaceBox;
+    mimeType: string | null;
+    dimensionWidth: number | null;
+    dimensionHeight: number | null;
+    regions: string | null;
+  }): ClusterFace => {
+    const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions } =
+      face;
+    return {
+      photo: createPhotoItem({
+        folder: relativePath.slice(0, relativePath.length - fileName.length),
+        fileName,
+        mimeType,
+        dimensionWidth: dimensionWidth ?? undefined,
+        dimensionHeight: dimensionHeight ?? undefined,
+        ...(regions != null ? { regions } : {}),
+        faceTableBoxes: [box],
+      }),
+      box,
+    };
+  };
+
+  return {
+    clusters: payload.clusters.map((cluster) => ({
+      id: cluster.id,
+      count: cluster.count,
+      representative: toClusterFace(cluster.representative),
+    })),
+    totalFaces: payload.totalFaces,
+    totalClusters: payload.totalClusters,
+  };
+};
+
+export const fetchClusterDetail = async ({
+  clusterId,
+  includeSubfolders = false,
+  path = "",
+  ratingFilter,
+  mediaTypeFilter = "all",
+  hasFaceScanData,
+  locationBounds,
+  dateRange,
+  peopleInImageFilter,
+  cameraModelFilter,
+  lensFilter,
+  signal,
+}: FetchPeopleClustersOptions & { clusterId: string } = { clusterId: "" }): Promise<PersonClusterDetailResult> => {
+  const params = new URLSearchParams();
+  params.set("aggregate", "peopleClusterDetail");
+  params.set("clusterId", clusterId);
+  if (includeSubfolders) {
+    params.set("includeSubfolders", "true");
+  }
+
+  const filters = buildFilters({
+    ratingFilter,
+    mediaTypeFilter,
+    hasFaceScanData,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+    cameraModelFilter,
+    lensFilter,
+  });
+
+  if (filters.length > 0) {
+    const filterObj =
+      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    params.set("filter", JSON.stringify(filterObj));
+  }
+
+  const url = buildFilesQueryUrl(path, params);
+  const payload = await fetchJsonOrThrow<{
+    cluster: {
+      id: string;
+      count: number;
+      representative: {
+        path: string;
+        fileName: string;
+        box: FaceBox;
+        mimeType: string | null;
+        dimensionWidth: number | null;
+        dimensionHeight: number | null;
+        regions: string | null;
+      };
+      faces: Array<{
+        path: string;
+        fileName: string;
+        box: FaceBox;
+        mimeType: string | null;
+        dimensionWidth: number | null;
+        dimensionHeight: number | null;
+        regions: string | null;
+      }>;
+    } | null;
+  }>(url, "fetch cluster detail", { signal });
+
+  const toClusterFace = (face: {
+    path: string;
+    fileName: string;
+    box: FaceBox;
+    mimeType: string | null;
+    dimensionWidth: number | null;
+    dimensionHeight: number | null;
+    regions: string | null;
+  }): ClusterFace => {
+    const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions } =
+      face;
+    return {
+      photo: createPhotoItem({
+        folder: relativePath.slice(0, relativePath.length - fileName.length),
+        fileName,
+        mimeType,
+        dimensionWidth: dimensionWidth ?? undefined,
+        dimensionHeight: dimensionHeight ?? undefined,
+        ...(regions != null ? { regions } : {}),
+        faceTableBoxes: [box],
+      }),
+      box,
+    };
+  };
+
+  if (!payload.cluster) {
+    return { cluster: null };
+  }
+
+  return {
+    cluster: {
+      id: payload.cluster.id,
+      count: payload.cluster.count,
+      representative: toClusterFace(payload.cluster.representative),
+      faces: payload.cluster.faces.map(toClusterFace),
+    },
+  };
 };
 
 export const fetchDateRange = async ({
