@@ -88,54 +88,8 @@ const checkInResources = (
   });
 };
 
-const fitLineToTerminalWidth = (line: string) => {
-  if (!process.stdout.isTTY) {
-    return line;
-  }
-
-  const maxWidth = Math.max(1, process.stdout.columns - 1);
-  return line.length > maxWidth
-    ? line.slice(0, maxWidth - 3) + "..."
-    : line + " ".repeat(maxWidth - line.length);
-};
-
-const abbreviateCount = (value: number) => {
-  if (value >= 1_000_000) {
-    return `${Math.round(value / 100_000) / 10}m`;
-  }
-
-  if (value >= 1_000) {
-    return `${Math.round(value / 100) / 10}k`;
-  }
-
-  return String(value);
-};
-
-const titleCase = (value: string) => value[0]?.toUpperCase() + value.slice(1);
-
-const compactTaskName = (queue: QueueType, name: string) => {
-  const compactQueue = titleCase(queue);
-  const compactName = name
-    .replace(/ metadata processing/gi, "")
-    .replace(/ file system /gi, " ")
-    .replace(/\s+/g, "-")
-    .replace(/^-|-$/g, "");
-  return `${compactQueue}-${compactName}`;
-};
-
-const renderProgressBar = (portionComplete: number, width = 10) => {
-  const clamped = Math.max(0, Math.min(1, portionComplete));
-  const markerIndex = Math.min(width - 1, Math.round(clamped * (width - 1)));
-
-  return Array.from({ length: width }, (_unused, index) => {
-    if (index < markerIndex) {
-      return "-";
-    }
-    if (index === markerIndex) {
-      return "|";
-    }
-    return " ";
-  }).join("");
+const logTaskEvent = (event: string, queue: QueueType, name: string) => {
+  console.log(`[TaskOrchestrator] ${event} (${queue}): ${name}`);
 };
 
 const normalizeProgressValue = (value: number | undefined) => {
@@ -179,107 +133,6 @@ export const createTaskOrchestrator = (): TaskOrchestrator => {
     disk: 0,
     network: 0,
   };
-
-  let previousStatusLineCount = 0;
-
-  const renderStatusLines = (lines: string[]) => {
-    if (!process.stdout.isTTY) {
-      console.log(lines.join("\n"));
-      return;
-    }
-
-    const nextLineCount = lines.length;
-    const linesToRender = Math.max(previousStatusLineCount, nextLineCount);
-    const extraClearedLines = Math.max(0, previousStatusLineCount - nextLineCount);
-    const prefix =
-      previousStatusLineCount > 0 ? `\u001b[${previousStatusLineCount}F` : "";
-    const body = Array.from({ length: linesToRender }, (_unused, index) => {
-      const line = lines[index] ?? "";
-      return `\u001b[2K${fitLineToTerminalWidth(line)}\n`;
-    }).join("");
-    const shrinkCursor = extraClearedLines > 0 ? `\u001b[${extraClearedLines}F` : "";
-    process.stdout.write(prefix + body + shrinkCursor);
-    previousStatusLineCount = nextLineCount;
-  };
-
-  const clearStatusLines = () => {
-    if (previousStatusLineCount === 0) {
-      return;
-    }
-
-    if (!process.stdout.isTTY) {
-      previousStatusLineCount = 0;
-      return;
-    }
-
-    const blank = fitLineToTerminalWidth("") + "\n";
-    const clearBody = Array.from({ length: previousStatusLineCount }, () => blank).join(
-      "",
-    );
-    process.stdout.write(
-      `\u001b[${previousStatusLineCount}F${clearBody}\u001b[${previousStatusLineCount}F`,
-    );
-    previousStatusLineCount = 0;
-  };
-
-  const statusReportIntervalMs = 200;
-  let renderingStatus = false;
-
-  const renderTaskStatuses = async () => {
-    if (renderingStatus) {
-      return;
-    }
-
-    renderingStatus = true;
-
-    const tasks = [...runningTasks];
-    try {
-      if (!tasks.length) {
-        clearStatusLines();
-        return;
-      }
-
-      const header = `Task status report (${tasks.length} active)`;
-      const lines = await Promise.all(
-        tasks.map(async ({ name, type: _type, queue, runner }, index) => {
-          const status = (await runner.getStatus?.()) ?? {};
-          const label = `${index + 1}. ${compactTaskName(queue, name)}`;
-          const portionText =
-            status.portionComplete != null
-              ? `${Math.round(Math.max(0, Math.min(1, status.portionComplete)) * 100)}%`
-              : null;
-          const bar =
-            status.portionComplete != null
-              ? `[${renderProgressBar(status.portionComplete)}]`
-              : null;
-          const counts =
-            status.itemsProcessed != null && status.total != null
-              ? `${abbreviateCount(status.itemsProcessed)}/${abbreviateCount(status.total)}`
-              : status.itemsProcessed != null
-                ? abbreviateCount(status.itemsProcessed)
-                : status.total != null
-                  ? `?/${abbreviateCount(status.total)}`
-                  : null;
-          const state =
-            status.state && status.state !== "running" ? `[${status.state}]` : null;
-          const description = status.description ?? null;
-
-          return [label + ":", portionText, bar, counts, state, description]
-            .filter(Boolean)
-            .join(" ");
-        }),
-      );
-
-      renderStatusLines([header, ...lines]);
-    } finally {
-      renderingStatus = false;
-    }
-  };
-
-  const statusReporter = setInterval(() => {
-    void renderTaskStatuses();
-  }, statusReportIntervalMs);
-  statusReporter.unref?.();
 
   const getBackgroundTaskStatus = async (): Promise<BackgroundTaskStatus[]> => {
     const activeTasks = [...runningTasks].filter(
@@ -378,6 +231,7 @@ export const createTaskOrchestrator = (): TaskOrchestrator => {
         runner,
       };
       runningTasks.add(runningTask);
+      logTaskEvent("Started", queue, nextTask.name);
 
       // We don't block because we want to support parallelism
       checkoutResources(resourcesInUse, requirements);
@@ -392,6 +246,7 @@ export const createTaskOrchestrator = (): TaskOrchestrator => {
         .finally(() => {
           checkInResources(resourcesInUse, requirements);
           runningTasks.delete(runningTask);
+          logTaskEvent("Completed", queue, nextTask.name);
         });
     }
   };
@@ -400,6 +255,7 @@ export const createTaskOrchestrator = (): TaskOrchestrator => {
   return {
     setPerformBackgroundTasks: (enabled: boolean) => {
       processBackgroundTasks = enabled;
+      console.log(`[TaskOrchestrator] Background tasks ${enabled ? "enabled" : "paused"}`);
       if (enabled) {
         wakeUp?.();
       }
