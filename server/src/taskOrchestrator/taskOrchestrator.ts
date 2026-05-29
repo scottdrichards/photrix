@@ -255,7 +255,9 @@ export const createTaskOrchestrator = (): TaskOrchestrator => {
   return {
     setPerformBackgroundTasks: (enabled: boolean) => {
       processBackgroundTasks = enabled;
-      console.log(`[TaskOrchestrator] Background tasks ${enabled ? "enabled" : "paused"}`);
+      console.log(
+        `[TaskOrchestrator] Background tasks ${enabled ? "enabled" : "paused"}`,
+      );
       if (enabled) {
         wakeUp?.();
       }
