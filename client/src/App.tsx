@@ -114,7 +114,7 @@ const AppContent = () => {
   return (
     <div className={css.app}>
       <header className={cx(css.header, isStatusOpen ? css.headerStatusOpen : undefined)}>
-        <div className={css.headerTitle}>
+        <div className={css.title}>
           <h2>Photrix</h2>
           <small>A better way to view photos.</small>
         </div>
