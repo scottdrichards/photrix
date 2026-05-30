@@ -4,6 +4,7 @@ import { fetchClusterDetail, fetchPeopleClusters } from "../api";
 import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
+import { ViewToggle } from "./ViewToggle";
 import css from "./PeopleView.module.css";
 
 const MIN_FACE_SCALE = 1.2;
@@ -86,7 +87,12 @@ const PersonDetail = ({ cluster, onBack }: PersonDetailProps) => {
   );
 };
 
-const PeopleViewComponent = () => {
+type PeopleViewProps = {
+  view: "library" | "people";
+  onViewChange: (view: "library" | "people") => void;
+};
+
+const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
   const { filter } = useFilter();
   const { setItems } = useSelectionContext();
   const [loading, setLoading] = useState(false);
@@ -156,6 +162,7 @@ const PeopleViewComponent = () => {
   if (personDetail) {
     return (
       <section className={css.peopleView}>
+        <ViewToggle view={view} onViewChange={onViewChange} />
         <PersonDetail cluster={personDetail} onBack={handleBack} />
       </section>
     );
@@ -163,6 +170,7 @@ const PeopleViewComponent = () => {
 
   return (
     <section className={css.peopleView}>
+      <ViewToggle view={view} onViewChange={onViewChange} />
       <div className={css.summaryRow}>
         <h3>People</h3>
         {data ? (

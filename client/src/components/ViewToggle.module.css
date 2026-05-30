@@ -1,0 +1,61 @@
+.toggleContainer {
+  display: flex;
+  align-items: center;
+  margin-block-end: var(--space-m);
+}
+
+.toggleTrack {
+  position: relative;
+  display: inline-flex;
+  background-color: var(--bg2);
+  border-radius: 9999px;
+  padding: var(--space-xs);
+  gap: 0;
+  border: 1px solid var(--stroke2);
+}
+
+.toggleSlider {
+  position: absolute;
+  top: var(--space-xs);
+  left: var(--space-xs);
+  bottom: var(--space-xs);
+  width: calc(50% - var(--space-xs));
+  background-color: var(--bg0);
+  border-radius: 9999px;
+  transition: left 0.25s ease-in-out;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  z-index: 0;
+
+  &[data-active="people"] {
+    left: calc(50% + var(--space-xs));
+  }
+}
+
+.toggleButton {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 100px;
+  padding: var(--space-xs) var(--space-m);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--fg2);
+  transition: color 0.25s ease-in-out;
+  border-radius: 9999px;
+
+  &[aria-selected="true"] {
+    color: var(--fg1);
+    font-weight: 600;
+  }
+
+  &:hover {
+    color: var(--fg1);
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+}

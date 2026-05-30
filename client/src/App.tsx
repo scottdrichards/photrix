@@ -40,26 +40,6 @@ const AppContent = () => {
         </div>
 
         <div className={css.headerActions}>
-          <div className={css.viewToggle} role="tablist" aria-label="Current view">
-            <button
-              type="button"
-              className={`btn btn-subtle ${view === "library" ? css.viewToggleActive : ""}`}
-              onClick={() => setView("library")}
-              role="tab"
-              aria-selected={view === "library"}
-            >
-              Thumbnails
-            </button>
-            <button
-              type="button"
-              className={`btn btn-subtle ${view === "people" ? css.viewToggleActive : ""}`}
-              onClick={() => setView("people")}
-              role="tab"
-              aria-selected={view === "people"}
-            >
-              People
-            </button>
-          </div>
           <Filter />
           <button
             title="Server Status"
@@ -74,7 +54,11 @@ const AppContent = () => {
 
       <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
 
-      {view === "library" ? <ThumbnailGrid /> : <PeopleView />}
+      {view === "library" ? (
+        <ThumbnailGrid view={view} onViewChange={setView} />
+      ) : (
+        <PeopleView view={view} onViewChange={setView} />
+      )}
       <FullscreenViewer />
     </div>
   );

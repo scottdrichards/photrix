@@ -24,12 +24,79 @@ vi.mock("./components/selection/SelectionContext", () => ({
   SelectionProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
+vi.mock("./components/ViewToggle", () => ({
+  ViewToggle: ({ view, onViewChange }: { view: string; onViewChange: (v: string) => void }) => (
+    <div role="tablist" aria-label="Current view">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={view === "library"}
+        onClick={() => onViewChange("library")}
+      >
+        Thumbnails
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={view === "people"}
+        onClick={() => onViewChange("people")}
+      >
+        People
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock("./components/ThumbnailGrid", () => ({
-  ThumbnailGrid: () => <div data-testid="thumbnail-grid">grid</div>,
+  ThumbnailGrid: ({ view, onViewChange }: { view: string; onViewChange: (v: string) => void }) => (
+    <div data-testid="thumbnail-grid">
+      <div role="tablist" aria-label="Current view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "library"}
+          onClick={() => onViewChange("library")}
+        >
+          Thumbnails
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "people"}
+          onClick={() => onViewChange("people")}
+        >
+          People
+        </button>
+      </div>
+      grid
+    </div>
+  ),
 }));
 
 vi.mock("./components/PeopleView", () => ({
-  PeopleView: () => <div data-testid="people-view">people</div>,
+  PeopleView: ({ view, onViewChange }: { view: string; onViewChange: (v: string) => void }) => (
+    <div data-testid="people-view">
+      <div role="tablist" aria-label="Current view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "library"}
+          onClick={() => onViewChange("library")}
+        >
+          Thumbnails
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "people"}
+          onClick={() => onViewChange("people")}
+        >
+          People
+        </button>
+      </div>
+      people
+    </div>
+  ),
 }));
 
 vi.mock("./components/FullscreenViewer", () => ({

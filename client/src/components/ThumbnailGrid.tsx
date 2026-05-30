@@ -5,11 +5,17 @@ import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { ThumbnailTile } from "./ThumbnailTile";
+import { ViewToggle } from "./ViewToggle";
 import css from "./ThumbnailGrid.module.css";
 
 const PAGE_SIZE = 200;
 
-const ThumbnailGridComponent = () => {
+type ThumbnailGridProps = {
+  view: "library" | "people";
+  onViewChange: (view: "library" | "people") => void;
+};
+
+const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   const { filter } = useFilter();
   const { setItems } = useSelectionContext();
   const [page, setPage] = useState(1);
@@ -98,6 +104,7 @@ const ThumbnailGridComponent = () => {
 
   return (
     <>
+      <ViewToggle view={view} onViewChange={onViewChange} />
       {error ? <h3>{error}</h3> : null}
       <div className={css.grid}>
         {data?.items.map((item) => (
