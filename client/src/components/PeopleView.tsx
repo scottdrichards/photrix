@@ -25,17 +25,15 @@ const toFaceTransform = (face: ClusterFace) => {
 type FaceThumbProps = {
   face: ClusterFace;
   label: string;
-  selected: boolean;
   onClick: () => void;
 };
 
-const FaceThumb = ({ face, label, selected, onClick }: FaceThumbProps) => (
+const FaceThumb = ({ face, label, onClick }: FaceThumbProps) => (
   <button
     type="button"
-    className={`${css.faceThumbButton} ${selected ? css.faceThumbButtonSelected : ""}`}
+    className={css.faceThumbButton}
     onClick={onClick}
     aria-label={label}
-    aria-pressed={selected}
   >
     <div className={css.faceThumbViewport}>
       <img
@@ -55,7 +53,7 @@ type PersonDetailProps = {
 };
 
 const PersonDetail = ({ cluster, onBack }: PersonDetailProps) => {
-  const { isSelected, selectionMode, setItems, setSelected, toggleSelected } = useSelectionContext();
+  const { setItems, setSelected } = useSelectionContext();
 
   useEffect(() => {
     setItems(cluster.faces.map((face) => face.photo));
@@ -63,10 +61,6 @@ const PersonDetail = ({ cluster, onBack }: PersonDetailProps) => {
   }, [cluster, setItems]);
 
   const handleFaceClick = (face: ClusterFace) => {
-    if (selectionMode) {
-      toggleSelected(face.photo);
-      return;
-    }
     setSelected(face.photo);
   };
 
@@ -84,7 +78,6 @@ const PersonDetail = ({ cluster, onBack }: PersonDetailProps) => {
             key={`${face.photo.path}-${index}`}
             face={face}
             label={face.photo.name}
-            selected={isSelected(face.photo.path)}
             onClick={() => handleFaceClick(face)}
           />
         ))}

@@ -463,7 +463,7 @@ describe("FullscreenViewer", () => {
     expect(document.documentElement.style.scrollbarGutter).toBe("");
   });
 
-  it("does not render media while selection mode is active", () => {
+  it("renders media when a selected photo exists", () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto(),
       selectionMode: true,
@@ -474,7 +474,7 @@ describe("FullscreenViewer", () => {
 
     render(<FullscreenViewer />);
 
-    expect(screen.queryByRole("img", { name: "1.jpg" })).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "1.jpg" })).toBeInTheDocument();
   });
 
   it("closes when backdrop or empty container area is clicked", () => {

@@ -15,26 +15,13 @@ const createPhoto = (path: string): PhotoItem => ({
 const photos = [createPhoto("a/1.jpg"), createPhoto("a/2.jpg"), createPhoto("a/3.jpg")];
 
 const SelectionHarness = () => {
-  const {
-    selected,
-    selectedPaths,
-    selectedItems,
-    selectionMode,
-    setSelectionMode,
-    setItems,
-    setSelected,
-    toggleSelected,
-    clearSelection,
-    selectNext,
-    selectPrevious,
-  } = useSelectionContext();
+  const { items, selected, setItems, setSelected, selectNext, selectPrevious } =
+    useSelectionContext();
 
   return (
     <>
-      <div data-testid="selected-paths">{selectedPaths.join(",")}</div>
+      <div data-testid="items-count">{items.length}</div>
       <div data-testid="selected-name">{selected?.name ?? "none"}</div>
-      <div data-testid="selected-count">{selectedItems.length}</div>
-      <div data-testid="selection-mode">{String(selectionMode)}</div>
       <button type="button" onClick={() => setItems(photos)}>
         load-items
       </button>
@@ -42,10 +29,13 @@ const SelectionHarness = () => {
         shrink-items
       </button>
       <button type="button" onClick={() => setSelected(photos[0])}>
-        set-single
+        set-first
       </button>
-      <button type="button" onClick={() => toggleSelected(photos[1])}>
-        toggle-second
+      <button type="button" onClick={() => setSelected(photos[1])}>
+        set-second
+      </button>
+      <button type="button" onClick={() => setSelected(null)}>
+        clear-selection
       </button>
       <button type="button" onClick={selectNext}>
         next
@@ -53,51 +43,42 @@ const SelectionHarness = () => {
       <button type="button" onClick={selectPrevious}>
         previous
       </button>
-      <button type="button" onClick={clearSelection}>
-        clear
-      </button>
-      <button type="button" onClick={() => setSelectionMode(true)}>
-        mode-on
-      </button>
     </>
   );
 };
 
 describe("SelectionContext", () => {
-  it("supports selecting, toggling, navigation, pruning, and mode changes", () => {
+  it("supports selecting, navigation, and item pruning", () => {
     render(
       <SelectionProvider>
         <SelectionHarness />
       </SelectionProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "load-items" }));
-    fireEvent.click(screen.getByRole("button", { name: "set-single" }));
+    expect(screen.getByTestId("items-count")).toHaveTextContent("0");
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("none");
 
-    expect(screen.getByTestId("selected-paths")).toHaveTextContent("a/1.jpg");
+    fireEvent.click(screen.getByRole("button", { name: "load-items" }));
+    expect(screen.getByTestId("items-count")).toHaveTextContent("3");
+
+    fireEvent.click(screen.getByRole("button", { name: "set-first" }));
     expect(screen.getByTestId("selected-name")).toHaveTextContent("1.jpg");
-    expect(screen.getByTestId("selected-count")).toHaveTextContent("1");
 
     fireEvent.click(screen.getByRole("button", { name: "next" }));
-    expect(screen.getByTestId("selected-paths")).toHaveTextContent("a/2.jpg");
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("2.jpg");
+
+    fireEvent.click(screen.getByRole("button", { name: "next" }));
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("3.jpg");
 
     fireEvent.click(screen.getByRole("button", { name: "previous" }));
-    expect(screen.getByTestId("selected-paths")).toHaveTextContent("a/1.jpg");
-
-    fireEvent.click(screen.getByRole("button", { name: "toggle-second" }));
-    expect(screen.getByTestId("selected-paths")).toHaveTextContent("a/1.jpg,a/2.jpg");
-    expect(screen.getByTestId("selected-name")).toHaveTextContent("none");
-    expect(screen.getByTestId("selected-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("2.jpg");
 
     fireEvent.click(screen.getByRole("button", { name: "shrink-items" }));
-    expect(screen.getByTestId("selected-paths")).toHaveTextContent("a/1.jpg");
-    expect(screen.getByTestId("selected-count")).toHaveTextContent("1");
+    expect(screen.getByTestId("items-count")).toHaveTextContent("1");
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("none");
 
-    fireEvent.click(screen.getByRole("button", { name: "mode-on" }));
-    expect(screen.getByTestId("selection-mode")).toHaveTextContent("true");
-
-    fireEvent.click(screen.getByRole("button", { name: "clear" }));
-    expect(screen.getByTestId("selected-paths")).toHaveTextContent("");
-    expect(screen.getByTestId("selected-count")).toHaveTextContent("0");
+    fireEvent.click(screen.getByRole("button", { name: "set-second" }));
+    fireEvent.click(screen.getByRole("button", { name: "clear-selection" }));
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("none");
   });
 });

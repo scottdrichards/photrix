@@ -27,11 +27,12 @@ describe("PeopleView", () => {
       filter: { includeSubfolders: true, path: "", mediaTypeFilter: "all" },
     });
     useSelectionContextMock.mockReturnValue({
-      isSelected: vi.fn(() => false),
-      selectionMode: false,
+      items: [],
+      selected: null,
       setItems: vi.fn(),
       setSelected: vi.fn(),
-      toggleSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
     });
   });
 

@@ -1,5 +1,4 @@
 import {
-  CheckmarkCircle24Regular,
   Filmstrip24Regular,
   PlayCircle24Regular,
 } from "@fluentui/react-icons";
@@ -9,7 +8,6 @@ import { useSelectionContext } from "./selection/SelectionContext";
 import css from "./ThumbnailTile.module.css";
 
 const DEFAULT_RATIO = 1;
-const LONG_PRESS_MS = 450;
 const RATIO_MISMATCH_LOG_THRESHOLD = 0.01;
 const clampRatio = (value: number): number => Math.min(Math.max(value, 0.25), 4);
 
@@ -58,21 +56,9 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   const [isHovered, setIsHovered] = useState(false);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
-  const { isSelected, selectionMode, setSelected, setSelectionMode, toggleSelected } =
-    useSelectionContext();
-  const longPressTimeoutRef = useRef<number | null>(null);
-  const suppressNextClickRef = useRef(false);
+  const { setSelected } = useSelectionContext();
   const metadataRatio = getAspectRatio(photo);
   const ratio = loadedRatio ?? metadataRatio;
-  const selected = isSelected(photo.path);
-
-  useEffect(() => {
-    return () => {
-      if (longPressTimeoutRef.current) {
-        window.clearTimeout(longPressTimeoutRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     setIsImageLoaded(false);
@@ -108,49 +94,8 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     };
   }, [supportsIntersectionObserver]);
 
-  const clearLongPressTimeout = () => {
-    if (!longPressTimeoutRef.current) {
-      return;
-    }
-
-    window.clearTimeout(longPressTimeoutRef.current);
-    longPressTimeoutRef.current = null;
-  };
-
   const handleClick = () => {
-    if (suppressNextClickRef.current) {
-      suppressNextClickRef.current = false;
-      return;
-    }
-
-    if (selectionMode) {
-      toggleSelected(photo);
-      return;
-    }
-
     setSelected(photo);
-  };
-
-  const handleTouchStart = () => {
-    if (selectionMode) {
-      return;
-    }
-
-    clearLongPressTimeout();
-    longPressTimeoutRef.current = window.setTimeout(() => {
-      suppressNextClickRef.current = true;
-      setSelectionMode(true);
-      setSelected(photo);
-      longPressTimeoutRef.current = null;
-    }, LONG_PRESS_MS);
-  };
-
-  const handleTouchEnd = () => {
-    clearLongPressTimeout();
-  };
-
-  const handleTouchMove = () => {
-    clearLongPressTimeout();
   };
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -176,24 +121,14 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     <button
       type="button"
       ref={tileRef}
-      className={`${css.tile} ${selected ? css.tileSelected : ""}`}
+      className={css.tile}
       style={{ "--ratio": ratio.toString() } as React.CSSProperties}
       onClick={handleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
-      onTouchCancel={handleTouchEnd}
-      onTouchMove={handleTouchMove}
       aria-label={photo.name}
-      aria-pressed={selected}
     >
-      {selected ? (
-        <span className={css.selectedBadge} aria-hidden="true">
-          <CheckmarkCircle24Regular fontSize={20} primaryFill="currentColor" />
-        </span>
-      ) : null}
-      {photo.livePhotoUrl && !selected ? (
+      {photo.livePhotoUrl ? (
         <span className={css.livePhotoBadge} aria-label="Live photo" title="Live photo">
           <Filmstrip24Regular fontSize={14} />
         </span>

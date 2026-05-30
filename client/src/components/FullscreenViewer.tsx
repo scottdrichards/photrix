@@ -69,12 +69,11 @@ const formatMetadataValue = (value: unknown): string => {
 export function FullscreenViewer() {
   const {
     selected: selectedPhoto,
-    selectionMode,
     setSelected,
     selectNext,
     selectPrevious,
   } = useSelectionContext();
-  const photo = selectionMode ? null : selectedPhoto;
+  const photo = selectedPhoto;
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
