@@ -59,11 +59,38 @@ const renderFilter = () =>
   );
 
 describe("Filter", () => {
+  let getBoundingClientRectSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     fetchFoldersMock.mockReset();
     fetchFoldersMock.mockResolvedValue(["trip", "family"]);
     fetchSuggestionsWithCountsMock.mockResolvedValue([]);
     window.history.pushState(null, "", "/");
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 1024,
+    });
+
+    getBoundingClientRectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() =>
+        ({
+          x: 0,
+          y: 0,
+          width: 36,
+          height: 36,
+          top: 100,
+          right: 80,
+          bottom: 136,
+          left: 44,
+          toJSON: () => ({}),
+        }) as DOMRect,
+      );
+  });
+
+  afterEach(() => {
+    getBoundingClientRectSpy.mockRestore();
   });
 
   it("passes an abort signal to fetchFolders", async () => {
@@ -297,6 +324,52 @@ describe("Filter", () => {
         "aria-pressed",
         "true",
       );
+    });
+  });
+
+  it("clamps popout to viewport on medium screens", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 800,
+    });
+
+    renderFilter();
+
+    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
+
+    const panelTitle = await screen.findByText("Media type");
+    const panel = panelTitle.closest(".popover-surface");
+
+    expect(panel).not.toBeNull();
+    expect(panel).toHaveStyle({
+      position: "fixed",
+      left: "12px",
+      width: "440px",
+    });
+  });
+
+  it("switches popout to full-width layout on narrow screens", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 560,
+    });
+
+    renderFilter();
+
+    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
+
+    const panelTitle = await screen.findByText("Media type");
+    const panel = panelTitle.closest(".popover-surface");
+
+    expect(panel).not.toBeNull();
+    expect(panel).toHaveStyle({
+      position: "fixed",
+      left: "12px",
+      right: "12px",
+      width: "auto",
+      maxWidth: "none",
     });
   });
 });

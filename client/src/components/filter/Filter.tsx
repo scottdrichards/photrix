@@ -8,6 +8,7 @@ import {
   ScanPerson24Regular,
   Star24Regular,
 } from "@fluentui/react-icons";
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Spinner } from "../../Spinner";
 import css from "./Filter.module.css";
@@ -53,19 +54,101 @@ export const Filter = () => {
   const ratingAtLeast = ratingFilter?.atLeast ?? true;
 
   const [activePanel, setActivePanel] = useState<FilterPanel | null>(null);
+  const [activePanelTrigger, setActivePanelTrigger] =
+    useState<HTMLButtonElement | null>(null);
+  const [floatingPanelStyle, setFloatingPanelStyle] = useState<CSSProperties | undefined>();
   const [folders, setFolders] = useState<string[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
   const [ratingCounts, setRatingCounts] = useState<Record<number, number>>({});
   const [loadingRatingCounts, setLoadingRatingCounts] = useState(false);
 
+  const applyPanelLayout = useCallback(() => {
+    if (!activePanel || !activePanelTrigger || typeof window === "undefined") {
+      setFloatingPanelStyle(undefined);
+      return;
+    }
+
+    const viewportPadding = 12;
+    const baseTop = Math.round(activePanelTrigger.getBoundingClientRect().bottom + 4);
+    const minimumWidth = 280;
+    const preferredWidth = activePanel === "map" ? 620 : 440;
+    const availableWidth = window.innerWidth - viewportPadding * 2;
+    const panelWidth = Math.max(minimumWidth, Math.min(availableWidth, preferredWidth));
+    const isMobile = window.innerWidth <= 720;
+
+    if (isMobile) {
+      setFloatingPanelStyle({
+        position: "fixed",
+        top: `${baseTop}px`,
+        left: `${viewportPadding}px`,
+        right: `${viewportPadding}px`,
+        width: "auto",
+        maxWidth: "none",
+        maxHeight: `calc(100vh - ${baseTop + viewportPadding}px)`,
+      });
+      return;
+    }
+
+    const preferredLeft = Math.round(activePanelTrigger.getBoundingClientRect().right - panelWidth);
+    const left = Math.max(
+      viewportPadding,
+      Math.min(preferredLeft, window.innerWidth - viewportPadding - panelWidth),
+    );
+
+    setFloatingPanelStyle({
+      position: "fixed",
+      top: `${baseTop}px`,
+      left: `${left}px`,
+      width: `${panelWidth}px`,
+      maxWidth: `${panelWidth}px`,
+      maxHeight: `calc(100vh - ${baseTop + viewportPadding}px)`,
+    });
+  }, [activePanel, activePanelTrigger]);
+
+  const handlePanelToggle = useCallback(
+    (panel: FilterPanel, trigger: HTMLButtonElement) => {
+      if (activePanel === panel) {
+        setActivePanel(null);
+        setActivePanelTrigger(null);
+        setFloatingPanelStyle(undefined);
+        return;
+      }
+      setActivePanel(panel);
+      setActivePanelTrigger(trigger);
+    },
+    [activePanel],
+  );
+
   useEffect(() => {
     if (!activePanel) return;
     const handle = (e: MouseEvent) => {
-      if (!filterBarRef.current?.contains(e.target as Node)) setActivePanel(null);
+      if (!filterBarRef.current?.contains(e.target as Node)) {
+        setActivePanel(null);
+        setActivePanelTrigger(null);
+        setFloatingPanelStyle(undefined);
+      }
     };
     document.addEventListener("mousedown", handle);
     return () => document.removeEventListener("mousedown", handle);
   }, [activePanel]);
+
+  useEffect(() => {
+    applyPanelLayout();
+  }, [applyPanelLayout]);
+
+  useEffect(() => {
+    if (!activePanel) {
+      return;
+    }
+
+    const handleWindowChange = () => applyPanelLayout();
+    window.addEventListener("resize", handleWindowChange);
+    window.addEventListener("scroll", handleWindowChange, true);
+    return () => {
+      window.removeEventListener("resize", handleWindowChange);
+      window.removeEventListener("scroll", handleWindowChange, true);
+    };
+  }, [activePanel, applyPanelLayout]);
 
   const currentPath = path?.replace(/\/$/, "");
   const isFolderFilterActive = Boolean(currentPath) || includeSubfolders === false;
@@ -256,12 +339,12 @@ export const Filter = () => {
           aria-label="Folders filter"
           aria-pressed={isFolderFilterActive}
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "folders" || isFolderFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={() => setActivePanel(activePanel === "folders" ? null : "folders")}
+          onClick={(e) => handlePanelToggle("folders", e.currentTarget)}
         >
           <Folder24Regular fontSize={20} />
         </button>
         {activePanel === "folders" && (
-          <div className={`popover-surface ${css.panelSurface}`}>
+          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
             <div className={css.panelSection}>
               <h3>Folders</h3>
               <label className="switch-label">
@@ -332,12 +415,12 @@ export const Filter = () => {
           aria-label="Media type filter"
           aria-pressed={isMediaTypeFilterActive}
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "type" || isMediaTypeFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={() => setActivePanel(activePanel === "type" ? null : "type")}
+          onClick={(e) => handlePanelToggle("type", e.currentTarget)}
         >
           <Image24Regular fontSize={20} />
         </button>
         {activePanel === "type" && (
-          <div className={`popover-surface ${css.panelSurface}`}>
+          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
             <div className={css.panelSection}>
               <h3>Media type</h3>
               <div className={css.controlsRow}>
@@ -376,12 +459,12 @@ export const Filter = () => {
           aria-label="People in image filter"
           aria-pressed={isPeopleFilterActive}
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "people" || isPeopleFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={() => setActivePanel(activePanel === "people" ? null : "people")}
+          onClick={(e) => handlePanelToggle("people", e.currentTarget)}
         >
           <Person24Regular fontSize={20} />
         </button>
         {activePanel === "people" && (
-          <div className={`popover-surface ${css.panelSurface}`}>
+          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
             <SuggestionFilterField
               title="People in image"
               placeholder="Search names (e.g. Scott)"
@@ -411,12 +494,12 @@ export const Filter = () => {
           aria-label="Camera and lens filter"
           aria-pressed={isGearFilterActive}
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "gear" || isGearFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={() => setActivePanel(activePanel === "gear" ? null : "gear")}
+          onClick={(e) => handlePanelToggle("gear", e.currentTarget)}
         >
           <Camera24Regular fontSize={20} />
         </button>
         {activePanel === "gear" && (
-          <div className={`popover-surface ${css.panelSurface}`}>
+          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
             <SuggestionFilterField
               title="Camera model"
               placeholder="Search camera model (e.g. R6 Mark II)"
@@ -465,12 +548,12 @@ export const Filter = () => {
           aria-label="Rating filter"
           aria-pressed={isRatingFilterActive}
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "rating" || isRatingFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={() => setActivePanel(activePanel === "rating" ? null : "rating")}
+          onClick={(e) => handlePanelToggle("rating", e.currentTarget)}
         >
           <Star24Regular fontSize={20} />
         </button>
         {activePanel === "rating" && (
-          <div className={`popover-surface ${css.panelSurface}`}>
+          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
             <div className={css.panelSection}>
               <h3>Rating</h3>
               <div className={css.ratingFilter}>
@@ -527,12 +610,12 @@ export const Filter = () => {
           aria-label="Date filter"
           aria-pressed={isDateFilterActive}
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "date" || isDateFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={() => setActivePanel(activePanel === "date" ? null : "date")}
+          onClick={(e) => handlePanelToggle("date", e.currentTarget)}
         >
           <Calendar24Regular fontSize={20} />
         </button>
         {activePanel === "date" && (
-          <div className={`popover-surface ${css.panelSurface}`}>
+          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
             <DateHistogram label="Date taken" />
           </div>
         )}
@@ -545,12 +628,12 @@ export const Filter = () => {
           aria-label="Map filter"
           aria-pressed={isMapFilterActive}
           className={`btn btn-icon ${css.filterIconButton} ${activePanel === "map" || isMapFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={() => setActivePanel(activePanel === "map" ? null : "map")}
+          onClick={(e) => handlePanelToggle("map", e.currentTarget)}
         >
           <Location24Regular fontSize={20} />
         </button>
         {activePanel === "map" && (
-          <div className={`popover-surface ${css.mapPanelSurface}`}>
+          <div className={`popover-surface ${css.mapPanelSurface}`} style={floatingPanelStyle}>
             <MapFilter compact />
           </div>
         )}
