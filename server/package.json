@@ -7,6 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "tsx src/main.ts",
     "face:python:install": "python -m pip install -r python/requirements.txt",
+    "clip:python:install": "python -m pip install open_clip_torch",
+    "clip:python:install:gpu": "python -m pip install open_clip_torch && python -m pip install torch --index-url https://download.pytorch.org/whl/cu121",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --selectProjects unit",
     "test:all": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
@@ -17,6 +19,9 @@
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
     "format": "prettier --write \"{src,tests}/**/*.{ts,tsx,js,jsx,json,md}\"",
     "format:check": "prettier --check \"{src,tests}/**/*.{ts,tsx,js,jsx,json,md}\""
+  },
+  "ts-node": {
+    "esm": true
   },
   "author": "",
   "license": "ISC",

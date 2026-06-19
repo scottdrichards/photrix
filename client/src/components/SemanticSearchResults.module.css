@@ -1,0 +1,46 @@
+.center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-m);
+  padding-block: var(--space-xl);
+  color: var(--text2, #555);
+}
+
+.error {
+  color: var(--colorStatusDangerForeground1, #c50f1f);
+  margin: 0;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: var(--text3, #888);
+  margin: 0;
+}
+
+.hint code {
+  font-family: monospace;
+  background: var(--fill2, #f4f4f4);
+  padding-inline: 4px;
+  border-radius: 3px;
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-m);
+}
+
+.resultCount {
+  margin: 0;
+  padding-block: var(--space-s);
+  color: var(--text2, #555);
+  font-size: 0.875rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-s);
+}

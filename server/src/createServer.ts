@@ -7,6 +7,7 @@ import { statusBackgroundTasksRequestHandler } from "./requestHandlers/statusBac
 import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
 import { networkProbeRequestHandler } from "./requestHandlers/networkProbeRequestHandler.ts";
 import { videoNegotiationRequestHandler } from "./requestHandlers/video/videoNegotiation.ts";
+import { searchRequestHandler } from "./requestHandlers/searchRequestHandler.ts";
 import {
   bindCurrentRequestTrace,
   finishRequestTrace,
@@ -139,6 +140,15 @@ export const createServer = (
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
               { database, storageRoot: storagePath },
+            );
+            return;
+          }
+
+          if (req.url?.startsWith("/api/search") && req.method === "GET") {
+            await searchRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              { database },
             );
             return;
           }

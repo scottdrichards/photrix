@@ -1,8 +1,17 @@
 import "dotenv/config";
 import { initializeCacheDirectories } from "./common/cacheUtils.ts";
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[uncaughtException]", error);
+});
 import { createServer } from "./createServer.ts";
 import { detectFacesWithInsightFace } from "./faceDetection/insightFaceDetector.ts";
 import { processFaceDetection } from "./faceDetection/processFaceDetection.ts";
+import { embedImageWithClip } from "./imageEmbedding/clipWorker.ts";
+import { processImageEmbedding } from "./imageEmbedding/processImageEmbedding.ts";
 import { fileSystemScanFolder } from "./indexDatabase/fileSystemScanFolder.ts";
 import { processExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { processFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
@@ -52,6 +61,15 @@ const startServer = async () => {
       name: "Face detection",
       start: () => processFaceDetection(database, detectFacesWithInsightFace),
       type: "faceDetection",
+    },
+    "background",
+  );
+
+  taskOrchestrator.addTask(
+    {
+      name: "Image embedding (CLIP)",
+      start: () => processImageEmbedding(database, embedImageWithClip),
+      type: "aiEmbedding",
     },
     "background",
   );

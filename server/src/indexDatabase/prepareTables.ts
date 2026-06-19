@@ -24,8 +24,8 @@ export const prepareTables = async (db: AsyncSqlite) => {
     const columnsInTable = new Set(columnsInTableResult.map(({ name }) => name));
     const requiredColumns = new Set(columns.map(({ name }) => name));
 
-    const missingColumns = requiredColumns.difference(columnsInTable);
-    for (const column of missingColumns) {
+    for (const column of requiredColumns) {
+      if (columnsInTable.has(column)) continue;
       const columnDef = columns.find((c) => c.name === column)!;
       await db.exec(
         `ALTER TABLE ${tableName} ADD COLUMN ${tableColumnToString(columnDef)}`,
@@ -79,8 +79,8 @@ export const prepareTables = async (db: AsyncSqlite) => {
     }
 
     // Remove any old columns that are no longer required
-    const extraColumns = columnsInTable.difference(requiredColumns);
-    for (const column of extraColumns) {
+    for (const column of columnsInTable) {
+      if (requiredColumns.has(column)) continue;
       await db.exec(`ALTER TABLE ${tableName} DROP COLUMN ${column}`);
     }
   }

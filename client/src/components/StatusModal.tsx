@@ -15,7 +15,83 @@ type StatusModalProps = {
 
 const clampUnit = (value: number) => Math.max(0, Math.min(1, value));
 
+type ProgressSample = { timestamp: number; itemsProcessed: number };
+
+const formatEta = (remainingMs: number): string => {
+  if (remainingMs < 60_000) return "< 1 minute remaining";
+  const totalMinutes = Math.round(remainingMs / 60_000);
+  if (totalMinutes < 60) return `${totalMinutes} minute${totalMinutes !== 1 ? "s" : ""} remaining`;
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  if (hours < 48) {
+    const hPart = `${hours} hour${hours !== 1 ? "s" : ""}`;
+    if (mins === 0) return `${hPart} remaining`;
+    return `${hPart} ${mins} minute${mins !== 1 ? "s" : ""} remaining`;
+  }
+  const days = Math.floor(hours / 24);
+  const hrs = hours % 24;
+  const dPart = `${days} day${days !== 1 ? "s" : ""}`;
+  if (hrs === 0) return `${dPart} remaining`;
+  return `${dPart} ${hrs} hour${hrs !== 1 ? "s" : ""} remaining`;
+};
+
+const computeEta = (
+  history: ProgressSample[],
+  total: number,
+  currentItemsProcessed: number,
+): string | null => {
+  if (history.length < 2) return null;
+  const oldest = history[0];
+  const newest = history[history.length - 1];
+  const elapsedMs = newest.timestamp - oldest.timestamp;
+  if (elapsedMs <= 0) return null;
+  const itemsDone = newest.itemsProcessed - oldest.itemsProcessed;
+  if (itemsDone <= 0) return null;
+  const ratePerMs = itemsDone / elapsedMs;
+  const remaining = total - currentItemsProcessed;
+  if (remaining <= 0) return null;
+  return formatEta(remaining / ratePerMs);
+};
+
 const capitalize = (value: string) => value[0]?.toUpperCase() + value.slice(1);
+
+const formatBytes = (bytes: number) => {
+  const gb = bytes / (1024 * 1024 * 1024);
+  if (gb >= 1) return `${gb.toFixed(1)} GB`;
+  const mb = bytes / (1024 * 1024);
+  return `${mb.toFixed(0)} MB`;
+};
+
+const formatMB = (mb: number) => {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${mb.toFixed(0)} MB`;
+};
+
+type UtilizationBarProps = {
+  label: string;
+  percent: number;
+  detail?: string;
+};
+
+const UtilizationBar = ({ label, percent, detail }: UtilizationBarProps) => {
+  const pct = Math.max(0, Math.min(100, percent));
+  const severity = pct >= 90 ? "high" : pct >= 70 ? "med" : "low";
+  return (
+    <div className={css.metricRow}>
+      <div className={css.metricHeader}>
+        <span className={css.metricLabel}>{label}</span>
+        <span className={css.metricValue}>{pct}%</span>
+      </div>
+      <div className={css.metricBar}>
+        <div
+          className={`${css.metricBarFill} ${css[`severity-${severity}`]}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {detail ? <small className={css.metricDetail}>{detail}</small> : null}
+    </div>
+  );
+};
 
 const toProgress = (task: BackgroundTaskStatus) => {
   if (task.total == null || task.itemsProcessed == null || task.total <= 0) {
@@ -49,6 +125,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   const [isTogglingBackgroundTasks, setIsTogglingBackgroundTasks] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const progressHistoryRef = useRef<Map<string, ProgressSample[]>>(new Map());
 
   const backgroundTasksEnabled = status?.maintenance.backgroundTasksEnabled ?? true;
 
@@ -63,6 +140,15 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     }
     const unsubscribe = subscribeStatusStream(
       (data) => {
+        const now = Date.now();
+        for (const task of data.backgroundTasks) {
+          if (task.itemsProcessed == null) continue;
+          const history = progressHistoryRef.current.get(task.id) ?? [];
+          const lastSample = history[history.length - 1];
+          if (lastSample?.itemsProcessed === task.itemsProcessed) continue;
+          const updated = [...history, { timestamp: now, itemsProcessed: task.itemsProcessed }];
+          progressHistoryRef.current.set(task.id, updated.slice(-20));
+        }
         setStatus(data);
       },
       (_error) => {
@@ -71,6 +157,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
 
     return () => {
       unsubscribe();
+      progressHistoryRef.current.clear();
       setStatus(undefined);
       setIsTogglingBackgroundTasks(false);
       setToggleError(null);
@@ -106,6 +193,54 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
         {!status && <progress />}
         {status && (
           <div className={css.container}>
+            {status.system && (
+              <div className={css.metricsList}>
+                <span className={css.label}>System utilization</span>
+                <UtilizationBar
+                  label={`CPU (${status.system.cpu.cores} cores)`}
+                  percent={status.system.cpu.usage}
+                />
+                <UtilizationBar
+                  label="Memory"
+                  percent={status.system.memory.usage}
+                  detail={`${formatBytes(status.system.memory.used)} / ${formatBytes(status.system.memory.total)}`}
+                />
+                {status.system.disk && (
+                  <UtilizationBar
+                    label="Disk"
+                    percent={status.system.disk.utilization ?? 0}
+                    detail={[
+                      status.system.disk.iopsRead != null
+                        ? `${status.system.disk.iopsRead} r/s`
+                        : null,
+                      status.system.disk.iopsWrite != null
+                        ? `${status.system.disk.iopsWrite} w/s`
+                        : null,
+                      status.system.disk.readLatencyMs != null
+                        ? `read ${status.system.disk.readLatencyMs}ms`
+                        : null,
+                      status.system.disk.writeLatencyMs != null
+                        ? `write ${status.system.disk.writeLatencyMs}ms`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" • ") || undefined}
+                  />
+                )}
+                {status.system.gpu && (
+                  <UtilizationBar
+                    label="GPU"
+                    percent={status.system.gpu.usage}
+                    detail={
+                      status.system.gpu.memory
+                        ? `${formatMB(status.system.gpu.memory.used)} / ${formatMB(status.system.gpu.memory.total)}`
+                        : undefined
+                    }
+                  />
+                )}
+              </div>
+            )}
+
             <div className={css.toggleRow}>
               <label className="switch-label">
                 <input
@@ -131,6 +266,14 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                 status.backgroundTasks.map((task) => {
                   const progress = toProgress(task);
                   const detail = buildTaskDetail(task);
+                  const eta =
+                    progress && task.total != null && task.itemsProcessed != null
+                      ? computeEta(
+                          progressHistoryRef.current.get(task.id) ?? [],
+                          task.total,
+                          task.itemsProcessed,
+                        )
+                      : null;
 
                   if (progress) {
                     return (
@@ -139,6 +282,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                         label={task.name}
                         progress={progress}
                         detail={detail}
+                        eta={eta}
                         summaryLabel="items"
                       />
                     );

@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
-import { fetchPhotos } from "../api";
+import { fetchPhotos, fetchSemanticSearch } from "../api";
 import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
@@ -36,17 +36,27 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   useEffect(() => {
     const abortOnDisposed = "disposed";
     const abortController = new AbortController();
+    const { semanticQuery, ...filterOptions } = filter;
 
     setLoading(true);
-    fetchPhotos({
-      page,
-      pageSize: PAGE_SIZE,
-      signal: abortController.signal,
-      ...filter,
-    })
+
+    const fetchPromise = semanticQuery
+      ? fetchSemanticSearch({
+          q: semanticQuery,
+          signal: abortController.signal,
+          ...filterOptions,
+        })
+      : fetchPhotos({
+          page,
+          pageSize: PAGE_SIZE,
+          signal: abortController.signal,
+          ...filterOptions,
+        });
+
+    fetchPromise
       .then((result) => {
         setData((previousData) => {
-          if (page === 1 || !previousData) {
+          if (semanticQuery || page === 1 || !previousData) {
             return { ...result, filterUsed: filter };
           }
 
@@ -66,7 +76,11 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
       .catch((err) => {
         if (err === "disposed") return;
         if (err.name === "AbortError") return;
-        setError("Failed to fetch photos");
+        setError(
+          semanticQuery
+            ? "Semantic search failed. Is the CLIP worker running?"
+            : "Failed to fetch photos",
+        );
       })
       .finally(() => {
         setLoading(false);
@@ -83,7 +97,7 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
 
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
-    if (!sentinel || loading) {
+    if (!sentinel || loading || filter.semanticQuery) {
       return;
     }
     const observer = new IntersectionObserver(
@@ -100,7 +114,11 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
     return () => {
       observer.disconnect();
     };
-  }, [loading, data?.items.length, data?.total]);
+  }, [loading, data?.items.length, data?.total, filter.semanticQuery]);
+
+  const emptyMessage = filter.semanticQuery
+    ? "No results found for your search."
+    : "No photos yet. Upload some to get started.";
 
   return (
     <>
@@ -110,15 +128,13 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
         {data?.items.map((item) => (
           <ThumbnailTile key={item.path} photo={item} />
         ))}
-        {data && data.items.length < data.total && (
+        {!filter.semanticQuery && data && data.items.length < data.total && (
           <div ref={loadMoreSentinelRef} className={css.sentinel}>
             {loading && <Spinner size="extra-tiny" />}
           </div>
         )}
       </div>
-      {data && data.items.length === 0 && (
-        <h3>No photos yet. Upload some to get started.</h3>
-      )}
+      {data && data.items.length === 0 && <h3>{emptyMessage}</h3>}
     </>
   );
 };

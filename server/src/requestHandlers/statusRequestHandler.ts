@@ -1,5 +1,6 @@
 import http from "node:http";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
+import { getSystemMetrics } from "../observability/systemMetrics.ts";
 
 type StatusRequestHandlerProps = {
   stream: boolean;
@@ -9,12 +10,14 @@ type StatusRequestHandlerProps = {
 const getStatusPayload = async (taskOrchestrator: TaskOrchestrator) => {
   const backgroundTasksEnabled = taskOrchestrator.getPerformBackgroundTasks();
   const backgroundTasks = await taskOrchestrator.getBackgroundTaskStatus();
+  const systemMetrics = await getSystemMetrics();
 
   return {
     backgroundTasks,
     maintenance: {
       backgroundTasksEnabled,
     },
+    system: systemMetrics,
   };
 };
 

@@ -4,6 +4,7 @@ import { cx } from "./cx";
 import css from "./App.module.css";
 import { FullscreenViewer } from "./components/FullscreenViewer";
 import { PeopleView } from "./components/PeopleView";
+import { SearchBar } from "./components/SearchBar";
 import { StatusModal } from "./components/StatusModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { Filter } from "./components/filter/Filter";
@@ -40,6 +41,7 @@ const AppContent = () => {
         </div>
 
         <div className={css.headerActions}>
+          <SearchBar />
           <Filter />
           <button
             title="Server Status"

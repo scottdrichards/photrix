@@ -1242,6 +1242,100 @@ export class IndexDatabase {
     return { sortedClusters };
   }
 
+  async getFilesNeedingEmbedding(
+    limit = 50,
+  ): Promise<Array<{ relativePath: string; mimeType: string | null }>> {
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT folder, fileName, mimeType FROM files
+       WHERE (mimeType LIKE 'image/%')
+         AND embeddingProcessedAt IS NULL
+         AND infoProcessedAt IS NOT NULL
+       ORDER BY embeddingErrorAt IS NOT NULL, embeddingErrorAt, folder, fileName
+       LIMIT ?`,
+      limit,
+    );
+    return rows.map((row) => ({
+      relativePath: joinPath(row.folder as string, row.fileName as string),
+      mimeType: (row.mimeType as string | null) ?? null,
+    }));
+  }
+
+  async saveImageEmbedding(relativePath: string, embedding: Float32Array): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    const buffer = Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
+    await this.db.run(
+      `UPDATE files
+       SET imageEmbedding = ?, embeddingProcessedAt = ?, embeddingErrorAt = NULL
+       WHERE folder = ? AND fileName = ?`,
+      buffer,
+      Date.now(),
+      folder,
+      fileName,
+    );
+  }
+
+  async saveImageEmbeddingError(relativePath: string): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    await this.db.run(
+      `UPDATE files SET embeddingErrorAt = ? WHERE folder = ? AND fileName = ?`,
+      Date.now(),
+      folder,
+      fileName,
+    );
+  }
+
+  async getEmbeddingProgress(): Promise<[total: number, done: number]> {
+    const row = await this.db.get<{ total: number | null; done: number | null }>(
+      `SELECT
+         SUM(CASE WHEN mimeType LIKE 'image/%' AND infoProcessedAt IS NOT NULL THEN 1 ELSE 0 END) AS total,
+         SUM(CASE WHEN mimeType LIKE 'image/%' AND embeddingProcessedAt IS NOT NULL THEN 1 ELSE 0 END) AS done
+       FROM files`,
+    );
+    return [row?.total ?? 0, row?.done ?? 0];
+  }
+
+  async semanticSearch(
+    queryVector: Float32Array,
+    filter: FilterElement,
+    limit: number,
+  ): Promise<Array<FileRecord & { similarity: number }>> {
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT *
+       FROM files
+       WHERE imageEmbedding IS NOT NULL
+         AND (mimeType LIKE 'image/%')
+         ${whereClause ? `AND (${whereClause})` : ""}`,
+      ...whereParams,
+    );
+
+    type ScoredRow = { record: FileRecord; similarity: number };
+    const scored: ScoredRow[] = [];
+
+    for (const row of rows) {
+      const rawBuf = row.imageEmbedding as Buffer | null;
+      if (!rawBuf) continue;
+
+      const aligned = new Uint8Array(rawBuf.byteLength);
+      aligned.set(rawBuf);
+      const embedding = new Float32Array(aligned.buffer);
+
+      // CLIP embeddings are L2-normalised so cosine similarity == dot product
+      let dot = 0;
+      const len = Math.min(queryVector.length, embedding.length);
+      for (let i = 0; i < len; i++) {
+        dot += (queryVector[i] ?? 0) * (embedding[i] ?? 0);
+      }
+
+      const record = rowToFileRecord(row as Record<string, string | number>);
+      scored.push({ record, similarity: dot });
+    }
+
+    scored.sort((a, b) => b.similarity - a.similarity);
+    return scored.slice(0, limit).map(({ record, similarity }) => ({ ...record, similarity }));
+  }
+
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(
     options: QueryOptions,
   ): Promise<QueryResult<TMetadata>> {

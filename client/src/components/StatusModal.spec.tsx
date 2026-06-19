@@ -143,7 +143,7 @@ describe("StatusModal", () => {
     });
 
     expect(await screen.findByText(/Background tasks/)).toBeInTheDocument();
-    expect(screen.getByText("42")).toBeInTheDocument();
+    expect(screen.getByText("42%")).toBeInTheDocument();
   });
 
   it("renders queued tasks without progress metadata", async () => {

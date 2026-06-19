@@ -93,7 +93,7 @@ describe("filesEndpointRequestHandler", () => {
     });
   });
 
-  it("omits the root path filter for recursive root queries with an explicit filter", async () => {
+  it("includes both folder and explicit filter for recursive root queries", async () => {
     const { res } = createMockResponse();
     const queryFiles = jest.fn(async () => ({
       items: [],
@@ -118,9 +118,11 @@ describe("filesEndpointRequestHandler", () => {
     expect(queryFiles).toHaveBeenCalledWith(
       expect.objectContaining({
         filter: {
-          mimeType: {
-            startsWith: "video/",
-          },
+          operation: "and",
+          conditions: [
+            { folder: { folder: "/", recursive: true } },
+            { mimeType: { startsWith: "video/" } },
+          ],
         },
       }),
     );

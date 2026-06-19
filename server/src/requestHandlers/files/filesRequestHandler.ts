@@ -3,7 +3,7 @@ import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import { stat, readFile } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { createReadStream, type Stats } from "fs";
-import path from "path/win32";
+import path from "path";
 import {
   convertImage,
   ImageConversionError,

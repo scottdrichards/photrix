@@ -1,0 +1,50 @@
+.searchBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+  background: var(--fill2, #f4f4f4);
+  border: 1px solid var(--stroke2, #ddd);
+  border-radius: 6px;
+  padding-inline: var(--space-s);
+  min-width: 260px;
+}
+
+.searchIcon {
+  flex-shrink: 0;
+  color: var(--text3, #666);
+}
+
+.input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding-block: var(--space-s);
+  font-size: 0.875rem;
+  outline: none;
+  color: inherit;
+  min-width: 0;
+}
+
+.input::placeholder {
+  color: var(--text3, #999);
+}
+
+/* Remove browser default clear button since we add our own */
+.input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.clearBtn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text3, #666);
+  display: flex;
+  align-items: center;
+}
+
+.clearBtn:hover {
+  color: var(--text1, #111);
+}

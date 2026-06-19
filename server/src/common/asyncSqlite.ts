@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const workerScriptPath = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  "sqliteWorker.ts",
+  "sqliteWorkerEntry.mjs",
 );
 
 type RunResult = { changes: number; lastInsertRowid: number };
@@ -36,7 +36,6 @@ const spawnWorker = async (
       pragmas: options.pragmas,
       customFunctions: options.customFunctions,
     },
-    execArgv: ["--import", "tsx"],
   });
 
   await new Promise<void>((resolve, reject) => {

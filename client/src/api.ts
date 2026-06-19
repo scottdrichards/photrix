@@ -1158,6 +1158,71 @@ export const fetchSuggestionsWithCounts = async ({
   return payload.suggestions;
 };
 
+export type SemanticSearchResult = {
+  items: (ApiPhotoItem & { similarity: number })[];
+  total: number;
+  query: string;
+};
+
+export type FetchSemanticSearchOptions = {
+  q: string;
+  limit?: number;
+  signal?: AbortSignal;
+} & Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata">;
+
+export const fetchSemanticSearch = async ({
+  q,
+  limit = 50,
+  signal,
+  includeSubfolders = false,
+  path = "",
+  ratingFilter,
+  mediaTypeFilter = "all",
+  hasFaceScanData,
+  locationBounds,
+  dateRange,
+  peopleInImageFilter,
+  cameraModelFilter,
+  lensFilter,
+}: FetchSemanticSearchOptions): Promise<FetchPhotosResult & { query: string }> => {
+  const params = new URLSearchParams();
+  params.set("q", q.trim());
+  params.set("limit", String(limit));
+
+  if (includeSubfolders) params.set("includeSubfolders", "true");
+  if (path) params.set("path", path);
+
+  const filters = buildFilters({
+    ratingFilter,
+    mediaTypeFilter,
+    hasFaceScanData,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+    cameraModelFilter,
+    lensFilter,
+  });
+  if (filters.length > 0) {
+    const filterObj =
+      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    params.set("filter", JSON.stringify(filterObj));
+  }
+
+  const payload = await fetchJsonOrThrow<SemanticSearchResult>(
+    `/api/search?${params.toString()}`,
+    "semantic search",
+    { signal },
+  );
+
+  return {
+    items: payload.items.map(createPhotoItem),
+    total: payload.total,
+    page: 1,
+    pageSize: limit,
+    query: payload.query,
+  };
+};
+
 export type VideoNegotiationResult =
   | { mode: "hls"; url: string; reason: string }
   | { mode: "direct"; url: string; reason: string }

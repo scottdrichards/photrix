@@ -34,8 +34,8 @@ export const ProgressItem = ({
       <progress value={progress.percent} max={1} />
       <span className={css.muted}>
         {valueFormatter(progress.completed)} / {valueFormatter(progress.total)} {summaryLabel}
+        {eta ? ` (${eta})` : ""}
         {detail ? ` • ${detail}` : ""}
-        {eta ? ` • ETA: ${eta}` : ""}
       </span>
     </div>
   );

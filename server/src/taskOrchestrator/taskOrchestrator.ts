@@ -8,7 +8,8 @@ type TaskType =
   | "videoConversion"
   | "mediaMedatadata"
   | "diskInfo"
-  | "faceDetection";
+  | "faceDetection"
+  | "aiEmbedding";
 
 const getResourceRequirements = (type?: TaskType): Partial<Record<Resources, number>> => {
   const mappings = {
@@ -17,6 +18,7 @@ const getResourceRequirements = (type?: TaskType): Partial<Record<Resources, num
     mediaMedatadata: { disk: 0.1 },
     diskInfo: { disk: 0.1 },
     faceDetection: { cpu: 1 },
+    aiEmbedding: {},
   };
   return type ? mappings[type] : {};
 };
@@ -247,6 +249,7 @@ export const createTaskOrchestrator = (): TaskOrchestrator => {
           checkInResources(resourcesInUse, requirements);
           runningTasks.delete(runningTask);
           logTaskEvent("Completed", queue, nextTask.name);
+          wakeUp?.();
         });
     }
   };

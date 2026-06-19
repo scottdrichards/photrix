@@ -53,3 +53,64 @@
   justify-content: flex-end;
   margin-top: var(--space-m);
 }
+
+.metricsList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s);
+}
+
+.metricRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.metricHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.metricLabel {
+  font-weight: var(--fw-semi);
+  font-size: 0.9rem;
+}
+
+.metricValue {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+  color: var(--fg2);
+}
+
+.metricBar {
+  width: 100%;
+  height: 8px;
+  background-color: var(--bg2);
+  border-radius: var(--radius-sm, 4px);
+  overflow: hidden;
+  border: 1px solid var(--stroke1);
+}
+
+.metricBarFill {
+  height: 100%;
+  transition: width 0.3s ease, background-color 0.3s ease;
+  border-radius: var(--radius-sm, 4px);
+}
+
+.severity-low {
+  background-color: var(--success, #2e7d32);
+}
+
+.severity-med {
+  background-color: var(--warning, #f9a825);
+}
+
+.severity-high {
+  background-color: var(--danger, #c62828);
+}
+
+.metricDetail {
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+}

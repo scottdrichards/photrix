@@ -131,6 +131,7 @@ export type ClientFilterState = Partial<{
   ratingFilter: RatingFilter | null;
   locationBounds: GeoBoundsLike | null;
   dateRange: DateRangeSelection | null;
+  semanticQuery: string;
 }>;
 
 /**
@@ -202,9 +203,36 @@ export type BackgroundTaskStatus = {
   description?: string;
 };
 
+export type SystemMetrics = {
+  cpu: {
+    usage: number; // percentage 0-100
+    cores: number;
+  };
+  memory: {
+    used: number; // bytes
+    total: number; // bytes
+    usage: number; // percentage 0-100
+  };
+  disk?: {
+    readLatencyMs?: number;
+    writeLatencyMs?: number;
+    utilization?: number; // percentage 0-100
+    iopsRead?: number;
+    iopsWrite?: number;
+  };
+  gpu?: {
+    usage: number; // percentage 0-100
+    memory?: {
+      used: number; // MB
+      total: number; // MB
+    };
+  };
+};
+
 export type ServerStatus = {
   backgroundTasks: BackgroundTaskStatus[];
   maintenance: {
     backgroundTasksEnabled: boolean;
   };
+  system: SystemMetrics;
 };

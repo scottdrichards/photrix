@@ -14,7 +14,7 @@ vi.mock("../api", async () => {
 });
 
 vi.mock("./filter/FilterContext", () => ({
-  useFilterContext: () => useFilterContextMock(),
+  useFilter: () => useFilterContextMock(),
 }));
 
 describe("DateHistogram", () => {

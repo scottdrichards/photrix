@@ -18,7 +18,7 @@ vi.mock("../api", async () => {
 });
 
 vi.mock("./filter/FilterContext", () => ({
-  useFilterContext: () => ({
+  useFilter: () => ({
     filter: currentFilter,
     setFilter: setFilterMock,
   }),

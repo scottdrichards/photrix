@@ -2,7 +2,17 @@ import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import type http from "node:http";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
-import { statusRequestHandler } from "./statusRequestHandler.ts";
+
+const mockGetSystemMetrics = jest.fn(() => ({
+  cpu: { usage: 25, cores: 4 },
+  memory: { used: 4000000000, total: 16000000000, usage: 25 },
+}));
+
+jest.unstable_mockModule("../observability/systemMetrics.ts", () => ({
+  getSystemMetrics: mockGetSystemMetrics,
+}));
+
+const { statusRequestHandler } = await import("./statusRequestHandler.ts");
 
 const flushMicrotasks = async () => {
   for (let i = 0; i < 10; i++) {
@@ -87,6 +97,10 @@ describe("statusRequestHandler", () => {
       },
     ]);
     expect(payload.maintenance.backgroundTasksEnabled).toBe(true);
+    expect(payload.system).toEqual({
+      cpu: { usage: 25, cores: 4 },
+      memory: { used: 4000000000, total: 16000000000, usage: 25 },
+    });
   });
 
   it("reports backgroundTasksEnabled false when background processing is disabled", async () => {

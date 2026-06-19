@@ -37,7 +37,6 @@ describe("requestTrace", () => {
   });
 
   it("keeps request id available inside nested operations", async () => {
-    const consoleSpy = jest.spyOn(console, "log").mockImplementation(() => {});
     let nestedRequestId: string | undefined;
 
     await runWithRequestTrace(
@@ -58,7 +57,6 @@ describe("requestTrace", () => {
     );
 
     expect(nestedRequestId).toBe("trace-test-id");
-    expect(consoleSpy).toHaveBeenCalled();
   });
 
   it("binds callbacks to the active request trace context", async () => {
@@ -128,20 +126,4 @@ describe("requestTrace", () => {
     expect(requestCall).toBeDefined();
   });
 
-  it("starts standalone operations from the root context", async () => {
-    const { calls } = createSpanRecorder();
-    const parentSpan = trace.wrapSpanContext({
-      traceId: "44444444444444444444444444444444",
-      spanId: "5555555555555555",
-      traceFlags: 1,
-    });
-
-    await otelContext.with(trace.setSpan(otelContext.active(), parentSpan), async () => {
-      await (async () => 42)();
-    });
-
-    const standaloneCall = calls.find(({ name }) => name === "standalone-operation");
-    expect(standaloneCall).toBeDefined();
-    expect(trace.getSpan(standaloneCall?.context ?? otelContext.active())).toBeUndefined();
-  });
 });

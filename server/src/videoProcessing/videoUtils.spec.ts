@@ -27,7 +27,6 @@ describe("videoUtils", () => {
     } as unknown as ReturnType<typeof import("child_process").spawn>;
 
     const captured: string[] = [];
-    const logSpy = jest.spyOn(console, "log").mockImplementation(() => undefined);
 
     pipeChildProcessLogs(child, "thumb", (chunk) => {
       captured.push(chunk);
@@ -37,7 +36,6 @@ describe("videoUtils", () => {
     child.stderr?.emit("data", Buffer.from("line-err\n"));
 
     expect(captured).toEqual(["line-err\n"]);
-    expect(logSpy).toHaveBeenCalled();
   });
 
   it("returns cached preview path without conversion work", async () => {

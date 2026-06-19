@@ -57,6 +57,9 @@ export const tables = {
       { name: "hlsGeneratedAt", type: "INTEGER", indexExpression: true },
       { name: "facesProcessedAt", type: "INTEGER", indexExpression: true },
       { name: "facesLastErrorAt", type: "INTEGER", indexExpression: true },
+      { name: "imageEmbedding", type: "BLOB" },
+      { name: "embeddingProcessedAt", type: "INTEGER", indexExpression: true },
+      { name: "embeddingErrorAt", type: "INTEGER", indexExpression: true },
     ],
     compositeIndexes: [
       {

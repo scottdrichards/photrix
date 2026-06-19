@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 import contextlib
 import json
+import shutil
 import sys
 from pathlib import Path
 
 import numpy as np
+import onnxruntime as ort
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 
+Image.MAX_IMAGE_PIXELS = None
+
 from insightface.app import FaceAnalysis
+
+# Suppress pthread_setaffinity_np errors logged by ORT's thread pool in container/VM environments
+# where the process CPU affinity mask doesn't cover all logical cores.
+ort.set_default_logger_severity(4)
 
 register_heif_opener()
 
@@ -37,13 +45,38 @@ def normalize_box(bbox: np.ndarray, width: int, height: int) -> dict:
     }
 
 
-def create_app() -> FaceAnalysis:
+def _purge_model_cache(model_name: str) -> None:
+    model_root = Path.home() / ".insightface" / "models"
+    for path in [model_root / f"{model_name}.zip", model_root / model_name]:
+        if path.exists():
+            print(f"Removing corrupted model cache: {path}", file=sys.stderr)
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+
+
+def create_app(allow_redownload: bool = True) -> FaceAnalysis:
     provider = (sys.argv[1] if len(sys.argv) > 1 else "CPUExecutionProvider").strip()
     ctx_id = -1 if provider == "CPUExecutionProvider" else 0
 
-    with contextlib.redirect_stdout(sys.stderr):
-        app = FaceAnalysis(name="buffalo_l", providers=[provider])
-        app.prepare(ctx_id=ctx_id)
+    import os
+    devnull = open(os.devnull, "w")
+    old_stderr = sys.stderr
+    try:
+        sys.stderr = devnull
+        with contextlib.redirect_stdout(sys.stderr):
+            try:
+                app = FaceAnalysis(name="buffalo_l", providers=[provider])
+                app.prepare(ctx_id=ctx_id)
+            except Exception as exc:
+                if allow_redownload and "INVALID_PROTOBUF" in str(exc):
+                    _purge_model_cache("buffalo_l")
+                    return create_app(allow_redownload=False)
+                raise
+    finally:
+        sys.stderr = old_stderr
+        devnull.close()
     return app
 
 
