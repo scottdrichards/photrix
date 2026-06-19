@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { logger } from "./logger.ts";
 import {
   context as otelContext,
   ROOT_CONTEXT,
@@ -200,6 +201,18 @@ export const finishRequestTrace = (statusCode: number): void => {
     code: statusCode >= 500 ? SpanStatusCode.ERROR : SpanStatusCode.OK,
   });
   context.rootSpan.end();
+
+  const logLevel = statusCode >= 500 ? "error" : statusCode >= 400 ? "warn" : "info";
+  logger[logLevel](
+    {
+      requestId: context.requestId,
+      method: context.method,
+      url: getRequestPathname(context.url),
+      status: statusCode,
+      durationMs: Math.round(totalDuration),
+    },
+    `${context.method} ${getRequestPathname(context.url)} ${statusCode}`,
+  );
 };
 
 export const measureOperation = async <T>(
@@ -254,13 +267,18 @@ export const measureOperation = async <T>(
       });
 
       if (durationMs >= getSpanLogThresholdMs()) {
-        const indentation = "  ".repeat(Math.min(depth, 5));
+        const indent = "  ".repeat(Math.min(depth, 5));
         const suffix = detail ? ` (${detail})` : "";
+        logger.debug(
+          { requestId: context.requestId, category, durationMs },
+          `${indent}[${category}] ${name}${suffix}`,
+        );
       }
     }
 
     if (logWithoutRequest && durationMs >= getSpanLogThresholdMs()) {
       const suffix = detail ? ` (${detail})` : "";
+      logger.debug({ category, durationMs }, `[${category}] ${name}${suffix}`);
     }
   };
 
@@ -339,13 +357,18 @@ export const measureSyncOperation = <T>(
       });
 
       if (durationMs >= getSpanLogThresholdMs()) {
-        const indentation = "  ".repeat(Math.min(depth, 5));
+        const indent = "  ".repeat(Math.min(depth, 5));
         const suffix = detail ? ` (${detail})` : "";
+        logger.debug(
+          { requestId: context.requestId, category, durationMs },
+          `${indent}[${category}] ${name}${suffix}`,
+        );
       }
     }
 
     if (logWithoutRequest && durationMs >= getSpanLogThresholdMs()) {
       const suffix = detail ? ` (${detail})` : "";
+      logger.debug({ category, durationMs }, `[${category}] ${name}${suffix}`);
     }
   };
 

@@ -1,9 +1,12 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
+import { getLogger } from "../observability/logger.ts";
 import { FileInfo } from "./fileRecord.type.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
+
+const log = getLogger("processFileInfo");
 
 const batchSize = 200;
 
@@ -77,6 +80,7 @@ export const processFileInfoMetadata = (database: IndexDatabase): TaskRunner => 
             continue;
           }
 
+          log.warn({ err: error, path: relativePath }, "File stat failed");
           await database.addOrUpdateFileData(relativePath, {
             infoProcessedAt,
           });

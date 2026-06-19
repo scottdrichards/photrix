@@ -1,4 +1,7 @@
 import type { BackgroundTaskStatus } from "../../../shared/filter-contract/src/index.ts";
+import { getLogger } from "../observability/logger.ts";
+
+const log = getLogger("TaskOrchestrator");
 
 export type QueueType = "blocking" | "implied" | "background";
 type Resources = "gpu" | "cpu" | "disk" | "network";
@@ -91,7 +94,7 @@ const checkInResources = (
 };
 
 const logTaskEvent = (event: string, queue: QueueType, name: string) => {
-  console.log(`[TaskOrchestrator] ${event} (${queue}): ${name}`);
+  log.info({ queue, task: name }, event);
 };
 
 const normalizeProgressValue = (value: number | undefined) => {
@@ -240,10 +243,7 @@ export const createTaskOrchestrator = (): TaskOrchestrator => {
       runner
         .onComplete()
         .catch((err) => {
-          console.error(
-            "Error processing task. Tasks should handle their own errors.",
-            err,
-          );
+          log.error({ err, task: nextTask.name, queue }, "Task failed");
         })
         .finally(() => {
           checkInResources(resourcesInUse, requirements);
@@ -258,9 +258,7 @@ export const createTaskOrchestrator = (): TaskOrchestrator => {
   return {
     setPerformBackgroundTasks: (enabled: boolean) => {
       processBackgroundTasks = enabled;
-      console.log(
-        `[TaskOrchestrator] Background tasks ${enabled ? "enabled" : "paused"}`,
-      );
+      log.info(`Background tasks ${enabled ? "enabled" : "paused"}`);
       if (enabled) {
         wakeUp?.();
       }

@@ -1,9 +1,12 @@
 import path from "node:path";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { getExifMetadataFromFile } from "../fileHandling/fileUtils.ts";
+import { getLogger } from "../observability/logger.ts";
 import { batch } from "../utils.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
+
+const log = getLogger("processExifMetadata");
 
 const dbBatchSize = 200;
 const parallelism = 4;
@@ -72,7 +75,8 @@ export const processExifMetadata = (database: IndexDatabase): TaskRunner => {
                   now,
                 );
               }
-            } catch {
+            } catch (err) {
+              log.warn({ err, path: relativePath }, "EXIF extraction failed");
               const errorDate = new Date();
               await database.addOrUpdateFileData(entry.relativePath, {
                 exifProcessedAt: errorDate.toISOString(),

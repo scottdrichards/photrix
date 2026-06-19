@@ -1,11 +1,13 @@
 import "dotenv/config";
 import { initializeCacheDirectories } from "./common/cacheUtils.ts";
+import { logger } from "./observability/logger.ts";
 
 process.on("unhandledRejection", (reason) => {
-  console.error("[unhandledRejection]", reason);
+  logger.error({ reason }, "Unhandled promise rejection");
 });
 process.on("uncaughtException", (error) => {
-  console.error("[uncaughtException]", error);
+  logger.fatal({ err: error }, "Uncaught exception — shutting down");
+  process.exit(1);
 });
 import { createServer } from "./createServer.ts";
 import { detectFacesWithInsightFace } from "./faceDetection/insightFaceDetector.ts";
@@ -77,6 +79,8 @@ const startServer = async () => {
   createServer(database, mediaRoot, {
     taskOrchestrator,
   });
+
+  logger.info({ mediaRoot, port: process.env.PORT ?? 3000 }, "Server started");
 };
 
 await startTelemetry();
