@@ -5,6 +5,7 @@ import { getLogger } from "../observability/logger.ts";
 import { FileInfo } from "./fileRecord.type.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
+import { createTaskController } from "../taskOrchestrator/taskController.ts";
 
 const log = getLogger("processFileInfo");
 
@@ -17,48 +18,24 @@ const getFileInfoMetadata = async (fullPath: string): Promise<FileInfo> =>
     modified: new Date(stats.mtimeMs),
   }));
 
-/**
- * Processes pending file metadata updates (size, created, modified) with pause/resume/cancel controls.
- */
 export const processFileInfoMetadata = (database: IndexDatabase): TaskRunner => {
-  let state: "running" | "paused" | "cancelled" | "complete" = "running";
-  let resumeSignal: (() => void) | null = null;
+  const ctrl = createTaskController("File metadata processing cancelled");
 
-  const cancelledError = new Error("File metadata processing cancelled");
-
-  const waitUntilResumed = async () => {
-    if (state !== "paused") {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      resumeSignal = resolve;
-    });
-  };
-
-  const exec = async () => {
+  const completion = (async () => {
     while (true) {
-      if (state === "cancelled") {
-        throw cancelledError;
-      }
+      ctrl.checkCancelled();
 
       const items = await database.getFilesNeedingMetadataUpdate("info", batchSize);
 
       if (items.length === 0) {
-        state = "complete";
+        ctrl.markComplete();
         return;
       }
 
       for (const entry of items) {
-        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-        if (state === "cancelled") {
-          throw cancelledError;
-        }
-
-        await waitUntilResumed();
-        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-        if (state === "cancelled") {
-          throw cancelledError;
-        }
+        ctrl.checkCancelled();
+        await ctrl.waitUntilResumed();
+        ctrl.checkCancelled();
 
         const { relativePath } = entry;
         const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
@@ -87,35 +64,18 @@ export const processFileInfoMetadata = (database: IndexDatabase): TaskRunner => 
         }
       }
     }
-  };
-
-  const completion = exec();
+  })();
 
   return {
-    pause: () => {
-      if (state === "running") {
-        state = "paused";
-      }
-    },
-    resume: () => {
-      if (state === "paused") {
-        state = "running";
-      }
-      resumeSignal?.();
-      resumeSignal = null;
-      return Promise.resolve();
-    },
-    cancel: () => {
-      state = "cancelled";
-      resumeSignal?.();
-      resumeSignal = null;
-    },
+    pause: ctrl.pause,
+    resume: ctrl.resume,
+    cancel: ctrl.cancel,
     getStatus: async () => {
       const counts = await database.getStatusCounts();
       const totalEligible = counts.allEntries;
       const done = Math.max(0, totalEligible - counts.missingFileMetadata);
       return {
-        state,
+        state: ctrl.state,
         itemsProcessed: done,
         total: totalEligible,
         portionComplete: totalEligible > 0 ? done / totalEligible : undefined,

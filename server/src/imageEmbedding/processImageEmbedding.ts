@@ -3,6 +3,7 @@ import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { batch } from "../utils.ts";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
+import { createTaskController } from "../taskOrchestrator/taskController.ts";
 
 const DB_BATCH_SIZE = 50;
 const PARALLELISM = 16;
@@ -11,35 +12,22 @@ export const processImageEmbedding = (
   database: IndexDatabase,
   embedImage: (imagePath: string) => Promise<Float32Array>,
 ): TaskRunner => {
-  let state: "running" | "paused" | "cancelled" | "complete" = "running";
-  let resumeSignal: (() => void) | null = null;
-
-  const cancelledError = new Error("Image embedding processing cancelled");
-
-  const waitUntilResumed = async () => {
-    if (state !== "paused") return;
-    await new Promise<void>((resolve) => {
-      resumeSignal = resolve;
-    });
-  };
+  const ctrl = createTaskController("Image embedding processing cancelled");
 
   const completion: Promise<void> = (async () => {
     while (true) {
-      // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-      if (state === "cancelled") throw cancelledError;
+      ctrl.checkCancelled();
 
       const items = await database.getFilesNeedingEmbedding(DB_BATCH_SIZE);
       if (!items.length) {
-        state = "complete";
+        ctrl.markComplete();
         return;
       }
 
       for (const chunk of batch(items, PARALLELISM)) {
-        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-        if (state === "cancelled") throw cancelledError;
-        await waitUntilResumed();
-        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-        if (state === "cancelled") throw cancelledError;
+        ctrl.checkCancelled();
+        await ctrl.waitUntilResumed();
+        ctrl.checkCancelled();
 
         await Promise.all(
           chunk.map(async ({ relativePath }) => {
@@ -62,24 +50,13 @@ export const processImageEmbedding = (
   })();
 
   return {
-    pause: () => {
-      if (state === "running") state = "paused";
-    },
-    resume: () => {
-      if (state === "paused") state = "running";
-      resumeSignal?.();
-      resumeSignal = null;
-      return Promise.resolve();
-    },
-    cancel: () => {
-      state = "cancelled";
-      resumeSignal?.();
-      resumeSignal = null;
-    },
+    pause: ctrl.pause,
+    resume: ctrl.resume,
+    cancel: ctrl.cancel,
     getStatus: async () => {
       const [total, done] = await database.getEmbeddingProgress();
       return {
-        state,
+        state: ctrl.state,
         itemsProcessed: done,
         total,
         portionComplete: total > 0 ? done / total : undefined,

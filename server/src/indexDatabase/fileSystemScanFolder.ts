@@ -3,10 +3,8 @@ import { walkFiles } from "../fileHandling/fileUtils.ts";
 import { batch } from "../utils.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
+import { createTaskController } from "../taskOrchestrator/taskController.ts";
 
-/**
- * Does an entire scan of the files in the database's storage path and adds them to the database.
- */
 export const fileSystemScanFolder = (
   database: IndexDatabase,
   subFolder?: string,
@@ -17,32 +15,13 @@ export const fileSystemScanFolder = (
   let scannedFilesCount = 0;
   let currentItem = "";
 
-  let state: "running" | "paused" | "cancelled" | "complete" = "running";
-  let resumeSignal: (() => void) | null = null;
-
-  const cancelledError = new Error("File system scan cancelled");
-
-  const waitUntilResumed = async () => {
-    if (state !== "paused") {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      resumeSignal = resolve;
-    });
-  };
+  const ctrl = createTaskController("File system scan cancelled");
 
   const completion: Promise<void> = (async () => {
     for (const absolutePathsBatch of batch(walkFiles(base), batchSize)) {
-      // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-      if (state === "cancelled") {
-        throw cancelledError;
-      }
-
-      await waitUntilResumed();
-      // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-      if (state === "cancelled") {
-        throw cancelledError;
-      }
+      ctrl.checkCancelled();
+      await ctrl.waitUntilResumed();
+      ctrl.checkCancelled();
 
       const relativePathsBatch = absolutePathsBatch.map((absolutePath) =>
         path.relative(database.storagePath, absolutePath),
@@ -52,37 +31,16 @@ export const fileSystemScanFolder = (
       currentItem = relativePathsBatch[relativePathsBatch.length - 1] ?? currentItem;
     }
 
-    // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-    if (state !== "cancelled") {
-      state = "complete";
-      return;
-    }
-
-    throw cancelledError;
+    ctrl.markComplete();
   })();
 
   return {
-    pause: () => {
-      if (state === "running") {
-        state = "paused";
-      }
-    },
-    resume: () => {
-      if (state === "paused") {
-        state = "running";
-      }
-      resumeSignal?.();
-      resumeSignal = null;
-      return Promise.resolve();
-    },
-    cancel: () => {
-      state = "cancelled";
-      resumeSignal?.();
-      resumeSignal = null;
-    },
+    pause: ctrl.pause,
+    resume: ctrl.resume,
+    cancel: ctrl.cancel,
     getStatus: () =>
       Promise.resolve({
-        state,
+        state: ctrl.state,
         itemsProcessed: scannedFilesCount,
         description: currentItem || undefined,
       }),

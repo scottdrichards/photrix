@@ -5,54 +5,30 @@ import { getLogger } from "../observability/logger.ts";
 import { batch } from "../utils.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
+import { createTaskController } from "../taskOrchestrator/taskController.ts";
 
 const log = getLogger("processExifMetadata");
 
 const dbBatchSize = 200;
 const parallelism = 4;
 
-/**
- * Processes pending EXIF metadata updates with pause/resume/cancel controls.
- */
 export const processExifMetadata = (database: IndexDatabase): TaskRunner => {
-  let state: "running" | "paused" | "cancelled" | "complete" = "running";
-  let resumeSignal: (() => void) | null = null;
-
-  const cancelledError = new Error("EXIF metadata processing cancelled");
-
-  const waitUntilResumed = async () => {
-    if (state !== "paused") {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      resumeSignal = resolve;
-    });
-  };
+  const ctrl = createTaskController("EXIF metadata processing cancelled");
 
   const completion: Promise<void> = (async () => {
     while (true) {
-      // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-      if (state === "cancelled") {
-        throw cancelledError;
-      }
+      ctrl.checkCancelled();
 
       const items = await database.getFilesNeedingMetadataUpdate("exif", dbBatchSize);
       if (!items.length) {
-        state = "complete";
+        ctrl.markComplete();
         return;
       }
 
       for (const chunk of batch(items, parallelism)) {
-        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-        if (state === "cancelled") {
-          throw cancelledError;
-        }
-
-        await waitUntilResumed();
-        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-        if (state === "cancelled") {
-          throw cancelledError;
-        }
+        ctrl.checkCancelled();
+        await ctrl.waitUntilResumed();
+        ctrl.checkCancelled();
 
         await Promise.all(
           chunk.map(async (entry) => {
@@ -89,30 +65,15 @@ export const processExifMetadata = (database: IndexDatabase): TaskRunner => {
   })();
 
   return {
-    pause: () => {
-      if (state === "running") {
-        state = "paused";
-      }
-    },
-    resume: () => {
-      if (state === "paused") {
-        state = "running";
-      }
-      resumeSignal?.();
-      resumeSignal = null;
-      return Promise.resolve();
-    },
-    cancel: () => {
-      state = "cancelled";
-      resumeSignal?.();
-      resumeSignal = null;
-    },
+    pause: ctrl.pause,
+    resume: ctrl.resume,
+    cancel: ctrl.cancel,
     getStatus: async () => {
       const counts = await database.getStatusCounts();
       const totalEligible = counts.imageEntries + counts.videoEntries;
       const done = Math.max(0, totalEligible - counts.missingMediaMetadata);
       return {
-        state,
+        state: ctrl.state,
         itemsProcessed: done,
         total: totalEligible,
         portionComplete: totalEligible > 0 ? done / totalEligible : undefined,

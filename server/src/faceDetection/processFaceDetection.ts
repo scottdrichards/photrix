@@ -3,6 +3,7 @@ import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { batch } from "../utils.ts";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
+import { createTaskController } from "../taskOrchestrator/taskController.ts";
 import type { DetectFaces, DetectedFace } from "./faceDetector.type.ts";
 
 const dbBatchSize = 50;
@@ -37,47 +38,25 @@ export const processFaceDetection = (
   database: IndexDatabase,
   detectFaces: DetectFaces,
 ): TaskRunner => {
-  let state: "running" | "paused" | "cancelled" | "complete" = "running";
-  let resumeSignal: (() => void) | null = null;
-
-  const cancelledError = new Error("Face detection processing cancelled");
-
-  const waitUntilResumed = async () => {
-    if (state !== "paused") {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      resumeSignal = resolve;
-    });
-  };
+  const ctrl = createTaskController("Face detection processing cancelled");
 
   const completion: Promise<void> = (async () => {
     // The detect function lazy-loads models + the tfjs backend on first call
     // (cached via a module-scope promise), so the first file in the first
     // batch pays the warmup cost. No explicit warmup step is needed.
     while (true) {
-      // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-      if (state === "cancelled") {
-        throw cancelledError;
-      }
+      ctrl.checkCancelled();
 
       const items = await database.getFilesNeedingMetadataUpdate("faces", dbBatchSize);
       if (!items.length) {
-        state = "complete";
+        ctrl.markComplete();
         return;
       }
 
       for (const chunk of batch(items, parallelism)) {
-        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-        if (state === "cancelled") {
-          throw cancelledError;
-        }
-
-        await waitUntilResumed();
-        // @ts-expect-error - false positive type narrowing with mutable captured variable in async context
-        if (state === "cancelled") {
-          throw cancelledError;
-        }
+        ctrl.checkCancelled();
+        await ctrl.waitUntilResumed();
+        ctrl.checkCancelled();
 
         await Promise.all(
           chunk.map(async (entry) => {
@@ -106,30 +85,15 @@ export const processFaceDetection = (
   })();
 
   return {
-    pause: () => {
-      if (state === "running") {
-        state = "paused";
-      }
-    },
-    resume: () => {
-      if (state === "paused") {
-        state = "running";
-      }
-      resumeSignal?.();
-      resumeSignal = null;
-      return Promise.resolve();
-    },
-    cancel: () => {
-      state = "cancelled";
-      resumeSignal?.();
-      resumeSignal = null;
-    },
+    pause: ctrl.pause,
+    resume: ctrl.resume,
+    cancel: ctrl.cancel,
     getStatus: async () => {
       const counts = await database.getStatusCounts();
       const totalEligible = counts.imageEntries;
       const done = Math.max(0, totalEligible - counts.missingFaceDetection);
       return {
-        state,
+        state: ctrl.state,
         itemsProcessed: done,
         total: totalEligible,
         portionComplete: totalEligible > 0 ? done / totalEligible : undefined,
