@@ -16,8 +16,18 @@ import {
 } from "./observability/requestTrace.ts";
 import type { TaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import { writeJson } from "./utils.ts";
+import { getLogger } from "./observability/logger.ts";
+
+const log = getLogger("httpServer");
 
 const PORT = process.env.PORT || 3000;
+
+// Bound how long a single connection may stay idle/slow so hung or malicious
+// clients can't accumulate and exhaust sockets. The status SSE stream sends data
+// well within these windows, so long-lived streams are unaffected.
+const REQUEST_TIMEOUT_MS = 5 * 60_000;
+const HEADERS_TIMEOUT_MS = 60_000;
+const KEEP_ALIVE_TIMEOUT_MS = 65_000;
 
 type ServerOptions = {
   taskOrchestrator: TaskOrchestrator;
@@ -75,6 +85,18 @@ export const createServer = (
           if (!req.url) {
             writeJson(res, 400, { error: "Bad request" });
             return;
+          }
+
+          // Let the orchestrator back background work off while a real user
+          // request is in flight, freeing disk/CPU for it. Exclude polling and
+          // health endpoints (especially the long-lived status stream) so
+          // routine status checks don't keep the backlog permanently paused.
+          if (
+            !req.url.startsWith("/api/status") &&
+            !req.url.startsWith("/api/health") &&
+            !req.url.startsWith("/api/network-probe")
+          ) {
+            taskOrchestrator.noteUserActivity();
           }
 
           if (req.url === "/api/health" && req.method === "GET") {
@@ -186,6 +208,18 @@ export const createServer = (
     );
   });
 
-  server.listen(PORT);
+  // Surface listener-level failures (e.g. EADDRINUSE) instead of letting them
+  // bubble up as an uncaught exception that takes the process down silently.
+  server.on("error", (error) => {
+    log.error({ err: error }, "HTTP server error");
+  });
+
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+
+  server.listen(PORT, () => {
+    log.info({ port: PORT }, "HTTP server listening");
+  });
   return server;
 };

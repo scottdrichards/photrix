@@ -60,7 +60,7 @@ const renderGrid = () =>
   render(
     <FilterProvider>
       <SelectionProvider>
-        <ThumbnailGrid />
+        <ThumbnailGrid view="library" onViewChange={() => {}} />
       </SelectionProvider>
     </FilterProvider>,
   );

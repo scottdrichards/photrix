@@ -491,4 +491,71 @@ describe("IndexDatabase", () => {
       });
     });
   });
+
+  describe("semanticSearch", () => {
+    const addImageWithEmbedding = async (
+      db: IndexDatabase,
+      relativePath: string,
+      embedding: number[],
+    ) => {
+      await db.addFile(createRecord(relativePath, { mimeType: "image/jpeg" }));
+      await db.saveImageEmbedding(relativePath, Float32Array.from(embedding));
+    };
+
+    it("ranks images by cosine similarity to the query vector", async () => {
+      await withTempDb(async (db) => {
+        // Distinct unit-ish vectors so the ordering is unambiguous.
+        await addImageWithEmbedding(db, "match.jpg", [1, 0, 0, 0]);
+        await addImageWithEmbedding(db, "partial.jpg", [0.7071, 0.7071, 0, 0]);
+        await addImageWithEmbedding(db, "orthogonal.jpg", [0, 1, 0, 0]);
+
+        const results = await db.semanticSearch(
+          Float32Array.from([1, 0, 0, 0]),
+          {},
+          10,
+        );
+
+        expect(results.map((r) => r.fileName)).toEqual([
+          "match.jpg",
+          "partial.jpg",
+          "orthogonal.jpg",
+        ]);
+        expect(results[0]?.similarity).toBeCloseTo(1, 5);
+        expect(results[1]?.similarity).toBeCloseTo(0.7071, 3);
+        expect(results[2]?.similarity).toBeCloseTo(0, 5);
+      });
+    });
+
+    it("caps results at the requested limit", async () => {
+      await withTempDb(async (db) => {
+        await addImageWithEmbedding(db, "a.jpg", [1, 0, 0, 0]);
+        await addImageWithEmbedding(db, "b.jpg", [0.9, 0.1, 0, 0]);
+        await addImageWithEmbedding(db, "c.jpg", [0.8, 0.2, 0, 0]);
+
+        const results = await db.semanticSearch(
+          Float32Array.from([1, 0, 0, 0]),
+          {},
+          2,
+        );
+
+        expect(results).toHaveLength(2);
+        expect(results[0]?.fileName).toBe("a.jpg");
+      });
+    });
+
+    it("ignores images without an embedding", async () => {
+      await withTempDb(async (db) => {
+        await addImageWithEmbedding(db, "embedded.jpg", [1, 0, 0, 0]);
+        await db.addFile(createRecord("plain.jpg", { mimeType: "image/jpeg" }));
+
+        const results = await db.semanticSearch(
+          Float32Array.from([1, 0, 0, 0]),
+          {},
+          10,
+        );
+
+        expect(results.map((r) => r.fileName)).toEqual(["embedded.jpg"]);
+      });
+    });
+  });
 });

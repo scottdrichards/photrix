@@ -1,12 +1,21 @@
 import { createHash } from "crypto";
+import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
+import { tmpdir } from "os";
 import { basename, dirname, extname, join, parse, resolve } from "path";
 
 export const CACHE_DIR = process.env.CACHE_DIR || join(process.cwd(), ".cache");
 export const MEDIA_CACHE_DIR = join(CACHE_DIR, "media");
 
-export const initializeCacheDirectories = async () => 
-  Promise.all([CACHE_DIR, MEDIA_CACHE_DIR]
+// HLS output is ephemeral (regenerated on demand, deleted shortly after playback)
+// so it lives on a RAM-backed filesystem and never touches persistent disk.
+// Defaults to tmpfs (/dev/shm on Linux); override with HLS_CACHE_DIR.
+export const HLS_CACHE_DIR =
+  process.env.HLS_CACHE_DIR ||
+  join(existsSync("/dev/shm") ? "/dev/shm" : tmpdir(), "photrix-hls");
+
+export const initializeCacheDirectories = async () =>
+  Promise.all([CACHE_DIR, MEDIA_CACHE_DIR, HLS_CACHE_DIR]
     .map(dir => mkdir(dir, { recursive: true })));
 
 export const getHash = (filePath: string, modifiedTimeMs: number): string => {
@@ -60,4 +69,14 @@ export const getMirroredCachedFilePath = (
 export const getMirroredHLSDirectory = (
   filePath: string,
   ...subdirectories: string[]
-): string => join(getMirroredCacheBaseDirectory(filePath), "hls", ...subdirectories);
+): string => {
+  const { rootKey, relativeDirectory, sourceName } = getMirroredSourceParts(filePath);
+  return join(
+    HLS_CACHE_DIR,
+    rootKey,
+    relativeDirectory,
+    sourceName,
+    "hls",
+    ...subdirectories,
+  );
+};

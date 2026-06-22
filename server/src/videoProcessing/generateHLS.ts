@@ -22,14 +22,13 @@ export const getHLSSegmentPath = (hlsDir: string, segmentName: string): string =
 const generateHLSWithFFMPEG = (
   args: string[],
   hlsDir: string,
-  logPrefix: string,
 ): Promise<void> =>
   new Promise<void>((resolve, reject) => {
     const process = spawn("ffmpeg", args);
 
     let stderr = "";
 
-    pipeChildProcessLogs(process, logPrefix, (chunk) => {
+    pipeChildProcessLogs(process, (chunk) => {
       stderr = appendWithLimit(stderr, chunk);
     });
 
@@ -52,9 +51,8 @@ const generateHLSWithFFMPEG = (
 export const generateHLS = async (
   filePath: string,
   height: StandardHeight = "original",
-  opts?: { priority?: ConversionPriority; contentDurationSeconds?: number },
+  _opts?: { priority?: ConversionPriority; contentDurationSeconds?: number },
 ): Promise<string> => {
-  void opts;
   await stat(filePath);
   const { exists, playlistPath, hlsDir } = await getHLSInfo(filePath, height);
 
@@ -107,7 +105,7 @@ export const generateHLS = async (
       maxBitrate,
       ...outputArgs,
     ];
-    await (() => generateHLSWithFFMPEG(hwArgs, hlsDir, gpu.vendor))();
+    await generateHLSWithFFMPEG(hwArgs, hlsDir);
   } else {
     const softwareArgs = [
       ...inputArgs,
@@ -121,7 +119,7 @@ export const generateHLS = async (
       "yuv420p",
       ...outputArgs,
     ];
-    await (() => generateHLSWithFFMPEG(softwareArgs, hlsDir, "software"))();
+    await generateHLSWithFFMPEG(softwareArgs, hlsDir);
   }
 
   return playlistPath;

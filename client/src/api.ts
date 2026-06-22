@@ -7,7 +7,7 @@ import type {
   RatingFilter,
   ServerStatus as SharedServerStatus,
 } from "../../shared/filter-contract/src";
-export type { DateRangeFilter, GeoBounds };
+export type { BackgroundTaskStatus, DateRangeFilter, GeoBounds };
 
 export interface ApiPhotoItem {
   folder: string;

@@ -68,7 +68,7 @@ export const queryHandler = async (
   };
 
   if (aggregate === "dateRange") {
-    const { minDate, maxDate } = await (() => database.getDateRange(filter))();
+    const { minDate, maxDate } = await database.getDateRange(filter);
     writeJson(res, 200, {
       minDate: minDate ? minDate.getTime() : null,
       maxDate: maxDate ? maxDate.getTime() : null,
@@ -77,16 +77,13 @@ export const queryHandler = async (
   }
 
   if (aggregate === "dateHistogram") {
-    const histogram = await (() => database.getDateHistogram(filter))();
+    const histogram = await database.getDateHistogram(filter);
     writeJson(res, 200, histogram);
     return;
   }
 
   if (aggregate === "people") {
-    const people = await (() =>
-      database.queryFaceClusters({
-        filter,
-      }))();
+    const people = await database.queryFaceClusters({ filter });
     writeJson(res, 200, people);
     return;
   }
@@ -97,11 +94,7 @@ export const queryHandler = async (
       writeJson(res, 400, { error: "Missing clusterId parameter" });
       return;
     }
-    const detail = await (() =>
-      database.getFaceClusterDetail({
-        filter,
-        clusterId,
-      }))();
+    const detail = await database.getFaceClusterDetail({ filter, clusterId });
     writeJson(res, 200, detail);
     return;
   }
@@ -122,17 +115,16 @@ export const queryHandler = async (
           south: Number.parseFloat(southParam ?? ""),
         }
       : null;
-    const { clusters, total } = await (() =>
-      database.queryGeoClusters({
-        filter,
-        clusterSize,
-        bounds,
-      }))();
+    const { clusters, total } = await database.queryGeoClusters({
+      filter,
+      clusterSize,
+      bounds,
+    });
     writeJson(res, 200, { clusters, total });
     return;
   }
 
-  const result = await (() => database.queryFiles(queryOptions))();
+  const result = await database.queryFiles(queryOptions);
 
   const responseBody = countOnly ? { count: result.total } : result;
   try {

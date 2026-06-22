@@ -3,7 +3,21 @@ import { mkdir, stat, writeFile, access } from "fs/promises";
 import { join } from "path";
 import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
+import { existsSync } from "fs";
 import { getGpuAcceleration, type GpuAcceleration } from "./gpuAcceleration.ts";
+import { HLS_SEGMENT_SECONDS } from "./buildHlsPlaylist.ts";
+import { getLogger } from "../observability/logger.ts";
+
+const log = getLogger("HLS");
+
+/** Output frame rate for all variants. */
+const HLS_FPS = 30;
+/**
+ * Keyframe interval in frames. Derived so a keyframe lands on every segment
+ * boundary (`-g` = fps × segment seconds), which lets the HLS muxer cut clean
+ * fixed-length segments that match the synthetic VOD playlist's segment count.
+ */
+const HLS_GOP = HLS_FPS * HLS_SEGMENT_SECONDS;
 
 /** HLS quality variants: 360p fast-start, 720p standard, 1080p quality, 2160p 4K — all at 30fps */
 const HLS_VARIANTS = [
@@ -24,8 +38,6 @@ const HLS_VARIANTS = [
     audioBitrate: "192k",
   },
 ] as const;
-
-const isVerboseHlsLoggingEnabled = () => process.env.HLS_ENCODE_VERBOSE === "1";
 
 /** Path to the completion marker written after all FFmpeg variants finish. */
 const getCompleteMarkerPath = (hlsDir: string): string => join(hlsDir, ".complete");
@@ -75,9 +87,6 @@ export const multibitrateHLSComplete = async (hlsDir: string): Promise<boolean> 
     () => false,
   );
 
-/** @deprecated use multibitrateHLSComplete */
-export const multibitrateHLSExists = multibitrateHLSComplete;
-
 /**
  * Get HLS info for a video file.
  */
@@ -90,8 +99,6 @@ export const getMultibitrateHLSInfo = async (
   initialized: boolean;
   /** All variants have finished encoding (.complete marker exists). */
   complete: boolean;
-  /** @deprecated use complete */
-  exists: boolean;
 }> => {
   await stat(filePath);
   const hlsDir = getMultibitrateHLSDirectory(filePath);
@@ -100,13 +107,7 @@ export const getMultibitrateHLSInfo = async (
     multibitrateHLSInitialized(hlsDir),
     multibitrateHLSComplete(hlsDir),
   ]);
-  return {
-    hlsDir,
-    masterPlaylistPath,
-    initialized,
-    complete,
-    exists: complete,
-  };
+  return { hlsDir, masterPlaylistPath, initialized, complete };
 };
 
 /**
@@ -118,18 +119,27 @@ const generateAllVariants = (
   filePath: string,
   hlsDir: string,
   gpu: GpuAcceleration | null,
+  onSpawn?: (child: ReturnType<typeof spawn>) => void,
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
     const n = HLS_VARIANTS.length;
+    // Keep the whole pipeline on the GPU for NVIDIA: decode to CUDA frames,
+    // scale with scale_cuda, and feed NVENC directly — no per-frame GPU↔CPU
+    // copies. AMD/software stay on the CPU scaler. Output frame rate is forced
+    // per-output with `-r` (below) rather than an `fps` filter, since the CPU
+    // `fps` filter can't run on GPU-resident CUDA frames.
+    const useCuda = gpu?.vendor === "nvidia";
+    const scaleFilter = useCuda ? "scale_cuda" : "scale";
     const splitOutputs = HLS_VARIANTS.map((_, i) => `[vin${i}]`).join("");
     const filterComplex = [
-      `[0:v]fps=30,split=${n}${splitOutputs}`,
-      ...HLS_VARIANTS.map((v, i) => `[vin${i}]scale=-2:${v.height}[vout${i}]`),
+      `[0:v]split=${n}${splitOutputs}`,
+      ...HLS_VARIANTS.map((v, i) => `[vin${i}]${scaleFilter}=-2:${v.height}[vout${i}]`),
     ].join(";");
 
     const args: string[] = [
       "-y",
       ...(gpu ? gpu.hwaccelArgs : []),
+      ...(useCuda ? ["-hwaccel_output_format", "cuda"] : []),
       "-i",
       filePath,
       "-filter_complex",
@@ -144,6 +154,8 @@ const generateAllVariants = (
         `[vout${i}]`,
         "-map",
         "0:a?",
+        "-r",
+        String(HLS_FPS),
         "-c:v",
         gpu ? gpu.h264Codec : "libx264",
         ...(gpu ? gpu.vbrArgs(28) : ["-preset", "veryfast", "-crf", "28"]),
@@ -154,7 +166,7 @@ const generateAllVariants = (
         "-bufsize",
         variant.bufsize,
         "-g",
-        "60",
+        String(HLS_GOP),
         "-c:a",
         "aac",
         "-b:a",
@@ -162,7 +174,7 @@ const generateAllVariants = (
         "-f",
         "hls",
         "-hls_time",
-        "2",
+        String(HLS_SEGMENT_SECONDS),
         "-hls_list_size",
         "0",
         "-hls_segment_type",
@@ -177,32 +189,60 @@ const generateAllVariants = (
       );
     }
 
-    const encoderLabel = gpu ? gpu.label : "software";
-    if (isVerboseHlsLoggingEnabled()) {
-    }
+    const spawnedAt = Date.now();
     const process = spawn("ffmpeg", args);
+    onSpawn?.(process);
+
+    log.info(
+      { hlsDir, encoder: gpu ? gpu.label : "software (libx264)", gpuResident: useCuda },
+      "HLS encode spawned",
+    );
+
+    // Time-to-first-segment: the user-perceived startup latency. Playback can't
+    // begin until the first segment of the smallest variant is flushed. This
+    // includes ffmpeg launch + (for GPU) NVENC/CUDA context init + encoding the
+    // first segment, so it isolates fixed startup cost from total encode time.
+    // Polled (not fs.watch) so it owns no event-loop handles to leak; unref'd and
+    // cleared on close so it never keeps the process alive.
+    const firstVariant = HLS_VARIANTS[0];
+    const firstSegment = getVariantSegmentPath(hlsDir, firstVariant.height, "segment_000.ts");
+    const firstSegmentPoll = setInterval(() => {
+      if (!existsSync(firstSegment)) return;
+      clearInterval(firstSegmentPoll);
+      log.info(
+        { hlsDir, variant: `${firstVariant.height}p`, ms: Date.now() - spawnedAt },
+        "HLS first segment ready",
+      );
+    }, 100);
+    firstSegmentPoll.unref?.();
 
     let stderr = "";
-    pipeChildProcessLogs(process, "hls-abr", (chunk) => {
+    pipeChildProcessLogs(process, (chunk) => {
       stderr = appendWithLimit(stderr, chunk);
     });
 
     process.on("close", (code) => {
+      clearInterval(firstSegmentPoll);
       if (code === 0) {
-        if (isVerboseHlsLoggingEnabled()) {
-        }
+        log.info(
+          { hlsDir, ms: Date.now() - spawnedAt },
+          "HLS encode complete (all variants)",
+        );
         resolve();
         return;
       }
 
       if (gpu && gpu.isHardwareFailure(stderr)) {
-        generateAllVariants(filePath, hlsDir, null).then(resolve).catch(reject);
+        generateAllVariants(filePath, hlsDir, null, onSpawn).then(resolve).catch(reject);
         return;
       }
       reject(new Error("HLS ABR generation failed"));
     });
 
-    process.on("error", reject);
+    process.on("error", (err) => {
+      clearInterval(firstSegmentPoll);
+      reject(err);
+    });
   });
 };
 
@@ -234,8 +274,6 @@ const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
 
   const masterPath = join(hlsDir, "master.m3u8");
   await writeFile(masterPath, lines.join("\n"), "utf-8");
-  if (isVerboseHlsLoggingEnabled()) {
-  }
 };
 
 /**
@@ -276,7 +314,10 @@ export const prepareMultibitrateHLSStructure = async (
  *
  * Returns the path to the master playlist.
  */
-export const generateMultibitrateHLS = async (filePath: string): Promise<string> => {
+export const generateMultibitrateHLS = async (
+  filePath: string,
+  opts?: { onSpawn?: (child: ReturnType<typeof spawn>) => void },
+): Promise<string> => {
   await stat(filePath);
   const hlsDir = getMultibitrateHLSDirectory(filePath);
   const masterPath = getMasterPlaylistPath(hlsDir);
@@ -290,21 +331,13 @@ export const generateMultibitrateHLS = async (filePath: string): Promise<string>
   // Ensure directory structure and master playlist exist before FFmpeg starts
   await prepareMultibitrateHLSStructure(filePath);
 
-  if (isVerboseHlsLoggingEnabled()) {
-  }
-  const startTime = Date.now();
-
   const gpu = await getGpuAcceleration();
 
   // Encode all variants in one FFmpeg process
-  await (() => generateAllVariants(filePath, hlsDir, gpu))();
+  await generateAllVariants(filePath, hlsDir, gpu, opts?.onSpawn);
 
   // Write the completion marker so future requests can skip encoding
   await writeFile(getCompleteMarkerPath(hlsDir), "", "utf-8");
-
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  if (isVerboseHlsLoggingEnabled()) {
-  }
 
   return masterPath;
 };

@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { access, mkdir, stat } from "fs/promises";
 import { dirname } from "path";
 import { StandardHeight } from "../common/standardHeights.ts";
-import { CACHE_DIR, getMirroredCachedFilePath } from "../common/cacheUtils.ts";
+import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
 import { getGpuAcceleration } from "./gpuAcceleration.ts";
 
@@ -20,16 +20,12 @@ export const appendWithLimit = (current: string, chunk: string): string => {
 
 export const pipeChildProcessLogs = (
   child: ReturnType<typeof spawn>,
-  _label: string,
   onCapturedStderr: (chunk: string) => void,
 ) => {
-  child.stdout?.on("data", () => {
-    // logging disabled
-  });
+  child.stdout?.on("data", () => {});
 
   child.stderr?.on("data", (data) => {
-    const text = data.toString();
-    onCapturedStderr(text);
+    onCapturedStderr(data.toString());
   });
 };
 
@@ -38,9 +34,8 @@ export const generateVideoPreview = async (
   filePath: string,
   height: StandardHeight = 320,
   durationMS: number = 5_000,
-  opts?: { priority?: ConversionPriority },
+  _opts?: { priority?: ConversionPriority },
 ): Promise<string> => {
-  void opts;
   await stat(filePath);
   const durationSeconds = Math.round(durationMS / 1000);
   const cachedPath = getMirroredCachedFilePath(
@@ -59,56 +54,50 @@ export const generateVideoPreview = async (
   }
   await mkdir(dirname(cachedPath), { recursive: true });
   const gpu = await getGpuAcceleration();
-  await (() =>
-    new Promise<void>((resolve, reject) => {
-      const args = [
-        "-y",
-        ...(gpu ? gpu.hwaccelArgs : []),
-        "-ss",
-        "00:00:00",
-        "-i",
-        filePath,
-        "-t",
-        `${durationMS / 1000}`,
-        "-vf",
-        `scale=-2:${height === "original" ? -1 : height}`,
-        "-c:v",
-        gpu ? gpu.h264Codec : "libx264",
-        ...(gpu ? gpu.cqArgs(23) : ["-preset", "fast", "-crf", "23"]),
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "96k",
-        "-movflags",
-        "+faststart",
-        cachedPath,
-      ];
+  await new Promise<void>((resolve, reject) => {
+    const args = [
+      "-y",
+      ...(gpu ? gpu.hwaccelArgs : []),
+      "-ss",
+      "00:00:00",
+      "-i",
+      filePath,
+      "-t",
+      `${durationMS / 1000}`,
+      "-vf",
+      `scale=-2:${height === "original" ? -1 : height}`,
+      "-c:v",
+      gpu ? gpu.h264Codec : "libx264",
+      ...(gpu ? gpu.cqArgs(23) : ["-preset", "fast", "-crf", "23"]),
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "96k",
+      "-movflags",
+      "+faststart",
+      cachedPath,
+    ];
 
-      console.log(`[VideoCache] ffmpeg (preview) args: ${JSON.stringify(args)}`);
-      const process = spawn("ffmpeg", args);
+    const process = spawn("ffmpeg", args);
 
-      let stderr = "";
+    let stderr = "";
 
-      pipeChildProcessLogs(process, "preview", (chunk) => {
-        stderr = appendWithLimit(stderr, chunk);
-      });
+    pipeChildProcessLogs(process, (chunk) => {
+      stderr = appendWithLimit(stderr, chunk);
+    });
 
-      process.on("close", (code) => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        console.error(`[VideoCache] FFmpeg failed: ${stderr}`);
-        reject(new Error(`Video preview generation failed: ${stderr}`));
-      });
+    process.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`Video preview generation failed: ${stderr}`));
+    });
 
-      process.on("error", (err) => {
-        console.error(`[VideoCache] Failed to start ffmpeg process: ${err.message}`);
-        reject(err);
-      });
-    }))();
+    process.on("error", reject);
+  });
   return cachedPath;
 };
 
@@ -116,9 +105,8 @@ export const generateVideoPreview = async (
 export const generateVideoThumbnail = async (
   filePath: string,
   height: StandardHeight = 320,
-  opts?: { priority?: ConversionPriority },
+  _opts?: { priority?: ConversionPriority },
 ): Promise<string> => {
-  void opts;
   await stat(filePath);
   const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
 
@@ -155,7 +143,7 @@ export const generateVideoThumbnail = async (
 
       let stderr = "";
 
-      pipeChildProcessLogs(process, "thumbnail", (chunk) => {
+      pipeChildProcessLogs(process, (chunk) => {
         stderr = appendWithLimit(stderr, chunk);
       });
 
@@ -173,10 +161,7 @@ export const generateVideoThumbnail = async (
         reject(new Error(`Video thumbnail generation failed: ${stderr}`));
       });
 
-      process.on("error", (err) => {
-        console.error(`[VideoCache] Failed to start ffmpeg process: ${err.message}`);
-        reject(err);
-      });
+      process.on("error", reject);
     });
   };
 

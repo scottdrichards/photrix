@@ -60,6 +60,12 @@ export const tables = {
       { name: "imageEmbedding", type: "BLOB" },
       { name: "embeddingProcessedAt", type: "INTEGER", indexExpression: true },
       { name: "embeddingErrorAt", type: "INTEGER", indexExpression: true },
+      { name: "audioTranscript", type: "TEXT" },
+      { name: "audioTranscribedAt", type: "INTEGER", indexExpression: true },
+      { name: "audioTranscribeErrorAt", type: "INTEGER", indexExpression: true },
+      { name: "audioEmbedding", type: "BLOB" },
+      { name: "audioEmbeddingProcessedAt", type: "INTEGER", indexExpression: true },
+      { name: "audioEmbeddingErrorAt", type: "INTEGER", indexExpression: true },
     ],
     compositeIndexes: [
       {
@@ -103,6 +109,22 @@ export const tables = {
       { name: "embedding", type: "BLOB" },
       { name: "personId", type: "INTEGER", indexExpression: true },
       { name: "detectedAt", type: "INTEGER" },
+    ],
+    compositeIndexes: [
+      {
+        name: "by_file",
+        expression: "folder, fileName",
+      },
+    ],
+  },
+  audioSegments: {
+    columns: [
+      { name: "id", type: "INTEGER", isPrimaryKey: true },
+      { name: "folder", type: "TEXT" },
+      { name: "fileName", type: "TEXT" },
+      { name: "startTime", type: "REAL" },
+      { name: "endTime", type: "REAL" },
+      { name: "text", type: "TEXT" },
     ],
     compositeIndexes: [
       {

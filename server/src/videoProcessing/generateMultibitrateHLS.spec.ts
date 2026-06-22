@@ -20,6 +20,7 @@ afterEach(() => {
   jest.resetModules();
   jest.restoreAllMocks();
   delete process.env.CACHE_DIR;
+  delete process.env.HLS_CACHE_DIR;
   delete process.env.HLS_ENCODE_VERBOSE;
 });
 
@@ -27,6 +28,7 @@ describe("generateMultibitrateHLS", () => {
   it("returns existing master playlist without re-encoding when .complete marker exists", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-existing-"));
     process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -47,6 +49,7 @@ describe("generateMultibitrateHLS", () => {
   it("generates all 4 variants in a single FFmpeg process and writes .complete marker", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-success-"));
     process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -89,13 +92,17 @@ describe("generateMultibitrateHLS", () => {
     expect(spawnMock).toHaveBeenCalledTimes(2);
 
     const encodeArgs = spawnMock.mock.calls[1]?.[1] as string[];
-    // All 4 scale filters are in the single filter_complex argument
+    // GPU detection resolves to NVIDIA here, so the pipeline stays GPU-resident:
+    // CUDA decode output + scale_cuda for all 4 variants in one filter_complex.
+    expect(encodeArgs).toContain("-hwaccel_output_format");
     const filterComplex = encodeArgs[encodeArgs.indexOf("-filter_complex") + 1] ?? "";
-    expect(filterComplex).toContain("scale=-2:360");
-    expect(filterComplex).toContain("scale=-2:720");
-    expect(filterComplex).toContain("scale=-2:1080");
-    expect(filterComplex).toContain("scale=-2:2160");
-    expect(filterComplex).toContain("fps=30");
+    expect(filterComplex).toContain("scale_cuda=-2:360");
+    expect(filterComplex).toContain("scale_cuda=-2:720");
+    expect(filterComplex).toContain("scale_cuda=-2:1080");
+    expect(filterComplex).toContain("scale_cuda=-2:2160");
+    // Frame rate is forced per-output with -r (no CPU fps filter on CUDA frames).
+    expect(filterComplex).not.toContain("fps=30");
+    expect(encodeArgs).toContain("-r");
 
     // .complete marker should exist
     const completePath = path.join(hlsDir, ".complete");
@@ -105,6 +112,7 @@ describe("generateMultibitrateHLS", () => {
   it("falls back to software encoding when hardware encode fails", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-fallback-"));
     process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -150,6 +158,7 @@ describe("generateMultibitrateHLS", () => {
   it("rejects when ffmpeg fails without hardware fallback signal", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-fail-"));
     process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 

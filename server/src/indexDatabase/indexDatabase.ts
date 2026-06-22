@@ -22,6 +22,9 @@ import {
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 import { prepareTables } from "./prepareTables.ts";
+import { getLogger } from "../observability/logger.ts";
+
+const log = getLogger("IndexDatabase");
 
 const filesNeedingMetadataUpdateFilter = (
   metadataGroupName: keyof typeof MetadataGroups,
@@ -118,6 +121,7 @@ export class IndexDatabase {
   public readonly storagePath: string;
   private db!: AsyncSqlite;
   private dbFilePath!: string;
+  private walCheckpointTimer?: ReturnType<typeof setInterval>;
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;
@@ -140,6 +144,10 @@ export class IndexDatabase {
         "journal_mode = WAL",
         "synchronous = NORMAL",
         "wal_autocheckpoint = 1000",
+        // Cap the on-disk WAL after a checkpoint. Without this SQLite leaves the
+        // WAL at its high-water mark even once frames are written back, so a one-
+        // time spike (or a stalled checkpoint) stays on disk forever.
+        "journal_size_limit = 67108864",
       ],
       customFunctions: [
         { name: "REGEXP", options: { deterministic: true }, type: "regexp" },
@@ -148,12 +156,73 @@ export class IndexDatabase {
           options: { deterministic: true },
           type: "cosine_similarity",
         },
+        {
+          // Image CLIP embeddings are stored as packed Float32 (see
+          // saveImageEmbedding); this variant reads them with the correct stride
+          // so similarity can be ranked inside SQL.
+          name: "cosine_similarity_f32",
+          options: { deterministic: true },
+          type: "cosine_similarity_f32",
+        },
       ],
     });
 
     await prepareTables(this.db);
 
     await this.db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
+
+    // Clean up any leftover zombie WAL from the previous run before starting
+    // the periodic maintenance timer.
+    await this.checkpointWal();
+    this.startWalMaintenance();
+  }
+
+  // Passive autocheckpoints (wal_autocheckpoint) abort whenever a reader holds a
+  // snapshot. The dedicated read connection services a near-constant stream of
+  // background queries, so passive checkpoints get starved and the WAL grows
+  // without bound (observed at ~1 GB). A periodic TRUNCATE checkpoint on the
+  // write connection writes committed frames back into the main DB and resets
+  // the WAL file during the gaps between readers.
+  private startWalMaintenance(): void {
+    const intervalMs =
+      Number(process.env.PHOTRIX_WAL_CHECKPOINT_INTERVAL_MS) || 60_000;
+    if (intervalMs <= 0) return;
+    this.walCheckpointTimer = setInterval(() => {
+      void this.checkpointWal();
+    }, intervalMs);
+    this.walCheckpointTimer.unref?.();
+  }
+
+  /**
+   * Write back reclaimable WAL frames and physically truncate the WAL file.
+   *
+   * TRUNCATE mode checkpoints all frames AND resets the WAL write position to
+   * frame 0, but only if no reader holds a WAL snapshot at that moment. The
+   * long-lived read worker holds an SHM lock for the lifetime of its
+   * connection, so TRUNCATE is blocked whenever the read worker is mid-query.
+   * Retrying with short gaps gives the checkpoint a window between read-query
+   * batches (which last milliseconds) to grab the lock and physically shrink
+   * the file. Without physical truncation, SQLite keeps the WAL at its peak
+   * high-water mark even after all frames are checkpointed.
+   */
+  async checkpointWal(): Promise<void> {
+    const maxAttempts = 5;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const result = await this.db.getFromWriteWorker<{
+          busy: number;
+          log: number;
+          checkpointed: number;
+        }>("PRAGMA wal_checkpoint(TRUNCATE)");
+        if (result && result.busy === 0) return;
+      } catch (err) {
+        log.warn({ err }, "WAL checkpoint failed");
+        return;
+      }
+      if (attempt < maxAttempts - 1) {
+        await new Promise<void>((r) => setTimeout(r, 50));
+      }
+    }
   }
 
   private async runInsert(
@@ -169,8 +238,21 @@ export class IndexDatabase {
     }
 
     const placeholders = columns.values.map(() => "?").join(", ");
-    const verb = mode === "replace" ? "INSERT OR REPLACE" : "INSERT";
-    const sql = `${verb} INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`;
+    let sql: string;
+    if (mode === "replace") {
+      // Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE.
+      // INSERT OR REPLACE is DELETE + INSERT, which fragments the B-tree badly
+      // on repeated updates (observed: 14 GB for ~650 MB of actual data).
+      // ON CONFLICT DO UPDATE is an in-place update — no rowid change, no dead pages.
+      const updateCols = columns.names
+        .filter((n) => n !== "folder" && n !== "fileName")
+        .map((n) => `${n} = excluded.${n}`)
+        .join(", ");
+      const conflictAction = updateCols ? `DO UPDATE SET ${updateCols}` : `DO NOTHING`;
+      sql = `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders}) ON CONFLICT(folder, fileName) ${conflictAction}`;
+    } else {
+      sql = `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`;
+    }
     await this.db.run(sql, ...columns.values);
   }
 
@@ -234,17 +316,21 @@ export class IndexDatabase {
   ): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
     const execute = async () => {
-      const row = await this.db.get<FileRecord>(
+      const row = await this.db.get<Record<string, string | number | null>>(
         "SELECT * FROM files WHERE folder = ? AND fileName = ?",
         folder,
         fileName,
       );
+      // The raw row stores JSON columns (tags, personInImage, regions, aiTags) as
+      // strings. They must be parsed back into values before merging, otherwise
+      // fileRecordToColumnNamesAndValues re-stringifies the existing string and
+      // double-encodes it — which, repeated across every face/embedding write,
+      // grows these columns exponentially (escaped-quote blobs into the MBs).
+      const existing: FileRecord = row
+        ? rowToFileRecord(row)
+        : { folder, fileName, mimeType: mimeTypeForFilename(relativePath) };
       const updatedEntry = {
-        ...(row ?? {
-          folder,
-          fileName,
-          mimeType: mimeTypeForFilename(relativePath),
-        }),
+        ...existing,
         ...fileData,
       };
       const columns = fileRecordToColumnNamesAndValues(updatedEntry);
@@ -1284,6 +1370,40 @@ export class IndexDatabase {
     );
   }
 
+  /**
+   * Images that still need face detection and/or semantic embedding, with a
+   * per-row flag for each. A file is only flagged for a stage once its
+   * prerequisite metadata exists (EXIF for faces, file info for embeddings), so
+   * the combined worker is asked to compute exactly the parts that are missing
+   * and never recomputes work that is already stored.
+   */
+  async getImagesNeedingAnalysis(
+    limit = 50,
+  ): Promise<
+    Array<{ relativePath: string; needsFaces: boolean; needsEmbedding: boolean }>
+  > {
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT folder, fileName,
+         CASE WHEN facesProcessedAt IS NULL AND exifProcessedAt IS NOT NULL THEN 1 ELSE 0 END AS needsFaces,
+         CASE WHEN embeddingProcessedAt IS NULL AND infoProcessedAt IS NOT NULL THEN 1 ELSE 0 END AS needsEmbedding
+       FROM files
+       WHERE mimeType LIKE 'image/%'
+         AND (
+           (facesProcessedAt IS NULL AND exifProcessedAt IS NOT NULL)
+           OR (embeddingProcessedAt IS NULL AND infoProcessedAt IS NOT NULL)
+         )
+       ORDER BY (facesLastErrorAt IS NOT NULL OR embeddingErrorAt IS NOT NULL),
+                folder, fileName
+       LIMIT ?`,
+      limit,
+    );
+    return rows.map((row) => ({
+      relativePath: joinPath(row.folder as string, row.fileName as string),
+      needsFaces: row.needsFaces === 1,
+      needsEmbedding: row.needsEmbedding === 1,
+    }));
+  }
+
   async getEmbeddingProgress(): Promise<[total: number, done: number]> {
     const row = await this.db.get<{ total: number | null; done: number | null }>(
       `SELECT
@@ -1294,7 +1414,140 @@ export class IndexDatabase {
     return [row?.total ?? 0, row?.done ?? 0];
   }
 
-  async semanticSearch(
+  // ---------------------------------------------------------------------------
+  // Audio transcription (Whisper)
+  // ---------------------------------------------------------------------------
+
+  async getFilesNeedingAudioTranscription(
+    limit = 10,
+  ): Promise<Array<{ relativePath: string }>> {
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT folder, fileName FROM files
+       WHERE exifProcessedAt IS NOT NULL
+         AND audioTranscribedAt IS NULL
+         AND (
+           (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL)
+           OR mimeType LIKE 'audio/%'
+         )
+       ORDER BY audioTranscribeErrorAt IS NOT NULL, audioTranscribeErrorAt, folder, fileName
+       LIMIT ?`,
+      limit,
+    );
+    return rows.map((row) => ({
+      relativePath: joinPath(row.folder as string, row.fileName as string),
+    }));
+  }
+
+  async saveAudioTranscription(
+    relativePath: string,
+    segments: Array<{ start: number; end: number; text: string }>,
+  ): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    const fullText = segments.map((s) => s.text).join(" ");
+    const now = Date.now();
+
+    await this.db.transaction([
+      {
+        sql: `UPDATE files
+              SET audioTranscript = ?, audioTranscribedAt = ?, audioTranscribeErrorAt = NULL
+              WHERE folder = ? AND fileName = ?`,
+        params: [fullText, now, folder, fileName],
+      },
+      {
+        sql: `DELETE FROM audioSegments WHERE folder = ? AND fileName = ?`,
+        params: [folder, fileName],
+      },
+      ...segments.map((seg) => ({
+        sql: `INSERT INTO audioSegments (folder, fileName, startTime, endTime, text)
+              VALUES (?, ?, ?, ?, ?)`,
+        params: [folder, fileName, seg.start, seg.end, seg.text],
+      })),
+    ]);
+  }
+
+  async saveAudioTranscriptionError(relativePath: string): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    await this.db.run(
+      `UPDATE files SET audioTranscribeErrorAt = ? WHERE folder = ? AND fileName = ?`,
+      Date.now(),
+      folder,
+      fileName,
+    );
+  }
+
+  async getAudioTranscriptionProgress(): Promise<[total: number, done: number]> {
+    const row = await this.db.get<{ total: number | null; done: number | null }>(
+      `SELECT
+         SUM(CASE WHEN exifProcessedAt IS NOT NULL AND (
+           (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL) OR mimeType LIKE 'audio/%'
+         ) THEN 1 ELSE 0 END) AS total,
+         SUM(CASE WHEN audioTranscribedAt IS NOT NULL THEN 1 ELSE 0 END) AS done
+       FROM files`,
+    );
+    return [row?.total ?? 0, row?.done ?? 0];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Audio embeddings (CLAP)
+  // ---------------------------------------------------------------------------
+
+  async getFilesNeedingAudioEmbedding(
+    limit = 10,
+  ): Promise<Array<{ relativePath: string }>> {
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT folder, fileName FROM files
+       WHERE exifProcessedAt IS NOT NULL
+         AND audioEmbeddingProcessedAt IS NULL
+         AND (
+           (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL)
+           OR mimeType LIKE 'audio/%'
+         )
+       ORDER BY audioEmbeddingErrorAt IS NOT NULL, audioEmbeddingErrorAt, folder, fileName
+       LIMIT ?`,
+      limit,
+    );
+    return rows.map((row) => ({
+      relativePath: joinPath(row.folder as string, row.fileName as string),
+    }));
+  }
+
+  async saveAudioEmbedding(relativePath: string, embedding: Float32Array): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    const buffer = Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
+    await this.db.run(
+      `UPDATE files
+       SET audioEmbedding = ?, audioEmbeddingProcessedAt = ?, audioEmbeddingErrorAt = NULL
+       WHERE folder = ? AND fileName = ?`,
+      buffer,
+      Date.now(),
+      folder,
+      fileName,
+    );
+  }
+
+  async saveAudioEmbeddingError(relativePath: string): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    await this.db.run(
+      `UPDATE files SET audioEmbeddingErrorAt = ? WHERE folder = ? AND fileName = ?`,
+      Date.now(),
+      folder,
+      fileName,
+    );
+  }
+
+  async getAudioEmbeddingProgress(): Promise<[total: number, done: number]> {
+    const row = await this.db.get<{ total: number | null; done: number | null }>(
+      `SELECT
+         SUM(CASE WHEN exifProcessedAt IS NOT NULL AND (
+           (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL) OR mimeType LIKE 'audio/%'
+         ) THEN 1 ELSE 0 END) AS total,
+         SUM(CASE WHEN audioEmbeddingProcessedAt IS NOT NULL THEN 1 ELSE 0 END) AS done
+       FROM files`,
+    );
+    return [row?.total ?? 0, row?.done ?? 0];
+  }
+
+  async audioSemanticSearch(
     queryVector: Float32Array,
     filter: FilterElement,
     limit: number,
@@ -1304,8 +1557,11 @@ export class IndexDatabase {
     const rows = await this.db.all<Record<string, unknown>>(
       `SELECT *
        FROM files
-       WHERE imageEmbedding IS NOT NULL
-         AND (mimeType LIKE 'image/%')
+       WHERE audioEmbedding IS NOT NULL
+         AND (
+           (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL)
+           OR mimeType LIKE 'audio/%'
+         )
          ${whereClause ? `AND (${whereClause})` : ""}`,
       ...whereParams,
     );
@@ -1314,14 +1570,14 @@ export class IndexDatabase {
     const scored: ScoredRow[] = [];
 
     for (const row of rows) {
-      const rawBuf = row.imageEmbedding as Buffer | null;
+      const rawBuf = row.audioEmbedding as Buffer | null;
       if (!rawBuf) continue;
 
       const aligned = new Uint8Array(rawBuf.byteLength);
       aligned.set(rawBuf);
       const embedding = new Float32Array(aligned.buffer);
 
-      // CLIP embeddings are L2-normalised so cosine similarity == dot product
+      // CLAP embeddings are L2-normalised so cosine similarity == dot product
       let dot = 0;
       const len = Math.min(queryVector.length, embedding.length);
       for (let i = 0; i < len; i++) {
@@ -1334,6 +1590,70 @@ export class IndexDatabase {
 
     scored.sort((a, b) => b.similarity - a.similarity);
     return scored.slice(0, limit).map(({ record, similarity }) => ({ ...record, similarity }));
+  }
+
+  async audioTranscriptSearch(
+    query: string,
+    filter: FilterElement,
+    limit: number,
+  ): Promise<Array<FileRecord & { similarity: number }>> {
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    const likePattern = `%${query.replace(/[%_]/g, "\\$&")}%`;
+
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT *
+       FROM files
+       WHERE audioTranscript IS NOT NULL
+         AND audioTranscript LIKE ? ESCAPE '\\'
+         ${whereClause ? `AND (${whereClause})` : ""}
+       LIMIT ?`,
+      likePattern,
+      ...whereParams,
+      limit,
+    );
+
+    return rows.map((row) => ({
+      ...rowToFileRecord(row as Record<string, string | number>),
+      similarity: 0.6,
+    }));
+  }
+
+  async semanticSearch(
+    queryVector: Float32Array,
+    filter: FilterElement,
+    limit: number,
+  ): Promise<Array<FileRecord & { similarity: number }>> {
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+
+    // Rank and truncate inside SQLite. The previous implementation pulled every
+    // embedding-bearing row (BLOBs and all columns) onto the JS heap and scored
+    // them here; on a large library that materialised the whole table twice (once
+    // in the read worker, once cloned across the worker boundary) and exhausted
+    // V8's heap. Pushing cosine_similarity_f32 into the ORDER BY ... LIMIT keeps
+    // the per-row embedding work in C and returns only `limit` rows.
+    const queryBuffer = Buffer.from(
+      queryVector.buffer,
+      queryVector.byteOffset,
+      queryVector.byteLength,
+    );
+
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT *, cosine_similarity_f32(imageEmbedding, ?) AS similarity
+       FROM files
+       WHERE imageEmbedding IS NOT NULL
+         AND (mimeType LIKE 'image/%')
+         ${whereClause ? `AND (${whereClause})` : ""}
+       ORDER BY similarity DESC
+       LIMIT ?`,
+      queryBuffer,
+      ...whereParams,
+      limit,
+    );
+
+    return rows.map((row) => ({
+      ...rowToFileRecord(row as Record<string, string | number>),
+      similarity: typeof row.similarity === "number" ? row.similarity : 0,
+    }));
   }
 
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(

@@ -4,20 +4,26 @@ import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { CACHE_DIR } from "../common/cacheUtils.js";
+import { getLogger } from "../observability/logger.ts";
+
+const log = getLogger("whisperWorker");
+
+export type TranscriptSegment = { start: number; end: number; text: string };
 
 type WorkerResponse =
   | { type: "ready" }
-  | { id: number; embedding: number[] }
+  | { id: number; segments: TranscriptSegment[] }
   | { id: number | null; error: string };
 
 type PendingRequest = {
-  resolve: (embedding: Float32Array) => void;
+  resolve: (segments: TranscriptSegment[]) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
 
-const REQUEST_TIMEOUT_MS = 120_000;
-const CLIP_SCRIPT = path.resolve(process.cwd(), "python", "clip_worker.py");
+// Long timeout: large-v3 on CPU can be slow for long videos
+const REQUEST_TIMEOUT_MS = 30 * 60 * 1_000;
+const WHISPER_SCRIPT = path.resolve(process.cwd(), "python", "whisper_worker.py");
 
 let nextRequestId = 1;
 let worker: ChildProcessWithoutNullStreams | null = null;
@@ -81,26 +87,25 @@ const onWorkerLine = (line: string, onReady: () => void) => {
   clearTimeout(request.timer);
 
   if ("error" in message) {
-    request.reject(new Error(message.error));
+    request.reject(new Error((message as { id: number; error: string }).error));
     return;
   }
 
-  const arr = new Float32Array((message as { id: number; embedding: number[] }).embedding);
-  request.resolve(arr);
+  request.resolve((message as { id: number; segments: TranscriptSegment[] }).segments);
 };
 
 const ensureWorkerReady = async (): Promise<void> => {
   if (readyPromise) return readyPromise;
 
   readyPromise = (async () => {
-    if (!(await canAccess(CLIP_SCRIPT))) {
-      throw new Error(`CLIP worker script missing at ${CLIP_SCRIPT}`);
+    if (!(await canAccess(WHISPER_SCRIPT))) {
+      throw new Error(`Whisper worker script missing at ${WHISPER_SCRIPT}`);
     }
 
     const pythonCommand = await resolvePythonCommand();
-    const provider = process.env.PHOTRIX_CLIP_PROVIDER ?? "CPUExecutionProvider";
+    const device = process.env.PHOTRIX_WHISPER_DEVICE ?? "cpu";
 
-    const child = spawn(pythonCommand, [CLIP_SCRIPT, provider], {
+    const child = spawn(pythonCommand, [WHISPER_SCRIPT, device], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       env: { ...process.env, HF_HOME: path.join(CACHE_DIR, "huggingface") },
@@ -127,13 +132,13 @@ const ensureWorkerReady = async (): Promise<void> => {
       });
 
       createInterface({ input: child.stderr }).on("line", (line) => {
-        console.warn(`[clipWorker] ${line}`);
+        log.warn({ line }, "worker stderr");
       });
 
       child.once("error", (error) => {
         rejectReady(
           new Error(
-            `Failed to start CLIP worker using '${pythonCommand}': ${error.message}`,
+            `Failed to start Whisper worker using '${pythonCommand}': ${error.message}`,
           ),
         );
       });
@@ -142,7 +147,7 @@ const ensureWorkerReady = async (): Promise<void> => {
         worker = null;
         readyPromise = null;
         const err = new Error(
-          `CLIP worker exited${signal ? ` with signal ${signal}` : ` with code ${code ?? "unknown"}`}`,
+          `Whisper worker exited${signal ? ` with signal ${signal}` : ` with code ${code ?? "unknown"}`}`,
         );
         rejectAllPending(err);
         if (!settled) rejectReady(err);
@@ -161,16 +166,16 @@ const ensureWorkerReady = async (): Promise<void> => {
   }
 };
 
-const sendRequest = async (payload: Record<string, unknown>): Promise<Float32Array> => {
+const sendRequest = async (payload: Record<string, unknown>): Promise<TranscriptSegment[]> => {
   await ensureWorkerReady();
-  if (!worker) throw new Error("CLIP worker is not available");
+  if (!worker) throw new Error("Whisper worker is not available");
 
   const id = nextRequestId++;
 
-  return new Promise<Float32Array>((resolve, reject) => {
+  return new Promise<TranscriptSegment[]>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`CLIP worker timed out for request ${id}`));
+      reject(new Error(`Whisper worker timed out for request ${id}`));
     }, REQUEST_TIMEOUT_MS);
 
     pending.set(id, { resolve, reject, timer });
@@ -185,8 +190,5 @@ const sendRequest = async (payload: Record<string, unknown>): Promise<Float32Arr
   });
 };
 
-export const embedImageWithClip = (imagePath: string): Promise<Float32Array> =>
-  sendRequest({ operation: "embedImage", imagePath });
-
-export const embedTextWithClip = (text: string): Promise<Float32Array> =>
-  sendRequest({ operation: "embedText", text });
+export const transcribeWithWhisper = (videoPath: string): Promise<TranscriptSegment[]> =>
+  sendRequest({ operation: "transcribe", videoPath });

@@ -204,7 +204,7 @@ describe("api", () => {
     expect(result.clusters[0]?.count).toBe(3);
     expect(result.clusters[0]?.representative.photo.path).toBe("/trip/a.jpg");
     // Summaries should not have faces
-    expect(result.clusters[0]?.faces).toBeUndefined();
+    expect((result.clusters[0] as Record<string, unknown>)?.faces).toBeUndefined();
   });
 
   it("does not serialize nullable array UI state as API filter conditions", async () => {

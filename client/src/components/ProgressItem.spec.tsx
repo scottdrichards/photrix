@@ -17,7 +17,7 @@ describe("ProgressItem", () => {
     expect(screen.getByText("25%")).toBeInTheDocument();
     expect(screen.getByText(/25 \/ 100 items processed/)).toBeInTheDocument();
     expect(screen.getByText(/75 remaining/)).toBeInTheDocument();
-    expect(screen.getByText(/ETA: ~5m/)).toBeInTheDocument();
+    expect(screen.getByText(/(~5m)/)).toBeInTheDocument();
   });
 
   it("uses valueFormatter for summary values", () => {

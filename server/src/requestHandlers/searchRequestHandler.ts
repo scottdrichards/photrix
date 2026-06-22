@@ -1,6 +1,7 @@
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import { embedTextWithClip } from "../imageEmbedding/clipWorker.ts";
+import { embedText } from "../imageAnalysis/imageAnalysisWorker.ts";
+import { embedTextWithClap } from "../audioProcessing/clapWorker.ts";
 import { writeJson } from "../utils.ts";
 
 type Options = { database: IndexDatabase };
@@ -47,31 +48,51 @@ export const searchRequestHandler = async (
         ? conditions[0]
         : { operation: "and" as const, conditions };
 
-  let queryVector: Float32Array;
-  try {
-    queryVector = await embedTextWithClip(q);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+  const dbFilter = filter as Parameters<typeof database.semanticSearch>[1];
+
+  // Run all three searches in parallel; failures in audio workers are non-fatal
+  const [clipResult, clapResult, transcriptResult] = await Promise.allSettled([
+    (async () => {
+      const queryVector = await embedText(q);
+      return database.semanticSearch(queryVector, dbFilter, limit);
+    })(),
+    (async () => {
+      const queryVector = await embedTextWithClap(q);
+      return database.audioSemanticSearch(queryVector, dbFilter, limit);
+    })(),
+    database.audioTranscriptSearch(q, dbFilter, limit),
+  ]);
+
+  if (clipResult.status === "rejected" && clapResult.status === "rejected") {
+    const message =
+      clipResult.reason instanceof Error ? clipResult.reason.message : String(clipResult.reason);
     return writeJson(res, 503, {
-      error: "CLIP worker unavailable",
+      error: "Search workers unavailable",
       message,
       hint: "Run: npm --prefix server run clip:python:install",
     });
   }
 
-  const results = await database.semanticSearch(
-    queryVector,
-    filter as Parameters<typeof database.semanticSearch>[1],
-    limit,
-  );
+  type SearchResult = { folder: string; fileName: string; mimeType: string | null; similarity: number; [key: string]: unknown };
 
-  const items = results.map(({ folder, fileName, mimeType, similarity, ...rest }) => ({
-    folder,
-    fileName,
-    mimeType: mimeType ?? null,
-    similarity,
-    ...rest,
-  }));
+  // Merge results from all sources, deduplicate by path, keep best similarity score
+  const byPath = new Map<string, SearchResult>();
+
+  const addResults = (results: Array<SearchResult>) => {
+    for (const { folder, fileName, mimeType, similarity, ...rest } of results) {
+      const key = `${folder}${fileName}`;
+      const existing = byPath.get(key);
+      if (!existing || similarity > existing.similarity) {
+        byPath.set(key, { folder, fileName, mimeType: mimeType ?? null, similarity, ...rest });
+      }
+    }
+  };
+
+  if (clipResult.status === "fulfilled") addResults(clipResult.value);
+  if (clapResult.status === "fulfilled") addResults(clapResult.value);
+  if (transcriptResult.status === "fulfilled") addResults(transcriptResult.value);
+
+  const items = [...byPath.values()].sort((a, b) => b.similarity - a.similarity).slice(0, limit);
 
   writeJson(res, 200, { items, total: items.length, query: q });
 };

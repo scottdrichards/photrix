@@ -36,6 +36,9 @@ const createMockResponse = () => {
       }
       return res as unknown as http.ServerResponse;
     }),
+    // The SSE stream path registers a `res.on("error", …)` listener; the stream
+    // tests drive lifecycle via `req` events, so a no-op listener is enough.
+    on: jest.fn(),
   } as unknown as http.ServerResponse;
 
   return {
@@ -57,6 +60,7 @@ const alwaysEnabledOrchestrator: TaskOrchestrator = {
   getBackgroundTaskStatus: async () => [],
   addTask: () => {},
   onQueueExhausted: () => {},
+  noteUserActivity: () => {},
 };
 
 describe("statusRequestHandler", () => {

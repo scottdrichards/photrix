@@ -11,8 +11,44 @@ type WorkerInit = {
   customFunctions?: Array<{
     name: string;
     options: { deterministic?: boolean };
-    type: "regexp" | "cosine_similarity";
+    type: "regexp" | "cosine_similarity" | "cosine_similarity_f32";
   }>;
+};
+
+type FloatArrayCtor = Float32ArrayConstructor | Float64ArrayConstructor;
+
+// Cosine similarity between two BLOBs each holding a packed array of floats.
+// `View`/`bytesPerEl` select the element width: Float64 (8 bytes) for face
+// embeddings, Float32 (4 bytes) for CLIP image embeddings. Runs entirely inside
+// SQLite so an ORDER BY ... LIMIT over the table never materialises every row's
+// embedding on the JS heap.
+const cosineSimilarityBlob = (
+  a: Buffer | null,
+  b: Buffer | null,
+  View: FloatArrayCtor,
+  bytesPerEl: number,
+): number => {
+  if (!a || !b || a.length !== b.length || a.length === 0) return 0;
+  // Blobs must hold whole values; a truncated/odd-length blob would otherwise
+  // throw a RangeError and surface as an opaque SQL error.
+  if (a.length % bytesPerEl !== 0) return 0;
+  // SQLite blob buffers are not guaranteed to be element-aligned, which a typed
+  // array view requires. Copy into a freshly-allocated (aligned) buffer so the
+  // view never throws.
+  const leftCopy = Uint8Array.prototype.slice.call(a);
+  const rightCopy = Uint8Array.prototype.slice.call(b);
+  const left = new View(leftCopy.buffer, leftCopy.byteOffset, a.length / bytesPerEl);
+  const right = new View(rightCopy.buffer, rightCopy.byteOffset, b.length / bytesPerEl);
+  let dot = 0;
+  let leftMag = 0;
+  let rightMag = 0;
+  for (let i = 0; i < left.length; i++) {
+    dot += left[i]! * right[i]!;
+    leftMag += left[i]! * left[i]!;
+    rightMag += right[i]! * right[i]!;
+  }
+  const denom = Math.sqrt(leftMag) * Math.sqrt(rightMag);
+  return denom > 0 ? dot / denom : 0;
 };
 
 type WorkerMessage =
@@ -56,21 +92,15 @@ for (const fn of init.customFunctions ?? []) {
     db.function(
       fn.name,
       { deterministic: fn.options.deterministic ?? true },
-      (a: Buffer | null, b: Buffer | null) => {
-        if (!a || !b || a.length !== b.length || a.length === 0) return 0;
-        const left = new Float64Array(a.buffer, a.byteOffset, a.byteLength / 8);
-        const right = new Float64Array(b.buffer, b.byteOffset, b.byteLength / 8);
-        let dot = 0;
-        let leftMag = 0;
-        let rightMag = 0;
-        for (let i = 0; i < left.length; i++) {
-          dot += left[i] * right[i];
-          leftMag += left[i] * left[i];
-          rightMag += right[i] * right[i];
-        }
-        const denom = Math.sqrt(leftMag) * Math.sqrt(rightMag);
-        return denom > 0 ? dot / denom : 0;
-      },
+      (a: Buffer | null, b: Buffer | null) => cosineSimilarityBlob(a, b, Float64Array, 8),
+    );
+  }
+
+  if (fn.type === "cosine_similarity_f32") {
+    db.function(
+      fn.name,
+      { deterministic: fn.options.deterministic ?? true },
+      (a: Buffer | null, b: Buffer | null) => cosineSimilarityBlob(a, b, Float32Array, 4),
     );
   }
 }

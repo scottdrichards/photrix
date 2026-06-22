@@ -162,7 +162,7 @@ describe("PeopleView", () => {
       return { cluster: null };
     });
 
-    render(<PeopleView />);
+    render(<PeopleView view="people" onViewChange={() => {}} />);
 
     // Cluster list is shown initially
     await waitFor(() => {

@@ -1,22 +1,35 @@
-import { watch, existsSync } from "node:fs";
+import { watch, existsSync, type FSWatcher } from "node:fs";
 import { EventEmitter } from "node:events";
 
-// One EventEmitter per HLS directory, firing "change" whenever any file in the tree changes.
-const watchers = new Map<string, EventEmitter>();
+// One EventEmitter + FSWatcher per HLS directory, firing "change" whenever any
+// file in the tree changes.
+const watchers = new Map<string, { emitter: EventEmitter; watcher: FSWatcher }>();
 
 const getOrCreateWatcher = (hlsDir: string): EventEmitter => {
   const existing = watchers.get(hlsDir);
-  if (existing) return existing;
+  if (existing) return existing.emitter;
 
   const emitter = new EventEmitter();
   emitter.setMaxListeners(0); // unlimited — one listener per waiting segment/playlist request
 
-  watch(hlsDir, { recursive: true }, () => {
+  const watcher = watch(hlsDir, { recursive: true }, () => {
     emitter.emit("change");
   });
 
-  watchers.set(hlsDir, emitter);
+  watchers.set(hlsDir, { emitter, watcher });
   return emitter;
+};
+
+/**
+ * Closes and forgets the watcher for an HLS directory. Call this before deleting
+ * the directory so the underlying fs.watch handle doesn't leak on a stale path.
+ */
+export const closeHlsWatcher = (hlsDir: string): void => {
+  const existing = watchers.get(hlsDir);
+  if (!existing) return;
+  watchers.delete(hlsDir);
+  existing.watcher.close();
+  existing.emitter.removeAllListeners();
 };
 
 /**

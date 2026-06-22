@@ -5,7 +5,10 @@ import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
+import { getLogger } from "../observability/logger.ts";
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
+
+const log = getLogger("convertImage");
 
 // Helper function to ensure cache directory exists
 const ensureCacheDir = async (filePath: string): Promise<void> => {
@@ -199,8 +202,9 @@ const generateImage = async (
             ? `${baseMessage}\n\nPython dependencies may be missing. Try: pip install -r server/src/imageProcessing/requirements.txt`
             : baseMessage;
 
-          console.error(
-            `[ImageCache] Python script failed (${code ?? "unknown"}): ${baseMessage}`,
+          log.error(
+            { inputPath, exitCode: code, stderr: normalizedError },
+            "Image conversion python script failed",
           );
           reject(
             new ImageConversionError(
@@ -213,7 +217,7 @@ const generateImage = async (
         });
 
         process.on("error", (err) => {
-          console.error(`[ImageCache] Failed to start python process: ${err.message}`);
+          log.error({ err, inputPath }, "Failed to start image conversion python process");
           reject(err);
         });
       })
@@ -230,9 +234,8 @@ const generateImage = async (
 export const convertImage = async (
   filePath: string,
   height: StandardHeight = 2160,
-  opts?: { priority?: ConversionPriority },
+  _opts?: { priority?: ConversionPriority },
 ): Promise<string> => {
-  void opts;
   await stat(filePath);
   const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
 
@@ -245,16 +248,15 @@ export const convertImage = async (
   }
 
   await ensureCacheDir(cachedPath);
-  await (() => generateImage(filePath, [{ path: cachedPath, height }]))();
+  await generateImage(filePath, [{ path: cachedPath, height }]);
   return cachedPath;
 };
 
 export const convertImageToMultipleSizes = async (
   filePath: string,
   heights: StandardHeight[],
-  opts?: { priority?: ConversionPriority },
+  _opts?: { priority?: ConversionPriority },
 ): Promise<void> => {
-  void opts;
   await stat(filePath);
 
   const existChecks = await Promise.all(
@@ -274,5 +276,5 @@ export const convertImageToMultipleSizes = async (
   }
 
   await Promise.all(outputs.map((o) => ensureCacheDir(o.path)));
-  await (() => generateImage(filePath, outputs))();
+  await generateImage(filePath, outputs);
 };

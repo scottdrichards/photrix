@@ -185,7 +185,7 @@ async function calculateDiskMetrics(): Promise<SystemMetrics["disk"]> {
   };
 }
 
-export async function getSystemMetrics(): Promise<SystemMetrics> {
+async function computeSystemMetrics(): Promise<SystemMetrics> {
   const cpus = os.cpus();
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
@@ -206,4 +206,30 @@ export async function getSystemMetrics(): Promise<SystemMetrics> {
     disk,
     gpu,
   };
+}
+
+// CPU and disk usage are computed from deltas against module-global state
+// (`lastCpuMeasure`, `lastDiskStats`). If several callers (e.g. multiple SSE
+// status clients) sampled concurrently they would each reset that window and
+// corrupt every reading. A short shared cache makes the sampling cadence
+// independent of caller count and keeps the deltas meaningful.
+const METRICS_CACHE_TTL_MS = 1000;
+let metricsCache: { value: SystemMetrics; expiresAt: number } | undefined;
+let metricsInflight: Promise<SystemMetrics> | undefined;
+
+export async function getSystemMetrics(): Promise<SystemMetrics> {
+  const now = Date.now();
+  if (metricsCache && metricsCache.expiresAt > now) return metricsCache.value;
+  if (metricsInflight) return metricsInflight;
+
+  metricsInflight = computeSystemMetrics()
+    .then((value) => {
+      metricsCache = { value, expiresAt: Date.now() + METRICS_CACHE_TTL_MS };
+      return value;
+    })
+    .finally(() => {
+      metricsInflight = undefined;
+    });
+
+  return metricsInflight;
 }

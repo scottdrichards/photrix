@@ -95,6 +95,9 @@ export const MetadataGroups = {
 export type FileRecord = BaseFileRecord &
   Partial<AllMetaData> & {
     [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null;
+  } & {
+    imageVariantsGeneratedAt?: string | null;
+    hlsGeneratedAt?: string | null;
     facesLastErrorAt?: string | null;
   };
 

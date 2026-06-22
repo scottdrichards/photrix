@@ -20,12 +20,14 @@ afterEach(() => {
   jest.resetModules();
   jest.restoreAllMocks();
   delete process.env.CACHE_DIR;
+  delete process.env.HLS_CACHE_DIR;
 });
 
 describe("generateHLS", () => {
   it("returns existing playlist path without queueing", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-hls-existing-"));
     process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -54,6 +56,7 @@ describe("generateHLS", () => {
   it("enqueues conversion and uses software encoder when CUDA is unavailable", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-hls-soft-"));
     process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -105,6 +108,7 @@ describe("generateHLS", () => {
   it("rejects when ffmpeg generation fails", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-hls-fail-"));
     process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 

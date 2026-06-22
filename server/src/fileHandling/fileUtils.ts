@@ -382,7 +382,6 @@ export const getExifMetadataFromFile = async (
 ): Promise<ExifMetadata> => {
   const mimeType = mimeTypeForFilename(fullPath);
   if (!mimeType) {
-    // console.log(`[exif] No mime type for file ${fullPath}`);
     return {};
   }
 
@@ -391,7 +390,6 @@ export const getExifMetadataFromFile = async (
   }
 
   if (!mimeType.startsWith("image/")) {
-    // console.log(`[exif] Skipping non-image file for EXIF: ${fullPath} (${mimeType})`);
     return {};
   }
 
@@ -399,8 +397,7 @@ export const getExifMetadataFromFile = async (
   if (quicktimeBrand) {
     try {
       return (await getVideoMetadata(fullPath)) as ExifMetadata;
-    } catch (videoError) {
-      const msg = videoError instanceof Error ? videoError.message : String(videoError);
+    } catch {
       return {};
     }
   }

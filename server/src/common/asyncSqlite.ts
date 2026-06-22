@@ -9,7 +9,7 @@ const workerScriptPath = resolve(
 
 type RunResult = { changes: number; lastInsertRowid: number };
 
-type CustomFunctionType = "regexp" | "cosine_similarity";
+type CustomFunctionType = "regexp" | "cosine_similarity" | "cosine_similarity_f32";
 
 type AsyncSqliteOptions = {
   pragmas?: string[];
@@ -151,6 +151,13 @@ export class AsyncSqlite {
     ...params: unknown[]
   ): Promise<T | undefined> {
     return this.send<T | undefined>(this.readWorker, "get", { sql, params });
+  }
+
+  async getFromWriteWorker<T = Record<string, unknown>>(
+    sql: string,
+    ...params: unknown[]
+  ): Promise<T | undefined> {
+    return this.send<T | undefined>(this.writeWorker, "get", { sql, params });
   }
 
   async all<T = Record<string, unknown>>(

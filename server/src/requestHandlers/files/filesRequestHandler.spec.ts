@@ -13,6 +13,7 @@ const orchestrator: TaskOrchestrator = {
   getBackgroundTaskStatus: async () => [],
   addTask: () => {},
   onQueueExhausted: () => {},
+  noteUserActivity: () => {},
 };
 
 const createMockResponse = () => {

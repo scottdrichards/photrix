@@ -9,6 +9,7 @@ import {
   ImageConversionError,
 } from "../../imageProcessing/convertImage.ts";
 import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
+import { markCacheAccess } from "../../common/cacheEviction.ts";
 import {
   generateMultibitrateHLS,
   getMultibitrateHLSInfo,
@@ -17,6 +18,14 @@ import {
   prepareMultibitrateHLSStructure,
 } from "../../videoProcessing/generateMultibitrateHLS.ts";
 import { waitForHlsFile } from "../../videoProcessing/hlsSegmentWatcher.ts";
+import { buildVodVariantPlaylist } from "../../videoProcessing/buildHlsPlaylist.ts";
+import {
+  registerHlsProcess,
+  touchHlsSession,
+} from "../../videoProcessing/hlsSession.ts";
+import { getLogger } from "../../observability/logger.ts";
+
+const hlsLog = getLogger("HLS");
 import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
 import { getVideoMetadata } from "../../videoProcessing/getVideoMetadata.ts";
 import { StandardHeight, parseToStandardHeight } from "../../common/standardHeights.ts";
@@ -141,6 +150,9 @@ const streamCachedFile = (
   opts: { contentType: string; size: number; cacheControl?: string },
 ) => {
   const { contentType, size, cacheControl = "public, max-age=31536000" } = opts;
+  // Bump the file's timestamp so the cache eviction policy treats it as
+  // recently used (approximate LRU).
+  markCacheAccess(filePath);
   streamStaticFile(filePath, {
     res,
     contentType,
@@ -174,8 +186,10 @@ const streamHlsSegment = async (res: http.ServerResponse, segmentPath: string) =
   streamStaticFile(segmentPath, {
     res,
     contentType: "video/mp2t",
+    // Ephemeral: segments are deleted after playback, so they must not be cached
+    // by the browser or any intermediary.
+    cacheControl: "no-store",
     size: segmentStats.size,
-    cacheControl: "public, max-age=31536000",
   });
 };
 
@@ -247,6 +261,10 @@ const tryHLSStream = async (
     // Check if multi-bitrate HLS structure is initialized (master.m3u8 exists)
     const multibitrateInfo = await getMultibitrateHLSInfo(normalizedPath);
 
+    // Mark this HLS tree as actively in use so the reaper keeps it alive while the
+    // player is fetching, then deletes it (and kills any running encode) once idle.
+    touchHlsSession(multibitrateInfo.hlsDir);
+
     // If not initialized, set up the directory structure immediately and queue FFmpeg.
     // The master playlist is returned to the client right away; segments become available
     // as FFmpeg encodes them and are served via the segment watcher.
@@ -263,16 +281,26 @@ const tryHLSStream = async (
       // Create dirs + write master.m3u8 synchronously so the response is immediate
       await prepareMultibitrateHLSStructure(normalizedPath);
 
-      // Queue HLS generation as a user-blocking task.
+      // Queue HLS generation as a user-blocking task. The output is ephemeral —
+      // it is served while the player fetches, then deleted by the reaper once
+      // playback goes idle (which may kill this encode mid-flight), so we don't
+      // persist any "HLS generated" marker in the database.
+      const hlsDir = multibitrateInfo.hlsDir;
       ctx.taskOrchestrator.addTask(
         {
           name: "HLS generation",
           type: "videoConversion",
           start: () => {
-            const promise = (async () => {
-              await generateMultibitrateHLS(normalizedPath);
-              await database.markHLSGenerated(subPath);
-            })();
+            const promise = generateMultibitrateHLS(normalizedPath, {
+              onSpawn: (child) => registerHlsProcess(hlsDir, child),
+            }).then(
+              () => {},
+              (error) => {
+                // A reaped session kills ffmpeg on purpose; that's an expected
+                // outcome for ephemeral HLS, not a real failure.
+                hlsLog.debug({ err: error, hlsDir }, "HLS generation ended early");
+              },
+            );
 
             return {
               onComplete: async () => {
@@ -303,8 +331,32 @@ const tryHLSStream = async (
       return true;
     }
 
-    // Serve variant playlist — wait for FFmpeg to write it if not ready yet
+    // Serve variant playlist
     if (variant) {
+      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}&segment=`;
+
+      // When the total duration is known, synthesize a complete VOD playlist that
+      // lists every segment up front and ends with #EXT-X-ENDLIST. This gives the
+      // player the true total length immediately, instead of FFmpeg's growing EVENT
+      // playlist whose duration creeps up as segments are appended. Not-yet-encoded
+      // segments are long-polled by the segment handler below until FFmpeg writes them.
+      if (
+        typeof knownDuration === "number" &&
+        Number.isFinite(knownDuration) &&
+        knownDuration > 0
+      ) {
+        const playlist = buildVodVariantPlaylist({
+          durationSeconds: knownDuration,
+          segmentBaseUrl: baseUrl,
+        });
+        // Ephemeral HLS: never cache playlists — the underlying segments are
+        // deleted after playback and may be re-encoded on replay.
+        writeHlsPlaylistResponse(res, playlist, "no-store", knownDuration);
+        return true;
+      }
+
+      // Duration unknown — fall back to FFmpeg's growing EVENT playlist, waiting for
+      // it to be written if it isn't ready yet.
       const variantHeight = parseInt(variant, 10);
       const variantPlaylistPath = getVariantPlaylistPath(
         multibitrateInfo.hlsDir,
@@ -323,18 +375,11 @@ const tryHLSStream = async (
       const playlistContent = await readFile(variantPlaylistPath, "utf-8");
 
       // Rewrite segment paths to use API endpoint
-      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}&segment=`;
       const modifiedPlaylist = playlistContent.replace(
         /^(segment_\d+\.ts)$/gm,
         (match) => `${baseUrl}${match}`,
       );
-      const isVariantDone = playlistContent.includes("#EXT-X-ENDLIST");
-      writeHlsPlaylistResponse(
-        res,
-        modifiedPlaylist,
-        isVariantDone ? "public, max-age=31536000" : "no-cache",
-        knownDuration,
-      );
+      writeHlsPlaylistResponse(res, modifiedPlaylist, "no-store", knownDuration);
       return true;
     }
 
@@ -347,13 +392,8 @@ const tryHLSStream = async (
       /^(\d+)p\/playlist\.m3u8$/gm,
       (_, variantHeight) => `${baseVariantUrl}${variantHeight}`,
     );
-    // Cache forever once complete; no-cache while encoding is in progress
-    writeHlsPlaylistResponse(
-      res,
-      masterContent,
-      multibitrateInfo.complete ? "public, max-age=31536000" : "no-cache",
-      knownDuration,
-    );
+    // Ephemeral HLS: never cache the master playlist.
+    writeHlsPlaylistResponse(res, masterContent, "no-store", knownDuration);
     return true;
   } catch (error) {
     writeJson(res, 500, {

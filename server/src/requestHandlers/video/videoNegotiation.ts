@@ -5,7 +5,7 @@ import { getMultibitrateHLSInfo } from "../../videoProcessing/generateMultibitra
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { writeJson } from "../../utils.ts";
-import path from "path/win32";
+import path from "path";
 
 type VideoPlaybackRequest = {
   path: string;

@@ -8,6 +8,10 @@ const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
   hevcSupported: true,
 });
 
+vi.mock("./components/SearchBar", () => ({
+  SearchBar: () => <div data-testid="search-bar">search</div>,
+}));
+
 vi.mock("./components/filter/Filter", () => ({
   Filter: () => <div data-testid="filter">filter</div>,
 }));

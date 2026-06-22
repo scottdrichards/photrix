@@ -6,3 +6,9 @@ pillow-heif==1.4.0
 # CLIP semantic search — CPU by default.
 # For GPU: pip install torch --index-url https://download.pytorch.org/whl/cu121
 open_clip_torch>=2.20.0
+# Audio transcription (Whisper) — GPU via CTranslate2/CUDA.
+# For GPU: pip install faster-whisper[cuda]
+faster-whisper>=1.1.0
+# Audio embeddings (CLAP) — GPU via PyTorch CUDA (see torch note above).
+transformers>=4.27.0
+soundfile>=0.12.1

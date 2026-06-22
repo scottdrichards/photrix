@@ -6,6 +6,7 @@ import type {
 } from "./indexDatabase.type.ts";
 import type { FileRecord } from "./fileRecord.type.ts";
 import { normalizeFolderPath } from "./utils/pathUtils.ts";
+import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 
 type SQLPart = {
   where: string;
@@ -337,11 +338,6 @@ const stringSearchToSQL = (
     params: [],
   };
 };
-
-/**
- * Escape special characters for SQL LIKE literal (%, _, \)
- */
-const escapeLikeLiteral = (value: string) => value.replace(/[\\%_]/g, (m) => `\\${m}`);
 
 const globToLike = (glob: string): string => {
   // Convert glob pattern to SQL LIKE pattern

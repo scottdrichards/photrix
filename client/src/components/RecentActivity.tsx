@@ -1,5 +1,10 @@
 import css from "./RecentActivity.module.css";
-import type { RecentMaintenance } from "../api";
+
+type RecentMaintenance = {
+  folder: string;
+  fileName: string;
+  completedAt: number | string;
+};
 
 type RecentActivityProps = {
   label: string;

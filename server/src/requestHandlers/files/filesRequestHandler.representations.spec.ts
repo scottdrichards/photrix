@@ -15,6 +15,7 @@ const baseOrchestrator: TaskOrchestrator = {
   getBackgroundTaskStatus: async () => [],
   addTask: () => {},
   onQueueExhausted: () => {},
+  noteUserActivity: () => {},
 };
 
 const createStreamingResponse = () => {
@@ -200,7 +201,69 @@ describe("filesRequestHandler representation paths", () => {
     expect(getBody()).toContain("#EXTM3U");
   });
 
-  it("returns 404 when multibitrate variant playlist times out", async () => {
+  it("serves a complete VOD variant playlist with the full duration when known", async () => {
+    const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-hls-vod-"));
+    const sourceFile = path.join(storageRoot, "clip.mp4");
+    writeFileSync(sourceFile, "video");
+
+    const hlsDir = path.join(storageRoot, "cache", "hls", "abr");
+
+    jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
+      generateMultibitrateHLS: jest.fn(),
+      getMultibitrateHLSInfo: jest.fn(async () => ({
+        initialized: true,
+        complete: false,
+        exists: true,
+        hlsDir,
+        masterPlaylistPath: path.join(hlsDir, "master.m3u8"),
+      })),
+      getVariantPlaylistPath: jest.fn(() => path.join(hlsDir, "360p", "playlist.m3u8")),
+      getVariantSegmentPath: jest.fn(),
+      prepareMultibitrateHLSStructure: jest.fn(),
+    }));
+
+    // Synthetic playlist must not depend on FFmpeg having written anything yet.
+    const waitForHlsFile = jest.fn(async () => false);
+    jest.unstable_mockModule("../../videoProcessing/hlsSegmentWatcher.ts", () => ({
+      waitForHlsFile,
+      closeHlsWatcher: jest.fn(),
+    }));
+
+    const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const res = createStreamingResponse();
+    const chunks: Buffer[] = [];
+    res.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/clip.mp4?representation=hls&variant=360",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      {
+        database: {
+          getFileRecord: jest.fn(async () => ({ duration: 5 })),
+        } as unknown as IndexDatabase,
+        storageRoot,
+        orchestrator: baseOrchestrator,
+      },
+    );
+    await once(res, "end");
+
+    const body = Buffer.concat(chunks).toString("utf-8");
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["X-Content-Duration"]).toBe("5");
+    // 5s at 1s segments → 5 segments, VOD, terminated with ENDLIST.
+    expect(body).toContain("#EXT-X-PLAYLIST-TYPE:VOD");
+    expect(body).toContain("#EXT-X-ENDLIST");
+    expect((body.match(/segment_\d+\.ts/g) ?? []).length).toBe(5);
+    expect(body).toContain("segment_004.ts");
+    expect(body).not.toContain("segment_005.ts");
+    // Did not block on FFmpeg's playlist file — served directly from duration.
+    expect(waitForHlsFile).not.toHaveBeenCalled();
+  });
+
+  it("falls back to FFmpeg's playlist (404 on timeout) when duration is unknown", async () => {
     const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-hls-variant-"));
     const sourceFile = path.join(storageRoot, "clip.mp4");
     writeFileSync(sourceFile, "video");
@@ -224,6 +287,14 @@ describe("filesRequestHandler representation paths", () => {
 
     jest.unstable_mockModule("../../videoProcessing/hlsSegmentWatcher.ts", () => ({
       waitForHlsFile: jest.fn(async () => false),
+      closeHlsWatcher: jest.fn(),
+    }));
+
+    // No duration in the DB and ffprobe fails → knownDuration stays undefined.
+    jest.unstable_mockModule("../../videoProcessing/getVideoMetadata.ts", () => ({
+      getVideoMetadata: jest.fn(async () => {
+        throw new Error("ffprobe failed");
+      }),
     }));
 
     const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
@@ -237,7 +308,7 @@ describe("filesRequestHandler representation paths", () => {
       res,
       {
         database: {
-          getFileRecord: jest.fn(async () => ({ duration: 30 })),
+          getFileRecord: jest.fn(async () => ({})),
         } as unknown as IndexDatabase,
         storageRoot,
         orchestrator: baseOrchestrator,
@@ -295,7 +366,7 @@ describe("filesRequestHandler representation paths", () => {
     expect(JSON.parse(getBody()).error).toBe("HLS not available");
   });
 
-  it("serves no-cache master playlist while encoding is in progress", async () => {
+  it("serves no-store master playlist while encoding is in progress", async () => {
     const storageRoot = mkdtempSync(
       path.join(os.tmpdir(), "photrix-files-hls-inprogress-"),
     );
@@ -342,11 +413,11 @@ describe("filesRequestHandler representation paths", () => {
     const cacheControl = (res.writeHead as jest.Mock).mock.calls.at(-1)?.[1]?.[
       "Cache-Control"
     ];
-    expect(cacheControl).toBe("no-cache");
+    expect(cacheControl).toBe("no-store");
     expect(getBody()).toContain("#EXTM3U");
   });
 
-  it("serves permanently cached master playlist when encoding is complete", async () => {
+  it("serves no-store master playlist when encoding is complete (ephemeral)", async () => {
     const storageRoot = mkdtempSync(
       path.join(os.tmpdir(), "photrix-files-hls-complete-"),
     );
@@ -396,7 +467,7 @@ describe("filesRequestHandler representation paths", () => {
     const cacheControl = (res.writeHead as jest.Mock).mock.calls.at(-1)?.[1]?.[
       "Cache-Control"
     ];
-    expect(cacheControl).toBe("public, max-age=31536000");
+    expect(cacheControl).toBe("no-store");
     expect(getBody()).toContain("#EXTM3U");
   });
 });

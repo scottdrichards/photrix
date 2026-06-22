@@ -12,9 +12,8 @@ const gpu = await getGpuAcceleration();
 export const generateWebSafeVideo = async (
   filePath: string,
   height: StandardHeight = "original",
-  opts?: { priority?: ConversionPriority },
+  _opts?: { priority?: ConversionPriority },
 ): Promise<string> => {
-  void opts;
   const fileStats = await stat(filePath);
   const modifiedTimeMs = fileStats.mtimeMs;
   const hash = getHash(filePath, modifiedTimeMs);
@@ -26,49 +25,44 @@ export const generateWebSafeVideo = async (
   }
 
   const scaleFilter = height === "original" ? "-1:-2" : `-2:${height}`;
-  const encoderLabel = gpu ? gpu.label : "software";
   await new Promise<void>((resolve, reject) => {
-        const args = [
-          "-y",
-          ...( gpu ? gpu.hwaccelArgs : []),
-          "-i",
-          filePath,
-          "-vf",
-          `scale=${scaleFilter}`,
-          "-c:v",
-          gpu ? gpu.h264Codec : "libx264",
-          ...(gpu
-            ? gpu.cqArgs(23)
-            : ["-preset", "fast", "-crf", "23"]),
-          "-pix_fmt",
-          "yuv420p",
-          "-c:a",
-          "aac",
-          "-b:a",
-          "128k",
-          "-movflags",
-          "+faststart",
-          cachedPath,
-        ];
-        const process = spawn("ffmpeg", args);
+    const args = [
+      "-y",
+      ...(gpu ? gpu.hwaccelArgs : []),
+      "-i",
+      filePath,
+      "-vf",
+      `scale=${scaleFilter}`,
+      "-c:v",
+      gpu ? gpu.h264Codec : "libx264",
+      ...(gpu ? gpu.cqArgs(23) : ["-preset", "fast", "-crf", "23"]),
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      "-movflags",
+      "+faststart",
+      cachedPath,
+    ];
+    const process = spawn("ffmpeg", args);
 
-        let stderr = "";
+    let stderr = "";
 
-        pipeChildProcessLogs(process, "webSafe", (chunk) => {
-          stderr = appendWithLimit(stderr, chunk);
-        });
+    pipeChildProcessLogs(process, (chunk) => {
+      stderr = appendWithLimit(stderr, chunk);
+    });
 
-        process.on("close", (code) => {
-          if (code === 0) {
-            resolve();
-            return;
-          }
-          reject(new Error(`Web-safe video generation failed: ${stderr}`));
-        });
+    process.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`Web-safe video generation failed: ${stderr}`));
+    });
 
-        process.on("error", (err) => {
-          reject(err);
-        });
-      });
+    process.on("error", reject);
+  });
   return cachedPath;
 };

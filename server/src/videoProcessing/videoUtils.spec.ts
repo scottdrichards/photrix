@@ -28,7 +28,7 @@ describe("videoUtils", () => {
 
     const captured: string[] = [];
 
-    pipeChildProcessLogs(child, "thumb", (chunk) => {
+    pipeChildProcessLogs(child, (chunk) => {
       captured.push(chunk);
     });
 

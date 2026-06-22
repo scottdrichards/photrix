@@ -1,24 +1,27 @@
 import path from "node:path";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
+import { getLogger } from "../observability/logger.ts";
 import { batch } from "../utils.ts";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
 
-const DB_BATCH_SIZE = 50;
-const PARALLELISM = 16;
+const log = getLogger("processAudioEmbedding");
 
-export const processImageEmbedding = (
+const DB_BATCH_SIZE = 10;
+const PARALLELISM = 2;
+
+export const processAudioEmbedding = (
   database: IndexDatabase,
-  embedImage: (imagePath: string) => Promise<Float32Array>,
+  embedAudio: (videoPath: string) => Promise<Float32Array>,
 ): TaskRunner => {
-  const ctrl = createTaskController("Image embedding processing cancelled");
+  const ctrl = createTaskController("Audio embedding cancelled");
 
   const completion: Promise<void> = (async () => {
     while (true) {
       ctrl.checkCancelled();
 
-      const items = await database.getFilesNeedingEmbedding(DB_BATCH_SIZE);
+      const items = await database.getFilesNeedingAudioEmbedding(DB_BATCH_SIZE);
       if (!items.length) {
         ctrl.markComplete();
         return;
@@ -36,12 +39,11 @@ export const processImageEmbedding = (
               stripLeadingSlash(relativePath),
             );
             try {
-              const embedding = await embedImage(fullPath);
-              await database.saveImageEmbedding(relativePath, embedding);
+              const embedding = await embedAudio(fullPath);
+              await database.saveAudioEmbedding(relativePath, embedding);
             } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              console.warn(`[imageEmbedding] Failed to embed ${relativePath}: ${message}`);
-              await database.saveImageEmbeddingError(relativePath);
+              log.warn({ err: error, path: relativePath }, "Audio embedding failed");
+              await database.saveAudioEmbeddingError(relativePath);
             }
           }),
         );
@@ -54,7 +56,7 @@ export const processImageEmbedding = (
     resume: ctrl.resume,
     cancel: ctrl.cancel,
     getStatus: async () => {
-      const [total, done] = await database.getEmbeddingProgress();
+      const [total, done] = await database.getAudioEmbeddingProgress();
       return {
         state: ctrl.state,
         itemsProcessed: done,

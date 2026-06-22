@@ -1,16 +1,21 @@
 import http from "node:http";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 import { getSystemMetrics } from "../observability/systemMetrics.ts";
+import { getLogger } from "../observability/logger.ts";
+
+const log = getLogger("statusRequestHandler");
 
 type StatusRequestHandlerProps = {
   stream: boolean;
   taskOrchestrator: TaskOrchestrator;
 };
 
-const getStatusPayload = async (taskOrchestrator: TaskOrchestrator) => {
+const computeStatusPayload = async (taskOrchestrator: TaskOrchestrator) => {
   const backgroundTasksEnabled = taskOrchestrator.getPerformBackgroundTasks();
-  const backgroundTasks = await taskOrchestrator.getBackgroundTaskStatus();
-  const systemMetrics = await getSystemMetrics();
+  const [backgroundTasks, systemMetrics] = await Promise.all([
+    taskOrchestrator.getBackgroundTaskStatus(),
+    getSystemMetrics(),
+  ]);
 
   return {
     backgroundTasks,
@@ -19,6 +24,25 @@ const getStatusPayload = async (taskOrchestrator: TaskOrchestrator) => {
     },
     system: systemMetrics,
   };
+};
+
+// Background-task status runs full-table-scan COUNT queries. Every connected SSE
+// client polls on its own interval, so without coordination the DB load scales
+// with the number of open browser tabs. De-duplicating in-flight computations
+// collapses pollers that overlap onto a single computation; system-metric
+// sampling is additionally bounded by the TTL cache inside getSystemMetrics.
+// (No time-based cache here on purpose: there is a single orchestrator in
+// production, but a stale shared payload would otherwise mask per-request state.)
+let payloadInflight: ReturnType<typeof computeStatusPayload> | undefined;
+
+const getStatusPayload = (taskOrchestrator: TaskOrchestrator) => {
+  if (payloadInflight) return payloadInflight;
+
+  payloadInflight = computeStatusPayload(taskOrchestrator).finally(() => {
+    payloadInflight = undefined;
+  });
+
+  return payloadInflight;
 };
 
 const writeSSE = (res: http.ServerResponse, payload: unknown) => {
@@ -51,22 +75,39 @@ export const statusRequestHandler = async (
   }
 
   let updating = false;
+  let closed = false;
+
   const sendUpdate = async () => {
-    if (updating) return;
+    if (updating || closed) return;
     updating = true;
     try {
       const payload = await getStatusPayload(taskOrchestrator);
+      // The client may have disconnected while the payload was being computed;
+      // writing after end throws, so bail out instead.
+      if (closed || res.writableEnded) return;
       writeSSE(res, payload);
+    } catch (error) {
+      log.warn({ err: error }, "Failed to push status update");
+      cleanup();
     } finally {
       updating = false;
     }
   };
 
-  sendUpdate();
-  const timer = setInterval(sendUpdate, 500);
+  const timer = setInterval(() => void sendUpdate(), 500);
 
-  req.on("close", () => {
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
     clearInterval(timer);
-    res.end();
-  });
+    if (!res.writableEnded) res.end();
+  };
+
+  void sendUpdate();
+
+  // Without an error handler, a reset SSE socket emits an unhandled 'error' that
+  // can take down the process.
+  res.on("error", cleanup);
+  req.on("error", cleanup);
+  req.on("close", cleanup);
 };
