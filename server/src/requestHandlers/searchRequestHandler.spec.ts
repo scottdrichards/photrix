@@ -26,9 +26,11 @@ const createJsonResponse = () => {
   return { res, getStatus: () => status, getJson: () => JSON.parse(body) };
 };
 
-const makeReq = (q: string) =>
-  ({ url: `/api/search?q=${encodeURIComponent(q)}`, headers: { host: "localhost" } }) as unknown as
-    http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
+const makeReq = (q: string, limit?: number) =>
+  ({
+    url: `/api/search?q=${encodeURIComponent(q)}${limit ? `&limit=${limit}` : ""}`,
+    headers: { host: "localhost" },
+  }) as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
 
 const transcriptRow = {
   folder: "/trip/",
@@ -97,6 +99,59 @@ describe("searchRequestHandler resilience", () => {
 
     expect(getStatus()).toBe(200);
     expect(getJson().total).toBe(1);
+  });
+
+  it("keeps a top image hit in the top-N even when transcript matches flood the results", async () => {
+    // Transcript matches all carry a flat 0.6 while image cosine is ~0.2, so a
+    // raw-magnitude merge would fill every top slot with transcript hits and
+    // truncate the image match out. Rank fusion must keep the image hit visible.
+    const handler = await loadHandler({
+      embedTextWithClap: async () => {
+        throw new Error("clap down");
+      },
+    });
+
+    const imageHit = { folder: "/photos/", fileName: "castle.jpg", mimeType: "image/jpeg", similarity: 0.2 };
+    const transcriptHits = Array.from({ length: 5 }, (_, i) => ({
+      folder: "/trip/",
+      fileName: `clip${i}.mp4`,
+      mimeType: "video/mp4",
+      similarity: 0.6,
+    }));
+
+    const database = {
+      semanticSearch: jest.fn(async () => [imageHit]),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => transcriptHits),
+    } as unknown as IndexDatabase;
+
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(makeReq("castle", 2), res, { database });
+
+    expect(getStatus()).toBe(200);
+    const fileNames = getJson().items.map((it: { fileName: string }) => it.fileName);
+    expect(fileNames).toContain("castle.jpg");
+  });
+
+  it("boosts a file matched by multiple sources above single-source hits", async () => {
+    const handler = await loadHandler({});
+
+    const shared = { folder: "/a/", fileName: "shared.mp4", mimeType: "video/mp4", similarity: 0.2 };
+    const imageOnly = { folder: "/a/", fileName: "image-only.jpg", mimeType: "image/jpeg", similarity: 0.9 };
+
+    const database = {
+      semanticSearch: jest.fn(async () => [imageOnly, shared]),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => [shared]),
+    } as unknown as IndexDatabase;
+
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(makeReq("shared"), res, { database });
+
+    expect(getStatus()).toBe(200);
+    // shared is rank-2 in image but appears in two sources, so its fused score
+    // (1/62 + 1/61) beats image-only's single rank-1 contribution (1/61).
+    expect(getJson().items[0].fileName).toBe("shared.mp4");
   });
 
   it("returns 503 only when both embed workers fail and there are no results at all", async () => {

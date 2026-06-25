@@ -96,24 +96,36 @@ export const searchRequestHandler = async (
 
   type SearchResult = { folder: string; fileName: string; mimeType: string | null; similarity: number; [key: string]: unknown };
 
-  // Merge results from all sources, deduplicate by path, keep best similarity score
-  const byPath = new Map<string, SearchResult>();
+  // Fuse the three rankings by reciprocal rank rather than raw score. The
+  // sources score on incomparable scales — CLIP image cosine ~0.1-0.3, CLAP
+  // cosine ~0.2-0.5, transcript a flat 0.6 — so merging by magnitude let the
+  // highest-scaled source (transcript) crowd genuine image matches out of the
+  // top-N entirely. Reciprocal Rank Fusion scores each hit by its position
+  // within its own already-sorted source (1/(k+rank)), so a top image hit
+  // competes fairly with a top transcript hit and a file surfaced by several
+  // sources is boosted. The fused value replaces `similarity` in the response;
+  // the client orders by it but never displays the raw number.
+  const RRF_K = 60;
+  const fused = new Map<string, SearchResult>();
 
-  const addResults = (results: Array<SearchResult>) => {
-    for (const { folder, fileName, mimeType, similarity, ...rest } of results) {
-      const key = `${folder}${fileName}`;
-      const existing = byPath.get(key);
-      if (!existing || similarity > existing.similarity) {
-        byPath.set(key, { folder, fileName, mimeType: mimeType ?? null, similarity, ...rest });
+  const fuseResults = (results: Array<SearchResult>) => {
+    results.forEach((result, index) => {
+      const key = `${result.folder}${result.fileName}`;
+      const contribution = 1 / (RRF_K + index + 1);
+      const existing = fused.get(key);
+      if (existing) {
+        existing.similarity += contribution;
+      } else {
+        fused.set(key, { ...result, mimeType: result.mimeType ?? null, similarity: contribution });
       }
-    }
+    });
   };
 
-  if (clipResult.status === "fulfilled") addResults(clipResult.value);
-  if (clapResult.status === "fulfilled") addResults(clapResult.value);
-  if (transcriptResult.status === "fulfilled") addResults(transcriptResult.value);
+  if (clipResult.status === "fulfilled") fuseResults(clipResult.value);
+  if (clapResult.status === "fulfilled") fuseResults(clapResult.value);
+  if (transcriptResult.status === "fulfilled") fuseResults(transcriptResult.value);
 
-  const items = [...byPath.values()].sort((a, b) => b.similarity - a.similarity).slice(0, limit);
+  const items = [...fused.values()].sort((a, b) => b.similarity - a.similarity).slice(0, limit);
 
   // Only surface a hard failure when there is nothing to show AND both embedding
   // workers failed — otherwise partial results (e.g. transcript matches alone)
