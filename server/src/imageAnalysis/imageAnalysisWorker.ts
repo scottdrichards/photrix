@@ -164,20 +164,46 @@ const createWorkerHandle = (label: string): WorkerHandle => {
       });
       proc = child;
 
+      // The child's stdin can emit an async 'error' (e.g. EPIPE) if the Python
+      // process dies between requests. Without a listener Node escalates it to an
+      // uncaught exception and takes down the whole server. Swallow it here — the
+      // 'exit' handler rejects any pending requests and resets state so the next
+      // call respawns a fresh worker.
+      child.stdin.on("error", (error) => {
+        log.warn({ err: error }, "Image analysis worker stdin error (worker likely exited)");
+      });
+
       const ready = new Promise<void>((resolve, reject) => {
         let settled = false;
 
         const resolveReady = () => {
           if (settled) return;
+          clearTimeout(readyTimer);
           settled = true;
           resolve();
         };
 
         const rejectReady = (error: Error) => {
           if (settled) return;
+          clearTimeout(readyTimer);
           settled = true;
           reject(error);
         };
+
+        // Bound model load/init. Without this a worker that never emits "ready"
+        // leaves ensureReady awaiting forever, and because readyPromise is
+        // memoised that wedges every later request too. On timeout we kill the
+        // child so the exit handler resets state and the next call respawns.
+        const readyTimeoutMs =
+          Number(process.env.PHOTRIX_IMAGE_WORKER_READY_TIMEOUT_MS) || 5 * 60 * 1_000;
+        const readyTimer = setTimeout(() => {
+          rejectReady(
+            new Error(
+              `Image analysis worker (${label}) failed to become ready within ${readyTimeoutMs}ms`,
+            ),
+          );
+          child.kill();
+        }, readyTimeoutMs);
 
         createInterface({ input: child.stdout }).on("line", (line) => {
           onLine(line, resolveReady);
@@ -224,6 +250,13 @@ const createWorkerHandle = (label: string): WorkerHandle => {
     return new Promise<WorkerSuccess>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
+        // A timeout means the worker is wedged on a forward pass (a pathological
+        // image, a stuck model run). The Python side holds _clip_lock during the
+        // pass, so a hung analyzeImage permanently starves the embedText thread
+        // used by search — and the stuck request never returns on its own. Kill
+        // the process; the exit handler rejects any pending requests and resets
+        // state so the next call respawns a fresh worker (matches clapWorker).
+        proc?.kill();
         reject(new Error(`Image analysis worker (${label}) timed out for request ${id}`));
       }, REQUEST_TIMEOUT_MS);
 

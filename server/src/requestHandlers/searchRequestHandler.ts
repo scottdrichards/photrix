@@ -50,28 +50,49 @@ export const searchRequestHandler = async (
 
   const dbFilter = filter as Parameters<typeof database.semanticSearch>[1];
 
+  // Cap how long the whole search waits on any one source. The embedding-based
+  // searches depend on Python ML workers that can be slow or wedged (a stuck
+  // forward pass, a model still loading, CPU starvation from background work).
+  // Without a bound the handler would block on the slowest worker's internal
+  // timeout (CLIP 120s, CLAP 10min), so a single slow worker makes the whole
+  // request appear to hang. Time the laggards out and return whatever resolved.
+  const SEARCH_TIMEOUT_MS = Number(process.env.PHOTRIX_SEARCH_TIMEOUT_MS) || 15_000;
+  const withTimeout = <T>(p: Promise<T>, label: string): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`${label} search timed out after ${SEARCH_TIMEOUT_MS}ms`)),
+        SEARCH_TIMEOUT_MS,
+      );
+      p.then(
+        (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        (e: unknown) => {
+          clearTimeout(timer);
+          reject(e instanceof Error ? e : new Error(String(e)));
+        },
+      );
+    });
+
   // Run all three searches in parallel; failures in audio workers are non-fatal
   const [clipResult, clapResult, transcriptResult] = await Promise.allSettled([
-    (async () => {
-      const queryVector = await embedText(q);
-      return database.semanticSearch(queryVector, dbFilter, limit);
-    })(),
-    (async () => {
-      const queryVector = await embedTextWithClap(q);
-      return database.audioSemanticSearch(queryVector, dbFilter, limit);
-    })(),
-    database.audioTranscriptSearch(q, dbFilter, limit),
+    withTimeout(
+      (async () => {
+        const queryVector = await embedText(q);
+        return database.semanticSearch(queryVector, dbFilter, limit);
+      })(),
+      "image",
+    ),
+    withTimeout(
+      (async () => {
+        const queryVector = await embedTextWithClap(q);
+        return database.audioSemanticSearch(queryVector, dbFilter, limit);
+      })(),
+      "audio",
+    ),
+    withTimeout(database.audioTranscriptSearch(q, dbFilter, limit), "transcript"),
   ]);
-
-  if (clipResult.status === "rejected" && clapResult.status === "rejected") {
-    const message =
-      clipResult.reason instanceof Error ? clipResult.reason.message : String(clipResult.reason);
-    return writeJson(res, 503, {
-      error: "Search workers unavailable",
-      message,
-      hint: "Run: npm --prefix server run clip:python:install",
-    });
-  }
 
   type SearchResult = { folder: string; fileName: string; mimeType: string | null; similarity: number; [key: string]: unknown };
 
@@ -93,6 +114,23 @@ export const searchRequestHandler = async (
   if (transcriptResult.status === "fulfilled") addResults(transcriptResult.value);
 
   const items = [...byPath.values()].sort((a, b) => b.similarity - a.similarity).slice(0, limit);
+
+  // Only surface a hard failure when there is nothing to show AND both embedding
+  // workers failed — otherwise partial results (e.g. transcript matches alone)
+  // are still useful and should be returned rather than masked by a 503.
+  if (
+    items.length === 0 &&
+    clipResult.status === "rejected" &&
+    clapResult.status === "rejected"
+  ) {
+    const message =
+      clipResult.reason instanceof Error ? clipResult.reason.message : String(clipResult.reason);
+    return writeJson(res, 503, {
+      error: "Search workers unavailable",
+      message,
+      hint: "Run: npm --prefix server run clip:python:install",
+    });
+  }
 
   writeJson(res, 200, { items, total: items.length, query: q });
 };

@@ -105,14 +105,22 @@ const ensureWorkerReady = async (): Promise<void> => {
     }
 
     const pythonCommand = await resolvePythonCommand();
-    const device = process.env.PHOTRIX_CLAP_DEVICE ?? "cpu";
 
-    const child = spawn(pythonCommand, [CLAP_SCRIPT, device], {
+    const child = spawn(pythonCommand, [CLAP_SCRIPT], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       env: { ...process.env, HF_HOME: path.join(CACHE_DIR, "huggingface") },
     });
     worker = child;
+
+    // The child's stdin can emit an async 'error' (e.g. EPIPE) if the Python
+    // process dies between requests. Without a listener Node escalates it to an
+    // uncaught exception and takes down the whole server. Swallow it here — the
+    // 'exit' handler below rejects any pending requests and resets state so the
+    // next call respawns a fresh worker.
+    child.stdin.on("error", (error) => {
+      log.warn({ err: error }, "CLAP worker stdin error (worker likely exited)");
+    });
 
     log.info("Starting CLAP worker — may take a minute to download models on first run");
     const slowTimer = setTimeout(() => {
@@ -127,6 +135,7 @@ const ensureWorkerReady = async (): Promise<void> => {
       const resolveReady = () => {
         if (settled) return;
         clearTimeout(slowTimer);
+        clearTimeout(readyTimer);
         settled = true;
         log.info("CLAP worker ready");
         resolve();
@@ -135,9 +144,21 @@ const ensureWorkerReady = async (): Promise<void> => {
       const rejectReady = (error: Error) => {
         if (settled) return;
         clearTimeout(slowTimer);
+        clearTimeout(readyTimer);
         settled = true;
         reject(error);
       };
+
+      // Bound model load/init. Without this a worker that never emits "ready"
+      // (stuck import, partial model download) leaves ensureWorkerReady awaiting
+      // forever; because readyPromise is memoised that wedges every later
+      // request too. On timeout we kill the child so the exit handler resets
+      // state and the next call respawns a fresh worker.
+      const readyTimeoutMs = Number(process.env.PHOTRIX_CLAP_READY_TIMEOUT_MS) || 5 * 60 * 1_000;
+      const readyTimer = setTimeout(() => {
+        rejectReady(new Error(`CLAP worker failed to become ready within ${readyTimeoutMs}ms`));
+        child.kill();
+      }, readyTimeoutMs);
 
       createInterface({ input: child.stdout }).on("line", (line) => {
         onWorkerLine(line, resolveReady, (msg) =>
@@ -146,7 +167,7 @@ const ensureWorkerReady = async (): Promise<void> => {
       });
 
       createInterface({ input: child.stderr }).on("line", (line) => {
-        log.debug({ line }, "CLAP worker stderr");
+        log.warn({ line }, "CLAP worker stderr");
       });
 
       child.once("error", (error) => {
@@ -189,6 +210,9 @@ const sendRequest = async (payload: Record<string, unknown>): Promise<Float32Arr
   return new Promise<Float32Array>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
+      // Kill the hung worker — the exit handler will rejectAllPending and reset state
+      // so the next request starts a fresh process rather than inheriting the stuck one.
+      worker?.kill();
       reject(new Error(`CLAP worker timed out for request ${id}`));
     }, REQUEST_TIMEOUT_MS);
 
