@@ -187,7 +187,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   };
 
   return (
-    <dialog ref={dialogRef} onClose={onDismiss}>
+    <dialog ref={dialogRef} onClose={onDismiss} className={css.dialog}>
       <div className={css.dialogBody}>
         <h2>Server Status</h2>
         {!status && <progress />}

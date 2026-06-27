@@ -60,6 +60,7 @@ export const tables = {
       { name: "imageEmbedding", type: "BLOB" },
       { name: "embeddingProcessedAt", type: "INTEGER", indexExpression: true },
       { name: "embeddingErrorAt", type: "INTEGER", indexExpression: true },
+      { name: "analysisDecodeErrorAt", type: "INTEGER", indexExpression: true },
       { name: "audioTranscript", type: "TEXT" },
       { name: "audioTranscribedAt", type: "INTEGER", indexExpression: true },
       { name: "audioTranscribeErrorAt", type: "INTEGER", indexExpression: true },
@@ -86,13 +87,24 @@ export const tables = {
           "mimeType LIKE 'video/%' AND hlsGeneratedAt IS NULL AND exifProcessedAt IS NOT NULL",
       },
       {
-        name: "idx_images_needing_faces",
+        // Renamed from idx_images_needing_faces to add the analysisDecodeErrorAt
+        // exclusion — prepareTables drops the old index and creates this one.
+        name: "idx_images_needing_faces_v2",
         expression: "mimeType, facesProcessedAt",
-        where: "mimeType LIKE 'image/%' AND facesProcessedAt IS NULL",
+        where:
+          "mimeType LIKE 'image/%' AND facesProcessedAt IS NULL AND analysisDecodeErrorAt IS NULL",
       },
       {
-        name: "sort_date",
-        expression: "COALESCE(dateTaken, created, modified) DESC",
+        // Serves the default library ordering. The folder/fileName tiebreakers are
+        // part of the index so `ORDER BY COALESCE(...) DESC, folder, fileName LIMIT N`
+        // is satisfied by an index walk — no full scan + temp B-tree sort.
+        //
+        // Renamed from `sort_date` (which was a single-expression index): the index
+        // names are stable keys, so bumping the name lets prepareTables drop the old
+        // index and build this wider one. Plain `CREATE INDEX IF NOT EXISTS` under
+        // the same name would have left the old definition in place.
+        name: "sort_date_v2",
+        expression: "COALESCE(dateTaken, created, modified) DESC, folder, fileName",
       },
     ],
   },

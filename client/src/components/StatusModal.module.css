@@ -42,6 +42,10 @@
   color: var(--danger);
 }
 
+.dialog {
+  width: min(92vw, 600px);
+}
+
 .dialogBody {
   display: flex;
   flex-direction: column;

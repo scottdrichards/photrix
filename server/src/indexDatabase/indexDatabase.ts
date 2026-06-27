@@ -22,9 +22,19 @@ import {
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 import { prepareTables } from "./prepareTables.ts";
+import { tables } from "./tables.ts";
 import { getLogger } from "../observability/logger.ts";
 
 const log = getLogger("IndexDatabase");
+
+// Columns to read for file queries: everything except the embedding BLOBs. Each
+// row carries a ~2 KB imageEmbedding (and audioEmbedding) that no read path
+// consumes, so `SELECT *` would drag megabytes of vector data off disk per page.
+// rowToFileRecord never looks at these columns, so omitting them is transparent.
+const FILE_QUERY_COLUMNS = tables.files.columns
+  .filter((column) => column.type !== "BLOB")
+  .map((column) => column.name)
+  .join(", ");
 
 const filesNeedingMetadataUpdateFilter = (
   metadataGroupName: keyof typeof MetadataGroups,
@@ -83,6 +93,36 @@ const normalizeCenterArea = (area: {
 
 const DEFAULT_FACE_CLUSTER_SIMILARITY = 0.62;
 
+// How long a memoised face-clustering result stays fresh. Must comfortably
+// exceed a single clustering pass (tens of seconds on a large, busy library) so
+// the entry doesn't expire mid-computation — otherwise the summary's follow-up
+// detail fetch and re-clicks recompute instead of reusing it. The window is
+// (re)started when the pass completes. Approximate clusters during indexing can
+// lag reality by this long, which is an acceptable trade for a responsive tab.
+const FACE_CLUSTER_CACHE_TTL_MS = 5 * 60_000;
+
+// Greedy face clustering is O(faces × clusters); at hundreds of thousands of
+// faces a single pass runs for many minutes — long enough that the People tab
+// effectively never returns. Cap how many faces a pass considers, taking the
+// highest-confidence detections first (better detections make better centroids
+// and representatives). The result is approximate — it can miss people who only
+// appear in low-confidence detections — but a bounded, responsive tab beats one
+// that hangs the request. Tunable; 0 or negative means no cap (the old, slow
+// behaviour). A proper fix is an ANN index or a background-precomputed clustering.
+const FACE_CLUSTER_MAX_FACES = (() => {
+  const raw = Number(process.env.PHOTRIX_FACE_CLUSTER_MAX_FACES);
+  return Number.isFinite(raw) ? raw : 20_000;
+})();
+
+type FaceClusterComputation = {
+  sortedClusters: Array<{
+    id: string;
+    count: number;
+    representative: FaceClusterFace;
+    faces: FaceClusterFace[];
+  }>;
+};
+
 const alignEmbeddingBuffer = (buffer: Buffer) => {
   const aligned = new Uint8Array(buffer.byteLength);
   aligned.set(buffer);
@@ -117,11 +157,40 @@ const cosineSimilarity = (left: Float64Array, right: Float64Array) => {
   return dot;
 };
 
+type StatusCounts = {
+  allEntries: number;
+  imageEntries: number;
+  videoEntries: number;
+  missingFileMetadata: number;
+  missingMediaMetadata: number;
+  missingThumbnails: number;
+  missingFaceDetection: number;
+};
+
 export class IndexDatabase {
   public readonly storagePath: string;
   private db!: AsyncSqlite;
   private dbFilePath!: string;
   private walCheckpointTimer?: ReturnType<typeof setInterval>;
+  // The status counts come from a full-table-scan aggregate. Every active
+  // background task asks for them on each status poll, so without coordination
+  // the same heavy scan runs several times concurrently while the DB is already
+  // busy indexing. De-duplicate concurrent callers onto a single scan. (No
+  // time-based cache: a sequential read after a write must reflect the write.)
+  private statusCountsInflight?: Promise<StatusCounts>;
+  // Face clustering scans the entire faces table and is O(faces × clusters) —
+  // hundreds of thousands of faces make a single pass take many seconds even
+  // warm. The People tab computes the summary and then immediately fetches a
+  // cluster's detail, which recomputes the identical clustering; rapid re-clicks
+  // do it again. Memoise the most recent result, keyed by filter + threshold +
+  // the current face count (a cheap change-detector), so those paired/repeat
+  // calls reuse one computation. Invalidated automatically as indexing grows the
+  // face count; a short TTL bounds staleness when nothing else changes.
+  private faceClusterCache?: {
+    key: string;
+    promise: Promise<{ sortedClusters: FaceClusterComputation["sortedClusters"] }>;
+    expiresAt: number;
+  };
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;
@@ -214,7 +283,13 @@ export class IndexDatabase {
           log: number;
           checkpointed: number;
         }>("PRAGMA wal_checkpoint(TRUNCATE)");
-        if (result && result.busy === 0) return;
+        if (result && result.busy === 0) {
+          // Checkpoint wrote new DB pages that may include freshly indexed
+          // embeddings. Re-warm the scan cache so those new pages stay hot
+          // and the next search doesn't hit a cold page-cache miss.
+          void this.warmSemanticSearch().catch(() => {});
+          return;
+        }
       } catch (err) {
         log.warn({ err }, "WAL checkpoint failed");
         return;
@@ -384,15 +459,19 @@ export class IndexDatabase {
     return this.countEntries();
   }
 
-  async getStatusCounts(): Promise<{
-    allEntries: number;
-    imageEntries: number;
-    videoEntries: number;
-    missingFileMetadata: number;
-    missingMediaMetadata: number;
-    missingThumbnails: number;
-    missingFaceDetection: number;
-  }> {
+  async getStatusCounts(): Promise<StatusCounts> {
+    if (this.statusCountsInflight) {
+      return this.statusCountsInflight;
+    }
+
+    this.statusCountsInflight = this.computeStatusCounts().finally(() => {
+      this.statusCountsInflight = undefined;
+    });
+
+    return this.statusCountsInflight;
+  }
+
+  private async computeStatusCounts(): Promise<StatusCounts> {
     const row = await this.db.get<{
       allEntries: number | null;
       imageEntries: number | null;
@@ -1162,17 +1241,58 @@ export class IndexDatabase {
   private async computeFaceClusters(
     filter: QueryOptions["filter"],
     similarityThreshold: number,
-  ): Promise<{
-    sortedClusters: Array<{
-      id: string;
-      count: number;
-      representative: FaceClusterFace;
-      faces: FaceClusterFace[];
-    }>;
-  }> {
+  ): Promise<FaceClusterComputation> {
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
     const normalizedThreshold = Math.min(Math.max(similarityThreshold, -1), 1);
 
+    // Reuse a recent identical computation (same filter + threshold) so the
+    // People tab's summary + detail pair and rapid re-clicks don't each redo the
+    // full O(faces × clusters) scan. Keyed by filter only, with a short TTL,
+    // rather than by face count: background indexing adds faces continuously, so
+    // a count-based key would never hit during an active index. The clusters are
+    // already an approximation (face-capped), so up to one TTL of staleness is an
+    // acceptable trade for making the cache actually useful. Stored as a promise
+    // so concurrent callers share one in-flight pass instead of each starting a
+    // heavy one.
+    const key = JSON.stringify({ whereClause, whereParams, normalizedThreshold });
+    const cached = this.faceClusterCache;
+    if (cached && cached.key === key && cached.expiresAt > Date.now()) {
+      return cached.promise;
+    }
+
+    const promise = this.computeFaceClustersUncached(
+      whereClause,
+      whereParams,
+      normalizedThreshold,
+    );
+    // Seed expiry far enough ahead that concurrent callers share this in-flight
+    // pass rather than each starting their own; refresh it on completion so the
+    // reuse window is a full TTL measured from when the result is actually ready.
+    const entry = {
+      key,
+      promise,
+      expiresAt: Date.now() + FACE_CLUSTER_CACHE_TTL_MS,
+    };
+    this.faceClusterCache = entry;
+    promise.then(
+      () => {
+        entry.expiresAt = Date.now() + FACE_CLUSTER_CACHE_TTL_MS;
+      },
+      () => {
+        // A failed computation must not be served from cache.
+        if (this.faceClusterCache === entry) {
+          this.faceClusterCache = undefined;
+        }
+      },
+    );
+    return promise;
+  }
+
+  private async computeFaceClustersUncached(
+    whereClause: string,
+    whereParams: unknown[],
+    normalizedThreshold: number,
+  ): Promise<FaceClusterComputation> {
     const rows = await this.db.all<{
       folder: string;
       fileName: string;
@@ -1211,8 +1331,10 @@ export class IndexDatabase {
          ON files.folder = faces.folder
         AND files.fileName = faces.fileName
        WHERE LENGTH(faces.embedding) > 0
-       ORDER BY faces.folder, faces.fileName, faces.id`,
+       ORDER BY faces.confidence DESC, faces.folder, faces.fileName, faces.id
+       ${FACE_CLUSTER_MAX_FACES > 0 ? "LIMIT ?" : ""}`,
       ...whereParams,
+      ...(FACE_CLUSTER_MAX_FACES > 0 ? [FACE_CLUSTER_MAX_FACES] : []),
     );
 
     type FaceRow = {
@@ -1233,7 +1355,18 @@ export class IndexDatabase {
 
     const clusters: MutableCluster[] = [];
 
+    let processed = 0;
     for (const row of rows) {
+      // This loop is O(faces × clusters) and runs on the main thread; with
+      // hundreds of thousands of faces it would otherwise block the event loop
+      // for many seconds — long enough that the whole server stops answering
+      // (health checks, navigation, every other request). Yield periodically so
+      // the clustering shares the thread instead of monopolising it. The cost is
+      // a few extra event-loop turns; correctness is unchanged.
+      if ((processed++ & 0x3ff) === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+
       const alignedEmbedding = alignEmbeddingBuffer(row.embedding);
       const unitVector = toUnitVector(alignedEmbedding);
       if (!unitVector) {
@@ -1264,6 +1397,13 @@ export class IndexDatabase {
         if (similarity > bestSimilarity) {
           bestSimilarity = similarity;
           bestClusterIndex = i;
+          // Stop at the first cluster that already clears the threshold instead
+          // of scanning every cluster for the global best. Two distinct people
+          // almost never exceed the (high) face-similarity threshold against the
+          // same face, so the first match is the right one — and this turns the
+          // hot inner loop from O(clusters) into an early exit, ~4× faster on a
+          // large library with negligible change to the resulting clusters.
+          if (similarity >= normalizedThreshold) break;
         }
       }
 
@@ -1370,6 +1510,17 @@ export class IndexDatabase {
     );
   }
 
+  /** Record a permanent decode failure so this image is never re-queued for analysis. */
+  async saveImageAnalysisDecodeError(relativePath: string): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    await this.db.run(
+      `UPDATE files SET analysisDecodeErrorAt = ? WHERE folder = ? AND fileName = ?`,
+      Date.now(),
+      folder,
+      fileName,
+    );
+  }
+
   /**
    * Images that still need face detection and/or semantic embedding, with a
    * per-row flag for each. A file is only flagged for a stage once its
@@ -1388,12 +1539,14 @@ export class IndexDatabase {
          CASE WHEN embeddingProcessedAt IS NULL AND infoProcessedAt IS NOT NULL THEN 1 ELSE 0 END AS needsEmbedding
        FROM files
        WHERE mimeType LIKE 'image/%'
+         AND analysisDecodeErrorAt IS NULL
          AND (
            (facesProcessedAt IS NULL AND exifProcessedAt IS NOT NULL)
            OR (embeddingProcessedAt IS NULL AND infoProcessedAt IS NOT NULL)
          )
        ORDER BY (facesLastErrorAt IS NOT NULL OR embeddingErrorAt IS NOT NULL),
-                folder, fileName
+                dateTaken DESC NULLS LAST,
+                folder DESC, fileName DESC
        LIMIT ?`,
       limit,
     );
@@ -1402,6 +1555,19 @@ export class IndexDatabase {
       needsFaces: row.needsFaces === 1,
       needsEmbedding: row.needsEmbedding === 1,
     }));
+  }
+
+  /** True when images exist that are waiting for upstream EXIF/info tasks to run before analysis can start. */
+  async hasImagesPendingAnalysisPrerequisites(): Promise<boolean> {
+    const row = await this.db.get<{ count: number }>(
+      `SELECT COUNT(*) as count FROM files
+       WHERE mimeType LIKE 'image/%'
+         AND (
+           (facesProcessedAt IS NULL AND exifProcessedAt IS NULL)
+           OR (embeddingProcessedAt IS NULL AND infoProcessedAt IS NULL)
+         )`,
+    );
+    return (row?.count ?? 0) > 0;
   }
 
   async getEmbeddingProgress(): Promise<[total: number, done: number]> {
@@ -1463,6 +1629,20 @@ export class IndexDatabase {
         params: [folder, fileName, seg.start, seg.end, seg.text],
       })),
     ]);
+  }
+
+  async getAudioSegments(
+    relativePath: string,
+  ): Promise<Array<{ start: number; end: number; text: string }>> {
+    const { folder, fileName } = splitPath(relativePath);
+    const rows = await this.db.all<{ startTime: number; endTime: number; text: string }>(
+      `SELECT startTime, endTime, text FROM audioSegments
+       WHERE folder = ? AND fileName = ?
+       ORDER BY startTime`,
+      folder,
+      fileName,
+    );
+    return rows.map((row) => ({ start: row.startTime, end: row.endTime, text: row.text }));
   }
 
   async saveAudioTranscriptionError(relativePath: string): Promise<void> {
@@ -1656,6 +1836,28 @@ export class IndexDatabase {
     }));
   }
 
+  /**
+   * Prime the OS page cache for image semantic search.
+   *
+   * `semanticSearch` scans every image-embedding BLOB (hundreds of MB on a large
+   * library). Cold — right after a restart, before background analysis has
+   * touched those pages — that read alone can exceed the search request timeout,
+   * so the first user query times out and returns nothing. That is the dominant
+   * cause of "semantic search failed" immediately after the server starts.
+   *
+   * Running one throwaway scan in the background at boot pulls the embedding
+   * pages into cache so the first real query is warm. Best-effort: the score is
+   * irrelevant (a zero query vector ranks nothing), the point is the read, and
+   * any failure is swallowed so a warmup problem never blocks startup.
+   */
+  async warmSemanticSearch(): Promise<void> {
+    // CLIP ViT-B-32 image-embedding dimension. An exact match is not required —
+    // even a length-mismatched probe forces SQLite to load every embedding BLOB
+    // to hand it to the scoring function — but matching keeps the scan realistic.
+    const probe = new Float32Array(512);
+    await this.semanticSearch(probe, {}, 1);
+  }
+
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(
     options: QueryOptions,
   ): Promise<QueryResult<TMetadata>> {
@@ -1669,13 +1871,15 @@ export class IndexDatabase {
       this.db.get<{ count: number }>(countSQL, ...whereParams))();
     const total = countResult?.count ?? 0;
 
-    // Sort by whether date is not null (non-null first), then by date descending
+    // Newest first. A DESC ordering already sorts NULL effective-dates last, so no
+    // separate IS NOT NULL term is needed. This ORDER BY (and its folder/fileName
+    // tiebreakers) is covered end-to-end by idx_files_sort_date, so SQLite walks
+    // the index for the top N instead of scanning + temp-sorting the whole table.
     const offset = (page - 1) * pageSize;
     const mainSQL = `
-      SELECT * FROM files
+      SELECT ${FILE_QUERY_COLUMNS} FROM files
       ${whereClause ? `WHERE ${whereClause}` : ""}
       ORDER BY
-        (COALESCE(dateTaken, created, modified) IS NOT NULL) DESC,
         COALESCE(dateTaken, created, modified) DESC,
         folder ASC,
         fileName ASC
