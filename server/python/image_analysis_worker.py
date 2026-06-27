@@ -63,6 +63,17 @@ _text_queue: queue.SimpleQueue[tuple[int, str] | None] = queue.SimpleQueue()
 # analyzeImage payloads are enqueued here and processed by the main thread.
 _image_queue: queue.SimpleQueue[dict | None] = queue.SimpleQueue()
 
+# Foreground (search) embedText requests must preempt the background image
+# backlog. The Node side caps how many analyzeImage requests it dispatches, but
+# several can still be sitting in _image_queue, and the main thread would drain
+# them one CLIP pass at a time before the text thread ever wins _clip_lock — so a
+# search query waits behind the whole queued backlog and times out under load.
+# _text_pending counts queued/in-flight embedText requests; the image loop waits
+# on this condition before starting each (CPU-heavy) image pass, so a search is
+# delayed by at most the single image pass already running, never the backlog.
+_text_pending = 0
+_text_cond = threading.Condition()
+
 
 def send(payload: dict) -> None:
     with _send_lock:
@@ -216,6 +227,7 @@ def _embed_text(text: str) -> list[float]:
 
 def _run_text_worker() -> None:
     """Drain _text_queue, processing embedText requests as they arrive."""
+    global _text_pending
     while True:
         item = _text_queue.get()
         if item is None:
@@ -225,6 +237,12 @@ def _run_text_worker() -> None:
             send({"id": req_id, "embedding": _embed_text(text)})
         except Exception as exc:  # noqa: BLE001
             send({"id": req_id, "error": str(exc)})
+        finally:
+            # Release the image loop once the foreground backlog clears.
+            with _text_cond:
+                _text_pending -= 1
+                if _text_pending == 0:
+                    _text_cond.notify_all()
 
 
 # --------------------------------------------------------------------------- #
@@ -244,7 +262,18 @@ def _handle_analyze_image(payload: dict) -> dict:
         return {"id": req_id, "error": "Nothing requested: set faces and/or embed"}
 
     # A decode failure fails the whole request; both parts share the one decode.
-    rgb = _load_oriented_rgb(image_path)
+    # It must NOT propagate: this runs on the main thread, and an uncaught
+    # exception here kills the worker process — taking down the search
+    # text-embedding thread that shares it. Corrupt/truncated images are common
+    # in a large library (e.g. PIL "image file is truncated"), so report the
+    # decode failure as a per-request error and keep serving.
+    #
+    # Decode failures are permanent (a truncated file won't fix itself), so
+    # "permanent": True tells the Node side to skip this file on future runs.
+    try:
+        rgb = _load_oriented_rgb(image_path)
+    except Exception as exc:  # noqa: BLE001 - report and keep the worker alive
+        return {"id": req_id, "error": str(exc), "permanent": True}
 
     response: dict = {"id": req_id}
     if want_faces:
@@ -267,6 +296,7 @@ def _run_stdin_reader() -> None:
     thread never delays an incoming embedText request from reaching the text
     thread.
     """
+    global _text_pending
     for line in sys.stdin:
         raw = line.strip()
         if not raw:
@@ -286,6 +316,10 @@ def _run_stdin_reader() -> None:
                 text = payload.get("text")
                 if not isinstance(text, str) or not text:
                     raise ValueError("text must be a non-empty string")
+                # Mark a foreground request pending *before* enqueuing so the
+                # image loop sees it and stops starting new background passes.
+                with _text_cond:
+                    _text_pending += 1
                 _text_queue.put((req_id, text))
             else:
                 raise ValueError(f"Unknown operation: {operation!r}")
@@ -310,7 +344,23 @@ def main() -> int:
         item = _image_queue.get()
         if item is None:
             break
-        send(_handle_analyze_image(item))
+        # Let any pending foreground search embedding go first. The text thread
+        # and this loop share _clip_lock and the box's CPU; without yielding here
+        # a queued backlog of image passes would each take the lock ahead of a
+        # waiting search and push it past the Node-side timeout. Waiting here
+        # bounds a search's delay to the single image pass already in flight.
+        with _text_cond:
+            while _text_pending > 0:
+                _text_cond.wait()
+        # Last line of defence: no single image may ever crash the worker, because
+        # that also kills the shared search text-embedding thread and forces a
+        # cold model reload. _handle_analyze_image already converts expected
+        # failures to error responses; this guards anything unforeseen.
+        try:
+            send(_handle_analyze_image(item))
+        except Exception as exc:  # noqa: BLE001 - keep the worker alive no matter what
+            req_id = item.get("id") if isinstance(item, dict) else None
+            send({"id": req_id, "error": str(exc)})
 
     text_thread.join()
     return 0

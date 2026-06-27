@@ -5,6 +5,10 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { CACHE_DIR } from "../common/cacheUtils.js";
 import { getLogger } from "../observability/logger.ts";
+import {
+  COMPUTE_WORKER_IDS,
+  registerComputeWorker,
+} from "../taskOrchestrator/computeWorkers.ts";
 
 const log = getLogger("whisperWorker");
 
@@ -31,6 +35,10 @@ let readyPromise: Promise<void> | null = null;
 const pending = new Map<number, PendingRequest>();
 
 const isWindows = process.platform === "win32";
+
+// Whisper is background-only (transcription), so it can be frozen wholesale
+// while a user request is in flight.
+registerComputeWorker(COMPUTE_WORKER_IDS.whisper, () => worker?.pid ?? null);
 
 const canAccess = async (targetPath: string): Promise<boolean> => {
   try {
@@ -103,14 +111,23 @@ const ensureWorkerReady = async (): Promise<void> => {
     }
 
     const pythonCommand = await resolvePythonCommand();
-    const device = process.env.PHOTRIX_WHISPER_DEVICE ?? "cpu";
 
-    const child = spawn(pythonCommand, [WHISPER_SCRIPT, device], {
+    log.info("Starting Whisper worker — may take a minute on first run");
+    const child = spawn(pythonCommand, [WHISPER_SCRIPT], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       env: { ...process.env, HF_HOME: path.join(CACHE_DIR, "huggingface") },
     });
     worker = child;
+
+    // The child's stdin can emit an async 'error' (e.g. EPIPE) if the Python
+    // process dies between requests. Without a listener Node escalates it to an
+    // uncaught exception and takes down the whole server. Swallow it here — the
+    // 'exit' handler rejects any pending requests and resets state so the next
+    // call respawns a fresh worker.
+    child.stdin.on("error", (error) => {
+      log.warn({ err: error }, "Whisper worker stdin error (worker likely exited)");
+    });
 
     const ready = new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -118,6 +135,7 @@ const ensureWorkerReady = async (): Promise<void> => {
       const resolveReady = () => {
         if (settled) return;
         settled = true;
+        log.info("Whisper worker ready");
         resolve();
       };
 
@@ -144,11 +162,13 @@ const ensureWorkerReady = async (): Promise<void> => {
       });
 
       child.once("exit", (code, signal) => {
+        const pendingCount = pending.size;
         worker = null;
         readyPromise = null;
         const err = new Error(
           `Whisper worker exited${signal ? ` with signal ${signal}` : ` with code ${code ?? "unknown"}`}`,
         );
+        log.warn({ code, signal, pendingCount }, "Whisper worker exited");
         rejectAllPending(err);
         if (!settled) rejectReady(err);
       });

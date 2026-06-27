@@ -50,15 +50,40 @@ def transcribe(model, video_path: str) -> list:
     return result
 
 
+def _cuda_rt_available() -> bool:
+    """Check whether ctranslate2 can actually load CUDA runtime libraries."""
+    try:
+        import ctranslate2
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        return False
+
+
+def detect_device() -> str:
+    try:
+        import torch
+        if torch.cuda.is_available() and _cuda_rt_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def _is_cuda_lib_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return "cannot be loaded" in msg or "libcublas" in msg or "CUDA error" in msg
+
+
 def main():
-    device = sys.argv[1] if len(sys.argv) > 1 else "cpu"
+    device = detect_device()
 
     try:
         model = load_model(device)
     except Exception as e:
         if device == "cuda":
             try:
-                model = load_model("cpu")
+                device = "cpu"
+                model = load_model(device)
             except Exception as e2:
                 send({"type": "error", "error": str(e2)})
                 sys.exit(1)
@@ -66,7 +91,7 @@ def main():
             send({"type": "error", "error": str(e)})
             sys.exit(1)
 
-    send({"type": "ready"})
+    send({"type": "ready", "device": device})
 
     for line in sys.stdin:
         line = line.strip()
@@ -83,7 +108,17 @@ def main():
 
         try:
             if operation == "transcribe":
-                segments = transcribe(model, request["videoPath"])
+                try:
+                    segments = transcribe(model, request["videoPath"])
+                except Exception as e:
+                    # ctranslate2 loads CUDA libs lazily; if the runtime is
+                    # missing at inference time, fall back to CPU silently.
+                    if device == "cuda" and _is_cuda_lib_error(e):
+                        device = "cpu"
+                        model = load_model("cpu")
+                        segments = transcribe(model, request["videoPath"])
+                    else:
+                        raise
                 send({"id": req_id, "segments": segments})
             else:
                 send({"id": req_id, "error": f"Unknown operation: {operation}"})

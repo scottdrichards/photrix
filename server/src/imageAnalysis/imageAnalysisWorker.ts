@@ -5,6 +5,12 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { CACHE_DIR } from "../common/cacheUtils.js";
 import { getLogger } from "../observability/logger.ts";
+import {
+  COMPUTE_WORKER_IDS,
+  registerComputeWorker,
+  withForegroundWorker,
+  awaitForegroundIdle,
+} from "../taskOrchestrator/computeWorkers.ts";
 import type { DetectedFace } from "../faceDetection/faceDetector.type.ts";
 
 const log = getLogger("imageAnalysisWorker");
@@ -38,8 +44,20 @@ type WorkerSuccess = {
 
 type WorkerResponse =
   | { type: "ready" }
-  | { id: number | null; error: string }
+  | { id: number | null; error: string; permanent?: boolean }
   | WorkerSuccess;
+
+/** Thrown when the image itself is unreadable (truncated, corrupt, missing).
+ *  Unlike transient worker errors (timeout, crash), this will never succeed on
+ *  retry, so callers should record a permanent skip rather than scheduling a
+ *  re-run.
+ */
+export class PermanentImageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermanentImageError";
+  }
+}
 
 export type AnalyzeImageOptions = { faces: boolean; embed: boolean };
 
@@ -139,7 +157,10 @@ const createWorkerHandle = (label: string): WorkerHandle => {
     clearTimeout(request.timer);
 
     if ("error" in message) {
-      request.reject(new Error(message.error));
+      const err = message.permanent
+        ? new PermanentImageError(message.error)
+        : new Error(message.error);
+      request.reject(err);
       return;
     }
 
@@ -157,6 +178,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
       const pythonCommand = await resolvePythonCommand();
       const provider = process.env.PHOTRIX_CLIP_PROVIDER ?? "CPUExecutionProvider";
 
+      log.info({ label, provider }, "Starting image analysis worker — may take a minute on first run");
       const child = spawn(pythonCommand, [WORKER_SCRIPT, provider], {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
@@ -180,6 +202,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
           if (settled) return;
           clearTimeout(readyTimer);
           settled = true;
+          log.info({ label }, "Image analysis worker ready");
           resolve();
         };
 
@@ -222,11 +245,13 @@ const createWorkerHandle = (label: string): WorkerHandle => {
         });
 
         child.once("exit", (code, signal) => {
+          const pendingCount = pending.size;
           proc = null;
           readyPromise = null;
           const err = new Error(
             `Image analysis worker (${label}) exited${signal ? ` with signal ${signal}` : ` with code ${code ?? "unknown"}`}`,
           );
+          log.warn({ label, code, signal, pendingCount }, "Image analysis worker exited");
           rejectAllPending(err);
           if (!settled) rejectReady(err);
         });
@@ -256,6 +281,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
         // used by search — and the stuck request never returns on its own. Kill
         // the process; the exit handler rejects any pending requests and resets
         // state so the next call respawns a fresh worker (matches clapWorker).
+        log.warn({ label, id, timeoutMs: REQUEST_TIMEOUT_MS }, "Image analysis worker timed out — killing process");
         proc?.kill();
         reject(new Error(`Image analysis worker (${label}) timed out for request ${id}`));
       }, REQUEST_TIMEOUT_MS);
@@ -277,6 +303,14 @@ const createWorkerHandle = (label: string): WorkerHandle => {
 
 const analysisWorker = createWorkerHandle("analysis");
 
+// Let the orchestrator freeze this process while a user request is in flight.
+// embedText (search) is routed through withForegroundWorker below so a query is
+// never blocked by a background suspension of the shared worker.
+registerComputeWorker(
+  COMPUTE_WORKER_IDS.image,
+  () => analysisWorker.getProcess()?.pid ?? null,
+);
+
 /**
  * Decode an image once and run the requested model(s). The caller asks only for
  * the parts a file is still missing, so completed work is never recomputed.
@@ -285,6 +319,9 @@ export const analyzeImage = async (
   imagePath: string,
   { faces, embed }: AnalyzeImageOptions,
 ): Promise<ImageAnalysisResult> => {
+  // Yield to any in-flight foreground search embedding: it shares this process
+  // and its model lock, so dispatching background passes first would starve it.
+  await awaitForegroundIdle(COMPUTE_WORKER_IDS.image);
   await analysisWorker.ensureReady();
   if (!analysisWorker.getProcess()) throw new Error("Image analysis worker is not available");
 
@@ -303,10 +340,14 @@ export const analyzeImage = async (
   return result;
 };
 
-export const embedText = async (text: string): Promise<Float32Array> => {
-  await analysisWorker.ensureReady();
-  if (!analysisWorker.getProcess()) throw new Error("Image analysis worker is not available");
-  const raw = await analysisWorker.send({ operation: "embedText", text });
-  if (!raw.embedding) throw new Error("Image analysis worker returned no embedding");
-  return new Float32Array(raw.embedding);
-};
+export const embedText = (text: string): Promise<Float32Array> =>
+  // Pin the worker awake for the duration: this is the foreground search path,
+  // and the same process may currently be SIGSTOP'd for background work.
+  withForegroundWorker(COMPUTE_WORKER_IDS.image, async () => {
+    await analysisWorker.ensureReady();
+    if (!analysisWorker.getProcess())
+      throw new Error("Image analysis worker is not available");
+    const raw = await analysisWorker.send({ operation: "embedText", text });
+    if (!raw.embedding) throw new Error("Image analysis worker returned no embedding");
+    return new Float32Array(raw.embedding);
+  });

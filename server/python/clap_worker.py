@@ -22,7 +22,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 
 import numpy as np
 
@@ -37,35 +36,6 @@ CHUNK_SECONDS = 10
 MODEL_ID = "laion/larger_clap_music_and_speech"
 
 
-def extract_audio(video_path: str, wav_path: str) -> None:
-    """Extract mono 48 kHz PCM audio from any video/audio file via ffmpeg."""
-    subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-ar", str(TARGET_SR),
-            "-ac", "1",
-            "-f", "wav",
-            wav_path,
-        ],
-        check=True,
-        capture_output=True,
-    )
-
-
-def load_audio(wav_path: str) -> np.ndarray:
-    import soundfile as sf
-
-    audio, sr = sf.read(wav_path, dtype="float32")
-    if audio.ndim > 1:
-        audio = audio.mean(axis=1)
-    if sr != TARGET_SR:
-        # Resample if soundfile gave a different rate (shouldn't happen after ffmpeg)
-        import librosa
-        audio = librosa.resample(audio, orig_sr=sr, target_sr=TARGET_SR)
-    return audio
-
-
 def _features(output):
     """Extract the projected embedding tensor.
 
@@ -76,29 +46,63 @@ def _features(output):
     return getattr(output, "pooler_output", output)
 
 
-def embed_audio(model, processor, audio: np.ndarray, device: str) -> list:
+def _embed_chunk(model, processor, chunk: np.ndarray, device: str) -> np.ndarray:
     import torch
 
-    chunk_size = TARGET_SR * CHUNK_SECONDS
-    # Split into fixed-length chunks; pad the last one
-    chunks = [audio[i : i + chunk_size] for i in range(0, max(len(audio), 1), chunk_size)]
-    if chunks and len(chunks[-1]) < chunk_size:
-        chunks[-1] = np.pad(chunks[-1], (0, chunk_size - len(chunks[-1])))
+    inputs = processor(audio=chunk, sampling_rate=TARGET_SR, return_tensors="pt")
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    with torch.no_grad():
+        feat = _features(model.get_audio_features(**inputs))
+        feat = feat / feat.norm(dim=-1, keepdim=True)
+    return feat.cpu().float().numpy()[0]
+
+
+def embed_audio_streaming(model, processor, video_path: str, device: str) -> list:
+    """Stream raw float32 PCM from ffmpeg in fixed chunks; never loads the full audio into memory."""
+    chunk_samples = TARGET_SR * CHUNK_SECONDS
+    chunk_bytes = chunk_samples * 4  # float32 = 4 bytes per sample
+
+    proc = subprocess.Popen(
+        [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-ar", str(TARGET_SR),
+            "-ac", "1",
+            "-f", "f32le",  # raw 32-bit float PCM, little-endian
+            "pipe:1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
 
     embeddings = []
-    for chunk in chunks:
-        inputs = processor(audio=chunk, sampling_rate=TARGET_SR, return_tensors="pt")
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        with torch.no_grad():
-            features = _features(model.get_audio_features(**inputs))
-            features = features / features.norm(dim=-1, keepdim=True)
-            embeddings.append(features.cpu().float().numpy()[0])
+    buf = bytearray()
+
+    try:
+        while True:
+            piece = proc.stdout.read(65536)
+            if not piece:
+                break
+            buf.extend(piece)
+            while len(buf) >= chunk_bytes:
+                chunk = np.frombuffer(bytes(buf[:chunk_bytes]), dtype=np.float32).copy()
+                del buf[:chunk_bytes]
+                embeddings.append(_embed_chunk(model, processor, chunk, device))
+        # Process any remaining samples (partial final chunk)
+        if buf:
+            chunk = np.frombuffer(bytes(buf), dtype=np.float32).copy()
+            chunk = np.pad(chunk, (0, chunk_samples - len(chunk)))
+            embeddings.append(_embed_chunk(model, processor, chunk, device))
+    finally:
+        proc.stdout.close()
+        proc.wait()
+
+    if not embeddings:
+        raise ValueError("No audio could be extracted from the file")
 
     avg = np.mean(embeddings, axis=0)
     norm = np.linalg.norm(avg)
-    if norm > 0:
-        avg = avg / norm
-    return avg.tolist()
+    return (avg / norm if norm > 0 else avg).tolist()
 
 
 def embed_text(model, processor, text: str, device: str) -> list:
@@ -113,15 +117,11 @@ def embed_text(model, processor, text: str, device: str) -> list:
 
 
 def main():
-    device_arg = sys.argv[1] if len(sys.argv) > 1 else "cpu"
-    device = "cuda" if "cuda" in device_arg.lower() else "cpu"
-
     try:
         import torch
         from transformers import ClapModel, ClapProcessor
 
-        if device == "cuda" and not torch.cuda.is_available():
-            device = "cpu"
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
         hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
         model = ClapModel.from_pretrained(MODEL_ID, cache_dir=hf_home)
@@ -132,7 +132,7 @@ def main():
         send({"type": "error", "error": f"Failed to load CLAP model: {e}"})
         sys.exit(1)
 
-    send({"type": "ready"})
+    send({"type": "ready", "device": device})
 
     for line in sys.stdin:
         line = line.strip()
@@ -150,15 +150,8 @@ def main():
         try:
             if operation == "embedAudio":
                 video_path = request["videoPath"]
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                    tmp_path = tmp.name
-                try:
-                    extract_audio(video_path, tmp_path)
-                    audio = load_audio(tmp_path)
-                    embedding = embed_audio(model, processor, audio, device)
-                    send({"id": req_id, "embedding": embedding})
-                finally:
-                    os.unlink(tmp_path)
+                embedding = embed_audio_streaming(model, processor, video_path, device)
+                send({"id": req_id, "embedding": embedding})
 
             elif operation == "embedText":
                 embedding = embed_text(model, processor, request["text"], device)

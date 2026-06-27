@@ -5,6 +5,12 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { CACHE_DIR } from "../common/cacheUtils.js";
 import { getLogger } from "../observability/logger.ts";
+import {
+  COMPUTE_WORKER_IDS,
+  registerComputeWorker,
+  withForegroundWorker,
+  awaitForegroundIdle,
+} from "../taskOrchestrator/computeWorkers.ts";
 
 const log = getLogger("clapWorker");
 
@@ -28,6 +34,11 @@ let readyPromise: Promise<void> | null = null;
 const pending = new Map<number, PendingRequest>();
 
 const isWindows = process.platform === "win32";
+
+// Allow the orchestrator to freeze the worker during user requests. embedText
+// (search) is routed through withForegroundWorker, so a query is never blocked
+// by a background suspension of this shared process.
+registerComputeWorker(COMPUTE_WORKER_IDS.clap, () => worker?.pid ?? null);
 
 const canAccess = async (targetPath: string): Promise<boolean> => {
   try {
@@ -179,11 +190,13 @@ const ensureWorkerReady = async (): Promise<void> => {
       });
 
       child.once("exit", (code, signal) => {
+        const pendingCount = pending.size;
         worker = null;
         readyPromise = null;
         const err = new Error(
           `CLAP worker exited${signal ? ` with signal ${signal}` : ` with code ${code ?? "unknown"}`}`,
         );
+        log.warn({ code, signal, pendingCount }, "CLAP worker exited");
         rejectAllPending(err);
         if (!settled) rejectReady(err);
       });
@@ -212,6 +225,7 @@ const sendRequest = async (payload: Record<string, unknown>): Promise<Float32Arr
       pending.delete(id);
       // Kill the hung worker — the exit handler will rejectAllPending and reset state
       // so the next request starts a fresh process rather than inheriting the stuck one.
+      log.warn({ id, timeoutMs: REQUEST_TIMEOUT_MS }, "CLAP worker timed out — killing process");
       worker?.kill();
       reject(new Error(`CLAP worker timed out for request ${id}`));
     }, REQUEST_TIMEOUT_MS);
@@ -228,8 +242,14 @@ const sendRequest = async (payload: Record<string, unknown>): Promise<Float32Arr
   });
 };
 
-export const embedAudioWithClap = (videoPath: string): Promise<Float32Array> =>
-  sendRequest({ operation: "embedAudio", videoPath });
+export const embedAudioWithClap = async (videoPath: string): Promise<Float32Array> => {
+  // Yield to any in-flight foreground search embedding: it shares this process
+  // and its model lock, so dispatching background passes first would starve it.
+  await awaitForegroundIdle(COMPUTE_WORKER_IDS.clap);
+  return sendRequest({ operation: "embedAudio", videoPath });
+};
 
 export const embedTextWithClap = (text: string): Promise<Float32Array> =>
-  sendRequest({ operation: "embedText", text });
+  withForegroundWorker(COMPUTE_WORKER_IDS.clap, () =>
+    sendRequest({ operation: "embedText", text }),
+  );
