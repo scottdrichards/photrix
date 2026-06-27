@@ -1,6 +1,6 @@
 import type { BackgroundTaskStatus } from "../../../shared/filter-contract/src/index.ts";
 import { getLogger } from "../observability/logger.ts";
-import { isSystemOverloaded } from "./systemLoad.ts";
+import { isSystemOverloaded, getAvailableMemoryMB } from "./systemLoad.ts";
 
 const log = getLogger("TaskOrchestrator");
 
@@ -14,7 +14,10 @@ const DUTY_ON_MS = Number(process.env.PHOTRIX_BG_DUTY_ON_MS) || 2_000;
 const DUTY_OFF_MS = Number(process.env.PHOTRIX_BG_DUTY_OFF_MS) || 2_000;
 
 export type QueueType = "blocking" | "implied" | "background";
-type Resources = "gpu" | "cpu" | "disk" | "network";
+// cpu/gpu/disk/network are notional fractions (0–1) tracked as reservations.
+// memoryMB is checked against actual OS available memory (MemAvailable on Linux)
+// minus already-reserved MB, so the system never over-commits RAM.
+type Resources = "gpu" | "cpu" | "disk" | "network" | "memoryMB";
 
 type TaskType =
   | "imageConversion"
@@ -37,9 +40,9 @@ const getResourceRequirements = (type?: TaskType): Partial<Record<Resources, num
     // Heavy combined pass (decode + face detection + CLIP). The dominant
     // background CPU consumer; leaves only a sliver so a single user-triggered
     // image conversion can still slip alongside it.
-    imageAnalysis: { cpu: 0.75 },
-    audioTranscription: { gpu: 0.5, cpu: 0.5 },
-    audioEmbedding: { gpu: 0.5, cpu: 0.5 },
+    imageAnalysis: { cpu: 0.75, memoryMB: 2500 },
+    audioTranscription: { gpu: 0.5, cpu: 0.5, memoryMB: 3500 },
+    audioEmbedding: { gpu: 0.5, cpu: 0.5, memoryMB: 2000 },
   };
   return type ? mappings[type] : {};
 };
@@ -69,6 +72,7 @@ export type Task = {
   name: string;
   start: () => TaskRunner;
   type?: TaskType;
+  resources?: Partial<Record<Resources, number>>;
   priority?: TaskPriority;
 };
 
@@ -90,15 +94,32 @@ export type TaskOrchestrator = {
   // Signal that a user request is being served, so background/implied work backs
   // off for a short cooldown and frees disk/CPU for the request.
   noteUserActivity: () => void;
+  // Bracket a user request so background/implied work stays fully backed off for
+  // the request's *entire* duration, not just a fixed cooldown. A single search
+  // can run 10–15s on a busy box (cold model load, a starved vector scan); the
+  // cooldown alone lets background workers resume mid-request and re-starve it.
+  // Every beginUserRequest must be paired with exactly one endUserRequest.
+  beginUserRequest: () => void;
+  endUserRequest: () => void;
 };
 
 const canRunTask = (
   state: Record<Resources, number>,
   requirements: Partial<Record<Resources, number>>,
-) =>
-  Object.entries(requirements).every(
-    ([resource, amount]) => state[resource as Resources] + (amount ?? 0) <= 1,
-  );
+  availableMemoryMB: () => number,
+): boolean => {
+  for (const [resource, amount] of Object.entries(requirements)) {
+    if (amount == null) continue;
+    if (resource === "memoryMB") {
+      // Compare against live OS memory minus what's already reserved, so the
+      // system never over-commits RAM across concurrent ML workers.
+      if (availableMemoryMB() - state.memoryMB < amount) return false;
+    } else {
+      if (state[resource as Resources] + amount > 1) return false;
+    }
+  }
+  return true;
+};
 
 const checkoutResources = (
   state: Record<Resources, number>,
@@ -132,50 +153,43 @@ const normalizeProgressValue = (value: number | undefined) => {
   return Math.max(0, Math.min(1, value));
 };
 
-const describeStatusError = (error: unknown) => {
-  if (error instanceof Error && error.message) {
-    return `Status unavailable: ${error.message}`;
-  }
-  return "Status unavailable";
-};
-
-// A task's getStatus() may query the DB or a worker; cap how long the status
-// endpoint will wait so one slow/stuck task can't freeze every poller.
+// A task's getStatus() may query the DB or a worker; cap how long a single
+// status poll will wait on it so one slow/stuck task can't freeze every poller.
+// On timeout the orchestrator reuses the task's last known status instead of
+// surfacing an error (see readActiveTaskStatus).
 const STATUS_TIMEOUT_MS = 2_000;
-const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
-  new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("Status timed out")),
-      ms,
-    );
-    timer.unref?.();
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
+
+// Sentinel: this poll's read didn't finish in time (or failed); fall back to the
+// last known status rather than blocking or showing an error.
+const STATUS_NOT_READY = Symbol("status-not-ready");
 
 export type TaskOrchestratorOptions = {
   // Injectable for tests/determinism. Default to real wall-clock and load.
   isOverloaded?: () => boolean;
+  availableMemoryMB?: () => number;
   now?: () => number;
   dutyOnMs?: number;
   dutyOffMs?: number;
+  // OS-level freeze/thaw of the heavy ML worker processes. The orchestrator
+  // calls suspend() when background work must fully stop (a user request is in
+  // flight, or background is explicitly disabled) so their in-flight native
+  // passes yield the CPU at once, and resume() when the pressure clears.
+  // Defaults to a no-op (e.g. in tests, or before workers exist).
+  computeThrottle?: { suspend: () => void; resume: () => void };
 };
 
 export const createTaskOrchestrator = (
   options: TaskOrchestratorOptions = {},
 ): TaskOrchestrator => {
   const isOverloaded = options.isOverloaded ?? isSystemOverloaded;
+  const availableMemoryMB = options.availableMemoryMB ?? getAvailableMemoryMB;
   const now = options.now ?? Date.now;
   const dutyOnMs = options.dutyOnMs ?? DUTY_ON_MS;
   const dutyOffMs = options.dutyOffMs ?? DUTY_OFF_MS;
+  const computeThrottle = options.computeThrottle ?? {
+    suspend: () => {},
+    resume: () => {},
+  };
 
   const queues: Record<QueueType, Task[]> = {
     blocking: [],
@@ -184,6 +198,16 @@ export const createTaskOrchestrator = (
   };
 
   const runningTasks = new Set<RunningTask>();
+
+  // Last status we successfully read for each active task, keyed by status id.
+  // A task's getStatus() can momentarily be slow (the DB is busy indexing), and
+  // we'd rather show its most recent real progress than a transient error, so a
+  // slow/failed read falls back to this instead of surfacing a timeout.
+  const lastKnownStatus = new Map<string, BackgroundTaskStatus>();
+  // getStatus() calls still in flight, keyed by status id. A slow read is reused
+  // across polls instead of launching another (so they can't pile up), and when
+  // it eventually resolves it refreshes lastKnownStatus for the next poll.
+  const statusInflight = new Map<string, Promise<BackgroundTaskStatus>>();
 
   let sleeping: Promise<void> | null = null;
   let wakeUp: (() => void) | null = null;
@@ -197,91 +221,146 @@ export const createTaskOrchestrator = (
 
   let onQueueExhausted: (() => void) | null = null;
 
-  // Backoff is a *duty cycle*, never a hard stop: background work always keeps
-  // making progress, it just pauses for part of each cycle when the system is
-  // under pressure so requests stay responsive and the box isn't pegged.
+  // Backoff has two regimes, chosen by *why* there's pressure:
   //
-  // Two pressure sources, applied per task priority:
-  //   - userActive(): a recent user request. ALL background/implied tasks yield
-  //     (including high-priority ones) so the request is served promptly.
-  //   - isOverloaded(): high system load. Only normal-priority tasks back off;
-  //     high-priority tasks (e.g. the filesystem scan) keep running full speed.
+  //   1. Full stop — a user request is in flight (userActive), or background
+  //      work is explicitly disabled. ALL background/implied runners are paused
+  //      (including high-priority ones), and the heavy ML worker processes are
+  //      SIGSTOP'd via computeThrottle so their in-flight native passes yield
+  //      the CPU at once rather than at the next chunk boundary. The request
+  //      gets the whole box; the workers thaw the moment the user goes idle.
+  //
+  //   2. Overload duty cycle — high system load but no in-flight request. Normal
+  //      priority work runs on an ON/OFF duty cycle so it keeps trickling while
+  //      freeing CPU between bursts; high-priority work (the filesystem scan)
+  //      keeps running full speed. Workers are NOT frozen here — the goal is to
+  //      keep making progress, just more gently.
   let userActiveUntil = 0;
-  const userActive = () => now() < userActiveUntil;
+  // Requests currently being served. While any are in flight the box belongs to
+  // the user, so background work stays fully stopped regardless of the cooldown
+  // clock; the cooldown only adds a trailing grace period after the last one.
+  let activeRequests = 0;
+  const userActive = () => activeRequests > 0 || now() < userActiveUntil;
 
-  const taskUnderPressure = (priority: TaskPriority) =>
-    userActive() || (priority !== "high" && isOverloaded());
+  // Regime 1: background/implied work must be fully stopped.
+  const fullStop = () => !processBackgroundTasks || userActive();
 
-  const anyPressure = () =>
+  // Regime 2: the overload duty cycle should run — we're loaded, not fully
+  // stopped, and at least one normal-priority runner is active to back off.
+  const overloadActive = () =>
+    !fullStop() &&
+    isOverloaded() &&
     [...runningTasks].some(
-      ({ queue, priority }) => queue !== "blocking" && taskUnderPressure(priority),
+      ({ queue, priority }) => queue !== "blocking" && priority !== "high",
     );
 
-  // During the OFF phase, pause each pressured background/implied runner; resume
-  // it otherwise. Pause/resume on the controllers are idempotent and only take
-  // effect at the runner's next chunk boundary.
+  // Mirror the compute-worker freeze state so suspend()/resume() are only ever
+  // called on a real transition (they're cheap, but this keeps logs/signals tidy).
+  let workersSuspended = false;
+  const suspendWorkers = () => {
+    if (workersSuspended) return;
+    workersSuspended = true;
+    computeThrottle.suspend();
+  };
+  const resumeWorkers = () => {
+    if (!workersSuspended) return;
+    workersSuspended = false;
+    computeThrottle.resume();
+  };
+
+  const pauseAllRunners = () => {
+    for (const { queue, runner } of runningTasks) {
+      if (queue === "background" || queue === "implied") runner.pause?.();
+    }
+  };
+
+  // During OFF, pause each normal-priority background/implied runner; resume it
+  // otherwise. Pause/resume are idempotent and only take effect at the runner's
+  // next chunk boundary. High-priority work is never paused by the duty cycle.
   let dutyOff = false;
   const applyDutyCycle = () => {
     for (const { queue, priority, runner } of runningTasks) {
       if (queue !== "background" && queue !== "implied") continue;
-      if (dutyOff && taskUnderPressure(priority)) runner.pause?.();
+      if (dutyOff && priority !== "high") runner.pause?.();
       else void runner.resume?.();
     }
   };
 
-  let dutyTimer: ReturnType<typeof setTimeout> | null = null;
-  const stopDutyCycle = () => {
-    if (dutyTimer) {
-      clearTimeout(dutyTimer);
-      dutyTimer = null;
+  let backoffTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearBackoffTimer = () => {
+    if (backoffTimer) {
+      clearTimeout(backoffTimer);
+      backoffTimer = null;
     }
-    dutyOff = false;
-    applyDutyCycle(); // resume everything
   };
-  const scheduleDutyFlip = () => {
-    dutyTimer = setTimeout(() => {
-      dutyTimer = null;
-      if (!processBackgroundTasks) return; // explicit pause owns the runners
-      if (!anyPressure()) {
-        stopDutyCycle();
-        wakeUp?.();
-        return;
-      }
+  const scheduleBackoff = (ms: number) => {
+    clearBackoffTimer();
+    backoffTimer = setTimeout(() => {
+      backoffTimer = null;
+      advanceBackoff();
+    }, ms);
+    backoffTimer.unref?.();
+  };
+
+  // Timer-driven step. Re-derives the regime each tick: flips the duty phase
+  // under overload, and re-checks whether a user-activity window has lapsed so
+  // background work resumes promptly once the user stops interacting.
+  const advanceBackoff = () => {
+    if (!processBackgroundTasks) return; // explicit pause owns the runners
+    if (fullStop()) {
+      // Still in a user-activity window: keep everything frozen and re-check
+      // soon. (Explicit pause is handled above and never schedules a timer.)
+      pauseAllRunners();
+      suspendWorkers();
+      scheduleBackoff(dutyOffMs);
+      return;
+    }
+    if (overloadActive()) {
+      resumeWorkers();
       dutyOff = !dutyOff;
       applyDutyCycle();
       if (!dutyOff) wakeUp?.(); // entering ON: nudge the loop to admit/resume
-      scheduleDutyFlip();
-    }, dutyOff ? dutyOffMs : dutyOnMs);
-    dutyTimer.unref?.();
+      scheduleBackoff(dutyOff ? dutyOffMs : dutyOnMs);
+      return;
+    }
+    // Pressure cleared: thaw, resume everything, stop ticking.
+    resumeWorkers();
+    dutyOff = false;
+    applyDutyCycle();
+    clearBackoffTimer();
+    wakeUp?.();
   };
 
-  // Reconcile the duty cycle with the current pressure/enabled state. Safe to
-  // call after any change: a request arrives, a task starts/ends, or the
-  // background toggle flips.
+  // Reconcile backoff with the current state. Safe to call after any change: a
+  // request arrives, a task starts/ends, or the background toggle flips.
   const reconcileBackoff = () => {
-    if (!processBackgroundTasks) {
-      // Explicit pause: stop cycling and hard-pause all background/implied work.
-      if (dutyTimer) {
-        clearTimeout(dutyTimer);
-        dutyTimer = null;
-      }
+    if (fullStop()) {
       dutyOff = false;
-      for (const { queue, runner } of runningTasks) {
-        if (queue === "background" || queue === "implied") runner.pause?.();
+      pauseAllRunners();
+      suspendWorkers();
+      // A user-activity window lapses on its own, so poll for it; an explicit
+      // pause has no expiry and waits for the toggle to flip back on.
+      if (processBackgroundTasks && userActive()) {
+        if (!backoffTimer) scheduleBackoff(dutyOffMs);
+      } else {
+        clearBackoffTimer();
       }
       return;
     }
-    if (anyPressure()) {
-      if (!dutyTimer) {
+    resumeWorkers();
+    if (overloadActive()) {
+      if (!backoffTimer) {
         // Begin with an OFF rest so an incoming request is served immediately.
         dutyOff = true;
         applyDutyCycle();
-        scheduleDutyFlip();
+        scheduleBackoff(dutyOffMs);
       } else {
         applyDutyCycle(); // catch tasks that started mid-cycle
       }
     } else {
-      stopDutyCycle();
+      dutyOff = false;
+      applyDutyCycle(); // resume everything
+      clearBackoffTimer();
     }
   };
 
@@ -290,22 +369,41 @@ export const createTaskOrchestrator = (
     cpu: 0,
     disk: 0,
     network: 0,
+    memoryMB: 0,
   };
 
-  const getBackgroundTaskStatus = async (): Promise<BackgroundTaskStatus[]> => {
-    const activeTasks = [...runningTasks].filter(
-      ({ queue }) => queue === "background" || queue === "implied",
-    );
+  const bareRunningStatus = (task: RunningTask): BackgroundTaskStatus => ({
+    id: `${task.queue}:${task.name}`,
+    name: task.name,
+    queue: task.queue as Extract<QueueType, "background" | "implied">,
+    state: "running",
+  });
 
-    const activeStatuses = await Promise.allSettled(
-      activeTasks.map(async ({ name, queue, runner }) => {
-        const status = runner.getStatus
-          ? await withTimeout(runner.getStatus(), STATUS_TIMEOUT_MS)
-          : {};
+  // Read one active task's status without ever blocking the whole payload or
+  // surfacing a transient error. A getStatus() call still running from an
+  // earlier poll is reused rather than duplicated; whenever one resolves it
+  // refreshes lastKnownStatus. If the read is slower than STATUS_TIMEOUT_MS (or
+  // fails), we return the last value we have instead of a timeout.
+  const readActiveTaskStatus = async (
+    task: RunningTask,
+  ): Promise<BackgroundTaskStatus> => {
+    const { name, queue, runner } = task;
+    const id = `${queue}:${name}`;
+
+    if (!runner.getStatus) {
+      const bare = bareRunningStatus(task);
+      lastKnownStatus.set(id, bare);
+      return bare;
+    }
+
+    let inflight = statusInflight.get(id);
+    if (!inflight) {
+      const getStatus = runner.getStatus;
+      inflight = (async () => {
+        const status = (await getStatus()) ?? {};
         const portionComplete = normalizeProgressValue(status.portionComplete);
-
-        return {
-          id: `${queue}:${name}`,
+        const built = {
+          id,
           name,
           queue,
           state: status.state ?? "running",
@@ -316,26 +414,54 @@ export const createTaskOrchestrator = (
           ...(portionComplete != null ? { portionComplete } : {}),
           ...(status.description ? { description: status.description } : {}),
         } as BackgroundTaskStatus;
+        lastKnownStatus.set(id, built);
+        return built;
+      })();
+      const tracked = inflight;
+      statusInflight.set(id, tracked);
+      // Keep the entry until it settles so later polls reuse it; swallow errors
+      // here so a failed read can never become an unhandled rejection.
+      void tracked
+        .catch(() => undefined)
+        .finally(() => {
+          if (statusInflight.get(id) === tracked) statusInflight.delete(id);
+        });
+    }
+
+    const raced = await Promise.race([
+      inflight.then(
+        (value) => value,
+        () => STATUS_NOT_READY,
+      ),
+      new Promise<typeof STATUS_NOT_READY>((resolve) => {
+        const timer = setTimeout(() => resolve(STATUS_NOT_READY), STATUS_TIMEOUT_MS);
+        timer.unref?.();
       }),
+    ]);
+
+    if (typeof raced !== "symbol") return raced;
+    return lastKnownStatus.get(id) ?? bareRunningStatus(task);
+  };
+
+  const getBackgroundTaskStatus = async (): Promise<BackgroundTaskStatus[]> => {
+    const activeTasks = [...runningTasks].filter(
+      ({ queue }) => queue === "background" || queue === "implied",
     );
 
-    const normalizedActiveStatuses = activeStatuses.map((result, index) => {
-      if (result.status === "fulfilled") {
-        return result.value;
-      }
+    const normalizedActiveStatuses = await Promise.all(
+      activeTasks.map((task) => readActiveTaskStatus(task)),
+    );
 
-      const task = activeTasks[index];
-      return {
-        id: `${task?.queue}:${task?.name}`,
-        name: task?.name ?? "Unknown task",
-        queue: (task?.queue ?? "background") as Extract<
-          QueueType,
-          "background" | "implied"
-        >,
-        state: "running" as const,
-        description: describeStatusError(result.reason),
-      } satisfies BackgroundTaskStatus;
-    });
+    // Drop bookkeeping for tasks that are no longer active so the maps can't
+    // grow without bound across the process lifetime. (An entry still in flight
+    // for an active task self-removes when it settles, so it's left alone here.)
+    const activeIds = new Set(activeTasks.map(({ name, queue }) => `${queue}:${name}`));
+    for (const id of lastKnownStatus.keys()) {
+      if (!activeIds.has(id)) lastKnownStatus.delete(id);
+    }
+    for (const id of statusInflight.keys()) {
+      if (!activeIds.has(id)) statusInflight.delete(id);
+    }
 
     const queuedStatuses = (["background", "implied"] as const).flatMap((queue) =>
       queues[queue].map((task, index) => ({
@@ -378,11 +504,15 @@ export const createTaskOrchestrator = (
                 ? 0
                 : -1
               : tasks.findIndex((task) =>
-                  canRunTask(resourcesInUse, getResourceRequirements(task.type)),
+                  canRunTask(
+                    resourcesInUse,
+                    task.resources ?? getResourceRequirements(task.type),
+                    availableMemoryMB,
+                  ),
                 );
           if (taskIndex !== -1) {
             const task = tasks.splice(taskIndex, 1)[0];
-            const requirements = getResourceRequirements(task.type);
+            const requirements = task.resources ?? getResourceRequirements(task.type);
             return [task, queueType as QueueType, requirements] as const;
           }
         }
@@ -446,6 +576,18 @@ export const createTaskOrchestrator = (
       onQueueExhausted = callback;
     },
     noteUserActivity: () => {
+      userActiveUntil = now() + ACTIVITY_COOLDOWN_MS;
+      reconcileBackoff();
+    },
+    beginUserRequest: () => {
+      activeRequests += 1;
+      // Extend the cooldown immediately too, so even a request that ends before
+      // the next reconcile still leaves a trailing grace window.
+      userActiveUntil = now() + ACTIVITY_COOLDOWN_MS;
+      reconcileBackoff();
+    },
+    endUserRequest: () => {
+      activeRequests = Math.max(0, activeRequests - 1);
       userActiveUntil = now() + ACTIVITY_COOLDOWN_MS;
       reconcileBackoff();
     },

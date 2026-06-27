@@ -1,11 +1,27 @@
 import { describe, expect, it, jest } from "@jest/globals";
-import { createTaskOrchestrator } from "./taskOrchestrator.ts";
+
+// The orchestrator logs lifecycle events through the structured (pino) logger,
+// not console.log, so mock the logger module to observe those calls. getLogger
+// returns a child logger; we hand back a single spyable stub for every module.
+const mockLog = {
+  info: jest.fn(),
+  error: jest.fn(),
+  warn: jest.fn(),
+  debug: jest.fn(),
+};
+
+jest.unstable_mockModule("../observability/logger.ts", () => ({
+  getLogger: () => mockLog,
+  logger: mockLog,
+}));
+
+const { createTaskOrchestrator } = await import("./taskOrchestrator.ts");
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("taskOrchestrator status reporting", () => {
   it("logs major task lifecycle events", async () => {
-    const logger = jest.spyOn(console, "log").mockImplementation(() => {});
+    mockLog.info.mockClear();
 
     let resolveTask!: () => void;
     const completion = new Promise<void>((resolve) => {
@@ -26,16 +42,17 @@ describe("taskOrchestrator status reporting", () => {
 
     await wait(40);
 
-    expect(logger).toHaveBeenCalledWith(
-      "[TaskOrchestrator] Started (background): Status test task",
+    expect(mockLog.info).toHaveBeenCalledWith(
+      { queue: "background", task: "Status test task" },
+      "Started",
     );
 
     resolveTask();
     await wait(40);
-    expect(logger).toHaveBeenCalledWith(
-      "[TaskOrchestrator] Completed (background): Status test task",
+    expect(mockLog.info).toHaveBeenCalledWith(
+      { queue: "background", task: "Status test task" },
+      "Completed",
     );
-    logger.mockRestore();
   });
 
   it("returns status for healthy tasks even when one task status throws", async () => {
@@ -92,13 +109,18 @@ describe("taskOrchestrator status reporting", () => {
           total: 5,
           portionComplete: 0.4,
         }),
+        // A failing status read must never break the payload or surface an
+        // error to the UI: the task still appears as running, just without
+        // progress details (we have no prior status to fall back to here).
         expect.objectContaining({
           name: "Broken status task",
           state: "running",
-          description: expect.stringContaining("Status unavailable"),
         }),
       ]),
     );
+
+    const brokenStatus = status.find((s) => s.name === "Broken status task");
+    expect(brokenStatus?.description).toBeUndefined();
 
     resolveHealthy();
     resolveBroken();
@@ -230,7 +252,7 @@ describe("taskOrchestrator backoff", () => {
     await wait(20);
   });
 
-  it("yields even high-priority work briefly to a user request", async () => {
+  it("fully yields even high-priority work to a user request, then resumes when idle", async () => {
     let clock = 1_000_000;
     const orchestrator = createTaskOrchestrator({
       isOverloaded: () => false,
@@ -246,19 +268,118 @@ describe("taskOrchestrator backoff", () => {
     const beforeRequest = high.ticksSoFar();
     expect(beforeRequest).toBeGreaterThan(0);
 
-    // A user request makes the user "active"; high-priority work now duty-cycles.
+    // A user request makes the user "active"; ALL background work (even the
+    // high-priority scan) is fully stopped so the request gets the box.
     orchestrator.noteUserActivity();
     await wait(40);
     const duringActivity = high.ticksSoFar() - beforeRequest;
+    // At most a single in-flight tick before the pause takes hold.
+    expect(duringActivity).toBeLessThanOrEqual(1);
 
     // Let the activity window lapse (cooldown is 2s); full speed resumes.
     clock += 5_000;
     await wait(40);
     const afterActivity = high.ticksSoFar() - beforeRequest - duringActivity;
-
-    // It still progressed during activity (a little), but less than when idle.
-    expect(duringActivity).toBeGreaterThan(0);
-    expect(afterActivity).toBeGreaterThan(duringActivity);
+    expect(afterActivity).toBeGreaterThan(0);
     high.stop();
+  });
+
+  it("suspends compute workers while a request is in flight and resumes when idle", async () => {
+    let clock = 1_000_000;
+    const suspend = jest.fn();
+    const resume = jest.fn();
+    const orchestrator = createTaskOrchestrator({
+      isOverloaded: () => false,
+      now: () => clock,
+      dutyOnMs: 10,
+      dutyOffMs: 10,
+      computeThrottle: { suspend, resume },
+    });
+
+    orchestrator.noteUserActivity();
+    expect(suspend).toHaveBeenCalledTimes(1);
+    expect(resume).not.toHaveBeenCalled();
+
+    // Window lapses -> workers thaw exactly once.
+    clock += 5_000;
+    await wait(40);
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps compute workers suspended for the whole bracketed request, past the cooldown", async () => {
+    let clock = 1_000_000;
+    const suspend = jest.fn();
+    const resume = jest.fn();
+    const orchestrator = createTaskOrchestrator({
+      isOverloaded: () => false,
+      now: () => clock,
+      dutyOnMs: 10,
+      dutyOffMs: 10,
+      computeThrottle: { suspend, resume },
+    });
+
+    orchestrator.beginUserRequest();
+    expect(suspend).toHaveBeenCalledTimes(1);
+
+    // Advance well past the 2s activity cooldown while the request is still in
+    // flight. A one-shot cooldown would have thawed the workers here; the bracket
+    // must keep them frozen because the request has not finished.
+    clock += 10_000;
+    await wait(40);
+    expect(resume).not.toHaveBeenCalled();
+
+    // Request ends -> trailing cooldown -> workers thaw exactly once.
+    orchestrator.endUserRequest();
+    clock += 5_000;
+    await wait(40);
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays suspended until the last overlapping request finishes", async () => {
+    let clock = 1_000_000;
+    const suspend = jest.fn();
+    const resume = jest.fn();
+    const orchestrator = createTaskOrchestrator({
+      isOverloaded: () => false,
+      now: () => clock,
+      dutyOnMs: 10,
+      dutyOffMs: 10,
+      computeThrottle: { suspend, resume },
+    });
+
+    orchestrator.beginUserRequest();
+    orchestrator.beginUserRequest();
+    expect(suspend).toHaveBeenCalledTimes(1);
+
+    // First of two concurrent requests ends; one is still in flight.
+    orchestrator.endUserRequest();
+    clock += 10_000;
+    await wait(40);
+    expect(resume).not.toHaveBeenCalled();
+
+    // Last request ends -> cooldown lapses -> thaw.
+    orchestrator.endUserRequest();
+    clock += 5_000;
+    await wait(40);
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not freeze compute workers for the overload duty cycle (work keeps trickling)", async () => {
+    const suspend = jest.fn();
+    const resume = jest.fn();
+    const orchestrator = createTaskOrchestrator({
+      isOverloaded: () => true,
+      dutyOnMs: 15,
+      dutyOffMs: 15,
+      computeThrottle: { suspend, resume },
+    });
+    const ticker = makeTickingTask("normal");
+    orchestrator.addTask(ticker.task, "background");
+
+    await wait(120);
+    // Overload backs off via the duty cycle, never by SIGSTOP — the workers must
+    // stay thawed so background work can keep making progress.
+    expect(suspend).not.toHaveBeenCalled();
+    ticker.stop();
   });
 });

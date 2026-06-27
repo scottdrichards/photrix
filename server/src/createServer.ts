@@ -87,16 +87,27 @@ export const createServer = (
             return;
           }
 
-          // Let the orchestrator back background work off while a real user
-          // request is in flight, freeing disk/CPU for it. Exclude polling and
-          // health endpoints (especially the long-lived status stream) so
-          // routine status checks don't keep the backlog permanently paused.
-          if (
+          // Let the orchestrator back background work off for the *entire* time a
+          // real user request is in flight, freeing disk/CPU for it. A search can
+          // run many seconds on a busy box; bracketing the request (rather than a
+          // one-shot cooldown) keeps background workers suspended until it
+          // actually finishes instead of resuming mid-request and re-starving it.
+          // Exclude polling and health endpoints (especially the long-lived
+          // status stream) so routine checks don't keep the backlog paused.
+          const tracksActivity =
             !req.url.startsWith("/api/status") &&
             !req.url.startsWith("/api/health") &&
-            !req.url.startsWith("/api/network-probe")
-          ) {
-            taskOrchestrator.noteUserActivity();
+            !req.url.startsWith("/api/network-probe");
+          if (tracksActivity) {
+            taskOrchestrator.beginUserRequest();
+            let ended = false;
+            const endRequest = () => {
+              if (ended) return;
+              ended = true;
+              taskOrchestrator.endUserRequest();
+            };
+            res.once("finish", endRequest);
+            res.once("close", endRequest);
           }
 
           if (req.url === "/api/health" && req.method === "GET") {

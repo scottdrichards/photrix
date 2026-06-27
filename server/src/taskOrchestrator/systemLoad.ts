@@ -1,4 +1,23 @@
+import { readFileSync } from "node:fs";
 import os from "node:os";
+
+/**
+ * Returns available memory in MB. On Linux reads MemAvailable from
+ * /proc/meminfo (which includes reclaimable page cache, unlike os.freemem()).
+ * Falls back to os.freemem() on other platforms.
+ */
+export const getAvailableMemoryMB = (): number => {
+  if (process.platform === "linux") {
+    try {
+      const content = readFileSync("/proc/meminfo", "utf8");
+      const match = /^MemAvailable:\s+(\d+)\s+kB/m.exec(content);
+      if (match?.[1]) return Number(match[1]) / 1024;
+    } catch {
+      // fall through
+    }
+  }
+  return os.freemem() / (1024 * 1024);
+};
 
 /**
  * 1-minute load average normalized to the number of logical CPUs. ~1.0 means
