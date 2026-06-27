@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ClosedCaption24Regular,
+  ClosedCaptionOff24Regular,
   Dismiss24Regular,
   Filmstrip24Regular,
   Info24Regular,
@@ -7,7 +9,8 @@ import {
 } from "@fluentui/react-icons";
 import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
-import { negotiateVideoPlayback } from "../api";
+import { fetchTranscriptSegments, negotiateVideoPlayback } from "../api";
+import type { TranscriptSegment } from "../api";
 import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes } from "./FaceOverlay";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { MiniMap } from "./MiniMap";
@@ -28,6 +31,20 @@ type HlsNetworkDetails = {
 
 type HlsMediaWithSource = HTMLMediaElement & {
   mediaSource?: MediaSource & { updating?: boolean };
+};
+
+const segmentsToWebVTT = (segments: TranscriptSegment[]): string => {
+  const toTimestamp = (s: number): string => {
+    const h = Math.floor(s / 3600).toString().padStart(2, "0");
+    const m = Math.floor((s % 3600) / 60).toString().padStart(2, "0");
+    const sec = Math.floor(s % 60).toString().padStart(2, "0");
+    const ms = Math.round((s % 1) * 1000).toString().padStart(3, "0");
+    return `${h}:${m}:${sec}.${ms}`;
+  };
+  const cues = segments
+    .map((seg, i) => `${i + 1}\n${toTimestamp(seg.start)} --> ${toTimestamp(seg.end)}\n${seg.text}`)
+    .join("\n\n");
+  return `WEBVTT\n\n${cues}`;
 };
 
 const safePlay = (video: HTMLVideoElement, _logPrefix: string) => {
@@ -80,12 +97,21 @@ export function FullscreenViewer() {
 
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
+  // ABR quality selector. `hlsLevels` are the variants the player can switch between
+  // (ascending height); `manualLevel` is -1 for Auto/ABR or a level index to lock to;
+  // `activeLevelHeight` is the height ABR is currently playing (for the "Auto" label).
+  const [hlsLevels, setHlsLevels] = useState<{ index: number; height: number }[]>([]);
+  const [manualLevel, setManualLevel] = useState<number>(-1);
+  const [activeLevelHeight, setActiveLevelHeight] = useState<number | null>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null);
   const [photoAspectRatio, setPhotoAspectRatio] = useState(1);
   const [showLiveVideo, setShowLiveVideo] = useState(false);
   const [showFileInfo, setShowFileInfo] = useState(false);
   const [showFaces, setShowFaces] = useState(false);
   const [hasFaceOverlayData, setHasFaceOverlayData] = useState(false);
+  const [showCaptions, setShowCaptions] = useState(false);
+  const [transcriptTrackUrl, setTranscriptTrackUrl] = useState<string | null>(null);
+  const captionBlobUrlRef = useRef<string | null>(null);
   const [photoZoom, setPhotoZoom] = useState({
     isZoomed: false,
     originXPercent: 50,
@@ -113,7 +139,48 @@ export function FullscreenViewer() {
       originYPercent: 50,
       scale: PHOTO_ZOOM_DEFAULT_SCALE,
     });
+
+    // Reset captions for new item
+    if (captionBlobUrlRef.current) {
+      URL.revokeObjectURL(captionBlobUrlRef.current);
+      captionBlobUrlRef.current = null;
+    }
+    setTranscriptTrackUrl(null);
+    setShowCaptions(false);
   }, [photo?.path]);
+
+  // Fetch transcript segments for videos
+  useEffect(() => {
+    if (!photo || photo.mediaType !== "video") return;
+
+    const abortController = new AbortController();
+
+    fetchTranscriptSegments(photo.path, abortController.signal)
+      .then((segments) => {
+        if (segments.length === 0) return;
+        const vtt = segmentsToWebVTT(segments);
+        const blob = new Blob([vtt], { type: "text/vtt" });
+        const url = URL.createObjectURL(blob);
+        captionBlobUrlRef.current = url;
+        setTranscriptTrackUrl(url);
+      })
+      .catch(() => {
+        // No transcript available — caption button stays hidden
+      });
+
+    return () => {
+      abortController.abort();
+    };
+  }, [photo?.path, photo?.mediaType]);
+
+  // Sync caption track mode with showCaptions toggle
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const track = video.textTracks[0];
+    if (!track) return;
+    track.mode = showCaptions ? "showing" : "hidden";
+  }, [showCaptions, transcriptTrackUrl]);
 
   // HLS setup effect
   useEffect(() => {
@@ -133,6 +200,9 @@ export function FullscreenViewer() {
     destroyHls();
     setVideoStatus(null);
     setVideoAspectRatio(null);
+    setHlsLevels([]);
+    setManualLevel(-1);
+    setActiveLevelHeight(null);
 
     const loadSelectedPlayback = async () => {
       try {
@@ -210,6 +280,11 @@ export function FullscreenViewer() {
           const hls = new Hls({
             enableWorker: true,
             lowLatencyMode: false,
+            // The master advertises every quality variant. Start on the lowest level
+            // (index 0 = 360p) for a fast, reliable start, then let ABR climb on its
+            // own *measured* throughput — which is the real host→client path, the only
+            // signal that reflects the actual (often constrained, variable) bottleneck.
+            startLevel: 0,
             loader: DurationCapturingLoader,
             maxBufferLength: 30,
             maxMaxBufferLength: 60,
@@ -256,6 +331,12 @@ export function FullscreenViewer() {
           };
 
           const manifestParsedHandler = () => {
+            // Expose the available variants to the quality selector (ascending height).
+            if (!cancelled) {
+              setHlsLevels(
+                hls.levels.map((level, index) => ({ index, height: level.height })),
+              );
+            }
             safePlay(video, "[HLS] Autoplay prevented:");
             applyKnownDuration();
           };
@@ -264,12 +345,33 @@ export function FullscreenViewer() {
           hls.on(Hls.Events.LEVEL_LOADED, applyKnownDuration);
           hls.on(Hls.Events.BUFFER_APPENDED, applyKnownDuration);
 
-          hls.on(Hls.Events.ERROR, (event, data) => {
-            if (data.fatal) {
-              if (photo.fullUrl) {
-                video.src = photo.fullUrl;
-                safePlay(video, "[HLS] Autoplay prevented (fallback):");
-              }
+          // Reflect the level ABR has settled on so the "Auto" option can show it.
+          hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
+            if (!cancelled) setActiveLevelHeight(hls.levels[data.level]?.height ?? null);
+          });
+
+          // Recover from transient failures in place rather than immediately dropping
+          // to the raw source — the raw file is the original multi-tens-of-Mbps stream
+          // and would buffer far worse over a constrained link. Only fall back to it
+          // when HLS is genuinely unrecoverable.
+          let mediaRecoveries = 0;
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (!data.fatal) return;
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              hls.startLoad();
+              return;
+            }
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 2) {
+              mediaRecoveries += 1;
+              hls.recoverMediaError();
+              return;
+            }
+            // Unrecoverable — fall back to raw playback if the browser can decode it.
+            if (photo.fullUrl) {
+              destroyHls();
+              video.src = photo.fullUrl;
+              setVideoStatus("direct");
+              safePlay(video, "[HLS] Autoplay prevented (fallback):");
             }
           });
           hlsRef.current = hls;
@@ -459,6 +561,43 @@ export function FullscreenViewer() {
             onTouchEnd={handleTouchEnd}
           >
             <div className={css.topRightActions}>
+              {photo.mediaType === "video" &&
+                videoStatus === "hls" &&
+                hlsLevels.length > 1 && (
+                  <select
+                    className={css.qualitySelect}
+                    value={manualLevel}
+                    aria-label="Video quality"
+                    title="Video quality"
+                    onChange={(e) => {
+                      const level = Number(e.target.value);
+                      setManualLevel(level);
+                      const hls = hlsRef.current;
+                      // -1 re-enables ABR (auto); a level index locks to that quality.
+                      if (hls) hls.currentLevel = level;
+                    }}
+                  >
+                    <option value={-1}>
+                      {`Auto${activeLevelHeight ? ` (${activeLevelHeight}p)` : ""}`}
+                    </option>
+                    {[...hlsLevels].reverse().map((level) => (
+                      <option key={level.index} value={level.index}>
+                        {`${level.height}p`}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              {photo.mediaType === "video" && transcriptTrackUrl && (
+                <button
+                  type="button"
+                  onClick={() => setShowCaptions((current) => !current)}
+                  className={css.faceButton}
+                  aria-label={showCaptions ? "Hide captions" : "Show captions"}
+                  title={showCaptions ? "Hide captions" : "Show captions"}
+                >
+                  {showCaptions ? <ClosedCaption24Regular /> : <ClosedCaptionOff24Regular />}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setShowFaces((current) => !current)}
@@ -524,7 +663,17 @@ export function FullscreenViewer() {
                       }
                     }}
                   >
-                    <track kind="captions" src="data:," label="Captions not provided" />
+                    {transcriptTrackUrl ? (
+                      <track
+                        key={transcriptTrackUrl}
+                        kind="captions"
+                        src={transcriptTrackUrl}
+                        label="Transcript"
+                        default={showCaptions}
+                      />
+                    ) : (
+                      <track kind="captions" src="data:," label="Captions not provided" />
+                    )}
                     Your browser does not support HTML video playback.
                   </video>
                 </div>

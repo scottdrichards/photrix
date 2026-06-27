@@ -37,6 +37,7 @@ vi.mock("../videoPlaybackProfile", () => ({
 
 vi.mock("../api", () => ({
   negotiateVideoPlayback: (...args: unknown[]) => negotiateVideoPlaybackMock(...args),
+  fetchTranscriptSegments: () => Promise.resolve([]),
 }));
 
 vi.mock("hls.js", () => ({

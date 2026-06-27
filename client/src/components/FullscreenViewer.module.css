@@ -172,6 +172,24 @@
   cursor: not-allowed;
 }
 
+.qualitySelect {
+  color: var(--fg-inv);
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-md);
+  padding: 4px 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.qualitySelect:hover {
+  background-color: rgba(0, 0, 0, 0.65);
+}
+
+.qualitySelect option {
+  color: initial;
+}
+
 .livePhotoButton {
   position: absolute;
   top: var(--space-m);
