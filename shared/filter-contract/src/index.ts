@@ -56,7 +56,7 @@ export type LogicalFilter<TCondition> = {
 
 export type FilterElement<TCondition> = TCondition | LogicalFilter<TCondition>;
 
-export type FileQueryExtraField = "relativePath" | "hasFaces";
+export type FileQueryExtraField = "relativePath" | "hasFaces" | "hasAudioTranscript";
 
 type FilterConstraintForValue<TField extends string, TValue> =
   | null
@@ -93,6 +93,16 @@ export type RecordFilterElement<
 
 export type MediaTypeFilter = "all" | "photo" | "video" | "other";
 
+/**
+ * Semantic-search modalities that contribute results, each rankable independently.
+ * Exposed so the UI can toggle sources on/off for debugging which modality matched.
+ * - `image`: CLIP image-embedding similarity
+ * - `audio`: CLAP audio-embedding similarity
+ * - `transcript`: substring match against speech transcripts
+ */
+export type SearchSource = "image" | "audio" | "transcript";
+export const SEARCH_SOURCES: readonly SearchSource[] = ["image", "audio", "transcript"];
+
 export type RatingFilter = {
   rating: number;
   atLeast: boolean;
@@ -125,6 +135,7 @@ export type ClientFilterState = Partial<{
   path: string;
   mediaTypeFilter: MediaTypeFilter;
   hasFaceScanData: boolean;
+  hasAudioTranscript: boolean;
   peopleInImageFilter: string[] | null;
   cameraModelFilter: string[] | null;
   lensFilter: string[] | null;
@@ -132,6 +143,8 @@ export type ClientFilterState = Partial<{
   locationBounds: GeoBoundsLike | null;
   dateRange: DateRangeSelection | null;
   semanticQuery: string;
+  /** Enabled semantic-search sources; `undefined` means all sources are used. */
+  searchSources: SearchSource[];
 }>;
 
 /**
@@ -148,6 +161,7 @@ export const FIELD_METADATA = {
   dateRange: { nullable: true, supportsArray: false },
   mediaTypeFilter: { nullable: false, supportsArray: false },
   hasFaceScanData: { nullable: false, supportsArray: false },
+  hasAudioTranscript: { nullable: false, supportsArray: false },
 } as const;
 
 /**

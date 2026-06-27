@@ -48,3 +48,43 @@
 .clearBtn:hover {
   color: var(--text1, #111);
 }
+
+.sourceToggles {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  flex-shrink: 0;
+  padding-left: var(--space-xs);
+  border-left: 1px solid var(--stroke2, #ddd);
+}
+
+.sourceToggle {
+  background: none;
+  border: none;
+  padding: var(--space-xxs);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--text3, #999);
+  opacity: 0.55;
+  transition:
+    color var(--dur-fast, 120ms) ease,
+    background-color var(--dur-fast, 120ms) ease,
+    opacity var(--dur-fast, 120ms) ease;
+}
+
+.sourceToggle:hover {
+  color: var(--text1, #111);
+  background-color: var(--fill3, rgba(0, 0, 0, 0.06));
+}
+
+.sourceToggleActive {
+  color: var(--brand, #2563eb);
+  opacity: 1;
+}
+
+.sourceToggleActive:hover {
+  color: var(--brand, #2563eb);
+}

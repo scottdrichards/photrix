@@ -5,9 +5,10 @@ import type {
   GeoBoundsLike as GeoBounds,
   MediaTypeFilter,
   RatingFilter,
+  SearchSource,
   ServerStatus as SharedServerStatus,
 } from "../../shared/filter-contract/src";
-export type { BackgroundTaskStatus, DateRangeFilter, GeoBounds };
+export type { BackgroundTaskStatus, DateRangeFilter, GeoBounds, SearchSource };
 
 export interface ApiPhotoItem {
   folder: string;
@@ -26,6 +27,7 @@ export interface PhotoItem {
   path: string;
   name: string;
   mediaType: "photo" | "video";
+  searchSources?: SearchSource[];
   originalUrl: string;
   thumbnailUrl: string;
   previewUrl: string;
@@ -118,6 +120,7 @@ export interface FetchPhotosOptions {
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
   hasFaceScanData?: ApiFilterOptions["hasFaceScanData"];
+  hasAudioTranscript?: boolean;
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
@@ -312,6 +315,7 @@ type BuildFiltersInput = {
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
   hasFaceScanData?: ApiFilterOptions["hasFaceScanData"];
+  hasAudioTranscript?: boolean;
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
@@ -363,6 +367,7 @@ const buildFilters = ({
   ratingFilter,
   mediaTypeFilter,
   hasFaceScanData,
+  hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -405,6 +410,10 @@ const buildFilters = ({
       operation: "or",
       conditions: [{ hasFaces: true }, { regions: { includes: '"area"' } }],
     });
+  }
+
+  if (hasAudioTranscript) {
+    filters.push({ hasAudioTranscript: true });
   }
 
   if (locationBounds) {
@@ -639,6 +648,7 @@ export const fetchPhotos = async ({
   ratingFilter,
   mediaTypeFilter = "all",
   hasFaceScanData,
+  hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -657,6 +667,7 @@ export const fetchPhotos = async ({
     ratingFilter,
     mediaTypeFilter,
     hasFaceScanData,
+    hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -692,6 +703,7 @@ export const fetchGeotaggedPhotos = async ({
   ratingFilter,
   mediaTypeFilter = "all",
   hasFaceScanData,
+  hasAudioTranscript,
   dateRange,
   peopleInImageFilter,
   cameraModelFilter,
@@ -720,6 +732,7 @@ export const fetchGeotaggedPhotos = async ({
     ratingFilter,
     mediaTypeFilter,
     hasFaceScanData,
+    hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -775,6 +788,7 @@ export const fetchPeopleClusters = async ({
   ratingFilter,
   mediaTypeFilter = "all",
   hasFaceScanData,
+  hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -792,6 +806,7 @@ export const fetchPeopleClusters = async ({
     ratingFilter,
     mediaTypeFilter,
     hasFaceScanData,
+    hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -867,6 +882,7 @@ export const fetchClusterDetail = async ({
   ratingFilter,
   mediaTypeFilter = "all",
   hasFaceScanData,
+  hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -885,6 +901,7 @@ export const fetchClusterDetail = async ({
     ratingFilter,
     mediaTypeFilter,
     hasFaceScanData,
+    hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -969,6 +986,7 @@ export const fetchDateRange = async ({
   ratingFilter,
   mediaTypeFilter = "all",
   hasFaceScanData,
+  hasAudioTranscript,
   locationBounds,
   peopleInImageFilter,
   cameraModelFilter,
@@ -988,6 +1006,7 @@ export const fetchDateRange = async ({
     ratingFilter,
     mediaTypeFilter,
     hasFaceScanData,
+    hasAudioTranscript,
     locationBounds,
     dateRange: null,
     peopleInImageFilter,
@@ -1015,6 +1034,7 @@ export const fetchDateHistogram = async ({
   ratingFilter,
   mediaTypeFilter = "all",
   hasFaceScanData,
+  hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -1032,6 +1052,7 @@ export const fetchDateHistogram = async ({
     ratingFilter,
     mediaTypeFilter,
     hasFaceScanData,
+    hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -1159,7 +1180,7 @@ export const fetchSuggestionsWithCounts = async ({
 };
 
 export type SemanticSearchResult = {
-  items: (ApiPhotoItem & { similarity: number })[];
+  items: (ApiPhotoItem & { similarity: number; sources?: SearchSource[] })[];
   total: number;
   query: string;
 };
@@ -1168,17 +1189,21 @@ export type FetchSemanticSearchOptions = {
   q: string;
   limit?: number;
   signal?: AbortSignal;
+  /** Restrict the search to these sources; omit to use all of them. */
+  searchSources?: SearchSource[];
 } & Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata">;
 
 export const fetchSemanticSearch = async ({
   q,
   limit = 50,
   signal,
+  searchSources,
   includeSubfolders = false,
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
   hasFaceScanData,
+  hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
@@ -1191,11 +1216,14 @@ export const fetchSemanticSearch = async ({
 
   if (includeSubfolders) params.set("includeSubfolders", "true");
   if (path) params.set("path", path);
+  // Only send `sources` when a subset is selected; absent means "all sources".
+  if (searchSources) params.set("sources", searchSources.join(","));
 
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
     hasFaceScanData,
+    hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
@@ -1215,7 +1243,10 @@ export const fetchSemanticSearch = async ({
   );
 
   return {
-    items: payload.items.map(createPhotoItem),
+    items: payload.items.map((item) => ({
+      ...createPhotoItem(item),
+      searchSources: item.sources,
+    })),
     total: payload.total,
     page: 1,
     pageSize: limit,
@@ -1244,4 +1275,19 @@ export const negotiateVideoPlayback = async (options: {
   const response = await fetch(`/api/video/negotiate?${params.toString()}`);
 
   return (await response.json()) as VideoNegotiationResult;
+};
+
+export type TranscriptSegment = { start: number; end: number; text: string };
+
+export const fetchTranscriptSegments = async (
+  path: string,
+  signal?: AbortSignal,
+): Promise<TranscriptSegment[]> => {
+  const url = buildFileUrl(path, { representation: "transcript" });
+  const result = await fetchJsonOrThrow<{ segments: TranscriptSegment[] }>(
+    url,
+    "fetch transcript",
+    { signal },
+  );
+  return result.segments;
 };

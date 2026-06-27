@@ -154,6 +154,83 @@ describe("searchRequestHandler resilience", () => {
     expect(getJson().items[0].fileName).toBe("shared.mp4");
   });
 
+  it("tags each result with the modalities that matched it", async () => {
+    const handler = await loadHandler({});
+
+    const shared = { folder: "/a/", fileName: "shared.mp4", mimeType: "video/mp4", similarity: 0.2 };
+    const imageOnly = { folder: "/a/", fileName: "image-only.jpg", mimeType: "image/jpeg", similarity: 0.9 };
+
+    const database = {
+      semanticSearch: jest.fn(async () => [imageOnly, shared]),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => [shared]),
+    } as unknown as IndexDatabase;
+
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(makeReq("shared"), res, { database });
+
+    expect(getStatus()).toBe(200);
+    const bySource = Object.fromEntries(
+      getJson().items.map((it: { fileName: string; sources: string[] }) => [it.fileName, it.sources]),
+    );
+    expect(bySource["shared.mp4"]).toEqual(["image", "transcript"]);
+    expect(bySource["image-only.jpg"]).toEqual(["image"]);
+  });
+
+  it("runs only the sources named in the `sources` param and skips the rest", async () => {
+    const handler = await loadHandler({});
+
+    const transcriptHit = { folder: "/a/", fileName: "spoken.mp4", mimeType: "video/mp4", similarity: 0.6 };
+    const semanticSearch = jest.fn(async () => []);
+    const audioSemanticSearch = jest.fn(async () => []);
+    const database = {
+      semanticSearch,
+      audioSemanticSearch,
+      audioTranscriptSearch: jest.fn(async () => [transcriptHit]),
+    } as unknown as IndexDatabase;
+
+    const req = {
+      url: `/api/search?q=${encodeURIComponent("hello")}&sources=transcript&debug=1`,
+      headers: { host: "localhost" },
+    } as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
+
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(req, res, { database });
+
+    expect(getStatus()).toBe(200);
+    // The disabled embedding searches must not even touch their (slow) workers.
+    expect(semanticSearch).not.toHaveBeenCalled();
+    expect(audioSemanticSearch).not.toHaveBeenCalled();
+    const json = getJson();
+    expect(json.items.map((it: { fileName: string }) => it.fileName)).toEqual(["spoken.mp4"]);
+    expect(json._diagnostics.clip).toEqual({ status: "skipped" });
+    expect(json._diagnostics.clap).toEqual({ status: "skipped" });
+  });
+
+  it("drops low-confidence CLAP audio hits below the relevance floor but keeps confident ones", async () => {
+    const handler = await loadHandler({});
+
+    // CLAP cosine sits on a higher scale than CLIP and is not relevance-calibrated
+    // across queries, so noise can score ~0.4. Only confident audio (>= floor)
+    // should reach the results; a sub-floor "match" is dropped before fusion.
+    const noiseVideo = { folder: "/a/", fileName: "noise.mp4", mimeType: "video/mp4", similarity: 0.41 };
+    const confidentVideo = { folder: "/a/", fileName: "music.mp4", mimeType: "video/mp4", similarity: 0.52 };
+
+    const database = {
+      semanticSearch: jest.fn(async () => []),
+      audioSemanticSearch: jest.fn(async () => [confidentVideo, noiseVideo]),
+      audioTranscriptSearch: jest.fn(async () => []),
+    } as unknown as IndexDatabase;
+
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(makeReq("music"), res, { database });
+
+    expect(getStatus()).toBe(200);
+    const names = getJson().items.map((i: { fileName: string }) => i.fileName);
+    expect(names).toContain("music.mp4");
+    expect(names).not.toContain("noise.mp4");
+  });
+
   it("returns 503 only when both embed workers fail and there are no results at all", async () => {
     const handler = await loadHandler({
       embedText: async () => {

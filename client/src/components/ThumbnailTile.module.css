@@ -90,6 +90,29 @@
   pointer-events: none;
 }
 
+.sourceBadges {
+  position: absolute;
+  bottom: var(--space-xxs);
+  left: var(--space-xxs);
+  display: flex;
+  gap: var(--space-xxs);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.sourceBadge {
+  background-color: var(--bg1);
+  color: var(--fg2);
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xs);
+  box-shadow: var(--shadow-sm);
+  opacity: 0.86;
+  pointer-events: auto;
+}
+
 .unknownFile {
   width: 100%;
   height: 100%;

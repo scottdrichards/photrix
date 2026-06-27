@@ -12,6 +12,7 @@ type BaseFilterCondition = RecordFilterCondition<FileRecord, "relativePath">;
 
 export type FilterCondition = BaseFilterCondition & {
   hasFaces?: boolean | null;
+  hasAudioTranscript?: boolean | null;
 };
 
 export type LogicalFilter = Extract<

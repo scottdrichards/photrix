@@ -7,6 +7,7 @@ import {
   Person24Regular,
   ScanPerson24Regular,
   Star24Regular,
+  Subtitles24Regular,
 } from "@fluentui/react-icons";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,6 +39,7 @@ export const Filter = () => {
     ratingFilter,
     mediaTypeFilter,
     hasFaceScanData,
+    hasAudioTranscript,
     path,
     peopleInImageFilter,
     cameraModelFilter,
@@ -154,6 +156,7 @@ export const Filter = () => {
   const isFolderFilterActive = Boolean(currentPath) || includeSubfolders === false;
   const isMediaTypeFilterActive = Boolean(mediaTypeFilter && mediaTypeFilter !== "all");
   const isFaceScanFilterActive = Boolean(hasFaceScanData);
+  const isTranscriptFilterActive = Boolean(hasAudioTranscript);
   const isPeopleFilterActive = selectedPeople.length > 0;
   const isGearFilterActive =
     selectedCameraModels.length > 0 || selectedLensModels.length > 0;
@@ -192,6 +195,10 @@ export const Filter = () => {
 
   const handleFaceScanFilterToggle = () => {
     setFilter({ hasFaceScanData: !isFaceScanFilterActive });
+  };
+
+  const handleTranscriptFilterToggle = () => {
+    setFilter({ hasAudioTranscript: !isTranscriptFilterActive });
   };
 
   const arrayFilterSetter = useCallback(
@@ -449,6 +456,19 @@ export const Filter = () => {
           onClick={handleFaceScanFilterToggle}
         >
           <ScanPerson24Regular fontSize={20} />
+        </button>
+      </div>
+
+      {/* Transcript */}
+      <div className="popover-anchor">
+        <button
+          title="Has transcript"
+          aria-label="Has transcript filter"
+          aria-pressed={isTranscriptFilterActive}
+          className={`btn btn-icon ${css.filterIconButton} ${isTranscriptFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={handleTranscriptFilterToggle}
+        >
+          <Subtitles24Regular fontSize={20} />
         </button>
       </div>
 

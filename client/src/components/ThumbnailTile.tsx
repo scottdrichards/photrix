@@ -1,11 +1,26 @@
 import {
+  ClosedCaption24Regular,
   Filmstrip24Regular,
+  Image24Regular,
+  MusicNote224Regular,
   PlayCircle24Regular,
 } from "@fluentui/react-icons";
 import { useEffect, useRef, useState } from "react";
-import type { PhotoItem } from "../api";
+import type { PhotoItem, SearchSource } from "../api";
 import { useSelectionContext } from "./selection/SelectionContext";
 import css from "./ThumbnailTile.module.css";
+
+const SOURCE_LABELS: Record<SearchSource, string> = {
+  image: "Matched on image content",
+  audio: "Matched on audio content",
+  transcript: "Matched in transcript",
+};
+
+const SOURCE_ICONS: Record<SearchSource, React.ReactNode> = {
+  image: <Image24Regular fontSize={14} />,
+  audio: <MusicNote224Regular fontSize={14} />,
+  transcript: <ClosedCaption24Regular fontSize={14} />,
+};
 
 const DEFAULT_RATIO = 1;
 const RATIO_MISMATCH_LOG_THRESHOLD = 0.01;
@@ -49,6 +64,7 @@ type Props = {
 
 export const ThumbnailTile: React.FC<Props> = (props) => {
   const { photo } = props;
+  const searchSources = photo.searchSources;
   const tileRef = useRef<HTMLButtonElement | null>(null);
   const supportsIntersectionObserver = typeof IntersectionObserver !== "undefined";
   const [isNearViewport, setIsNearViewport] = useState(!supportsIntersectionObserver);
@@ -131,6 +147,18 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       {photo.livePhotoUrl ? (
         <span className={css.livePhotoBadge} aria-label="Live photo" title="Live photo">
           <Filmstrip24Regular fontSize={14} />
+        </span>
+      ) : null}
+      {searchSources && searchSources.length > 0 ? (
+        <span
+          className={css.sourceBadges}
+          aria-label={`Matched by: ${searchSources.map((s) => SOURCE_LABELS[s]).join(", ")}`}
+        >
+          {searchSources.map((source) => (
+            <span key={source} className={css.sourceBadge} title={SOURCE_LABELS[source]}>
+              {SOURCE_ICONS[source]}
+            </span>
+          ))}
         </span>
       ) : null}
       {photo.mediaType === "video" ? (

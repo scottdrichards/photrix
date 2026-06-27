@@ -96,6 +96,16 @@ const constraintToSQL = (
     return null;
   }
 
+  if (fieldName === "hasAudioTranscript") {
+    if (constraint === true) {
+      return { where: "audioTranscribedAt IS NOT NULL", params: [] };
+    }
+    if (constraint === false) {
+      return { where: "audioTranscribedAt IS NULL", params: [] };
+    }
+    return null;
+  }
+
   const sqlField = fieldName === "relativePath" ? "(folder || fileName)" : fieldName;
   const isStringArrayJsonField = stringArrayJsonFields.has(fieldName);
 
