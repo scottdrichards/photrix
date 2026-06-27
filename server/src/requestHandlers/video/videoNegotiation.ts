@@ -1,7 +1,6 @@
 import type http from "node:http";
 import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
 import { getHLSInfo } from "../../videoProcessing/generateHLS.ts";
-import { getMultibitrateHLSInfo } from "../../videoProcessing/generateMultibitrateHLS.ts";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { writeJson } from "../../utils.ts";
@@ -48,7 +47,7 @@ export const negotiateVideoPlayback = async (
   request: VideoPlaybackRequest,
   deps: NegotiationDeps,
 ): Promise<VideoPlaybackResponse> => {
-  const { path: subPath, bandwidthMbps, hevcSupported } = request;
+  const { path: subPath, hevcSupported } = request;
 
   if (!deps.isVideoFile(subPath)) {
     return { mode: "error", reason: "Not a video file" };
@@ -60,7 +59,12 @@ export const negotiateVideoPlayback = async (
   }
 
   const encodedPath = encodeURIComponent(subPath);
-  const hlsUrl = `/api/files/${encodedPath}?representation=hls&height=original`;
+  // The HLS master advertises every quality variant; the player adapts between them
+  // mid-stream from its own measured throughput (real ABR), so no height is chosen
+  // here. (The client's reported downlink can't drive this anyway — for a remote
+  // viewer it measures their download link, not the host's upload, which is the
+  // actual bottleneck.)
+  const hlsUrl = `/api/files/${encodedPath}?representation=hls`;
   const directUrl = `/api/files/${encodedPath}`;
 
   // 1. Cached HLS available — always prefer (no compute cost)
@@ -97,10 +101,8 @@ export const negotiateVideoPlayback = async (
 
 const buildDeps = (database: IndexDatabase, storageRoot: string): NegotiationDeps => ({
   hasCachedHLS: async (filePath: string) => {
-    const multibitrate = await getMultibitrateHLSInfo(filePath);
-    // complete = all variants encoded (.complete marker exists)
-    // initialized = structure exists but may still be encoding (don't count as "cached")
-    if (multibitrate.complete) return true;
+    // On-the-fly HLS is ephemeral (reaped after playback), so the only persisted
+    // cache is a fully-encoded single-bitrate stream, if one was ever produced.
     const singleBitrate = await getHLSInfo(filePath);
     return singleBitrate.exists;
   },

@@ -2,7 +2,7 @@ import * as http from "http";
 import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import { stat, readFile } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
-import { createReadStream, type Stats } from "fs";
+import { createReadStream, existsSync, type Stats } from "fs";
 import path from "path";
 import {
   convertImage,
@@ -11,7 +11,8 @@ import {
 import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
 import { markCacheAccess } from "../../common/cacheEviction.ts";
 import {
-  generateMultibitrateHLS,
+  clampToSupportedHeight,
+  generateVariantHLS,
   getMultibitrateHLSInfo,
   getVariantPlaylistPath,
   getVariantSegmentPath,
@@ -20,8 +21,10 @@ import {
 import { waitForHlsFile } from "../../videoProcessing/hlsSegmentWatcher.ts";
 import { buildVodVariantPlaylist } from "../../videoProcessing/buildHlsPlaylist.ts";
 import {
+  claimVariantEncode,
   registerHlsProcess,
   touchHlsSession,
+  touchVariant,
 } from "../../videoProcessing/hlsSession.ts";
 import { getLogger } from "../../observability/logger.ts";
 
@@ -193,6 +196,12 @@ const streamHlsSegment = async (res: http.ServerResponse, segmentPath: string) =
   });
 };
 
+/** Extracts the integer index N from an HLS segment name `segment_NNN.ts`. */
+const parseSegmentIndex = (segment: string): number | null => {
+  const match = segment.match(/segment_(\d+)\.ts$/);
+  return match ? Number(match[1]) : null;
+};
+
 type FileHandlingContext = {
   normalizedPath: string;
   subPath: string;
@@ -265,9 +274,12 @@ const tryHLSStream = async (
     // player is fetching, then deletes it (and kills any running encode) once idle.
     touchHlsSession(multibitrateInfo.hlsDir);
 
-    // If not initialized, set up the directory structure immediately and queue FFmpeg.
-    // The master playlist is returned to the client right away; segments become available
-    // as FFmpeg encodes them and are served via the segment watcher.
+    const hlsDir = multibitrateInfo.hlsDir;
+
+    // If not initialized, set up the directory structure immediately so the master
+    // playlist can be returned to the client right away. Encodes are started lazily
+    // per variant when the client requests segments (see ensureEncodeCovers below);
+    // segments become available as FFmpeg writes them and are served via the watcher.
     if (!multibitrateInfo.initialized) {
       if (!(await getGpuAcceleration())) {
         writeJson(res, 422, {
@@ -278,27 +290,46 @@ const tryHLSStream = async (
         return true;
       }
 
-      // Create dirs + write master.m3u8 synchronously so the response is immediate
+      // Create dirs + write the multi-variant master.m3u8 synchronously so the
+      // response is immediate.
       await prepareMultibitrateHLSStructure(normalizedPath);
+    }
 
-      // Queue HLS generation as a user-blocking task. The output is ephemeral —
-      // it is served while the player fetches, then deleted by the reaper once
-      // playback goes idle (which may kill this encode mid-flight), so we don't
-      // persist any "HLS generated" marker in the database.
-      const hlsDir = multibitrateInfo.hlsDir;
+    // Ensure a live/pending encode for `variantHeight` will produce `startSegment`,
+    // (re)starting one if needed. `claimVariantEncode` makes the decision atomically
+    // (see there) and returns the segment to begin at, or null if already covered.
+    // Queued as a user-blocking task. The output is ephemeral — served while the
+    // player fetches, then reaped once that variant goes idle (an ABR switch away) or
+    // the whole tree goes idle, so we persist no DB marker.
+    const ensureEncodeCovers = (
+      variantHeight: number,
+      segmentIndex: number,
+      forwardSeek = false,
+    ): void => {
+      const startSegment = claimVariantEncode(
+        hlsDir,
+        variantHeight,
+        segmentIndex,
+        forwardSeek,
+      );
+      if (startSegment === null) return;
       ctx.taskOrchestrator.addTask(
         {
-          name: "HLS generation",
+          name: `HLS encode ${variantHeight}p @${startSegment}`,
           type: "videoConversion",
           start: () => {
-            const promise = generateMultibitrateHLS(normalizedPath, {
-              onSpawn: (child) => registerHlsProcess(hlsDir, child),
+            const promise = generateVariantHLS(normalizedPath, variantHeight, {
+              startSegment,
+              onSpawn: (child) => registerHlsProcess(hlsDir, variantHeight, child),
             }).then(
               () => {},
               (error) => {
-                // A reaped session kills ffmpeg on purpose; that's an expected
-                // outcome for ephemeral HLS, not a real failure.
-                hlsLog.debug({ err: error, hlsDir }, "HLS generation ended early");
+                // A reaped session/variant kills ffmpeg on purpose; expected for
+                // ephemeral HLS, not a real failure.
+                hlsLog.debug(
+                  { err: error, hlsDir, variantHeight, startSegment },
+                  "HLS encode ended early",
+                );
               },
             );
 
@@ -311,18 +342,26 @@ const tryHLSStream = async (
         },
         "blocking",
       );
-    }
+    };
 
     // Serve variant segment — wait for FFmpeg to write it if not ready yet
     if (segment && variant) {
-      const variantHeight = parseInt(variant, 10);
-      const segmentPath = getVariantSegmentPath(
-        multibitrateInfo.hlsDir,
-        variantHeight,
-        segment,
-      );
+      const variantHeight = clampToSupportedHeight(parseInt(variant, 10));
+      const segmentPath = getVariantSegmentPath(hlsDir, variantHeight, segment);
+      const segmentIndex = parseSegmentIndex(segment);
+      // Touch the variant (re-arm idle reaper) and learn whether this request is a
+      // forward seek — a jump well past the furthest segment requested so far.
+      const forwardSeek = touchVariant(hlsDir, variantHeight, segmentIndex ?? undefined);
 
-      const available = await waitForHlsFile(multibitrateInfo.hlsDir, segmentPath);
+      // Only (re)start an encode when the segment isn't already on disk. Buffer-ahead
+      // requests for not-yet-produced segments fall through to the long-poll below,
+      // letting the running encode reach them rather than spuriously restarting it —
+      // unless this is a forward seek, where we restart at the seek target.
+      if (!existsSync(segmentPath) && segmentIndex !== null) {
+        ensureEncodeCovers(variantHeight, segmentIndex, forwardSeek);
+      }
+
+      const available = await waitForHlsFile(hlsDir, segmentPath);
       if (!available) {
         writeJson(res, 404, { error: "HLS segment not found or timed out" });
         return true;
@@ -333,13 +372,16 @@ const tryHLSStream = async (
 
     // Serve variant playlist
     if (variant) {
+      const variantHeight = clampToSupportedHeight(parseInt(variant, 10));
+      touchVariant(hlsDir, variantHeight);
       const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}&segment=`;
 
       // When the total duration is known, synthesize a complete VOD playlist that
       // lists every segment up front and ends with #EXT-X-ENDLIST. This gives the
       // player the true total length immediately, instead of FFmpeg's growing EVENT
-      // playlist whose duration creeps up as segments are appended. Not-yet-encoded
-      // segments are long-polled by the segment handler below until FFmpeg writes them.
+      // playlist whose duration creeps up as segments are appended. The encode itself
+      // is started lazily by the segment handler at the position the player asks for,
+      // so a mid-stream switch to this variant begins encoding there, not from 0.
       if (
         typeof knownDuration === "number" &&
         Number.isFinite(knownDuration) &&
@@ -355,9 +397,10 @@ const tryHLSStream = async (
         return true;
       }
 
-      // Duration unknown — fall back to FFmpeg's growing EVENT playlist, waiting for
-      // it to be written if it isn't ready yet.
-      const variantHeight = parseInt(variant, 10);
+      // Duration unknown — we can't synthesize the VOD playlist, so fall back to
+      // FFmpeg's own growing EVENT playlist. That requires an encode from the start;
+      // kick one off and wait for the playlist to be written.
+      ensureEncodeCovers(variantHeight, 0);
       const variantPlaylistPath = getVariantPlaylistPath(
         multibitrateInfo.hlsDir,
         variantHeight,
@@ -485,6 +528,12 @@ const fileHandler = async (
     database,
     taskOrchestrator,
   };
+
+  if (representation === "transcript") {
+    const segments = await database.getAudioSegments(subPath);
+    writeJson(res, 200, { segments });
+    return;
+  }
 
   // HLS handler needs URL for segment parameter
   const hlsHandled = await tryHLSStream({ ...handlingContext, url });
