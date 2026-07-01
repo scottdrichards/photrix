@@ -1,4 +1,5 @@
 import path from "node:path";
+import { access } from "node:fs/promises";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { getLogger } from "../observability/logger.ts";
 import { batch } from "../utils.ts";
@@ -38,6 +39,13 @@ export const processAudioEmbedding = (
               database.storagePath,
               stripLeadingSlash(relativePath),
             );
+            try {
+              await access(fullPath);
+            } catch {
+              log.warn({ path: relativePath }, "Audio embedding skipped: file not found at storage path");
+              await database.markAudioEmbeddingSkipped(relativePath);
+              return;
+            }
             try {
               const embedding = await embedAudio(fullPath);
               await database.saveAudioEmbedding(relativePath, embedding);

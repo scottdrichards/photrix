@@ -866,6 +866,22 @@ export class IndexDatabase {
     });
   }
 
+  async getImagesMissingDimensions(
+    limit = 200,
+  ): Promise<Array<{ relativePath: string }>> {
+    const rows = await this.db.all<{ folder: string; fileName: string }>(
+      `SELECT folder, fileName FROM files
+       WHERE mimeType LIKE 'image/%'
+         AND exifProcessedAt IS NOT NULL
+         AND dimensionsWidth IS NULL
+       LIMIT ?`,
+      limit,
+    );
+    return rows.map((row) => ({
+      relativePath: joinPath(row.folder, row.fileName),
+    }));
+  }
+
   async allFiles(): Promise<FileRecord[]> {
     const rows =
       await this.db.all<Record<string, string | number>>("SELECT * FROM files");
@@ -1709,6 +1725,16 @@ export class IndexDatabase {
     const { folder, fileName } = splitPath(relativePath);
     await this.db.run(
       `UPDATE files SET audioEmbeddingErrorAt = ? WHERE folder = ? AND fileName = ?`,
+      Date.now(),
+      folder,
+      fileName,
+    );
+  }
+
+  async markAudioEmbeddingSkipped(relativePath: string): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    await this.db.run(
+      `UPDATE files SET audioEmbedding = NULL, audioEmbeddingProcessedAt = ?, audioEmbeddingErrorAt = NULL WHERE folder = ? AND fileName = ?`,
       Date.now(),
       folder,
       fileName,
