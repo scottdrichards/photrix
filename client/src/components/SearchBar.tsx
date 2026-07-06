@@ -10,6 +10,17 @@ import { SEARCH_SOURCES, type SearchSource } from "../../../shared/filter-contra
 import { useFilter } from "./filter/FilterContext";
 import css from "./SearchBar.module.css";
 
+const SEARCH_EXAMPLES = [
+  "sunset on the beach",
+  "birthday cake with candles",
+  "kids playing in the snow",
+  "hiking in the mountains",
+  "family at the dinner table",
+  "dog at the park",
+  "city lights at night",
+  "flowers in bloom",
+];
+
 const WIDE_BREAKPOINT = "(min-width: 700px)";
 
 const SOURCE_TOGGLES: { source: SearchSource; label: string; icon: React.ReactNode }[] = [
@@ -25,6 +36,20 @@ export const SearchBar = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isWide, setIsWide] = useState(() => window.matchMedia(WIDE_BREAKPOINT).matches);
+  const [exampleIdx, setExampleIdx] = useState(0);
+  const [exampleVisible, setExampleVisible] = useState(true);
+  const [isFocused, setIsFocused] = useState(false);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setExampleVisible(false);
+      setTimeout(() => {
+        setExampleIdx((i) => (i + 1) % SEARCH_EXAMPLES.length);
+        setExampleVisible(true);
+      }, 500);
+    }, 10000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     const mq = window.matchMedia(WIDE_BREAKPOINT);
@@ -99,7 +124,7 @@ export const SearchBar = () => {
         type="button"
         className={css.iconBtn}
         onClick={expand}
-        aria-label="Open semantic search"
+        aria-label="Search your photos"
         aria-expanded={showExpanded}
       >
         <Search24Regular />
@@ -114,15 +139,27 @@ export const SearchBar = () => {
         aria-hidden={!showExpanded}
       >
         <Search24Regular className={css.searchIcon} />
-        <input
-          ref={inputRef}
-          className={css.input}
-          type="search"
-          placeholder="Semantic search…"
-          defaultValue={query}
-          aria-label="Semantic search"
-          tabIndex={showExpanded ? 0 : -1}
-        />
+        <div className={css.inputWrap}>
+          <input
+            ref={inputRef}
+            className={css.input}
+            type="search"
+            placeholder=""
+            defaultValue={query}
+            aria-label="Search your photos"
+            tabIndex={showExpanded ? 0 : -1}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+          />
+          {!hasActiveQuery && !isFocused && (
+            <span
+              className={`${css.examplePlaceholder} ${exampleVisible ? css.examplePlaceholderVisible : ""}`}
+              aria-hidden
+            >
+              e.g. &ldquo;{SEARCH_EXAMPLES[exampleIdx]}&rdquo;
+            </span>
+          )}
+        </div>
         {hasActiveQuery && (
           <button
             type="button"

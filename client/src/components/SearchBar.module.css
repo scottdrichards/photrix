@@ -78,8 +78,16 @@
   color: var(--text3, #666);
 }
 
-.input {
+.inputWrap {
   flex: 1;
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.input {
+  width: 100%;
   border: none;
   background: transparent;
   padding-block: var(--space-s);
@@ -89,8 +97,22 @@
   min-width: 0;
 }
 
-.input::placeholder {
+.examplePlaceholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  font-size: 0.875rem;
   color: var(--text3, #999);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 450ms ease;
+}
+
+.examplePlaceholderVisible {
+  opacity: 1;
 }
 
 /* Remove browser default clear button since we add our own */
