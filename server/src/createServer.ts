@@ -9,6 +9,11 @@ import { networkProbeRequestHandler } from "./requestHandlers/networkProbeReques
 import { videoNegotiationRequestHandler } from "./requestHandlers/video/videoNegotiation.ts";
 import { searchRequestHandler } from "./requestHandlers/searchRequestHandler.ts";
 import {
+  authLoginHandler,
+  authLogoutHandler,
+  authShareTokenHandler,
+} from "./requestHandlers/authRequestHandler.ts";
+import {
   bindCurrentRequestTrace,
   finishRequestTrace,
   getCurrentRequestId,
@@ -17,6 +22,12 @@ import {
 import type { TaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import { writeJson } from "./utils.ts";
 import { getLogger } from "./observability/logger.ts";
+import {
+  extractToken,
+  getShareFilter,
+  isAuthEnabled,
+  validateToken,
+} from "./auth/authService.ts";
 
 const log = getLogger("httpServer");
 
@@ -73,7 +84,7 @@ export const createServer = (
         try {
           res.setHeader("Access-Control-Allow-Origin", "*");
           res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-          res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+          res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
           res.setHeader("Vary", "Origin");
 
           if (req.method === "OPTIONS") {
@@ -85,6 +96,25 @@ export const createServer = (
           if (!req.url) {
             writeJson(res, 400, { error: "Bad request" });
             return;
+          }
+
+          // Auth gate — bypass for health check and auth endpoints themselves
+          let shareFilter: unknown = null;
+          if (
+            isAuthEnabled() &&
+            req.url !== "/api/health" &&
+            !req.url.startsWith("/api/auth/")
+          ) {
+            const parsedUrl = new URL(req.url, "http://localhost");
+            const token = extractToken(
+              req.headers["authorization"],
+              parsedUrl.searchParams.get("token"),
+            );
+            if (!token || !validateToken(token)) {
+              writeJson(res, 401, { error: "Unauthorized" });
+              return;
+            }
+            shareFilter = getShareFilter(token);
           }
 
           // Let the orchestrator back background work off for the *entire* time a
@@ -110,6 +140,21 @@ export const createServer = (
             res.once("close", endRequest);
           }
 
+          if (req.url === "/api/auth/login" && req.method === "POST") {
+            await authLoginHandler(req, res);
+            return;
+          }
+
+          if (req.url === "/api/auth/logout" && req.method === "POST") {
+            await authLogoutHandler(req, res);
+            return;
+          }
+
+          if (req.url === "/api/auth/share-token" && req.method === "POST") {
+            authShareTokenHandler(req, res);
+            return;
+          }
+
           if (req.url === "/api/health" && req.method === "GET") {
             const payload = {
               status: "ok",
@@ -121,6 +166,7 @@ export const createServer = (
           }
 
           if (req.url?.startsWith("/api/status/stream") && req.method === "GET") {
+            if (shareFilter) { writeJson(res, 403, { error: "Forbidden" }); return; }
             await statusRequestHandler(req, res, {
               stream: true,
               taskOrchestrator,
@@ -129,11 +175,13 @@ export const createServer = (
           }
 
           if (req.url === "/api/status/background-tasks" && req.method === "POST") {
+            if (shareFilter) { writeJson(res, 403, { error: "Forbidden" }); return; }
             await statusBackgroundTasksRequestHandler(req, res, { taskOrchestrator });
             return;
           }
 
           if (req.url?.startsWith("/api/status") && req.method === "GET") {
+            if (shareFilter) { writeJson(res, 403, { error: "Forbidden" }); return; }
             await statusRequestHandler(req, res, {
               stream: false,
               taskOrchestrator,
@@ -151,6 +199,12 @@ export const createServer = (
 
           // Get folders endpoint - list subfolders at a given path
           if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
+            if (shareFilter) {
+              // Folder browsing is not meaningful for a scoped share link; deny
+              // to prevent enumeration of the full folder tree.
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
             await foldersRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
@@ -163,7 +217,7 @@ export const createServer = (
             await suggestionsRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
-              { database },
+              { database, shareFilter },
             );
             return;
           }
@@ -172,7 +226,7 @@ export const createServer = (
             await videoNegotiationRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
-              { database, storageRoot: storagePath },
+              { database, storageRoot: storagePath, shareFilter },
             );
             return;
           }
@@ -181,7 +235,7 @@ export const createServer = (
             await searchRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
-              { database },
+              { database, shareFilter },
             );
             return;
           }
@@ -197,6 +251,7 @@ export const createServer = (
                 database,
                 storageRoot: storagePath,
                 taskOrchestrator,
+                shareFilter,
               },
             );
             return;

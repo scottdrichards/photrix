@@ -1,7 +1,40 @@
+.toggleWrapper {
+  position: sticky;
+  z-index: 9;
+  display: flex;
+  justify-content: center;
+  padding-block: var(--space-s);
+  /* Blurred backdrop so content scrolling beneath looks clean */
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(8px);
+  /* Negative margin to let the backdrop bleed to the panel edges */
+  margin-inline: calc(var(--space-m) * -1);
+  padding-inline: var(--space-m);
+  transition: transform 0.25s ease;
+}
+
+.toggleWrapperHidden {
+  transform: translateY(-200%);
+  transition: transform 0.2s ease-in;
+}
+
+.selectionBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-m);
+  width: 100%;
+}
+
+.selectionCount {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--fg1);
+  margin-inline-end: auto;
+}
+
 .toggleContainer {
   display: flex;
   align-items: center;
-  margin-block-end: var(--space-m);
 }
 
 .toggleTrack {

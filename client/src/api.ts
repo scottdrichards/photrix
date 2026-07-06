@@ -8,6 +8,7 @@ import type {
   SearchSource,
   ServerStatus as SharedServerStatus,
 } from "../../shared/filter-contract/src";
+import { getAuthHeaders, getToken, notifyUnauthorized } from "./auth";
 export type { BackgroundTaskStatus, DateRangeFilter, GeoBounds, SearchSource };
 
 export interface ApiPhotoItem {
@@ -97,6 +98,8 @@ export type PeopleClustersResult = {
   clusters: PersonCluster[];
   totalFaces: number;
   totalClusters: number;
+  /** Faces awaiting background clustering — non-zero means the list is still growing. */
+  pendingFaces: number;
 };
 
 export type PersonClusterDetailResult = {
@@ -119,11 +122,11 @@ export interface FetchPhotosOptions {
   signal?: AbortSignal;
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
-  hasFaceScanData?: ApiFilterOptions["hasFaceScanData"];
   hasAudioTranscript?: boolean;
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
+  faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
 }
@@ -147,10 +150,10 @@ export type FetchSuggestionsOptions = {
   path?: string;
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
-  hasFaceScanData?: ApiFilterOptions["hasFaceScanData"];
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
+  faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
   signal?: AbortSignal;
@@ -204,7 +207,9 @@ export const subscribeStatusStream = (
   onUpdate: (status: ServerStatus) => void,
   onError?: (error: unknown) => void,
 ) => {
-  const source = new EventSource("/api/status/stream");
+  const token = getToken();
+  const url = token ? `/api/status/stream?token=${encodeURIComponent(token)}` : "/api/status/stream";
+  const source = new EventSource(url);
 
   source.onmessage = (event) => {
     try {
@@ -314,11 +319,11 @@ const dateRangeToFilter = (dateRange?: DateRangeFilter | null) => {
 type BuildFiltersInput = {
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
-  hasFaceScanData?: ApiFilterOptions["hasFaceScanData"];
   hasAudioTranscript?: boolean;
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
+  faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
 };
@@ -331,6 +336,23 @@ const normalizeDistinctNonEmpty = (values: string[]) =>
 const toStringIncludesFilter = (value: string) => {
   const normalizedValue = value.trim();
   return normalizedValue.length > 0 ? { includes: normalizedValue } : null;
+};
+
+// People-tab cluster ids arrive as `person-<n>`; the server filters on the raw
+// numeric clusterId, so parse the digits out and drop anything malformed.
+const toClusterIdFilter = (
+  value: string[] | string | null | undefined,
+): number[] | null => {
+  const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const ids = Array.from(
+    new Set(
+      values
+        .map((id) => /^person-(\d+)$/.exec(id.trim())?.[1])
+        .filter((digits): digits is string => digits !== undefined)
+        .map((digits) => Number.parseInt(digits, 10)),
+    ),
+  );
+  return ids.length > 0 ? ids : null;
 };
 
 const toStringArrayFilter = (value: string[] | string | null | undefined) => {
@@ -366,11 +388,11 @@ const addStringFilter = (
 const buildFilters = ({
   ratingFilter,
   mediaTypeFilter,
-  hasFaceScanData,
   hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
 }: BuildFiltersInput) => {
@@ -404,12 +426,9 @@ const buildFilters = ({
     });
   }
 
-  if (hasFaceScanData) {
-    filters.push({ mimeType: { startsWith: "image/" } });
-    filters.push({
-      operation: "or",
-      conditions: [{ hasFaces: true }, { regions: { includes: '"area"' } }],
-    });
+  const clusterIds = toClusterIdFilter(faceClusterFilter);
+  if (clusterIds) {
+    filters.push({ faceCluster: clusterIds });
   }
 
   if (hasAudioTranscript) {
@@ -441,12 +460,53 @@ const buildFilters = ({
   return filters;
 };
 
+// Builds the full server-side query filter for a share token, including the
+// folder/path constraint. This is the format stored server-side and enforced
+// on every request made with the resulting share token.
+export const buildFullShareFilter = (filter: ApiFilterOptions & { path?: string; includeSubfolders?: boolean }): unknown => {
+  const conditions: unknown[] = [];
+
+  const path = (filter.path ?? "").replace(/\/$/, "");
+  const includeSubfolders = filter.includeSubfolders ?? true;
+
+  if (path || !includeSubfolders) {
+    conditions.push({
+      folder: { folder: path || "/", recursive: includeSubfolders },
+    });
+  }
+
+  conditions.push(
+    ...buildFilters({
+      ratingFilter: filter.ratingFilter,
+      mediaTypeFilter: filter.mediaTypeFilter,
+      hasAudioTranscript: filter.hasAudioTranscript,
+      locationBounds: filter.locationBounds,
+      dateRange: filter.dateRange,
+      peopleInImageFilter: filter.peopleInImageFilter,
+      faceClusterFilter: filter.faceClusterFilter,
+      cameraModelFilter: filter.cameraModelFilter,
+      lensFilter: filter.lensFilter,
+    }),
+  );
+
+  if (conditions.length === 0) return {};
+  if (conditions.length === 1) return conditions[0];
+  return { operation: "and", conditions };
+};
+
 const fetchJsonOrThrow = async <T>(
   url: string,
   errorLabel: string,
   init?: RequestInit,
 ): Promise<T> => {
-  const response = await fetch(url, init);
+  const response = await fetch(url, {
+    ...init,
+    headers: { ...getAuthHeaders(), ...(init?.headers ?? {}) },
+  });
+  if (response.status === 401) {
+    notifyUnauthorized();
+    throw new Error(`Unauthorized`);
+  }
   if (!response.ok) {
     throw new Error(`Failed to ${errorLabel} (status ${response.status})`);
   }
@@ -465,10 +525,10 @@ const buildSuggestionParams = ({
   path,
   ratingFilter,
   mediaTypeFilter,
-  hasFaceScanData,
   locationBounds,
   dateRange,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
 }: {
@@ -480,10 +540,10 @@ const buildSuggestionParams = ({
   path: string;
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
-  hasFaceScanData?: ApiFilterOptions["hasFaceScanData"];
   locationBounds?: GeoBounds | null;
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
+  faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
 }) => {
@@ -505,10 +565,10 @@ const buildSuggestionParams = ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     locationBounds,
     dateRange,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -559,16 +619,44 @@ const buildFileUrl = (path: string, params: Record<string, string>): string => {
   // Strip leading slash from path since folder paths start with /
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
   const url = new URL(`/api/files/${normalizedPath}`, window.location.origin);
-  // Add any transformation params (for future use)
   Object.entries(params).forEach(([key, value]) => {
     url.searchParams.set(key, value);
   });
+  // <img src> tags can't send Authorization headers, so embed the token as a
+  // query param — the server accepts either form.
+  const token = getToken();
+  if (token) url.searchParams.set("token", token);
   return url.toString();
 };
 
 const buildFallbackUrl = (path: string): string => {
   const url = new URL(`/api/uploads/${path}`, window.location.origin);
   return url.toString();
+};
+
+// How much context to include around the detected face, as a fraction of the
+// face's own size added on every side. 0.6 → the crop is ~2.2× the face box, so
+// there's headroom for hair/chin without shrinking the face too far.
+const FACE_CROP_PADDING = 0.6;
+
+/**
+ * Builds a URL for a server-side crop of just the face region. `face.box` is
+ * center-normalized (x/y = face center in [0,1], width/height = extents), so we
+ * pad it and convert to the top-left crop rectangle the API expects. The server
+ * crops before downscaling, so the face fills a small JPEG at full effective
+ * resolution — no oversized download and no browser-side transform.
+ */
+export const buildFaceCropUrl = (face: ClusterFace, size = 320): string => {
+  const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+  const grow = 1 + 2 * FACE_CROP_PADDING;
+  const w = clamp01(face.box.width * grow);
+  const h = clamp01(face.box.height * grow);
+  const x = clamp01(Math.min(Math.max(face.box.x - w / 2, 0), 1 - w));
+  const y = clamp01(Math.min(Math.max(face.box.y - h / 2, 0), 1 - h));
+  return buildFileUrl(face.photo.path, {
+    crop: `${x},${y},${w},${h}`,
+    height: String(size),
+  });
 };
 
 const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
@@ -647,11 +735,11 @@ export const fetchPhotos = async ({
   signal,
   ratingFilter,
   mediaTypeFilter = "all",
-  hasFaceScanData,
   hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
 }: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
@@ -666,11 +754,11 @@ export const fetchPhotos = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -702,10 +790,10 @@ export const fetchGeotaggedPhotos = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
-  hasFaceScanData,
   hasAudioTranscript,
   dateRange,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
   signal,
@@ -731,11 +819,11 @@ export const fetchGeotaggedPhotos = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -787,11 +875,11 @@ export const fetchPeopleClusters = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
-  hasFaceScanData,
   hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
   signal,
@@ -805,11 +893,11 @@ export const fetchPeopleClusters = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -837,6 +925,7 @@ export const fetchPeopleClusters = async ({
     }>;
     totalFaces: number;
     totalClusters: number;
+    pendingFaces?: number;
   }>(url, "fetch people clusters", { signal });
 
   const toClusterFace = (face: {
@@ -872,6 +961,7 @@ export const fetchPeopleClusters = async ({
     })),
     totalFaces: payload.totalFaces,
     totalClusters: payload.totalClusters,
+    pendingFaces: payload.pendingFaces ?? 0,
   };
 };
 
@@ -881,11 +971,11 @@ export const fetchClusterDetail = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
-  hasFaceScanData,
   hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
   signal,
@@ -900,11 +990,11 @@ export const fetchClusterDetail = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -985,10 +1075,10 @@ export const fetchDateRange = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
-  hasFaceScanData,
   hasAudioTranscript,
   locationBounds,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
   signal,
@@ -1005,11 +1095,11 @@ export const fetchDateRange = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     hasAudioTranscript,
     locationBounds,
     dateRange: null,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -1033,11 +1123,11 @@ export const fetchDateHistogram = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
-  hasFaceScanData,
   hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
   signal,
@@ -1051,11 +1141,11 @@ export const fetchDateHistogram = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -1095,10 +1185,10 @@ export const fetchSuggestions = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
-  hasFaceScanData,
   locationBounds,
   dateRange,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
   signal,
@@ -1116,10 +1206,10 @@ export const fetchSuggestions = async ({
     path,
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     locationBounds,
     dateRange,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -1142,10 +1232,10 @@ export const fetchSuggestionsWithCounts = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
-  hasFaceScanData,
   locationBounds,
   dateRange,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
   signal,
@@ -1163,10 +1253,10 @@ export const fetchSuggestionsWithCounts = async ({
     path,
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     locationBounds,
     dateRange,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -1202,11 +1292,11 @@ export const fetchSemanticSearch = async ({
   path = "",
   ratingFilter,
   mediaTypeFilter = "all",
-  hasFaceScanData,
   hasAudioTranscript,
   locationBounds,
   dateRange,
   peopleInImageFilter,
+  faceClusterFilter,
   cameraModelFilter,
   lensFilter,
 }: FetchSemanticSearchOptions): Promise<FetchPhotosResult & { query: string }> => {
@@ -1222,11 +1312,11 @@ export const fetchSemanticSearch = async ({
   const filters = buildFilters({
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     hasAudioTranscript,
     locationBounds,
     dateRange,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -1272,7 +1362,9 @@ export const negotiateVideoPlayback = async (options: {
   }
   params.set("hevcSupported", String(hevcSupported));
 
-  const response = await fetch(`/api/video/negotiate?${params.toString()}`);
+  const response = await fetch(`/api/video/negotiate?${params.toString()}`, {
+    headers: getAuthHeaders(),
+  });
 
   return (await response.json()) as VideoNegotiationResult;
 };

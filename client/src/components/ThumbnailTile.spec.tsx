@@ -66,6 +66,11 @@ describe("ThumbnailTile", () => {
       setItems: vi.fn(),
       selectNext: vi.fn(),
       selectPrevious: vi.fn(),
+      selectionMode: false,
+      checkedPaths: new Set<string>(),
+      enterSelectionMode: vi.fn(),
+      exitSelectionMode: vi.fn(),
+      toggleChecked: vi.fn(),
     });
   });
 
@@ -73,6 +78,10 @@ describe("ThumbnailTile", () => {
     const setSelected = vi.fn();
     useSelectionContextMock.mockReturnValue({
       setSelected,
+      selectionMode: false,
+      checkedPaths: new Set<string>(),
+      enterSelectionMode: vi.fn(),
+      toggleChecked: vi.fn(),
     });
 
     const photo = createPhoto();

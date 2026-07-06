@@ -1,12 +1,16 @@
 import * as http from "http";
 import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
+import type { FilterElement } from "../../indexDatabase/indexDatabase.type.ts";
 import { stat, readFile } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { createReadStream, existsSync, type Stats } from "fs";
 import path from "path";
 import {
   convertImage,
+  convertImageCrop,
+  IMAGE_OUTPUT_CONTENT_TYPE,
   ImageConversionError,
+  type CropBox,
 } from "../../imageProcessing/convertImage.ts";
 import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
 import { markCacheAccess } from "../../common/cacheEviction.ts";
@@ -40,20 +44,21 @@ type Options = {
   database: IndexDatabase;
   storageRoot: string;
   taskOrchestrator: TaskOrchestrator;
+  shareFilter?: unknown;
 };
 
 export const filesEndpointRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
   res: http.ServerResponse,
-  { database, storageRoot, taskOrchestrator }: Options,
+  { database, storageRoot, taskOrchestrator, shareFilter }: Options,
 ) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathMatch = url.pathname.match(/^\/api\/files\/(.*)/);
     if (!pathMatch) return writeJson(res, 400, { error: "Bad request" });
     const subPath = decodeURIComponent(pathMatch[1]) || "/";
-    if (subPath.endsWith("/")) return queryHandler(url, subPath, database, res);
-    await fileHandler(req, url, subPath, storageRoot, res, database, taskOrchestrator);
+    if (subPath.endsWith("/")) return queryHandler(url, subPath, database, res, shareFilter);
+    await fileHandler(req, url, subPath, storageRoot, res, database, taskOrchestrator, shareFilter);
   } catch (error) {
     if (!res.headersSent)
       writeJson(res, 500, {
@@ -212,8 +217,30 @@ type FileHandlingContext = {
   needsFormatChange: boolean;
   isImage: boolean;
   isVideo: boolean;
+  crop: CropBox | null;
   database: IndexDatabase;
   taskOrchestrator: TaskOrchestrator;
+};
+
+/**
+ * Parses a `crop=x,y,w,h` query param of normalized top-left fractions (0..1)
+ * of the EXIF-oriented image. Returns null when absent, or throws a message when
+ * malformed so the caller can respond with 400.
+ */
+const parseCrop = (raw: string | null): CropBox | null => {
+  if (raw === null) return null;
+  const parts = raw.split(",").map((p) => Number.parseFloat(p));
+  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) {
+    throw new Error("crop must be four comma-separated numbers: x,y,w,h");
+  }
+  const [x, y, width, height] = parts;
+  if (width <= 0 || height <= 0) {
+    throw new Error("crop width and height must be positive");
+  }
+  if (x < 0 || y < 0 || x >= 1 || y >= 1) {
+    throw new Error("crop x and y must be in [0, 1)");
+  }
+  return { x, y, width, height };
 };
 
 const serveVideoThumb = async (ctx: FileHandlingContext, height: StandardHeight) => {
@@ -447,6 +474,29 @@ const tryHLSStream = async (
   }
 };
 
+const tryImageCrop = async (ctx: FileHandlingContext) => {
+  const { crop, isImage, normalizedPath, height, res } = ctx;
+  if (!crop || !isImage) return false;
+
+  try {
+    const cachedPath = await convertImageCrop(normalizedPath, crop, height, {
+      priority: "userBlocked",
+    });
+    const cachedStats = await stat(cachedPath);
+    streamCachedFile(res, cachedPath, {
+      contentType: IMAGE_OUTPUT_CONTENT_TYPE,
+      size: cachedStats.size,
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof ImageConversionError) {
+      writeJson(res, 422, { error: "Invalid image", message: error.message });
+      return true;
+    }
+    return false;
+  }
+};
+
 const tryImageVariant = async (ctx: FileHandlingContext) => {
   const { needsFormatChange, needsResize, isImage, normalizedPath, height, res } = ctx;
   if (!(needsFormatChange || needsResize) || !isImage) return false;
@@ -457,7 +507,7 @@ const tryImageVariant = async (ctx: FileHandlingContext) => {
     });
     const cachedStats = await stat(cachedPath);
     streamCachedFile(res, cachedPath, {
-      contentType: "image/jpeg",
+      contentType: IMAGE_OUTPUT_CONTENT_TYPE,
       size: cachedStats.size,
     });
     return true;
@@ -478,6 +528,7 @@ const fileHandler = async (
   res: http.ServerResponse,
   database: IndexDatabase,
   taskOrchestrator: TaskOrchestrator,
+  shareFilter: unknown = null,
 ) => {
   if (!subPath) {
     return writeJson(res, 400, { error: "Missing file path" });
@@ -487,6 +538,13 @@ const fileHandler = async (
 
   if (!isPathInsideStorage(storageRoot, normalizedPath)) {
     return writeJson(res, 403, { error: "Access denied" });
+  }
+
+  if (shareFilter) {
+    const allowed = await database.fileMatchesFilter(subPath, shareFilter as FilterElement);
+    if (!allowed) {
+      return writeJson(res, 403, { error: "Access denied" });
+    }
   }
 
   let fileStats: Stats | null = null;
@@ -511,9 +569,27 @@ const fileHandler = async (
   const needsResize = height !== "original";
   const needsFormatChange =
     representation === "webSafe" &&
-    (mimeType === "image/heic" || mimeType === "image/heif");
+    (mimeType === "image/heic" ||
+      mimeType === "image/heif" ||
+      mimeType === "image/x-canon-cr3");
   const isImage = mimeType.startsWith("image/");
   const isVideo = mimeType.startsWith("video/");
+
+  let crop: CropBox | null;
+  try {
+    crop = parseCrop(url.searchParams.get("crop"));
+  } catch (error) {
+    return writeJson(res, 400, {
+      error: "Invalid crop",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (crop && !isImage) {
+    return writeJson(res, 415, {
+      error: "Unsupported Media Type",
+      message: "Crop is only supported for image files",
+    });
+  }
 
   const handlingContext: FileHandlingContext = {
     normalizedPath,
@@ -525,6 +601,7 @@ const fileHandler = async (
     needsFormatChange,
     isImage,
     isVideo,
+    crop,
     database,
     taskOrchestrator,
   };
@@ -539,10 +616,24 @@ const fileHandler = async (
   const hlsHandled = await tryHLSStream({ ...handlingContext, url });
   if (hlsHandled) return;
 
-  const handlers = [tryVideoThumbnail, tryImageVariant];
+  const handlers = [tryVideoThumbnail, tryImageCrop, tryImageVariant];
   for (const handler of handlers) {
     const handled = await handler(handlingContext);
     if (handled) return;
+  }
+
+  if (representation === "preview" && !isVideo) {
+    return writeJson(res, 415, {
+      error: "Unsupported Media Type",
+      message: "Preview is only available for video files",
+    });
+  }
+
+  if (representation !== null && !isImage && !isVideo) {
+    return writeJson(res, 415, {
+      error: "Unsupported Media Type",
+      message: "Requested representation is not supported for this file type",
+    });
   }
 
   streamFile(req, res, normalizedPath, {

@@ -29,6 +29,7 @@ describe("api", () => {
 
     expect(result).toEqual(["a", "b"]);
     expect(fetchMock).toHaveBeenCalledWith("/api/folders/photos/2024/", {
+      headers: {},
       signal: undefined,
     });
   });
@@ -77,7 +78,7 @@ describe("api", () => {
       path: "trip/",
       ratingFilter: { rating: 3, atLeast: true },
       mediaTypeFilter: "all",
-      hasFaceScanData: true,
+      faceClusterFilter: ["person-3", "person-3", "bogus", "person-12"],
       peopleInImageFilter: [" Sam ", "sam", "Taylor"],
       cameraModelFilter: ["EOS R6"],
       lensFilter: ["RF 24-70mm"],
@@ -101,14 +102,7 @@ describe("api", () => {
     expect(filter.conditions).toEqual(
       expect.arrayContaining([
         { rating: { min: 3 } },
-        { mimeType: { startsWith: "image/" } },
-        {
-          operation: "or",
-          conditions: [
-            { hasFaces: true },
-            { regions: { includes: '"area"' } },
-          ],
-        },
+        { faceCluster: [3, 12] },
         { personInImage: ["Sam", "sam", "Taylor"] },
         { cameraModel: ["EOS R6"] },
         { lens: ["RF 24-70mm"] },
@@ -243,7 +237,11 @@ describe("api", () => {
       supportsArray: false,
       allowsNullState: false,
     });
-    expect(filterFieldCapabilities.hasFaceScanData).toEqual({
+    expect(filterFieldCapabilities.faceClusterFilter).toEqual({
+      supportsArray: true,
+      allowsNullState: true,
+    });
+    expect(filterFieldCapabilities.hasAudioTranscript).toEqual({
       supportsArray: false,
       allowsNullState: false,
     });
@@ -253,6 +251,7 @@ describe("api", () => {
       .map(([field]) => field);
     expect(nullableFields).toEqual([
       "peopleInImageFilter",
+      "faceClusterFilter",
       "cameraModelFilter",
       "lensFilter",
       "ratingFilter",
@@ -265,6 +264,7 @@ describe("api", () => {
       .map(([field]) => field);
     expect(arrayFields).toEqual([
       "peopleInImageFilter",
+      "faceClusterFilter",
       "cameraModelFilter",
       "lensFilter",
     ]);

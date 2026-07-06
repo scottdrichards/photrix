@@ -4,6 +4,7 @@ import { FilterProvider, useFilter } from "./FilterContext";
 
 const fetchFoldersMock = vi.fn();
 const fetchSuggestionsWithCountsMock = vi.fn();
+const fetchPeopleClustersMock = vi.fn();
 
 vi.mock("../../api", async () => {
   const actual = await vi.importActual<typeof import("../../api")>("../../api");
@@ -12,6 +13,7 @@ vi.mock("../../api", async () => {
     fetchFolders: (...args: unknown[]) => fetchFoldersMock(...args),
     fetchSuggestionsWithCounts: (...args: unknown[]) =>
       fetchSuggestionsWithCountsMock(...args),
+    fetchPeopleClusters: (...args: unknown[]) => fetchPeopleClustersMock(...args),
   };
 });
 
@@ -65,6 +67,22 @@ describe("Filter", () => {
     fetchFoldersMock.mockReset();
     fetchFoldersMock.mockResolvedValue(["trip", "family"]);
     fetchSuggestionsWithCountsMock.mockResolvedValue([]);
+    fetchPeopleClustersMock.mockReset();
+    fetchPeopleClustersMock.mockResolvedValue({
+      clusters: [
+        {
+          id: "person-3",
+          count: 7,
+          representative: {
+            photo: { path: "trip/a.jpg", name: "a.jpg" },
+            box: { x: 0.5, y: 0.5, width: 0.2, height: 0.2 },
+          },
+        },
+      ],
+      totalFaces: 7,
+      totalClusters: 1,
+      pendingFaces: 0,
+    });
     window.history.pushState(null, "", "/");
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
@@ -179,24 +197,25 @@ describe("Filter", () => {
     });
   });
 
-  it("toggles filter for items with face scan data", async () => {
+  it("selects a clustered face from the People face panel", async () => {
     renderFilter();
 
-    const button = screen.getByRole("button", { name: "Face scan data filter" });
+    fireEvent.click(screen.getByRole("button", { name: "People face filter" }));
 
-    fireEvent.click(button);
+    const faceButton = await screen.findByRole("button", { name: "7 faces" });
+    fireEvent.click(faceButton);
 
     await waitFor(() => {
       expect(screen.getByTestId("filter-state").textContent).toContain(
-        '"hasFaceScanData":true',
+        '"faceClusterFilter":["person-3"]',
       );
     });
 
-    fireEvent.click(button);
+    fireEvent.click(faceButton);
 
     await waitFor(() => {
       expect(screen.getByTestId("filter-state").textContent).toContain(
-        '"hasFaceScanData":false',
+        '"faceClusterFilter":null',
       );
     });
   });

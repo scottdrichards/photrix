@@ -33,7 +33,7 @@ describe("convertImage", () => {
 
     // Clean up cache for this file
     const hash = getHash(testImagePath);
-    const cachedFile = path.join(cacheDir, "thumbs", `${hash}.320.jpg`);
+    const cachedFile = path.join(cacheDir, "thumbs", `${hash}.320.webp`);
 
     if (fs.existsSync(cachedFile)) {
       fs.unlinkSync(cachedFile);
@@ -46,7 +46,7 @@ describe("convertImage", () => {
 
     const metadata = await sharp(outputPath).metadata();
 
-    expect(metadata.format).toBe("jpeg");
+    expect(metadata.format).toBe("webp");
     // Verify max dimension is close to 320 (resizing might have slight rounding, but usually exact for max dim)
     expect(Math.max(metadata.width!, metadata.height!)).toBe(320);
   }, 30000); // Increase timeout for image processing

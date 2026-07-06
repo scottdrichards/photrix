@@ -139,6 +139,13 @@ const resolvePythonInvocation = async (): Promise<PythonInvocation> => {
   return await pythonInvocationPromise;
 };
 
+// Converted images are emitted as WebP: ~30% smaller than JPEG at matching
+// quality with universal modern-browser support. process_image.py picks the
+// encoder from the output file extension, so the extension and content type must
+// stay in sync — both are derived from here.
+export const IMAGE_OUTPUT_EXTENSION = "webp";
+export const IMAGE_OUTPUT_CONTENT_TYPE = "image/webp";
+
 export class ImageConversionError extends Error {
   constructor(
     message: string,
@@ -151,9 +158,15 @@ export class ImageConversionError extends Error {
   }
 }
 
+/**
+ * Crop region expressed as normalized top-left fractions (0..1) of the
+ * EXIF-oriented source image.
+ */
+export type CropBox = { x: number; y: number; width: number; height: number };
+
 const generateImage = async (
   inputPath: string,
-  outputs: Array<{ path: string; height: StandardHeight }>,
+  outputs: Array<{ path: string; height: StandardHeight; crop?: CropBox }>,
 ): Promise<void> => {
   const args = [
     scriptPath,
@@ -163,6 +176,9 @@ const generateImage = async (
       outputs.map((o) => ({
         path: o.path,
         height: o.height === "original" ? null : o.height,
+        ...(o.crop
+          ? { crop: [o.crop.x, o.crop.y, o.crop.width, o.crop.height] }
+          : {}),
       })),
     ),
   ];
@@ -237,7 +253,7 @@ export const convertImage = async (
   _opts?: { priority?: ConversionPriority },
 ): Promise<string> => {
   await stat(filePath);
-  const cachedPath = getMirroredCachedFilePath(filePath, height, "jpg");
+  const cachedPath = getMirroredCachedFilePath(filePath, height, IMAGE_OUTPUT_EXTENSION);
 
   const cachedExists = await access(cachedPath).then(
     () => true,
@@ -252,6 +268,48 @@ export const convertImage = async (
   return cachedPath;
 };
 
+/** Rounds a fraction to 5 decimals so near-identical crops share a cache entry. */
+const cropToken = (crop: CropBox): string => {
+  const q = (n: number) => Math.round(clamp01(n) * 1e5).toString();
+  return `crop_${q(crop.x)}_${q(crop.y)}_${q(crop.width)}_${q(crop.height)}`;
+};
+
+const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
+
+/**
+ * Creates a converted image cropped to `crop` (normalized top-left fractions of
+ * the EXIF-oriented image) and resized so its longest side is at most `height`,
+ * caching the result. The crop is applied before the resize, so a small crop is
+ * served at higher effective resolution (and smaller file size) than cropping a
+ * pre-scaled image would allow.
+ * @returns Path of converted image
+ */
+export const convertImageCrop = async (
+  filePath: string,
+  crop: CropBox,
+  height: StandardHeight = 2160,
+  _opts?: { priority?: ConversionPriority },
+): Promise<string> => {
+  await stat(filePath);
+  const cachedPath = getMirroredCachedFilePath(
+    filePath,
+    `${height}.${cropToken(crop)}`,
+    IMAGE_OUTPUT_EXTENSION,
+  );
+
+  const cachedExists = await access(cachedPath).then(
+    () => true,
+    () => false,
+  );
+  if (cachedExists) {
+    return cachedPath;
+  }
+
+  await ensureCacheDir(cachedPath);
+  await generateImage(filePath, [{ path: cachedPath, height, crop }]);
+  return cachedPath;
+};
+
 export const convertImageToMultipleSizes = async (
   filePath: string,
   heights: StandardHeight[],
@@ -261,7 +319,7 @@ export const convertImageToMultipleSizes = async (
 
   const existChecks = await Promise.all(
     heights.map(async (height) => {
-      const p = getMirroredCachedFilePath(filePath, height, "jpg");
+      const p = getMirroredCachedFilePath(filePath, height, IMAGE_OUTPUT_EXTENSION);
       const exists = await access(p).then(
         () => true,
         () => false,

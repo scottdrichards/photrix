@@ -7,6 +7,7 @@ import { existsSync } from "fs";
 import { getGpuAcceleration, type GpuAcceleration } from "./gpuAcceleration.ts";
 import { HLS_SEGMENT_SECONDS } from "./buildHlsPlaylist.ts";
 import { getLogger } from "../observability/logger.ts";
+import { getVideoRotationDegrees } from "./getVideoMetadata.ts";
 
 const log = getLogger("HLS");
 
@@ -187,6 +188,7 @@ const encodeVariant = (
   variant: Variant,
   gpu: GpuAcceleration | null,
   startSegment: number,
+  rotation: number,
   onSpawn?: (child: ReturnType<typeof spawn>) => void,
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
@@ -195,7 +197,13 @@ const encodeVariant = (
     // AMD/software stay on the CPU scaler. Output frame rate is forced with `-r`
     // rather than an `fps` filter, since the CPU `fps` filter can't run on
     // GPU-resident CUDA frames.
-    const useCuda = gpu?.vendor === "nvidia";
+    //
+    // EXCEPTION: when the source has rotation metadata (e.g. GoPro 180°, phone 90°),
+    // the GPU-resident pipeline is skipped. `-hwaccel_output_format cuda` keeps
+    // frames on the GPU where software transpose can't run, so ffmpeg's auto-rotation
+    // is silently skipped. Without that flag, decoded frames land in system memory
+    // and ffmpeg applies auto-rotation before the scale filter.
+    const useCuda = gpu?.vendor === "nvidia" && rotation === 0;
     // Force 8-bit 4:2:0 output. Sources are frequently 10-bit HEVC (HDR/HLG — the
     // default for iPhone and much GoPro footage). Two reasons this matters:
     //   1. h264_nvenc rejects 10-bit input outright ("10 bit encode not supported"),
@@ -311,7 +319,7 @@ const encodeVariant = (
       }
 
       if (gpu && gpu.isHardwareFailure(stderr)) {
-        encodeVariant(filePath, hlsDir, variant, null, startSegment, onSpawn)
+        encodeVariant(filePath, hlsDir, variant, null, startSegment, rotation, onSpawn)
           .then(resolve)
           .catch(reject);
         return;
@@ -350,6 +358,6 @@ export const generateVariantHLS = async (
   const hlsDir = getMultibitrateHLSDirectory(filePath);
   await mkdir(join(hlsDir, `${variant.height}p`), { recursive: true });
 
-  const gpu = await getGpuAcceleration();
-  await encodeVariant(filePath, hlsDir, variant, gpu, opts?.startSegment ?? 0, opts?.onSpawn);
+  const [gpu, rotation] = await Promise.all([getGpuAcceleration(), getVideoRotationDegrees(filePath)]);
+  await encodeVariant(filePath, hlsDir, variant, gpu, opts?.startSegment ?? 0, rotation, opts?.onSpawn);
 };

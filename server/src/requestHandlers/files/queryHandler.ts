@@ -1,6 +1,9 @@
 import type * as http from "http";
+import path from "path";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "../../indexDatabase/indexDatabase.type.ts";
+import { getFastMediaDimensions } from "../../fileHandling/fileUtils.ts";
+import { stripLeadingSlash } from "../../common/stripLeadingSlash.ts";
 import { writeJson } from "../../utils.ts";
 
 export const queryHandler = async (
@@ -8,6 +11,7 @@ export const queryHandler = async (
   directoryPath: string,
   database: IndexDatabase,
   res: http.ServerResponse,
+  shareFilter: unknown = null,
 ) => {
   const filterParam = url.searchParams.get("filter");
   const metadataParam = url.searchParams.get("metadata");
@@ -26,6 +30,7 @@ export const queryHandler = async (
   const filter = {
     operation: "and" as const,
     conditions: [
+      ...(shareFilter ? [shareFilter as QueryOptions["filter"]] : []),
       ...(directoryPath || includeSubfolders
         ? [
             {
@@ -125,6 +130,32 @@ export const queryHandler = async (
   }
 
   const result = await database.queryFiles(queryOptions);
+
+  if (!countOnly) {
+    const itemsMissingDims = result.items.filter(
+      (item) => !("dimensionWidth" in item) && item.mimeType?.startsWith("image/"),
+    );
+    if (itemsMissingDims.length > 0) {
+      const reads = Promise.allSettled(
+        itemsMissingDims.map(async (item) => {
+          const relativePath = item.folder + item.fileName;
+          const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
+          const dims = await getFastMediaDimensions(fullPath);
+          if (dims.dimensionWidth !== undefined) {
+            (item as Record<string, unknown>).dimensionWidth = dims.dimensionWidth;
+          }
+          if (dims.dimensionHeight !== undefined) {
+            (item as Record<string, unknown>).dimensionHeight = dims.dimensionHeight;
+          }
+        }),
+      );
+      // Cap how long we wait: if the filesystem is slow (NFS/SMB), don't let
+      // dimension lookups add more than 200 ms to the response. Any reads that
+      // finish within the window contribute their dimensions; the rest are left
+      // for the background fill-in task.
+      await Promise.race([reads, new Promise<void>((r) => setTimeout(r, 200))]);
+    }
+  }
 
   const responseBody = countOnly ? { count: result.total } : result;
   try {

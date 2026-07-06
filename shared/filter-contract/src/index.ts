@@ -56,7 +56,11 @@ export type LogicalFilter<TCondition> = {
 
 export type FilterElement<TCondition> = TCondition | LogicalFilter<TCondition>;
 
-export type FileQueryExtraField = "relativePath" | "hasFaces" | "hasAudioTranscript";
+export type FileQueryExtraField =
+  | "relativePath"
+  | "hasFaces"
+  | "hasAudioTranscript"
+  | "faceCluster";
 
 type FilterConstraintForValue<TField extends string, TValue> =
   | null
@@ -134,9 +138,10 @@ export type ClientFilterState = Partial<{
   includeSubfolders: boolean;
   path: string;
   mediaTypeFilter: MediaTypeFilter;
-  hasFaceScanData: boolean;
   hasAudioTranscript: boolean;
   peopleInImageFilter: string[] | null;
+  /** Face-cluster ids (People-tab clusters, e.g. `person-3`) to match faces against. */
+  faceClusterFilter: string[] | null;
   cameraModelFilter: string[] | null;
   lensFilter: string[] | null;
   ratingFilter: RatingFilter | null;
@@ -154,13 +159,13 @@ export type ClientFilterState = Partial<{
  */
 export const FIELD_METADATA = {
   peopleInImageFilter: { nullable: true, supportsArray: true },
+  faceClusterFilter: { nullable: true, supportsArray: true },
   cameraModelFilter: { nullable: true, supportsArray: true },
   lensFilter: { nullable: true, supportsArray: true },
   ratingFilter: { nullable: true, supportsArray: false },
   locationBounds: { nullable: true, supportsArray: false },
   dateRange: { nullable: true, supportsArray: false },
   mediaTypeFilter: { nullable: false, supportsArray: false },
-  hasFaceScanData: { nullable: false, supportsArray: false },
   hasAudioTranscript: { nullable: false, supportsArray: false },
 } as const;
 

@@ -31,7 +31,7 @@ describe("convertImage unit", () => {
     writeFileSync(source, "img");
 
     const { getMirroredCachedFilePath } = await import("../common/cacheUtils.ts");
-    const cached = getMirroredCachedFilePath(source, 320, "jpg");
+    const cached = getMirroredCachedFilePath(source, 320, "webp");
     mkdirSync(path.dirname(cached), { recursive: true });
     writeFileSync(cached, "cached");
 
@@ -67,7 +67,7 @@ describe("convertImage unit", () => {
     const { convertImage } = await import("./convertImage.ts");
 
     const out = await convertImage(source, 320);
-    expect(out.endsWith("320.jpg")).toBe(true);
+    expect(out.endsWith("320.webp")).toBe(true);
     expect(spawnMock).toHaveBeenCalled();
   });
 
@@ -109,8 +109,8 @@ describe("convertImage unit", () => {
     writeFileSync(source, "img");
 
     const { getMirroredCachedFilePath } = await import("../common/cacheUtils.ts");
-    const cached320 = getMirroredCachedFilePath(source, 320, "jpg");
-    const cached640 = getMirroredCachedFilePath(source, 640, "jpg");
+    const cached320 = getMirroredCachedFilePath(source, 320, "webp");
+    const cached640 = getMirroredCachedFilePath(source, 640, "webp");
     mkdirSync(path.dirname(cached320), { recursive: true });
     writeFileSync(cached320, "a");
     writeFileSync(cached640, "b");

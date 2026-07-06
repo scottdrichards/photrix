@@ -155,7 +155,7 @@ describe("FullscreenViewer", () => {
     expect(screen.getByText("folder-a/1.jpg")).toBeInTheDocument();
     expect(screen.getByText("Filename")).toBeInTheDocument();
     expect(screen.getByText("1.jpg")).toBeInTheDocument();
-    expect(screen.getByText("mimeType")).toBeInTheDocument();
+    expect(screen.getByText("Type")).toBeInTheDocument();
     expect(screen.getByText("image/jpeg")).toBeInTheDocument();
 
     selectedRef.current = null;
@@ -173,7 +173,7 @@ describe("FullscreenViewer", () => {
     expect(screen.getByRole("button", { name: "Hide file info" })).toBeInTheDocument();
     expect(screen.getByText("folder-b/2.jpg")).toBeInTheDocument();
     expect(screen.getByText("2.jpg")).toBeInTheDocument();
-    expect(screen.getByText("cameraModel")).toBeInTheDocument();
+    expect(screen.getAllByText("Camera").length).toBeGreaterThan(0);
     expect(screen.getByText("A7R V")).toBeInTheDocument();
   });
 

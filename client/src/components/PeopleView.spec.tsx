@@ -9,6 +9,7 @@ const useSelectionContextMock = vi.fn();
 vi.mock("../api", () => ({
   fetchPeopleClusters: (...args: unknown[]) => fetchPeopleClustersMock(...args),
   fetchClusterDetail: (...args: unknown[]) => fetchClusterDetailMock(...args),
+  buildFaceCropUrl: (face: { photo: { thumbnailUrl: string } }) => face.photo.thumbnailUrl,
 }));
 
 vi.mock("./filter/FilterContext", () => ({
@@ -172,9 +173,6 @@ describe("PeopleView", () => {
     });
 
     const representativeFace = screen.getByAltText("a.jpg");
-    expect(representativeFace).toHaveStyle({
-      transform: "translate(48%, 36%) scale(1.2)",
-    });
 
     // Click person-1 cluster to navigate into detail view
     fireEvent.click(screen.getByText("2 faces").closest("button") as HTMLButtonElement);

@@ -32,12 +32,12 @@ const log = getLogger("searchRequestHandler");
 const CLIP_MIN_SIMILARITY = Number(process.env.PHOTRIX_SEARCH_CLIP_MIN_SIMILARITY ?? 0.18);
 const CLAP_MIN_SIMILARITY = Number(process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.45);
 
-type Options = { database: IndexDatabase };
+type Options = { database: IndexDatabase; shareFilter?: unknown };
 
 export const searchRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
   res: http.ServerResponse,
-  { database }: Options,
+  { database, shareFilter }: Options,
 ): Promise<void> => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const q = url.searchParams.get("q")?.trim();
@@ -65,6 +65,7 @@ export const searchRequestHandler = async (
   }
 
   const conditions = [
+    ...(shareFilter ? [shareFilter] : []),
     ...(path || includeSubfolders
       ? [{ folder: { folder: path || "/", recursive: includeSubfolders } }]
       : []),

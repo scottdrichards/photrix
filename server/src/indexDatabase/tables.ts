@@ -26,7 +26,7 @@ export const tables = {
       { name: "sizeInBytes", type: "INTEGER" },
       { name: "created", type: "INTEGER" },
       { name: "modified", type: "INTEGER" },
-      { name: "dateTaken", type: "INTEGER", indexExpression: "dateTaken DESC" },
+      { name: "dateTaken", type: "INTEGER" },
       { name: "dimensionsWidth", type: "INTEGER" },
       { name: "dimensionsHeight", type: "INTEGER" },
       { name: "locationLatitude", type: "REAL" },
@@ -95,6 +95,18 @@ export const tables = {
           "mimeType LIKE 'image/%' AND facesProcessedAt IS NULL AND analysisDecodeErrorAt IS NULL",
       },
       {
+        // Covering index for getDateRange/getDateHistogram: MIN/MAX and the
+        // per-bucket GROUP BY run over dateTaken while the trailing
+        // folder/fileName let filter EXISTS probes (which correlate on those
+        // columns) stay inside the index. Without them each of the ~190k rows
+        // is fetched to read folder/fileName, dragging the image/audio
+        // embedding BLOB pages along (measured 6.8s vs 0.1s for the date-range
+        // query under a face filter). Replaces the old single-column
+        // idx_files_dateTaken, which prepareTables drops automatically.
+        name: "dateTaken_range",
+        expression: "dateTaken, folder, fileName",
+      },
+      {
         // Serves the default library ordering. The folder/fileName tiebreakers are
         // part of the index so `ORDER BY COALESCE(...) DESC, folder, fileName LIMIT N`
         // is satisfied by an index walk — no full scan + temp B-tree sort.
@@ -121,13 +133,73 @@ export const tables = {
       { name: "embedding", type: "BLOB" },
       { name: "personId", type: "INTEGER", indexExpression: true },
       { name: "detectedAt", type: "INTEGER" },
+      // Persistent cluster assignment (see faceClusterEngine.ts). NULL means
+      // "not yet assigned" — the clustering backfill task picks those up.
+      { name: "clusterId", type: "INTEGER" },
+      // Cosine similarity to the cluster centroid at assignment time. Lets the
+      // People queries pick representatives and order faces without reading
+      // embedding BLOBs.
+      { name: "clusterSimilarity", type: "REAL" },
     ],
     compositeIndexes: [
       {
-        name: "by_file",
-        expression: "folder, fileName",
+        // Trailing clusterId makes the face-cluster filter's correlated EXISTS
+        // (folder = ? AND fileName = ? AND clusterId = ?) an index-only probe.
+        // Without clusterId in the index SQLite fetches each matching face row
+        // to read clusterId, dragging a ~4 KB embedding BLOB page per row — the
+        // difference between ~28s and sub-second on the whole library. The
+        // (folder, fileName) prefix still serves plain per-file lookups.
+        //
+        // clusterSimilarity and id make the index cover the filtered People
+        // queries too: queryFaceClusters/getFaceClusterDetail join the filtered
+        // file set to faces and read those two columns, so with them in the
+        // index the whole join is index-only (measured ~14s -> ~0.2s under a
+        // face filter; without them every joined face row is fetched, dragging
+        // its embedding BLOB pages).
+        //
+        // Renamed from `by_file_v2` so prepareTables drops the old index and
+        // rebuilds this wider one (CREATE INDEX IF NOT EXISTS won't widen an
+        // index that already exists under the same name).
+        name: "by_file_v3",
+        expression: "folder, fileName, clusterId, clusterSimilarity, id",
+      },
+      {
+        // Serves the clustering backfill's "next unassigned faces, best
+        // detections first" query without scanning assigned rows.
+        name: "needing_cluster",
+        expression: "confidence DESC",
+        where: "clusterId IS NULL AND LENGTH(embedding) > 0",
+      },
+      {
+        // Covering index for the People queries: the per-cluster COUNT +
+        // MAX(clusterSimilarity) aggregation and the similarity-ordered detail
+        // listing run entirely inside this index. Without it the aggregation
+        // fetches every face row — and each row fetch drags a ~4 KB embedding
+        // BLOB page off disk (measured 4.8s vs 0.1s over 316k faces).
+        name: "by_cluster",
+        expression: "clusterId, clusterSimilarity DESC, id",
+        where: "clusterId > 0",
       },
     ],
+  },
+  faceClusters: {
+    columns: [
+      { name: "id", type: "INTEGER", isPrimaryKey: true },
+      // Unnormalized running mean of the member faces' unit embedding vectors,
+      // serialized as Float32 (the face model itself only produces 32-bit
+      // precision). Normalizing this gives the cluster centroid.
+      { name: "centroid", type: "BLOB" },
+      // Number of vectors folded into `centroid` — the divisor for the running
+      // mean. Deliberately not reconciled with live face counts (see
+      // faceClusterEngine.ts); displayed counts always come from GROUP BY.
+      { name: "weight", type: "INTEGER" },
+      // The similarity threshold the assignments were computed with. If the
+      // code's threshold constant changes, existing assignments are invalid and
+      // the engine resets them for the backfill to redo.
+      { name: "threshold", type: "REAL" },
+      { name: "updatedAt", type: "INTEGER" },
+    ],
+    compositeIndexes: [],
   },
   audioSegments: {
     columns: [

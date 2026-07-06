@@ -61,9 +61,15 @@ describe("generateVariantHLS", () => {
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const spawnMock = jest.fn((_command: string, args: string[]) => {
+    const spawnMock = jest.fn((command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
+        // Rotation probe — return no rotation so GPU pipeline is used.
+        if (command === "ffprobe") {
+          proc.stdout.emit("data", JSON.stringify({ streams: [] }));
+          proc.emit("close", 0);
+          return;
+        }
         // GPU detection probe resolves to NVIDIA.
         if (args.includes("-init_hw_device")) {
           proc.emit("close", 0);
@@ -83,10 +89,10 @@ describe("generateVariantHLS", () => {
 
     await generateVariantHLS(source, 720);
 
-    // 1 GPU detection call + 1 encode call (a single variant).
-    expect(spawnMock).toHaveBeenCalledTimes(2);
+    // 1 rotation probe (ffprobe) + 1 GPU detection + 1 encode call (a single variant).
+    expect(spawnMock).toHaveBeenCalledTimes(3);
 
-    const encodeArgs = spawnMock.mock.calls[1]?.[1] as string[];
+    const encodeArgs = spawnMock.mock.calls[2]?.[1] as string[];
     expect(encodeArgs).toContain("-hwaccel_output_format");
     // Scales to the chosen height and converts to 8-bit on the GPU so 10-bit HEVC
     // (HDR) sources don't fail h264_nvenc and drop to slow software encoding.
@@ -109,9 +115,14 @@ describe("generateVariantHLS", () => {
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const spawnMock = jest.fn((_command: string, args: string[]) => {
+    const spawnMock = jest.fn((command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
+        if (command === "ffprobe") {
+          proc.stdout.emit("data", JSON.stringify({ streams: [] }));
+          proc.emit("close", 0);
+          return;
+        }
         if (args.includes("-init_hw_device")) {
           proc.emit("close", 0);
           return;
@@ -130,7 +141,8 @@ describe("generateVariantHLS", () => {
     // HLS_SEGMENT_SECONDS is 1, so segment 300 starts at 300s.
     await generateVariantHLS(source, 720, { startSegment: 300 });
 
-    const encodeArgs = spawnMock.mock.calls[1]?.[1] as string[];
+    // calls[0] = ffprobe (rotation), calls[1] = GPU detect, calls[2] = encode
+    const encodeArgs = spawnMock.mock.calls[2]?.[1] as string[];
     // Seeks the input to the segment boundary and preserves source timestamps so the
     // same segment index has identical PTS across variants (seamless ABR switching).
     expect(encodeArgs).toContain("-ss");
@@ -147,9 +159,14 @@ describe("generateVariantHLS", () => {
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const spawnMock = jest.fn((_command: string, args: string[]) => {
+    const spawnMock = jest.fn((command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
+        if (command === "ffprobe") {
+          proc.stdout.emit("data", JSON.stringify({ streams: [] }));
+          proc.emit("close", 0);
+          return;
+        }
         if (args.includes("-init_hw_device")) {
           proc.emit("close", 0);
           return;
@@ -174,9 +191,9 @@ describe("generateVariantHLS", () => {
 
     await generateVariantHLS(source, 720);
 
-    // 1 GPU detection + 1 hardware attempt (fails) + 1 software retry.
-    expect(spawnMock).toHaveBeenCalledTimes(3);
-    const retryArgs = spawnMock.mock.calls[2]?.[1] as string[];
+    // 1 rotation probe (ffprobe) + 1 GPU detection + 1 hardware attempt (fails) + 1 software retry.
+    expect(spawnMock).toHaveBeenCalledTimes(4);
+    const retryArgs = spawnMock.mock.calls[3]?.[1] as string[];
     expect(retryArgs).toContain("libx264");
   });
 
@@ -187,9 +204,14 @@ describe("generateVariantHLS", () => {
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const spawnMock = jest.fn((_command: string, _args: string[]) => {
+    const spawnMock = jest.fn((command: string, _args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
+        if (command === "ffprobe") {
+          proc.stdout.emit("data", JSON.stringify({ streams: [] }));
+          proc.emit("close", 0);
+          return;
+        }
         proc.stderr.emit("data", Buffer.from("unrecoverable ffmpeg failure"));
         proc.emit("close", 1);
       });

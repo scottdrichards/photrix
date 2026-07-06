@@ -17,6 +17,7 @@ import { fileSystemScanFolder } from "./indexDatabase/fileSystemScanFolder.ts";
 import { processExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { processFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
+import { processFaceClustering } from "./indexDatabase/processFaceClustering.ts";
 import { measureOperation } from "./observability/requestTrace.ts";
 import { startTelemetry } from "./observability/telemetry.ts";
 import { createTaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
@@ -138,6 +139,17 @@ const startServer = async () => {
       name: "Image analysis (faces + CLIP)",
       start: () => processImageAnalysis(database, analyzeImage),
       type: "imageAnalysis",
+    },
+    "background",
+  );
+
+  taskOrchestrator.addTask(
+    {
+      name: "Face clustering",
+      start: () => processFaceClustering(database),
+      // Single-threaded JS over in-memory centroids; sized so it can run
+      // alongside the image-analysis pass instead of waiting behind it.
+      resources: { cpu: 0.25 },
     },
     "background",
   );

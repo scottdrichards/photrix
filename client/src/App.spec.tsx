@@ -1,6 +1,13 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import App from "./App";
+
+vi.mock("./auth", () => ({
+  extractUrlToken: vi.fn(),
+  getAuthHeaders: vi.fn(() => ({})),
+  initAuth: vi.fn(() => Promise.resolve(true)),
+  onUnauthorized: vi.fn(),
+}));
 
 const useSyncUrlWithFilterMock = vi.fn();
 const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
@@ -18,6 +25,7 @@ vi.mock("./components/filter/Filter", () => ({
 
 vi.mock("./components/filter/FilterContext", () => ({
   FilterProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  useFilter: vi.fn(() => ({ filter: {} })),
 }));
 
 vi.mock("./hooks/useSyncUrlWithFilter", () => ({
@@ -123,8 +131,8 @@ describe("App", () => {
     probeVideoPlaybackProfileMock.mockClear();
   });
 
-  it("calls url sync hook", () => {
-    render(<App />);
+  it("calls url sync hook", async () => {
+    await act(async () => { render(<App />); });
 
     expect(probeVideoPlaybackProfileMock).toHaveBeenCalledTimes(1);
     expect(useSyncUrlWithFilterMock).toHaveBeenCalledWith(
@@ -133,16 +141,16 @@ describe("App", () => {
     );
   });
 
-  it("opens status modal from Status button", () => {
-    render(<App />);
+  it("opens status modal from Status button", async () => {
+    await act(async () => { render(<App />); });
 
     expect(screen.getByTestId("status-modal")).toHaveTextContent("closed");
     fireEvent.click(screen.getByRole("button", { name: "Status" }));
     expect(screen.getByTestId("status-modal")).toHaveTextContent("open");
   });
 
-  it("switches between thumbnail and people views", () => {
-    render(<App />);
+  it("switches between thumbnail and people views", async () => {
+    await act(async () => { render(<App />); });
 
     expect(screen.getByTestId("thumbnail-grid")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "People" }));

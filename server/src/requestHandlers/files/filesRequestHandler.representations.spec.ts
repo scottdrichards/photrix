@@ -61,18 +61,22 @@ describe("filesRequestHandler representation paths", () => {
   it("serves converted cached image for webSafe representation", async () => {
     const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-websafe-"));
     const sourceFile = path.join(storageRoot, "photo.heic");
-    const cachedFile = path.join(storageRoot, "cache", "photo.320.jpg");
+    const cachedFile = path.join(storageRoot, "cache", "photo.320.webp");
 
     mkdirSync(path.dirname(cachedFile), { recursive: true });
     writeFileSync(sourceFile, "source");
-    writeFileSync(cachedFile, "jpeg-content");
+    writeFileSync(cachedFile, "webp-content");
 
     const convertImage = jest.fn(async () => cachedFile);
+    const convertImageCrop = jest.fn(async () => cachedFile);
     const convertImageToMultipleSizes = jest.fn(async () => undefined);
 
     jest.unstable_mockModule("../../imageProcessing/convertImage.ts", () => ({
       convertImage,
+      convertImageCrop,
       convertImageToMultipleSizes,
+      IMAGE_OUTPUT_CONTENT_TYPE: "image/webp",
+      IMAGE_OUTPUT_EXTENSION: "webp",
       ImageConversionError: class ImageConversionError extends Error {},
     }));
 
@@ -98,8 +102,8 @@ describe("filesRequestHandler representation paths", () => {
 
     expect(convertImage).toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
-    expect(res.headers?.["Content-Type"]).toBe("image/jpeg");
-    expect(Buffer.concat(chunks).toString()).toBe("jpeg-content");
+    expect(res.headers?.["Content-Type"]).toBe("image/webp");
+    expect(Buffer.concat(chunks).toString()).toBe("webp-content");
   });
 
   it("serves video thumbnail for preview representation", async () => {

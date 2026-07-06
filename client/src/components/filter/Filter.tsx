@@ -20,11 +20,12 @@ import { MapFilter } from "../MapFilter";
 import { OptionListWithCounts } from "./OptionListWithCounts";
 import { useFilter } from "./FilterContext";
 import { SuggestionFilterField } from "./SuggestionFilterField";
+import { FaceFilterPanel } from "./FaceFilterPanel";
 
 type FilterPanel =
   | "folders"
   | "type"
-  | "faceScan"
+  | "faceCluster"
   | "people"
   | "gear"
   | "rating"
@@ -38,10 +39,10 @@ export const Filter = () => {
     includeSubfolders,
     ratingFilter,
     mediaTypeFilter,
-    hasFaceScanData,
     hasAudioTranscript,
     path,
     peopleInImageFilter,
+    faceClusterFilter,
     cameraModelFilter,
     lensFilter,
     locationBounds,
@@ -155,7 +156,7 @@ export const Filter = () => {
   const currentPath = path?.replace(/\/$/, "");
   const isFolderFilterActive = Boolean(currentPath) || includeSubfolders === false;
   const isMediaTypeFilterActive = Boolean(mediaTypeFilter && mediaTypeFilter !== "all");
-  const isFaceScanFilterActive = Boolean(hasFaceScanData);
+  const isFaceClusterFilterActive = (faceClusterFilter ?? []).length > 0;
   const isTranscriptFilterActive = Boolean(hasAudioTranscript);
   const isPeopleFilterActive = selectedPeople.length > 0;
   const isGearFilterActive =
@@ -191,10 +192,6 @@ export const Filter = () => {
 
   const handleMediaTypeChange = (type: MediaTypeFilter) => {
     setFilter({ mediaTypeFilter: type });
-  };
-
-  const handleFaceScanFilterToggle = () => {
-    setFilter({ hasFaceScanData: !isFaceScanFilterActive });
   };
 
   const handleTranscriptFilterToggle = () => {
@@ -446,17 +443,22 @@ export const Filter = () => {
         )}
       </div>
 
-      {/* Face scan data */}
+      {/* People face */}
       <div className="popover-anchor">
         <button
-          title="Face scan data"
-          aria-label="Face scan data filter"
-          aria-pressed={isFaceScanFilterActive}
-          className={`btn btn-icon ${css.filterIconButton} ${isFaceScanFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={handleFaceScanFilterToggle}
+          title="People face"
+          aria-label="People face filter"
+          aria-pressed={isFaceClusterFilterActive}
+          className={`btn btn-icon ${css.filterIconButton} ${activePanel === "faceCluster" || isFaceClusterFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={(e) => handlePanelToggle("faceCluster", e.currentTarget)}
         >
           <ScanPerson24Regular fontSize={20} />
         </button>
+        {activePanel === "faceCluster" && (
+          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
+            <FaceFilterPanel isActive={activePanel === "faceCluster"} />
+          </div>
+        )}
       </div>
 
       {/* Transcript */}

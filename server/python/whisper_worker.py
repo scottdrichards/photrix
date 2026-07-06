@@ -16,6 +16,7 @@ Response (error):
   {"id": 1, "error": "error message"}
 """
 import json
+import os
 import sys
 
 
@@ -28,7 +29,13 @@ def load_model(device: str):
     from faster_whisper import WhisperModel
 
     compute_type = "float16" if device == "cuda" else "int8"
-    return WhisperModel("large-v3", device=device, compute_type=compute_type)
+    # On CPU, cap threads so transcription doesn't starve foreground work.
+    # SIGSTOP already freezes the worker during user requests; this keeps
+    # background CPU usage bounded while the worker is running.
+    kwargs = {}
+    if device == "cpu":
+        kwargs["cpu_threads"] = int(os.environ.get("WHISPER_CPU_THREADS", "2"))
+    return WhisperModel("large-v3", device=device, compute_type=compute_type, **kwargs)
 
 
 def transcribe(model, video_path: str) -> list:

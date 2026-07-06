@@ -96,6 +96,26 @@ const constraintToSQL = (
     return null;
   }
 
+  if (fieldName === "faceCluster") {
+    const clusterIds = (Array.isArray(constraint) ? constraint : [constraint]).filter(
+      (id): id is number => typeof id === "number" && Number.isFinite(id),
+    );
+    if (clusterIds.length === 0) {
+      return null;
+    }
+    // AND semantics: the file must contain a face from *every* selected cluster,
+    // so each id gets its own EXISTS subquery joined with AND.
+    return {
+      where: clusterIds
+        .map(
+          () =>
+            "EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND faces.clusterId = ?)",
+        )
+        .join(" AND "),
+      params: clusterIds,
+    };
+  }
+
   if (fieldName === "hasAudioTranscript") {
     if (constraint === true) {
       return { where: "audioTranscribedAt IS NOT NULL", params: [] };
@@ -353,7 +373,6 @@ const globToLike = (glob: string): string => {
   // Convert glob pattern to SQL LIKE pattern
   // ? -> _ (single char), * -> % (any chars)
   return glob
-    .replace(/\./g, "[.]") // Escape dots
     .replace(/\*/g, "%")
     .replace(/\?/g, "_");
 };

@@ -25,6 +25,45 @@ type FFProbeOutput = {
   streams?: FFProbeStream[];
 };
 
+const extractRotationDegrees = (streams: FFProbeStream[]): number => {
+  const videoStream = streams.find((s) => s.codec_type === "video");
+  if (!videoStream) return 0;
+
+  let raw: number | undefined;
+  if (videoStream.tags?.rotate) {
+    raw = Number(videoStream.tags.rotate);
+  } else if (videoStream.side_data_list) {
+    const sd = videoStream.side_data_list.find((d) => d.rotation !== undefined);
+    if (sd?.rotation !== undefined) raw = sd.rotation;
+  }
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 0;
+  return ((Math.round(raw) % 360) + 360) % 360;
+};
+
+/**
+ * Returns the clockwise rotation in degrees (0, 90, 180, or 270) needed to
+ * display the video correctly. Returns 0 if no rotation metadata is present.
+ */
+export const getVideoRotationDegrees = (filePath: string): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const proc = spawn("ffprobe", [
+      "-v", "error",
+      "-print_format", "json",
+      "-show_streams",
+      filePath,
+    ]);
+    let stdout = "";
+    proc.stdout.on("data", (d) => { stdout += d.toString(); });
+    proc.on("close", (code) => {
+      if (code !== 0) { reject(new Error(`ffprobe failed for ${filePath}`)); return; }
+      try {
+        const data = JSON.parse(stdout) as FFProbeOutput;
+        resolve(extractRotationDegrees(data.streams ?? []));
+      } catch (e) { reject(e); }
+    });
+    proc.on("error", reject);
+  });
+
 export const getVideoMetadata = async (
   filePath: string,
 ): Promise<Partial<ExifMetadata>> => {

@@ -1,3 +1,36 @@
+/* Outer wrapper — collapsed by default, just wide enough for the icon button */
+.searchWrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* The icon-only trigger button */
+.iconBtn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: var(--space-xs);
+  cursor: pointer;
+  color: var(--text3, #666);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm, 4px);
+  transition: color var(--dur-fast, 120ms) ease;
+  z-index: 1;
+}
+
+.iconBtn:hover {
+  color: var(--text1, #111);
+}
+
+/* Hide the icon button when expanded (the form's own icon takes over) */
+.searchWrapperExpanded .iconBtn {
+  display: none;
+}
+
+/* The full search form — hidden by default via zero width + overflow:hidden */
 .searchBar {
   display: flex;
   align-items: center;
@@ -6,7 +39,38 @@
   border: 1px solid var(--stroke2, #ddd);
   border-radius: 6px;
   padding-inline: var(--space-s);
-  min-width: 260px;
+  overflow: hidden;
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    width var(--dur-normal, 200ms) ease,
+    opacity var(--dur-normal, 200ms) ease;
+}
+
+/* Expanded state — animate to full width */
+.searchWrapperExpanded .searchBar {
+  width: 320px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Auto-expand when there's enough horizontal space */
+@media (min-width: 700px) {
+  .iconBtn {
+    display: none;
+  }
+
+  .searchBar {
+    width: 260px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* On wide screens, expanded just means a bit wider */
+  .searchWrapperExpanded .searchBar {
+    width: 360px;
+  }
 }
 
 .searchIcon {

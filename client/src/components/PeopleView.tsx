@@ -1,27 +1,28 @@
 import { memo, useEffect, useState } from "react";
 import type { ClusterFace, PersonCluster, PersonClusterWithFaces, PeopleClustersResult } from "../api";
-import { fetchClusterDetail, fetchPeopleClusters } from "../api";
+import { buildFaceCropUrl, fetchClusterDetail, fetchPeopleClusters } from "../api";
 import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { ViewToggle } from "./ViewToggle";
 import css from "./PeopleView.module.css";
 
-const MIN_FACE_SCALE = 1.2;
-const MAX_FACE_SCALE = 5;
-const FACE_FOCUS_FACTOR = 0.36;
-
-const toFaceTransform = (face: ClusterFace) => {
-  const centerX = face.box.x;
-  const centerY = face.box.y;
-  const size = Math.max(face.box.width, face.box.height, 0.01);
-  const scale = Math.min(MAX_FACE_SCALE, Math.max(MIN_FACE_SCALE, FACE_FOCUS_FACTOR / size));
-  // Translation needs to be proportional to zoom so the target face center
-  // remains anchored in the viewport center after scaling.
-  const translateX = (0.5 - centerX) * 100 * scale;
-  const translateY = (0.5 - centerY) * 100 * scale;
-  return `translate(${translateX}%, ${translateY}%) scale(${scale})`;
+type FaceImageProps = {
+  face: ClusterFace;
+  className: string;
 };
+
+// The server returns a JPEG cropped to the padded face region, so the browser
+// only downloads the face and just needs object-fit: cover to fill the square
+// viewport — no zoom/pan transform or aspect-ratio compensation required.
+const FaceImage = ({ face, className }: FaceImageProps) => (
+  <img
+    src={buildFaceCropUrl(face)}
+    alt={face.photo.name}
+    className={className}
+    loading="lazy"
+  />
+);
 
 type FaceThumbProps = {
   face: ClusterFace;
@@ -37,13 +38,7 @@ const FaceThumb = ({ face, label, onClick }: FaceThumbProps) => (
     aria-label={label}
   >
     <div className={css.faceThumbViewport}>
-      <img
-        src={face.photo.thumbnailUrl}
-        alt={face.photo.name}
-        className={css.faceThumbImage}
-        style={{ transform: toFaceTransform(face) }}
-        loading="lazy"
-      />
+      <FaceImage face={face} className={css.faceThumbImage} />
     </div>
   </button>
 );
@@ -105,28 +100,43 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
   useEffect(() => {
     const abortOnDisposed = "disposed";
     const abortController = new AbortController();
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
-    setLoading(true);
-    setError(null);
+    const load = (initial: boolean) => {
+      if (initial) {
+        setLoading(true);
+        setError(null);
+      }
 
-    fetchPeopleClusters({
-      signal: abortController.signal,
-      ...filter,
-    })
-      .then((result) => {
-        setData(result);
+      fetchPeopleClusters({
+        signal: abortController.signal,
+        ...filter,
       })
-      .catch((err) => {
-        if (err === abortOnDisposed || err.name === "AbortError") {
-          return;
-        }
-        setError("Failed to fetch people clusters");
-      })
-      .finally(() => {
-        setLoading(false);
-      });
+        .then((result) => {
+          setData(result);
+          // While the background clustering task is still assigning faces,
+          // refresh periodically so newly formed clusters appear on their own.
+          if (result.pendingFaces > 0 && !abortController.signal.aborted) {
+            refreshTimer = setTimeout(() => load(false), 10_000);
+          }
+        })
+        .catch((err) => {
+          if (err === abortOnDisposed || err.name === "AbortError") {
+            return;
+          }
+          setError("Failed to fetch people clusters");
+        })
+        .finally(() => {
+          if (initial) {
+            setLoading(false);
+          }
+        });
+    };
+
+    load(true);
 
     return () => {
+      if (refreshTimer !== undefined) clearTimeout(refreshTimer);
       abortController.abort(abortOnDisposed);
     };
   }, [filter]);
@@ -176,6 +186,9 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
         {data ? (
           <small>
             {data.totalClusters} clusters • {data.totalFaces} faces
+            {data.pendingFaces > 0
+              ? ` • clustering ${data.pendingFaces.toLocaleString()} more…`
+              : ""}
           </small>
         ) : null}
       </div>
@@ -202,12 +215,9 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
               onClick={() => handleClusterClick(cluster)}
             >
               <div className={css.clusterFaceWrap}>
-                <img
-                  src={cluster.representative.photo.thumbnailUrl}
-                  alt={cluster.representative.photo.name}
+                <FaceImage
+                  face={cluster.representative}
                   className={css.clusterFaceImage}
-                  style={{ transform: toFaceTransform(cluster.representative) }}
-                  loading="lazy"
                 />
               </div>
               <span className={css.clusterLabel}>{cluster.count} faces</span>

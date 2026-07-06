@@ -13,6 +13,8 @@ type BaseFilterCondition = RecordFilterCondition<FileRecord, "relativePath">;
 export type FilterCondition = BaseFilterCondition & {
   hasFaces?: boolean | null;
   hasAudioTranscript?: boolean | null;
+  /** Match files that contain a detected face assigned to any of these cluster ids. */
+  faceCluster?: number | number[] | null;
 };
 
 export type LogicalFilter = Extract<
@@ -90,6 +92,11 @@ export type FaceClusterResult = {
   clusters: FaceClusterSummary[];
   totalFaces: number;
   totalClusters: number;
+  /**
+   * Faces detected but not yet assigned to a cluster by the background
+   * clustering task — lets the client show clustering progress.
+   */
+  pendingFaces: number;
 };
 
 export type FaceClusterDetailResult = {

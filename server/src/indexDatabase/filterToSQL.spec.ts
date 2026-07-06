@@ -65,7 +65,7 @@ describe("filterToSQL", () => {
   it("builds glob search with LIKE", () => {
     const result = filterToSQL({ fileName: { glob: "IMG_*.jpg" } });
     expect(result.where).toBe("fileName LIKE ?");
-    expect(result.params).toEqual(["IMG_%[.]jpg"]);
+    expect(result.params).toEqual(["IMG_%.jpg"]);
   });
 
   it("builds relativePath regex search using folder and fileName", () => {
@@ -98,5 +98,21 @@ describe("filterToSQL", () => {
       "NOT EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName)",
     );
     expect(result.params).toEqual([]);
+  });
+
+  it("requires a face from every selected cluster (AND semantics)", () => {
+    const result = filterToSQL({ faceCluster: [3, 12] });
+    expect(result.where).toBe(
+      "EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND faces.clusterId = ?) AND EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND faces.clusterId = ?)",
+    );
+    expect(result.params).toEqual([3, 12]);
+  });
+
+  it("accepts a single cluster id", () => {
+    const result = filterToSQL({ faceCluster: 7 });
+    expect(result.where).toBe(
+      "EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND faces.clusterId = ?)",
+    );
+    expect(result.params).toEqual([7]);
   });
 });

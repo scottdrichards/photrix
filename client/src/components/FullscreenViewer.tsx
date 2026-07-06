@@ -63,24 +63,51 @@ const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
   incompatible: "No Compatible Stream",
 };
 
-const formatMetadataValue = (value: unknown): string => {
-  if (value === null) {
-    return "null";
-  }
+const formatShutterSpeed = (exposureTime: unknown): string | null => {
+  const t = typeof exposureTime === "number" ? exposureTime : parseFloat(String(exposureTime));
+  if (!isFinite(t) || t <= 0) return null;
+  if (t >= 1) return `${t}s`;
+  const denom = Math.round(1 / t);
+  return `1/${denom}s`;
+};
 
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return String(value);
-  }
+const formatAperture = (aperture: unknown): string | null => {
+  const f = typeof aperture === "number" ? aperture : parseFloat(String(aperture));
+  if (!isFinite(f) || f <= 0) return null;
+  return `f/${f % 1 === 0 ? f.toFixed(0) : f.toFixed(1)}`;
+};
 
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "[unserializable value]";
+const formatFocalLength = (focalLength: unknown): string | null => {
+  if (typeof focalLength !== "string" && typeof focalLength !== "number") return null;
+  const str = String(focalLength).trim();
+  // Handle rational notation "50/1"
+  const rationalMatch = str.match(/^(\d+)\/(\d+)$/);
+  if (rationalMatch) {
+    const val = parseInt(rationalMatch[1]) / parseInt(rationalMatch[2]);
+    return `${Math.round(val)}mm`;
   }
+  const num = parseFloat(str);
+  if (!isFinite(num)) return str;
+  return str.includes("mm") ? str : `${num % 1 === 0 ? num.toFixed(0) : num.toFixed(1)}mm`;
+};
+
+const formatFileSize = (bytes: unknown): string | null => {
+  const b = typeof bytes === "number" ? bytes : parseInt(String(bytes));
+  if (!isFinite(b) || b < 0) return null;
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+};
+
+const formatDuration = (seconds: unknown): string | null => {
+  const s = typeof seconds === "number" ? seconds : parseFloat(String(seconds));
+  if (!isFinite(s) || s < 0) return null;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${m}:${String(sec).padStart(2, "0")}`;
 };
 
 export function FullscreenViewer() {
@@ -528,9 +555,7 @@ export function FullscreenViewer() {
     });
   };
 
-  const metadataEntries = Object.entries(photo?.metadata ?? {}).filter(
-    ([, value]) => value !== undefined,
-  );
+  const meta = photo?.metadata;
 
   
   const faceToggleDisabled = photo?.mediaType === "video" || !hasFaceOverlayData;
@@ -723,33 +748,136 @@ export function FullscreenViewer() {
           {showFileInfo && (
             <aside className={css.infoSidebar} aria-label="File info panel">
               <h3 className={css.infoTitle}>File info</h3>
+
+              {/* Camera */}
+              {Boolean(meta?.cameraMake || meta?.cameraModel || meta?.lens) && (
+                <>
+                  <h4 className={css.infoSubtitle}>Camera</h4>
+                  <dl className={css.infoList}>
+                    {Boolean(meta?.cameraMake || meta?.cameraModel) && (
+                      <div className={css.infoRow}>
+                        <dt>Camera</dt>
+                        <dd>
+                          {[meta?.cameraMake, meta?.cameraModel]
+                            .filter(Boolean)
+                            .join(" ")}
+                        </dd>
+                      </div>
+                    )}
+                    {Boolean(meta?.lens) && (
+                      <div className={css.infoRow}>
+                        <dt>Lens</dt>
+                        <dd>{String(meta?.lens)}</dd>
+                      </div>
+                    )}
+                  </dl>
+                </>
+              )}
+
+              {/* Capture settings */}
+              {(meta?.aperture != null || meta?.exposureTime != null || meta?.iso != null || meta?.focalLength != null) && (
+                <>
+                  <h4 className={css.infoSubtitle}>Capture</h4>
+                  <dl className={css.infoList}>
+                    {meta.aperture != null && (
+                      <div className={css.infoRow}>
+                        <dt>Aperture</dt>
+                        <dd>{formatAperture(meta.aperture)}</dd>
+                      </div>
+                    )}
+                    {meta.exposureTime != null && (
+                      <div className={css.infoRow}>
+                        <dt>Shutter Speed</dt>
+                        <dd>{formatShutterSpeed(meta.exposureTime)}</dd>
+                      </div>
+                    )}
+                    {meta.iso != null && (
+                      <div className={css.infoRow}>
+                        <dt>ISO</dt>
+                        <dd>{String(meta.iso)}</dd>
+                      </div>
+                    )}
+                    {meta.focalLength != null && (
+                      <div className={css.infoRow}>
+                        <dt>Focal Length</dt>
+                        <dd>{formatFocalLength(meta.focalLength)}</dd>
+                      </div>
+                    )}
+                  </dl>
+                </>
+              )}
+
+              {/* File details */}
+              <h4 className={css.infoSubtitle}>File</h4>
               <dl className={css.infoList}>
-                <div className={css.infoRow}>
-                  <dt>Path</dt>
-                  <dd>{photo.path}</dd>
-                </div>
                 <div className={css.infoRow}>
                   <dt>Filename</dt>
                   <dd>{photo.name}</dd>
                 </div>
+                <div className={css.infoRow}>
+                  <dt>Path</dt>
+                  <dd>{photo.path}</dd>
+                </div>
+                {meta?.dateTaken && (
+                  <div className={css.infoRow}>
+                    <dt>Date Taken</dt>
+                    <dd>{new Date(String(meta.dateTaken)).toLocaleString()}</dd>
+                  </div>
+                )}
+                {meta?.dimensionWidth != null && meta?.dimensionHeight != null && (
+                  <div className={css.infoRow}>
+                    <dt>Dimensions</dt>
+                    <dd>{String(meta.dimensionWidth)} × {String(meta.dimensionHeight)}</dd>
+                  </div>
+                )}
+                {meta?.sizeInBytes != null && (
+                  <div className={css.infoRow}>
+                    <dt>File Size</dt>
+                    <dd>{formatFileSize(meta.sizeInBytes)}</dd>
+                  </div>
+                )}
+                {meta?.mimeType && (
+                  <div className={css.infoRow}>
+                    <dt>Type</dt>
+                    <dd>{String(meta.mimeType)}</dd>
+                  </div>
+                )}
+                {meta?.duration != null && (
+                  <div className={css.infoRow}>
+                    <dt>Duration</dt>
+                    <dd>{formatDuration(meta.duration)}</dd>
+                  </div>
+                )}
+                {meta?.framerate != null && (
+                  <div className={css.infoRow}>
+                    <dt>Frame Rate</dt>
+                    <dd>{String(meta.framerate)} fps</dd>
+                  </div>
+                )}
+                {meta?.videoCodec && (
+                  <div className={css.infoRow}>
+                    <dt>Codec</dt>
+                    <dd>{String(meta.videoCodec)}</dd>
+                  </div>
+                )}
+                {meta?.rating != null && (
+                  <div className={css.infoRow}>
+                    <dt>Rating</dt>
+                    <dd>{"★".repeat(Number(meta.rating))}</dd>
+                  </div>
+                )}
+                {Array.isArray(meta?.tags) && (meta.tags as string[]).length > 0 && (
+                  <div className={css.infoRow}>
+                    <dt>Tags</dt>
+                    <dd>{(meta.tags as string[]).join(", ")}</dd>
+                  </div>
+                )}
               </dl>
+
               <MiniMap
                 latitude={photo.metadata?.locationLatitude}
                 longitude={photo.metadata?.locationLongitude}
               />
-              <h4 className={css.infoSubtitle}>Metadata</h4>
-              {metadataEntries.length === 0 ? (
-                <p className={css.infoEmpty}>No metadata available.</p>
-              ) : (
-                <dl className={css.infoList}>
-                  {metadataEntries.map(([key, value]) => (
-                    <div className={css.infoRow} key={key}>
-                      <dt>{key}</dt>
-                      <dd>{formatMetadataValue(value)}</dd>
-                    </div>
-                  ))}
-                </dl>
-              )}
             </aside>
           )}
         </div>

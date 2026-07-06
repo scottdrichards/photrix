@@ -1,4 +1,6 @@
 import {
+  CheckmarkCircle24Filled,
+  Circle24Regular,
   ClosedCaption24Regular,
   Filmstrip24Regular,
   Image24Regular,
@@ -62,19 +64,25 @@ type Props = {
   photo: PhotoItem;
 };
 
+const LONG_PRESS_MS = 500;
+
 export const ThumbnailTile: React.FC<Props> = (props) => {
   const { photo } = props;
   const searchSources = photo.searchSources;
   const tileRef = useRef<HTMLButtonElement | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTriggeredRef = useRef(false);
   const supportsIntersectionObserver = typeof IntersectionObserver !== "undefined";
   const [isNearViewport, setIsNearViewport] = useState(!supportsIntersectionObserver);
   const [canRequestThumbnail, setCanRequestThumbnail] = useState(!supportsIntersectionObserver);
   const [isHovered, setIsHovered] = useState(false);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
-  const { setSelected } = useSelectionContext();
+  const { setSelected, selectionMode, checkedPaths, enterSelectionMode, toggleChecked } = useSelectionContext();
   const metadataRatio = getAspectRatio(photo);
   const ratio = loadedRatio ?? metadataRatio;
+  const isChecked = checkedPaths.has(photo.path);
+  const showCheckbox = selectionMode || isHovered;
 
   useEffect(() => {
     setIsImageLoaded(false);
@@ -111,7 +119,49 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   }, [supportsIntersectionObserver]);
 
   const handleClick = () => {
-    setSelected(photo);
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    if (selectionMode) {
+      toggleChecked(photo);
+    } else {
+      setSelected(photo);
+    }
+  };
+
+  const handlePointerDown = () => {
+    longPressTriggeredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      if (!selectionMode) {
+        enterSelectionMode();
+      }
+      toggleChecked(photo);
+    }, LONG_PRESS_MS);
+  };
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handlePointerUp = () => {
+    cancelLongPress();
+  };
+
+  const handlePointerMove = () => {
+    cancelLongPress();
+  };
+
+  const handleCheckboxClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!selectionMode) {
+      enterSelectionMode();
+    }
+    toggleChecked(photo);
   };
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -137,13 +187,30 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     <button
       type="button"
       ref={tileRef}
-      className={css.tile}
+      className={`${css.tile}${isChecked ? ` ${css.tileSelected}` : ""}`}
       style={{ "--ratio": ratio.toString() } as React.CSSProperties}
       onClick={handleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerMove={handlePointerMove}
+      onPointerCancel={cancelLongPress}
       aria-label={photo.name}
+      aria-pressed={selectionMode ? isChecked : undefined}
     >
+      {showCheckbox && (
+        <span
+          className={css.checkboxOverlay}
+          onClick={handleCheckboxClick}
+          aria-hidden="true"
+        >
+          {isChecked
+            ? <CheckmarkCircle24Filled className={css.checkboxChecked} />
+            : <Circle24Regular className={css.checkboxUnchecked} />}
+        </span>
+      )}
+      {isChecked && <span className={css.checkedOverlay} aria-hidden="true" />}
       {photo.livePhotoUrl ? (
         <span className={css.livePhotoBadge} aria-label="Live photo" title="Live photo">
           <Filmstrip24Regular fontSize={14} />

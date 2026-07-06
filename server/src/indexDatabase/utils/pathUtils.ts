@@ -44,3 +44,13 @@ export const splitPath = (relativePath: string): { folder: string; fileName: str
 export const joinPath = (folder: string, fileName: string): string => {
   return `${normalizeFolderPath(folder)}${fileName}`;
 };
+
+/**
+ * Reduces a relativePath to the canonical form stored in the database
+ * (leading slash, forward slashes), so paths discovered on disk can be
+ * compared against indexed paths regardless of platform separators.
+ */
+export const canonicalRelativePath = (relativePath: string): string => {
+  const { folder, fileName } = splitPath(relativePath);
+  return joinPath(folder, fileName);
+};

@@ -2,6 +2,7 @@ import type http from "node:http";
 import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
 import { getHLSInfo } from "../../videoProcessing/generateHLS.ts";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
+import type { FilterElement } from "../../indexDatabase/indexDatabase.type.ts";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { writeJson } from "../../utils.ts";
 import path from "path";
@@ -132,12 +133,12 @@ const buildDeps = (database: IndexDatabase, storageRoot: string): NegotiationDep
   resolveFilePath: (subPath: string) => path.join(storageRoot, subPath),
 });
 
-type Options = { database: IndexDatabase; storageRoot: string };
+type Options = { database: IndexDatabase; storageRoot: string; shareFilter?: unknown };
 
 export const videoNegotiationRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
   res: http.ServerResponse,
-  { database, storageRoot }: Options,
+  { database, storageRoot, shareFilter }: Options,
 ) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const videoPath = url.searchParams.get("path");
@@ -150,6 +151,13 @@ export const videoNegotiationRequestHandler = async (
   const relativeToStorage = path.relative(storageRoot, normalizedPath);
   if (relativeToStorage.startsWith("..") || path.isAbsolute(relativeToStorage)) {
     return writeJson(res, 403, { error: "Access denied" });
+  }
+
+  if (shareFilter) {
+    const allowed = await database.fileMatchesFilter(videoPath, shareFilter as FilterElement);
+    if (!allowed) {
+      return writeJson(res, 403, { error: "Access denied" });
+    }
   }
 
   const bandwidthParam = url.searchParams.get("bandwidthMbps");

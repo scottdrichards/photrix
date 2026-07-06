@@ -22,6 +22,7 @@ import {
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 import { prepareTables } from "./prepareTables.ts";
+import { FaceClusterEngine } from "./faceClusterEngine.ts";
 import { tables } from "./tables.ts";
 import { getLogger } from "../observability/logger.ts";
 
@@ -91,71 +92,55 @@ const normalizeCenterArea = (area: {
   return { x, y, width, height };
 };
 
-const DEFAULT_FACE_CLUSTER_SIMILARITY = 0.62;
+// At a real library's scale (~316k faces) the greedy clustering produces a
+// huge tail of tiny clusters — measured ~113k total, ~90k of them singletons
+// (mostly low-confidence junk detections). Hiding single-face clusters keeps
+// the People response meaningful and small; the faces still exist and show up
+// the moment a second face of that person is found.
+const MIN_FACE_CLUSTER_SIZE = 2;
 
-// How long a memoised face-clustering result stays fresh. Must comfortably
-// exceed a single clustering pass (tens of seconds on a large, busy library) so
-// the entry doesn't expire mid-computation — otherwise the summary's follow-up
-// detail fetch and re-clicks recompute instead of reusing it. The window is
-// (re)started when the pass completes. Approximate clusters during indexing can
-// lag reality by this long, which is an acceptable trade for a responsive tab.
-const FACE_CLUSTER_CACHE_TTL_MS = 5 * 60_000;
+// Caps the summary's cluster list (ordered by size, so this is "the 1000
+// biggest people") and the detail's face list. Totals in the response still
+// reflect the uncapped numbers. Without caps the summary JSON carried tens of
+// thousands of clusters (megabytes) and a big person's detail tens of
+// thousands of face entries.
+const MAX_FACE_CLUSTERS_LISTED = 1000;
+const MAX_FACES_IN_CLUSTER_DETAIL = 2000;
 
-// Greedy face clustering is O(faces × clusters); at hundreds of thousands of
-// faces a single pass runs for many minutes — long enough that the People tab
-// effectively never returns. Cap how many faces a pass considers, taking the
-// highest-confidence detections first (better detections make better centroids
-// and representatives). The result is approximate — it can miss people who only
-// appear in low-confidence detections — but a bounded, responsive tab beats one
-// that hangs the request. Tunable; 0 or negative means no cap (the old, slow
-// behaviour). A proper fix is an ANN index or a background-precomputed clustering.
-const FACE_CLUSTER_MAX_FACES = (() => {
-  const raw = Number(process.env.PHOTRIX_FACE_CLUSTER_MAX_FACES);
-  return Number.isFinite(raw) ? raw : 20_000;
-})();
-
-type FaceClusterComputation = {
-  sortedClusters: Array<{
-    id: string;
-    count: number;
-    representative: FaceClusterFace;
-    faces: FaceClusterFace[];
-  }>;
+// Face rows are stored per file; cluster ids are exposed to the client as
+// opaque strings. Keep the "person-" prefix stable — it's part of the API.
+const faceClusterIdToString = (clusterId: number) => `person-${clusterId}`;
+const faceClusterIdFromString = (clusterId: string): number | null => {
+  const match = /^person-(\d+)$/.exec(clusterId);
+  if (!match) return null;
+  return Number(match[1]);
 };
 
-const alignEmbeddingBuffer = (buffer: Buffer) => {
-  const aligned = new Uint8Array(buffer.byteLength);
-  aligned.set(buffer);
-  return new Float64Array(aligned.buffer);
-};
-
-const toUnitVector = (vector: Float64Array): Float64Array | null => {
-  let magnitudeSquared = 0;
-  for (let i = 0; i < vector.length; i += 1) {
-    const value = vector[i] ?? 0;
-    magnitudeSquared += value * value;
-  }
-
-  if (magnitudeSquared <= 0) {
-    return null;
-  }
-
-  const magnitude = Math.sqrt(magnitudeSquared);
-  const normalized = new Float64Array(vector.length);
-  for (let i = 0; i < vector.length; i += 1) {
-    normalized[i] = (vector[i] ?? 0) / magnitude;
-  }
-  return normalized;
-};
-
-const cosineSimilarity = (left: Float64Array, right: Float64Array) => {
-  const length = Math.min(left.length, right.length);
-  let dot = 0;
-  for (let i = 0; i < length; i += 1) {
-    dot += (left[i] ?? 0) * (right[i] ?? 0);
-  }
-  return dot;
-};
+const faceRowToClusterFace = (row: {
+  folder: string;
+  fileName: string;
+  boxX: number;
+  boxY: number;
+  boxWidth: number;
+  boxHeight: number;
+  mimeType: string | null;
+  dimensionWidth: number | null;
+  dimensionHeight: number | null;
+  regions: string | null;
+}): FaceClusterFace => ({
+  path: joinPath(row.folder, row.fileName),
+  fileName: row.fileName,
+  box: {
+    x: row.boxX,
+    y: row.boxY,
+    width: row.boxWidth,
+    height: row.boxHeight,
+  },
+  mimeType: row.mimeType,
+  dimensionWidth: row.dimensionWidth,
+  dimensionHeight: row.dimensionHeight,
+  regions: row.regions,
+});
 
 type StatusCounts = {
   allEntries: number;
@@ -178,19 +163,10 @@ export class IndexDatabase {
   // busy indexing. De-duplicate concurrent callers onto a single scan. (No
   // time-based cache: a sequential read after a write must reflect the write.)
   private statusCountsInflight?: Promise<StatusCounts>;
-  // Face clustering scans the entire faces table and is O(faces × clusters) —
-  // hundreds of thousands of faces make a single pass take many seconds even
-  // warm. The People tab computes the summary and then immediately fetches a
-  // cluster's detail, which recomputes the identical clustering; rapid re-clicks
-  // do it again. Memoise the most recent result, keyed by filter + threshold +
-  // the current face count (a cheap change-detector), so those paired/repeat
-  // calls reuse one computation. Invalidated automatically as indexing grows the
-  // face count; a short TTL bounds staleness when nothing else changes.
-  private faceClusterCache?: {
-    key: string;
-    promise: Promise<{ sortedClusters: FaceClusterComputation["sortedClusters"] }>;
-    expiresAt: number;
-  };
+  // Incremental face clustering: assignments are persisted on the faces rows
+  // and centroids in the faceClusters table, so People queries are plain
+  // indexed reads. See faceClusterEngine.ts.
+  private faceClusters!: FaceClusterEngine;
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;
@@ -237,6 +213,8 @@ export class IndexDatabase {
     });
 
     await prepareTables(this.db);
+
+    this.faceClusters = new FaceClusterEngine(this.db);
 
     await this.db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
 
@@ -287,7 +265,9 @@ export class IndexDatabase {
           // Checkpoint wrote new DB pages that may include freshly indexed
           // embeddings. Re-warm the scan cache so those new pages stay hot
           // and the next search doesn't hit a cold page-cache miss.
-          void this.warmSemanticSearch().catch(() => {});
+          if (result.checkpointed > 0) {
+            void this.warmSemanticSearch().catch(() => {});
+          }
           return;
         }
       } catch (err) {
@@ -347,42 +327,28 @@ export class IndexDatabase {
     });
   }
 
-  async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
+  /** Moves a file record (and all related rows) to a new path. Returns false if the source is not in the database. */
+  async moveFile(oldRelativePath: string, newRelativePath: string): Promise<boolean> {
     const { folder: oldFolder, fileName: oldFile } = splitPath(oldRelativePath);
-    const row = await this.db.get<FileRecord>(
-      "SELECT * FROM files WHERE folder = ? AND fileName = ?",
-      oldFolder,
-      oldFile,
-    );
-    if (!row) {
-      throw new Error(
-        `moveFile: File at path "${oldRelativePath}" does not exist in the database.`,
-      );
-    }
-
     const { folder: newFolder, fileName: newFile } = splitPath(newRelativePath);
-    const updated: FileRecord = {
-      ...row,
-      folder: newFolder,
-      fileName: newFile,
-    };
 
-    const columns = fileRecordToColumnNamesAndValues(updated);
-    const placeholders = columns.values.map(() => "?").join(", ");
+    const result = await this.db.run(
+      "UPDATE files SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
+      [newFolder, newFile, oldFolder, oldFile],
+    );
+    if (result.changes === 0) return false;
+
     await this.db.transaction([
-      {
-        sql: "DELETE FROM files WHERE folder = ? AND fileName = ?",
-        params: [oldFolder, oldFile],
-      },
-      {
-        sql: `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`,
-        params: columns.values,
-      },
       {
         sql: "UPDATE faces SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
         params: [newFolder, newFile, oldFolder, oldFile],
       },
+      {
+        sql: "UPDATE audioSegments SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
+        params: [newFolder, newFile, oldFolder, oldFile],
+      },
     ]);
+    return true;
   }
 
   async addOrUpdateFileData(
@@ -433,6 +399,20 @@ export class IndexDatabase {
     }
 
     return rowToFileRecord(row);
+  }
+
+  async fileMatchesFilter(subPath: string, filter: FilterElement): Promise<boolean> {
+    const { folder, fileName } = splitPath(subPath);
+    const combined: FilterElement = {
+      operation: "and",
+      conditions: [filter, { folder, fileName } as FilterElement],
+    };
+    const { where, params } = filterToSQL(combined);
+    const result = await this.db.get<{ count: number }>(
+      `SELECT COUNT(*) as count FROM files${where ? ` WHERE ${where}` : ""}`,
+      ...params,
+    );
+    return (result?.count ?? 0) > 0;
   }
 
   async countMissingInfo(): Promise<number> {
@@ -586,6 +566,10 @@ export class IndexDatabase {
     const { folder, fileName } = splitPath(relativePath);
     const detectedAtMs = detectedAt.getTime();
 
+    // Re-detection replaces this file's face rows; subtract the outgoing faces
+    // from their clusters' running means so the replacements don't count twice.
+    await this.withdrawFaceClusterAssignments(folder, fileName);
+
     const statements: Array<{ sql: string; params: unknown[] }> = [
       {
         sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
@@ -624,6 +608,48 @@ export class IndexDatabase {
     });
 
     await this.db.transaction(statements);
+
+    // Assign the fresh faces to clusters right away so the People tab reflects
+    // new detections without waiting for the backfill task. Best-effort: on
+    // failure the rows stay clusterId NULL and the backfill picks them up.
+    try {
+      const inserted = await this.db.all<{ id: number; embedding: Buffer }>(
+        "SELECT id, embedding FROM faces WHERE folder = ? AND fileName = ? AND LENGTH(embedding) > 0",
+        folder,
+        fileName,
+      );
+      await this.faceClusters.assignFaces(inserted);
+    } catch (error) {
+      log.warn(
+        { err: error, path: relativePath },
+        "Inline face cluster assignment failed; backfill will retry",
+      );
+    }
+  }
+
+  /**
+   * Subtracts a file's clustered faces from their clusters ahead of deleting
+   * the face rows. Best-effort: a missed withdrawal only leaves ghost weight in
+   * a centroid (displayed counts always come from live rows).
+   */
+  private async withdrawFaceClusterAssignments(
+    folder: string,
+    fileName: string,
+  ): Promise<void> {
+    try {
+      const assigned = await this.db.all<{ clusterId: number; embedding: Buffer }>(
+        `SELECT clusterId, embedding FROM faces
+         WHERE folder = ? AND fileName = ? AND clusterId IS NOT NULL AND LENGTH(embedding) > 0`,
+        folder,
+        fileName,
+      );
+      await this.faceClusters.removeFaces(assigned);
+    } catch (error) {
+      log.warn(
+        { err: error, folder, fileName },
+        "Face cluster withdrawal failed; centroids keep ghost weight",
+      );
+    }
   }
 
   async saveFacesFromMetadataRegions(
@@ -661,6 +687,9 @@ export class IndexDatabase {
 
     const { folder, fileName } = splitPath(relativePath);
     const detectedAtMs = detectedAt.getTime();
+
+    await this.withdrawFaceClusterAssignments(folder, fileName);
+
     const statements: Array<{ sql: string; params: unknown[] }> = [
       {
         sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
@@ -769,6 +798,10 @@ export class IndexDatabase {
       folder,
       fileName,
     ]);
+    await this.db.run("DELETE FROM audioSegments WHERE folder = ? AND fileName = ?", [
+      folder,
+      fileName,
+    ]);
     return result.changes === 1;
   }
 
@@ -784,6 +817,10 @@ export class IndexDatabase {
         },
         {
           sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
+          params: [folder, fileName] as unknown[],
+        },
+        {
+          sql: "DELETE FROM audioSegments WHERE folder = ? AND fileName = ?",
           params: [folder, fileName] as unknown[],
         },
       ];
@@ -802,6 +839,10 @@ export class IndexDatabase {
       },
       {
         sql: "DELETE FROM faces WHERE folder LIKE ? ESCAPE '\\'",
+        params: [likePattern],
+      },
+      {
+        sql: "DELETE FROM audioSegments WHERE folder LIKE ? ESCAPE '\\'",
         params: [likePattern],
       },
     ];
@@ -886,6 +927,25 @@ export class IndexDatabase {
     const rows =
       await this.db.all<Record<string, string | number>>("SELECT * FROM files");
     return rows.map((row) => rowToFileRecord(row));
+  }
+
+  /**
+   * Returns the canonical relativePaths of every indexed file, optionally
+   * scoped to a subfolder. Used to reconcile the index against the filesystem
+   * so entries for moved/deleted files can be pruned.
+   */
+  async getIndexedPaths(subFolder?: string): Promise<string[]> {
+    const base = normalizeFolderPath(subFolder ?? "/");
+    const rows =
+      base === "/"
+        ? await this.db.all<{ folder: string; fileName: string }>(
+            "SELECT folder, fileName FROM files",
+          )
+        : await this.db.all<{ folder: string; fileName: string }>(
+            "SELECT folder, fileName FROM files WHERE folder LIKE ? ESCAPE '\\'",
+            `${escapeLikeLiteral(base)}%`,
+          );
+    return rows.map((row) => joinPath(row.folder, row.fileName));
   }
 
   async getFolders(relativePath: string): Promise<Array<string>> {
@@ -1201,114 +1261,184 @@ export class IndexDatabase {
 
   async queryFaceClusters(options: {
     filter: QueryOptions["filter"];
-    similarityThreshold?: number;
   }): Promise<FaceClusterResult> {
-    const { filter, similarityThreshold = DEFAULT_FACE_CLUSTER_SIMILARITY } = options;
+    const { filter } = options;
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
 
-    const clusterData = await this.computeFaceClusters(filter, similarityThreshold);
+    // Step 1: per-cluster count + representative face id. SQLite bare-column
+    // semantics: with a MAX() aggregate, non-aggregated columns take their
+    // values from the row that produced the max — so `id` here is the face
+    // with the highest centroid similarity per cluster (its representative).
+    //
+    // With no filter (the People tab's default) this skips the files join
+    // entirely and runs as a pure scan of the by_cluster covering index —
+    // ~0.1s over 316k faces. Any row fetch would drag ~4 KB embedding BLOB
+    // pages along, which is what made the previous formulation take seconds.
+    //
+    // The filtered variant forces the join order: MATERIALIZED pins the
+    // filtered file set, and CROSS JOIN makes it the driving table so faces
+    // are probed through the by_file_v3 covering index. Left to itself the
+    // planner drove the join from all ~300k clustered faces instead, fetching
+    // each face row (and its embedding BLOB pages) to get folder/fileName —
+    // ~14s vs ~0.2s under a face filter.
+    const aggregateRows = whereClause
+      ? await this.db.all<{ clusterId: number; count: number; id: number }>(
+          `WITH filtered_files AS MATERIALIZED (
+             SELECT folder, fileName FROM files WHERE ${whereClause}
+           )
+           SELECT
+             faces.clusterId AS clusterId,
+             COUNT(*) AS count,
+             MAX(faces.clusterSimilarity) AS representativeSimilarity,
+             faces.id AS id
+           FROM filtered_files
+           CROSS JOIN faces
+             ON faces.folder = filtered_files.folder
+            AND faces.fileName = filtered_files.fileName
+           WHERE faces.clusterId > 0
+           GROUP BY faces.clusterId
+           HAVING COUNT(*) >= ${MIN_FACE_CLUSTER_SIZE}
+           ORDER BY COUNT(*) DESC, faces.clusterId`,
+          ...whereParams,
+        )
+      : await this.db.all<{ clusterId: number; count: number; id: number }>(
+          `SELECT
+             clusterId,
+             COUNT(*) AS count,
+             MAX(clusterSimilarity) AS representativeSimilarity,
+             id
+           FROM faces
+           WHERE clusterId > 0
+           GROUP BY clusterId
+           HAVING COUNT(*) >= ${MIN_FACE_CLUSTER_SIZE}
+           ORDER BY COUNT(*) DESC, clusterId`,
+        );
 
-    // Return only summaries (without faces array) for performance
-    const clusters = clusterData.sortedClusters.map((cluster) => ({
-      id: cluster.id,
-      count: cluster.count,
-      representative: cluster.representative,
-    }));
+    // Same join-order forcing as above. Only faces that pass the clusterId IS
+    // NULL index constraint get a row fetch (for the LENGTH check), so the
+    // BLOB drag is limited to the actual pending backlog. Without a filter the
+    // needing_cluster partial index answers the count directly.
+    const pendingRow = whereClause
+      ? await this.db.get<{ count: number }>(
+          `WITH filtered_files AS MATERIALIZED (
+             SELECT folder, fileName FROM files WHERE ${whereClause}
+           )
+           SELECT COUNT(*) AS count
+           FROM filtered_files
+           CROSS JOIN faces
+             ON faces.folder = filtered_files.folder
+            AND faces.fileName = filtered_files.fileName
+           WHERE faces.clusterId IS NULL AND LENGTH(faces.embedding) > 0`,
+          ...whereParams,
+        )
+      : await this.db.get<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM faces
+           WHERE clusterId IS NULL AND LENGTH(embedding) > 0`,
+        );
 
-    const totalFaces = clusterData.sortedClusters.reduce(
-      (sum, cluster) => sum + cluster.count,
-      0,
-    );
+    // Step 2: hydrate the representative faces — only for the clusters the
+    // response actually lists.
+    const listed = aggregateRows.slice(0, MAX_FACE_CLUSTERS_LISTED);
+    const representatives = new Map<number, FaceClusterFace>();
+    if (listed.length) {
+      const representativeRows = await this.db.all<{
+        id: number;
+        folder: string;
+        fileName: string;
+        boxX: number;
+        boxY: number;
+        boxWidth: number;
+        boxHeight: number;
+        mimeType: string | null;
+        dimensionWidth: number | null;
+        dimensionHeight: number | null;
+        regions: string | null;
+      }>(
+        `SELECT
+           faces.id AS id,
+           faces.folder,
+           faces.fileName,
+           faces.boxX,
+           faces.boxY,
+           faces.boxWidth,
+           faces.boxHeight,
+           files.mimeType,
+           files.dimensionsWidth AS dimensionWidth,
+           files.dimensionsHeight AS dimensionHeight,
+           files.regions
+         FROM faces
+         JOIN files
+           ON files.folder = faces.folder
+          AND files.fileName = faces.fileName
+         WHERE faces.id IN (${listed.map(() => "?").join(", ")})`,
+        ...listed.map((row) => row.id),
+      );
+      for (const row of representativeRows) {
+        representatives.set(row.id, faceRowToClusterFace(row));
+      }
+    }
+
+    const clusters = listed.flatMap((row) => {
+      const representative = representatives.get(row.id);
+      if (!representative) return [];
+      return [
+        {
+          id: faceClusterIdToString(row.clusterId),
+          count: row.count,
+          representative,
+        },
+      ];
+    });
 
     return {
       clusters,
-      totalFaces,
-      totalClusters: clusters.length,
+      totalFaces: aggregateRows.reduce((sum, row) => sum + row.count, 0),
+      totalClusters: aggregateRows.length,
+      pendingFaces: pendingRow?.count ?? 0,
     };
   }
 
   async getFaceClusterDetail(options: {
     filter: QueryOptions["filter"];
     clusterId: string;
-    similarityThreshold?: number;
   }): Promise<FaceClusterDetailResult> {
-    const {
-      filter,
-      clusterId,
-      similarityThreshold = DEFAULT_FACE_CLUSTER_SIMILARITY,
-    } = options;
-
-    const clusterData = await this.computeFaceClusters(filter, similarityThreshold);
-    const cluster = clusterData.sortedClusters.find((c) => c.id === clusterId);
-
-    if (!cluster) {
+    const { filter, clusterId } = options;
+    const numericClusterId = faceClusterIdFromString(clusterId);
+    if (numericClusterId === null || numericClusterId <= 0) {
       return { cluster: null };
     }
 
-    return {
-      cluster: {
-        id: cluster.id,
-        count: cluster.count,
-        representative: cluster.representative,
-        faces: cluster.faces,
-      },
-    };
-  }
-
-  private async computeFaceClusters(
-    filter: QueryOptions["filter"],
-    similarityThreshold: number,
-  ): Promise<FaceClusterComputation> {
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
-    const normalizedThreshold = Math.min(Math.max(similarityThreshold, -1), 1);
 
-    // Reuse a recent identical computation (same filter + threshold) so the
-    // People tab's summary + detail pair and rapid re-clicks don't each redo the
-    // full O(faces × clusters) scan. Keyed by filter only, with a short TTL,
-    // rather than by face count: background indexing adds faces continuously, so
-    // a count-based key would never hit during an active index. The clusters are
-    // already an approximation (face-capped), so up to one TTL of staleness is an
-    // acceptable trade for making the cache actually useful. Stored as a promise
-    // so concurrent callers share one in-flight pass instead of each starting a
-    // heavy one.
-    const key = JSON.stringify({ whereClause, whereParams, normalizedThreshold });
-    const cached = this.faceClusterCache;
-    if (cached && cached.key === key && cached.expiresAt > Date.now()) {
-      return cached.promise;
-    }
+    // The `limited` CTE selects the top-N face ids entirely inside covering
+    // indexes (by_cluster unfiltered; filtered_files probing by_file_v3 under
+    // a filter — MATERIALIZED + CROSS JOIN force that join order, see
+    // queryFaceClusters). Only the N surviving rows are then fetched from
+    // faces/files for box and dimension columns, keeping the embedding-BLOB
+    // page drag proportional to the response, not the cluster size. The
+    // redundant clusterId > 0 term lets the planner prove the by_cluster
+    // partial index applies even though the cluster id is a bound parameter.
+    const limitedCTE = whereClause
+      ? `WITH filtered_files AS MATERIALIZED (
+           SELECT folder, fileName FROM files WHERE ${whereClause}
+         ),
+         limited AS (
+           SELECT faces.id AS id
+           FROM filtered_files
+           CROSS JOIN faces
+             ON faces.folder = filtered_files.folder
+            AND faces.fileName = filtered_files.fileName
+           WHERE faces.clusterId = ? AND faces.clusterId > 0
+           ORDER BY faces.clusterSimilarity DESC, faces.id
+           LIMIT ${MAX_FACES_IN_CLUSTER_DETAIL}
+         )`
+      : `WITH limited AS (
+           SELECT id FROM faces
+           WHERE clusterId = ? AND clusterId > 0
+           ORDER BY clusterSimilarity DESC, id
+           LIMIT ${MAX_FACES_IN_CLUSTER_DETAIL}
+         )`;
 
-    const promise = this.computeFaceClustersUncached(
-      whereClause,
-      whereParams,
-      normalizedThreshold,
-    );
-    // Seed expiry far enough ahead that concurrent callers share this in-flight
-    // pass rather than each starting their own; refresh it on completion so the
-    // reuse window is a full TTL measured from when the result is actually ready.
-    const entry = {
-      key,
-      promise,
-      expiresAt: Date.now() + FACE_CLUSTER_CACHE_TTL_MS,
-    };
-    this.faceClusterCache = entry;
-    promise.then(
-      () => {
-        entry.expiresAt = Date.now() + FACE_CLUSTER_CACHE_TTL_MS;
-      },
-      () => {
-        // A failed computation must not be served from cache.
-        if (this.faceClusterCache === entry) {
-          this.faceClusterCache = undefined;
-        }
-      },
-    );
-    return promise;
-  }
-
-  private async computeFaceClustersUncached(
-    whereClause: string,
-    whereParams: unknown[],
-    normalizedThreshold: number,
-  ): Promise<FaceClusterComputation> {
     const rows = await this.db.all<{
       folder: string;
       fileName: string;
@@ -1316,17 +1446,12 @@ export class IndexDatabase {
       boxY: number;
       boxWidth: number;
       boxHeight: number;
-      embedding: Buffer;
       mimeType: string | null;
       dimensionWidth: number | null;
       dimensionHeight: number | null;
       regions: string | null;
     }>(
-      `WITH filtered_files AS (
-         SELECT folder, fileName
-         FROM files
-         ${whereClause ? `WHERE ${whereClause}` : ""}
-       )
+      `${limitedCTE}
        SELECT
          faces.folder,
          faces.fileName,
@@ -1334,154 +1459,102 @@ export class IndexDatabase {
          faces.boxY,
          faces.boxWidth,
          faces.boxHeight,
-         faces.embedding,
          files.mimeType,
          files.dimensionsWidth AS dimensionWidth,
          files.dimensionsHeight AS dimensionHeight,
          files.regions
-       FROM faces
-       JOIN filtered_files
-         ON filtered_files.folder = faces.folder
-        AND filtered_files.fileName = faces.fileName
+       FROM limited
+       JOIN faces
+         ON faces.id = limited.id
        JOIN files
          ON files.folder = faces.folder
         AND files.fileName = faces.fileName
-       WHERE LENGTH(faces.embedding) > 0
-       ORDER BY faces.confidence DESC, faces.folder, faces.fileName, faces.id
-       ${FACE_CLUSTER_MAX_FACES > 0 ? "LIMIT ?" : ""}`,
+       ORDER BY faces.clusterSimilarity DESC, faces.id`,
       ...whereParams,
-      ...(FACE_CLUSTER_MAX_FACES > 0 ? [FACE_CLUSTER_MAX_FACES] : []),
+      numericClusterId,
     );
 
-    type FaceRow = {
-      path: string;
-      fileName: string;
-      box: { x: number; y: number; width: number; height: number };
-      mimeType: string | null;
-      dimensionWidth: number | null;
-      dimensionHeight: number | null;
-      regions: string | null;
-      vector: Float64Array;
-    };
-
-    type MutableCluster = {
-      faces: FaceRow[];
-      centroid: Float64Array;
-    };
-
-    const clusters: MutableCluster[] = [];
-
-    let processed = 0;
-    for (const row of rows) {
-      // This loop is O(faces × clusters) and runs on the main thread; with
-      // hundreds of thousands of faces it would otherwise block the event loop
-      // for many seconds — long enough that the whole server stops answering
-      // (health checks, navigation, every other request). Yield periodically so
-      // the clustering shares the thread instead of monopolising it. The cost is
-      // a few extra event-loop turns; correctness is unchanged.
-      if ((processed++ & 0x3ff) === 0) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-
-      const alignedEmbedding = alignEmbeddingBuffer(row.embedding);
-      const unitVector = toUnitVector(alignedEmbedding);
-      if (!unitVector) {
-        continue;
-      }
-
-      const nextFace: FaceRow = {
-        path: joinPath(row.folder, row.fileName),
-        fileName: row.fileName,
-        box: {
-          x: row.boxX,
-          y: row.boxY,
-          width: row.boxWidth,
-          height: row.boxHeight,
-        },
-        mimeType: row.mimeType,
-        dimensionWidth: row.dimensionWidth,
-        dimensionHeight: row.dimensionHeight,
-        regions: row.regions,
-        vector: unitVector,
-      };
-
-      let bestClusterIndex = -1;
-      let bestSimilarity = -2;
-
-      for (let i = 0; i < clusters.length; i += 1) {
-        const similarity = cosineSimilarity(unitVector, clusters[i].centroid);
-        if (similarity > bestSimilarity) {
-          bestSimilarity = similarity;
-          bestClusterIndex = i;
-          // Stop at the first cluster that already clears the threshold instead
-          // of scanning every cluster for the global best. Two distinct people
-          // almost never exceed the (high) face-similarity threshold against the
-          // same face, so the first match is the right one — and this turns the
-          // hot inner loop from O(clusters) into an early exit, ~4× faster on a
-          // large library with negligible change to the resulting clusters.
-          if (similarity >= normalizedThreshold) break;
-        }
-      }
-
-      if (bestClusterIndex < 0 || bestSimilarity < normalizedThreshold) {
-        clusters.push({ faces: [nextFace], centroid: unitVector });
-        continue;
-      }
-
-      const cluster = clusters[bestClusterIndex];
-      const previousCount = cluster.faces.length;
-      cluster.faces.push(nextFace);
-
-      const updatedCentroid = new Float64Array(cluster.centroid.length);
-      for (let i = 0; i < cluster.centroid.length; i += 1) {
-        updatedCentroid[i] =
-          ((cluster.centroid[i] ?? 0) * previousCount + (unitVector[i] ?? 0)) /
-          (previousCount + 1);
-      }
-
-      cluster.centroid = toUnitVector(updatedCentroid) ?? updatedCentroid;
+    if (!rows.length) {
+      return { cluster: null };
     }
 
-    const sortedClusters = clusters
-      .map((cluster, index) => {
-        const withScores = cluster.faces.map((face) => ({
-          face,
-          similarity: cosineSimilarity(face.vector, cluster.centroid),
-        }));
-        withScores.sort((left, right) => right.similarity - left.similarity);
+    // `count` reflects the whole cluster within the filter even when the faces
+    // list is capped; the count query is index-only, so it's cheap.
+    const countRow = whereClause
+      ? await this.db.get<{ count: number }>(
+          `WITH filtered_files AS MATERIALIZED (
+             SELECT folder, fileName FROM files WHERE ${whereClause}
+           )
+           SELECT COUNT(*) AS count
+           FROM filtered_files
+           CROSS JOIN faces
+             ON faces.folder = filtered_files.folder
+            AND faces.fileName = filtered_files.fileName
+           WHERE faces.clusterId = ?`,
+          ...whereParams,
+          numericClusterId,
+        )
+      : await this.db.get<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM faces
+           WHERE clusterId = ? AND clusterId > 0`,
+          numericClusterId,
+        );
 
-        const representativeFace = withScores[0]?.face;
-        if (!representativeFace) {
-          return null;
-        }
+    const faces = rows.map(faceRowToClusterFace);
+    return {
+      cluster: {
+        id: clusterId,
+        count: countRow?.count ?? faces.length,
+        // Faces are ordered by similarity to the centroid, so the first one is
+        // the cluster's best match — same representative the summary query picks.
+        representative: faces[0],
+        faces,
+      },
+    };
+  }
 
-        return {
-          id: `person-${index + 1}`,
-          count: cluster.faces.length,
-          representative: {
-            path: representativeFace.path,
-            fileName: representativeFace.fileName,
-            box: representativeFace.box,
-            mimeType: representativeFace.mimeType,
-            dimensionWidth: representativeFace.dimensionWidth,
-            dimensionHeight: representativeFace.dimensionHeight,
-            regions: representativeFace.regions,
-          },
-          faces: withScores.map(({ face }) => ({
-            path: face.path,
-            fileName: face.fileName,
-            box: face.box,
-            mimeType: face.mimeType,
-            dimensionWidth: face.dimensionWidth,
-            dimensionHeight: face.dimensionHeight,
-            regions: face.regions,
-          })),
-        };
-      })
-      .filter((cluster): cluster is NonNullable<typeof cluster> => Boolean(cluster))
-      .sort((left, right) => right.count - left.count || left.id.localeCompare(right.id));
+  /**
+   * Assigns one batch of not-yet-clustered faces (best detections first, so
+   * early centroids are built from confident faces) to persistent clusters.
+   * Returns the number of faces handled; 0 means the backlog is drained.
+   *
+   * The id list and the embedding fetch are separate queries on purpose:
+   * sorting must not drag 4 KB embedding BLOBs through the sorter (that was
+   * the dominant cost of the old per-request clustering).
+   */
+  async clusterPendingFaces(batchSize = 256): Promise<number> {
+    const idRows = await this.db.all<{ id: number }>(
+      `SELECT id FROM faces
+       WHERE clusterId IS NULL AND LENGTH(embedding) > 0
+       ORDER BY confidence DESC
+       LIMIT ?`,
+      batchSize,
+    );
+    if (!idRows.length) return 0;
 
-    return { sortedClusters };
+    const faces = await this.db.all<{ id: number; embedding: Buffer }>(
+      `SELECT id, embedding FROM faces WHERE id IN (${idRows.map(() => "?").join(", ")})`,
+      ...idRows.map((row) => row.id),
+    );
+    await this.faceClusters.assignFaces(faces);
+    return idRows.length;
+  }
+
+  async pruneEmptyFaceClusters(): Promise<void> {
+    await this.faceClusters.pruneEmptyClusters();
+  }
+
+  /** Cheap index-only counts — polled by the backfill task's status hook. */
+  async getFaceClusteringProgress(): Promise<{ assigned: number; pending: number }> {
+    const [assignedRow, pendingRow] = await Promise.all([
+      this.db.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM faces WHERE clusterId > 0",
+      ),
+      this.db.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM faces WHERE clusterId IS NULL AND LENGTH(embedding) > 0",
+      ),
+    ]);
+    return { assigned: assignedRow?.count ?? 0, pending: pendingRow?.count ?? 0 };
   }
 
   async getFilesNeedingEmbedding(
@@ -1760,42 +1833,32 @@ export class IndexDatabase {
   ): Promise<Array<FileRecord & { similarity: number }>> {
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
 
+    const queryBuffer = Buffer.from(
+      queryVector.buffer,
+      queryVector.byteOffset,
+      queryVector.byteLength,
+    );
+
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT *
+      `SELECT *, cosine_similarity_f32(audioEmbedding, ?) AS similarity
        FROM files
        WHERE audioEmbedding IS NOT NULL
          AND (
            (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL)
            OR mimeType LIKE 'audio/%'
          )
-         ${whereClause ? `AND (${whereClause})` : ""}`,
+         ${whereClause ? `AND (${whereClause})` : ""}
+       ORDER BY similarity DESC
+       LIMIT ?`,
+      queryBuffer,
       ...whereParams,
+      limit,
     );
 
-    type ScoredRow = { record: FileRecord; similarity: number };
-    const scored: ScoredRow[] = [];
-
-    for (const row of rows) {
-      const rawBuf = row.audioEmbedding as Buffer | null;
-      if (!rawBuf) continue;
-
-      const aligned = new Uint8Array(rawBuf.byteLength);
-      aligned.set(rawBuf);
-      const embedding = new Float32Array(aligned.buffer);
-
-      // CLAP embeddings are L2-normalised so cosine similarity == dot product
-      let dot = 0;
-      const len = Math.min(queryVector.length, embedding.length);
-      for (let i = 0; i < len; i++) {
-        dot += (queryVector[i] ?? 0) * (embedding[i] ?? 0);
-      }
-
-      const record = rowToFileRecord(row as Record<string, string | number>);
-      scored.push({ record, similarity: dot });
-    }
-
-    scored.sort((a, b) => b.similarity - a.similarity);
-    return scored.slice(0, limit).map(({ record, similarity }) => ({ ...record, similarity }));
+    return rows.map((row) => ({
+      ...rowToFileRecord(row as Record<string, string | number>),
+      similarity: typeof row.similarity === "number" ? row.similarity : 0,
+    }));
   }
 
   async audioTranscriptSearch(
