@@ -1,0 +1,128 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  backdrop-filter: blur(4px);
+}
+
+.panel {
+  background: var(--bg0, #111);
+  border: 1px solid var(--stroke2, #333);
+  border-radius: var(--radius-lg, 12px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s, 8px);
+  padding: var(--space-m, 16px);
+  max-width: 960px;
+  width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-s, 8px);
+}
+
+.title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--fg1, #eee);
+  flex-shrink: 0;
+}
+
+.hint {
+  font-size: 0.78rem;
+  color: var(--fg3, #888);
+  flex: 1;
+}
+
+.headerActions {
+  display: flex;
+  gap: var(--space-xs, 4px);
+}
+
+.headerBtn {
+  background: none;
+  border: 1px solid var(--stroke2, #333);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--fg2, #ccc);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}
+
+.headerBtn:hover {
+  border-color: var(--stroke3, #555);
+  color: var(--fg1, #eee);
+}
+
+.closeBtn {
+  background: none;
+  border: 1px solid var(--stroke2, #333);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--fg2, #ccc);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.closeBtn:hover {
+  border-color: var(--stroke3, #555);
+  color: var(--fg1, #eee);
+}
+
+.canvas {
+  border-radius: var(--radius-md, 8px);
+  background: radial-gradient(ellipse at center, #1a1a2e 0%, #0d0d0d 100%);
+  width: 100%;
+  height: auto;
+  display: block;
+  touch-action: none;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs, 4px) var(--space-s, 8px);
+  overflow-y: auto;
+  max-height: 80px;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--fg2, #bbb);
+  font-size: 0.78rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.legendItem:hover {
+  background: var(--bg2, #222);
+  color: var(--fg1, #eee);
+}
+
+.legendDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legendMore {
+  font-size: 0.78rem;
+  color: var(--fg3, #888);
+  align-self: center;
+}

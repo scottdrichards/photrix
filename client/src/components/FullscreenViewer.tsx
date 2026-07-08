@@ -1,19 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ArrowDownload24Regular,
   ClosedCaption24Regular,
   ClosedCaptionOff24Regular,
   Dismiss24Regular,
   Filmstrip24Regular,
   Info24Regular,
   ScanPerson24Regular,
+  Share24Regular,
 } from "@fluentui/react-icons";
 import Hls from "hls.js";
 import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
 import { fetchTranscriptSegments, negotiateVideoPlayback } from "../api";
-import type { TranscriptSegment } from "../api";
+import { getToken } from "../auth";
+import { createClientOperationId, logClientEvent } from "../diagnostics";
 import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes } from "./FaceOverlay";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { MiniMap } from "./MiniMap";
+import { ShareOptionsModal } from "./ShareOptionsModal";
 import css from "./FullscreenViewer.module.css";
 
 const SWIPE_THRESHOLD_PX = 60;
@@ -33,16 +37,29 @@ type HlsMediaWithSource = HTMLMediaElement & {
   mediaSource?: MediaSource & { updating?: boolean };
 };
 
-const segmentsToWebVTT = (segments: TranscriptSegment[]): string => {
+const segmentsToWebVTT = (
+  segments: Array<{ start: number; end: number; text: string }>,
+): string => {
   const toTimestamp = (s: number): string => {
-    const h = Math.floor(s / 3600).toString().padStart(2, "0");
-    const m = Math.floor((s % 3600) / 60).toString().padStart(2, "0");
-    const sec = Math.floor(s % 60).toString().padStart(2, "0");
-    const ms = Math.round((s % 1) * 1000).toString().padStart(3, "0");
+    const h = Math.floor(s / 3600)
+      .toString()
+      .padStart(2, "0");
+    const m = Math.floor((s % 3600) / 60)
+      .toString()
+      .padStart(2, "0");
+    const sec = Math.floor(s % 60)
+      .toString()
+      .padStart(2, "0");
+    const ms = Math.round((s % 1) * 1000)
+      .toString()
+      .padStart(3, "0");
     return `${h}:${m}:${sec}.${ms}`;
   };
   const cues = segments
-    .map((seg, i) => `${i + 1}\n${toTimestamp(seg.start)} --> ${toTimestamp(seg.end)}\n${seg.text}`)
+    .map(
+      (seg, i) =>
+        `${i + 1}\n${toTimestamp(seg.start)} --> ${toTimestamp(seg.end)}\n${seg.text}`,
+    )
     .join("\n\n");
   return `WEBVTT\n\n${cues}`;
 };
@@ -50,21 +67,54 @@ const segmentsToWebVTT = (segments: TranscriptSegment[]): string => {
 const safePlay = (video: HTMLVideoElement, _logPrefix: string) => {
   const playResult = video.play();
   if (playResult && typeof playResult.catch === "function") {
-    playResult.catch((_err) => {
-    });
+    playResult.catch((_err) => {});
   }
 };
 
-type VideoStatus = "hls" | "direct" | "incompatible" | null;
+const clearVideoSource = (video: HTMLVideoElement) => {
+  try {
+    video.pause();
+  } catch {
+    // Ignore best-effort cleanup failures.
+  }
+
+  try {
+    video.removeAttribute("src");
+    video.load();
+  } catch {
+    // Ignore best-effort cleanup failures.
+  }
+};
+
+const syncDialogOpenState = (dialog: HTMLDialogElement, isOpen: boolean) => {
+  try {
+    if (isOpen) {
+      if (!dialog.open) {
+        dialog.showModal();
+      }
+      return;
+    }
+
+    if (dialog.open) {
+      dialog.close();
+    }
+  } catch {
+    // Ignore dialog state races during hot reload or interrupted renders.
+  }
+};
+
+type VideoStatus = "hls" | "direct" | "incompatible" | "unavailable" | null;
 
 const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
   hls: "HLS",
   direct: "Raw Video",
   incompatible: "No Compatible Stream",
+  unavailable: "Playback Unavailable",
 };
 
 const formatShutterSpeed = (exposureTime: unknown): string | null => {
-  const t = typeof exposureTime === "number" ? exposureTime : parseFloat(String(exposureTime));
+  const t =
+    typeof exposureTime === "number" ? exposureTime : parseFloat(String(exposureTime));
   if (!isFinite(t) || t <= 0) return null;
   if (t >= 1) return `${t}s`;
   const denom = Math.round(1 / t);
@@ -88,7 +138,9 @@ const formatFocalLength = (focalLength: unknown): string | null => {
   }
   const num = parseFloat(str);
   if (!isFinite(num)) return str;
-  return str.includes("mm") ? str : `${num % 1 === 0 ? num.toFixed(0) : num.toFixed(1)}mm`;
+  return str.includes("mm")
+    ? str
+    : `${num % 1 === 0 ? num.toFixed(0) : num.toFixed(1)}mm`;
 };
 
 const formatFileSize = (bytes: unknown): string | null => {
@@ -121,6 +173,7 @@ export function FullscreenViewer() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const playbackOperationIdRef = useRef<string | null>(null);
 
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
@@ -136,6 +189,7 @@ export function FullscreenViewer() {
   const [showFileInfo, setShowFileInfo] = useState(false);
   const [showFaces, setShowFaces] = useState(false);
   const [hasFaceOverlayData, setHasFaceOverlayData] = useState(false);
+  const [exportMode, setExportMode] = useState<"share" | "download" | null>(null);
   const [showCaptions, setShowCaptions] = useState(false);
   const [transcriptTrackUrl, setTranscriptTrackUrl] = useState<string | null>(null);
   const captionBlobUrlRef = useRef<string | null>(null);
@@ -159,6 +213,7 @@ export function FullscreenViewer() {
     setShowLiveVideo(false);
     setShowFaces(false);
     setHasFaceOverlayData(hasFaceRegions || hasFaceTableBoxes);
+    setExportMode(null);
     setPhotoAspectRatio(1);
     setPhotoZoom({
       isZoomed: false,
@@ -174,6 +229,22 @@ export function FullscreenViewer() {
     }
     setTranscriptTrackUrl(null);
     setShowCaptions(false);
+
+    if (photo?.mediaType === "video") {
+      const clientOperationId = createClientOperationId();
+      playbackOperationIdRef.current = clientOperationId;
+      logClientEvent({
+        level: "info",
+        event: "video.playback.selected",
+        message: `Selected video ${photo.path}`,
+        clientOperationId,
+        data: { path: photo.path },
+        immediate: true,
+      });
+      return;
+    }
+
+    playbackOperationIdRef.current = null;
   }, [photo?.path]);
 
   // Fetch transcript segments for videos
@@ -182,7 +253,11 @@ export function FullscreenViewer() {
 
     const abortController = new AbortController();
 
-    fetchTranscriptSegments(photo.path, abortController.signal)
+    fetchTranscriptSegments(
+      photo.path,
+      abortController.signal,
+      playbackOperationIdRef.current ?? undefined,
+    )
       .then((segments) => {
         if (segments.length === 0) return;
         const vtt = segmentsToWebVTT(segments);
@@ -215,6 +290,8 @@ export function FullscreenViewer() {
     if (!video || !photo || photo.mediaType !== "video") return;
 
     let cancelled = false;
+    const clientOperationId = playbackOperationIdRef.current ?? createClientOperationId();
+    playbackOperationIdRef.current = clientOperationId;
 
     const destroyHls = () => {
       if (hlsRef.current) {
@@ -223,8 +300,41 @@ export function FullscreenViewer() {
       }
     };
 
+    const markPlaybackUnavailable = () => {
+      destroyHls();
+      clearVideoSource(video);
+      if (cancelled) {
+        return;
+      }
+      setVideoStatus("unavailable");
+      setHlsLevels([]);
+      setManualLevel(-1);
+      setActiveLevelHeight(null);
+    };
+
+    let directFallbackAttempted = false;
+
+    const fallbackToDirectPlayback = () => {
+      if (!photo.fullUrl) {
+        markPlaybackUnavailable();
+        return;
+      }
+
+      directFallbackAttempted = true;
+      destroyHls();
+      if (!cancelled) {
+        setVideoStatus("direct");
+        setHlsLevels([]);
+        setManualLevel(-1);
+        setActiveLevelHeight(null);
+      }
+      video.src = photo.fullUrl;
+      safePlay(video, "[HLS] Autoplay prevented (fallback):");
+    };
+
     // Clean up previous HLS instance
     destroyHls();
+    clearVideoSource(video);
     setVideoStatus(null);
     setVideoAspectRatio(null);
     setHlsLevels([]);
@@ -233,6 +343,14 @@ export function FullscreenViewer() {
 
     const loadSelectedPlayback = async () => {
       try {
+        logClientEvent({
+          level: "info",
+          event: "video.negotiation.started",
+          message: `Negotiating playback for ${photo.path}`,
+          clientOperationId,
+          data: { path: photo.path },
+          immediate: true,
+        });
         const playbackProfile = await probeVideoPlaybackProfile();
         if (cancelled) return;
 
@@ -240,8 +358,22 @@ export function FullscreenViewer() {
           path: photo.path,
           bandwidthMbps: playbackProfile.bandwidthMbps,
           hevcSupported: playbackProfile.hevcSupported,
+          clientOperationId,
         });
         if (cancelled) return;
+
+        logClientEvent({
+          level: negotiation.mode === "error" ? "warn" : "info",
+          event: "video.negotiation.completed",
+          message: `Playback negotiation returned ${negotiation.mode}`,
+          clientOperationId,
+          data: {
+            path: photo.path,
+            negotiation,
+            playbackProfile,
+          },
+          immediate: negotiation.mode === "error",
+        });
 
         if (negotiation.mode === "error") {
           if (!cancelled) setVideoStatus("incompatible");
@@ -288,8 +420,12 @@ export function FullscreenViewer() {
                   ? (callbackContext as { type?: string }).type
                   : undefined;
 
-              if ((requestType === "manifest" || requestType === "level") && details?.xhr) {
-                const durationHeader = details.xhr.getResponseHeader("X-Content-Duration");
+              if (
+                (requestType === "manifest" || requestType === "level") &&
+                details?.xhr
+              ) {
+                const durationHeader =
+                  details.xhr.getResponseHeader("X-Content-Duration");
                 if (durationHeader) {
                   const parsed = parseFloat(durationHeader);
                   if (Number.isFinite(parsed) && parsed > 0) {
@@ -304,15 +440,20 @@ export function FullscreenViewer() {
         }
 
         if (hlsJsSupported) {
+          const authToken = getToken();
           const hls = new Hls({
             enableWorker: true,
             lowLatencyMode: false,
-            // The master advertises every quality variant. Start on the lowest level
-            // (index 0 = 360p) for a fast, reliable start, then let ABR climb on its
-            // own *measured* throughput — which is the real host→client path, the only
-            // signal that reflects the actual (often constrained, variable) bottleneck.
             startLevel: 0,
             loader: DurationCapturingLoader,
+            // Inject auth token into every XHR hls.js makes (manifest, playlists, segments)
+            ...(authToken
+              ? {
+                  xhrSetup: (xhr: XMLHttpRequest) => {
+                    xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+                  },
+                }
+              : {}),
             maxBufferLength: 30,
             maxMaxBufferLength: 60,
             maxBufferSize: 60 * 1000 * 1000,
@@ -340,11 +481,8 @@ export function FullscreenViewer() {
             if (!(dur && Number.isFinite(dur) && dur > 0)) return;
             const media = hls.media as HlsMediaWithSource | null;
             const mediaSource = media?.mediaSource;
-            if (
-              !mediaSource ||
-              mediaSource.readyState !== "open" ||
-              mediaSource.updating
-            ) return;
+            if (!mediaSource || mediaSource.readyState !== "open" || mediaSource.updating)
+              return;
             if (media.duration === dur) return;
             try {
               mediaSource.duration = dur;
@@ -364,6 +502,13 @@ export function FullscreenViewer() {
                 hls.levels.map((level, index) => ({ index, height: level.height })),
               );
             }
+            logClientEvent({
+              level: "info",
+              event: "video.hls.manifest.parsed",
+              message: `Parsed HLS manifest for ${photo.path}`,
+              clientOperationId,
+              data: { path: photo.path, levels: hls.levels.length },
+            });
             safePlay(video, "[HLS] Autoplay prevented:");
             applyKnownDuration();
           };
@@ -382,9 +527,24 @@ export function FullscreenViewer() {
           // and would buffer far worse over a constrained link. Only fall back to it
           // when HLS is genuinely unrecoverable.
           let mediaRecoveries = 0;
+          let networkRecoveries = 0;
           hls.on(Hls.Events.ERROR, (_event, data) => {
+            logClientEvent({
+              level: data.fatal ? "error" : "warn",
+              event: "video.hls.error",
+              message: `HLS ${data.fatal ? "fatal" : "non-fatal"} error`,
+              clientOperationId,
+              data: {
+                path: photo.path,
+                type: data.type,
+                details: data.details,
+                fatal: data.fatal,
+              },
+              immediate: data.fatal,
+            });
             if (!data.fatal) return;
-            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < 2) {
+              networkRecoveries += 1;
               hls.startLoad();
               return;
             }
@@ -393,13 +553,12 @@ export function FullscreenViewer() {
               hls.recoverMediaError();
               return;
             }
-            // Unrecoverable — fall back to raw playback if the browser can decode it.
-            if (photo.fullUrl) {
-              destroyHls();
-              video.src = photo.fullUrl;
-              setVideoStatus("direct");
-              safePlay(video, "[HLS] Autoplay prevented (fallback):");
+            if (!directFallbackAttempted) {
+              fallbackToDirectPlayback();
+              return;
             }
+
+            markPlaybackUnavailable();
           });
           hlsRef.current = hls;
           return;
@@ -407,15 +566,31 @@ export function FullscreenViewer() {
 
         if (nativeHlsSupport) {
           if (!cancelled) setVideoStatus("hls");
-          video.src = hlsUrl;
+          // For native HLS (Safari), Authorization headers can't be set, so
+          // embed the token as a query param. The server propagates it through
+          // all rewritten variant/segment URLs.
+          const nativeToken = getToken();
+          video.src = nativeToken
+            ? `${hlsUrl}&token=${encodeURIComponent(nativeToken)}`
+            : hlsUrl;
           safePlay(video, "[HLS] Autoplay prevented (native):");
           return;
         }
 
         video.src = photo.fullUrl;
-      } catch {
-        video.src = photo.fullUrl;
-        safePlay(video, "[Video] Autoplay prevented (fallback):");
+      } catch (error) {
+        logClientEvent({
+          level: "error",
+          event: "video.negotiation.failed",
+          message: `Playback setup failed for ${photo.path}`,
+          clientOperationId,
+          data: {
+            path: photo.path,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          immediate: true,
+        });
+        fallbackToDirectPlayback();
       }
     };
 
@@ -423,19 +598,81 @@ export function FullscreenViewer() {
 
     return () => {
       cancelled = true;
+      logClientEvent({
+        level: "info",
+        event: "video.playback.cleanup",
+        message: `Cleaned up playback for ${photo.path}`,
+        clientOperationId,
+        data: { path: photo.path },
+      });
       destroyHls();
+      clearVideoSource(video);
     };
   }, [photo]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const photoPath = photo?.path;
+    const clientOperationId = playbackOperationIdRef.current;
+    if (!video || !photoPath || photo?.mediaType !== "video" || !clientOperationId) return;
+
+    const logVideoEvent = (event: string, level: "info" | "warn" | "error") => {
+      logClientEvent({
+        level,
+        event,
+        message: `${event} for ${photoPath}`,
+        clientOperationId,
+        data: {
+          path: photoPath,
+          currentTime: video.currentTime,
+          readyState: video.readyState,
+          networkState: video.networkState,
+        },
+        immediate: level !== "info",
+      });
+    };
+
+    const onPlaying = () => logVideoEvent("video.element.playing", "info");
+    const onCanPlay = () => logVideoEvent("video.element.canplay", "info");
+    const onWaiting = () => logVideoEvent("video.element.waiting", "warn");
+    const onStalled = () => logVideoEvent("video.element.stalled", "warn");
+    const onError = () => {
+      logVideoEvent("video.element.error", "error");
+      if (
+        hlsRef.current ||
+        videoStatus === "unavailable" ||
+        !(video.currentSrc || video.getAttribute("src"))
+      ) {
+        return;
+      }
+
+      clearVideoSource(video);
+      setVideoStatus("unavailable");
+      setHlsLevels([]);
+      setManualLevel(-1);
+      setActiveLevelHeight(null);
+    };
+
+    video.addEventListener("playing", onPlaying);
+    video.addEventListener("canplay", onCanPlay);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("stalled", onStalled);
+    video.addEventListener("error", onError);
+
+    return () => {
+      video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("stalled", onStalled);
+      video.removeEventListener("error", onError);
+    };
+  }, [photo?.path, photo?.mediaType, videoStatus]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
 
-    if (photo && !dialog.open) {
-      dialog.showModal();
-    } else if (!photo && dialog.open) {
-      dialog.close();
-    }
+    syncDialogOpenState(dialog, Boolean(photo));
   }, [photo]);
 
   useEffect(() => {
@@ -557,7 +794,6 @@ export function FullscreenViewer() {
 
   const meta = photo?.metadata;
 
-  
   const faceToggleDisabled = photo?.mediaType === "video" || !hasFaceOverlayData;
 
   const zoomStyle = {
@@ -577,310 +813,355 @@ export function FullscreenViewer() {
       onClick={handleBackdropClick}
     >
       {photo && (
-        <div className={css.viewerLayout}>
-          {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
-          <div
-            className={css.container}
-            onClick={handleContainerClick}
-            onTouchStart={handleTouchStart}
-            onTouchEnd={handleTouchEnd}
-          >
-            <div className={css.topRightActions}>
-              {photo.mediaType === "video" &&
-                videoStatus === "hls" &&
-                hlsLevels.length > 1 && (
-                  <select
-                    className={css.qualitySelect}
-                    value={manualLevel}
-                    aria-label="Video quality"
-                    title="Video quality"
-                    onChange={(e) => {
-                      const level = Number(e.target.value);
-                      setManualLevel(level);
-                      const hls = hlsRef.current;
-                      // -1 re-enables ABR (auto); a level index locks to that quality.
-                      if (hls) hls.currentLevel = level;
-                    }}
-                  >
-                    <option value={-1}>
-                      {`Auto${activeLevelHeight ? ` (${activeLevelHeight}p)` : ""}`}
-                    </option>
-                    {[...hlsLevels].reverse().map((level) => (
-                      <option key={level.index} value={level.index}>
-                        {`${level.height}p`}
+        <>
+          {exportMode && (
+            <ShareOptionsModal
+              photos={[photo]}
+              mode={exportMode}
+              onClose={() => setExportMode(null)}
+            />
+          )}
+          <div className={css.viewerLayout}>
+            {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+            <div
+              className={css.container}
+              onClick={handleContainerClick}
+              onTouchStart={handleTouchStart}
+              onTouchEnd={handleTouchEnd}
+            >
+              <div className={css.topRightActions}>
+                {photo.mediaType === "video" &&
+                  videoStatus === "hls" &&
+                  hlsLevels.length > 1 && (
+                    <select
+                      className={css.qualitySelect}
+                      value={manualLevel}
+                      aria-label="Video quality"
+                      title="Video quality"
+                      onChange={(e) => {
+                        const level = Number(e.target.value);
+                        setManualLevel(level);
+                        const hls = hlsRef.current;
+                        // -1 re-enables ABR (auto); a level index locks to that quality.
+                        if (hls) hls.currentLevel = level;
+                      }}
+                    >
+                      <option value={-1}>
+                        {`Auto${activeLevelHeight ? ` (${activeLevelHeight}p)` : ""}`}
                       </option>
-                    ))}
-                  </select>
-                )}
-              {photo.mediaType === "video" && transcriptTrackUrl && (
+                      {[...hlsLevels].reverse().map((level) => (
+                        <option key={level.index} value={level.index}>
+                          {`${level.height}p`}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 <button
                   type="button"
-                  onClick={() => setShowCaptions((current) => !current)}
-                  className={css.faceButton}
-                  aria-label={showCaptions ? "Hide captions" : "Show captions"}
-                  title={showCaptions ? "Hide captions" : "Show captions"}
+                  onClick={() => setExportMode("share")}
+                  className={css.infoButton}
+                  aria-label="Share item"
+                  title="Share item"
                 >
-                  {showCaptions ? <ClosedCaption24Regular /> : <ClosedCaptionOff24Regular />}
+                  <Share24Regular />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExportMode("download")}
+                  className={css.infoButton}
+                  aria-label="Download item"
+                  title="Download item"
+                >
+                  <ArrowDownload24Regular />
+                </button>
+                {photo.mediaType === "video" && transcriptTrackUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setShowCaptions((current) => !current)}
+                    className={css.faceButton}
+                    aria-label={showCaptions ? "Hide captions" : "Show captions"}
+                    title={showCaptions ? "Hide captions" : "Show captions"}
+                  >
+                    {showCaptions ? (
+                      <ClosedCaption24Regular />
+                    ) : (
+                      <ClosedCaptionOff24Regular />
+                    )}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowFaces((current) => !current)}
+                  className={css.faceButton}
+                  aria-label={showFaces ? "Hide faces" : "Show faces"}
+                  title={showFaces ? "Hide faces" : "Show faces"}
+                  disabled={faceToggleDisabled}
+                >
+                  <ScanPerson24Regular />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowFileInfo((current) => !current)}
+                  className={css.infoButton}
+                  aria-label={showFileInfo ? "Hide file info" : "Show file info"}
+                  title={showFileInfo ? "Hide file info" : "Show file info"}
+                >
+                  <Info24Regular />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelected(null)}
+                  className={css.closeButton}
+                  aria-label="Close"
+                >
+                  <Dismiss24Regular />
+                </button>
+              </div>
+              {photo.mediaType !== "video" && photo.livePhotoUrl && (
+                <button
+                  type="button"
+                  onClick={() => setShowLiveVideo((v) => !v)}
+                  className={css.livePhotoButton}
+                  aria-label={showLiveVideo ? "Show photo" : "Play live photo"}
+                  title={showLiveVideo ? "Show photo" : "Play live photo"}
+                >
+                  <Filmstrip24Regular />
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => setShowFaces((current) => !current)}
-                className={css.faceButton}
-                aria-label={showFaces ? "Hide faces" : "Show faces"}
-                title={showFaces ? "Hide faces" : "Show faces"}
-                disabled={faceToggleDisabled}
-              >
-                <ScanPerson24Regular />
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowFileInfo((current) => !current)}
-                className={css.infoButton}
-                aria-label={showFileInfo ? "Hide file info" : "Show file info"}
-                title={showFileInfo ? "Hide file info" : "Show file info"}
-              >
-                <Info24Regular />
-              </button>
-              <button
-                onClick={() => setSelected(null)}
-                className={css.closeButton}
-                aria-label="Close"
-              >
-                <Dismiss24Regular />
-              </button>
-            </div>
-            {photo.mediaType !== "video" && photo.livePhotoUrl && (
-              <button
-                type="button"
-                onClick={() => setShowLiveVideo((v) => !v)}
-                className={css.livePhotoButton}
-                aria-label={showLiveVideo ? "Show photo" : "Play live photo"}
-                title={showLiveVideo ? "Show photo" : "Play live photo"}
-              >
-                <Filmstrip24Regular />
-              </button>
-            )}
-            {photo.mediaType === "video" ? (
-              <>
-                <div
-                  className={css.videoWrapper}
-                  style={
-                    videoAspectRatio
-                      ? ({
-                          aspectRatio: videoAspectRatio,
-                          "--video-ar": videoAspectRatio,
-                        } as React.CSSProperties)
-                      : undefined
-                  }
-                >
-                  <video
-                    ref={videoRef}
-                    key={photo.path}
-                    controls
-                    className={css.videoMedia}
-                    poster={photo.previewUrl}
-                    preload="metadata"
-                    onLoadedMetadata={(e) => {
-                      const v = e.currentTarget;
-                      if (v.videoWidth && v.videoHeight) {
-                        setVideoAspectRatio(v.videoWidth / v.videoHeight);
+              {photo.mediaType === "video" ? (
+                <>
+                  <div
+                    className={css.videoWrapper}
+                    style={
+                      videoAspectRatio
+                        ? ({
+                            aspectRatio: videoAspectRatio,
+                            "--video-ar": videoAspectRatio,
+                          } as React.CSSProperties)
+                        : undefined
+                    }
+                  >
+                    <video
+                      ref={videoRef}
+                      key={photo.path}
+                      controls
+                      className={css.videoMedia}
+                      poster={photo.previewUrl}
+                      preload="metadata"
+                      onLoadedMetadata={(e) => {
+                        const v = e.currentTarget;
+                        if (v.videoWidth && v.videoHeight) {
+                          setVideoAspectRatio(v.videoWidth / v.videoHeight);
+                        }
+                      }}
+                    >
+                      {transcriptTrackUrl ? (
+                        <track
+                          key={transcriptTrackUrl}
+                          kind="captions"
+                          src={transcriptTrackUrl}
+                          label="Transcript"
+                          default={showCaptions}
+                        />
+                      ) : (
+                        <track
+                          kind="captions"
+                          src="data:,"
+                          label="Captions not provided"
+                        />
+                      )}
+                      Your browser does not support HTML video playback.
+                    </video>
+                  </div>
+                  {videoStatus && (
+                    <span className={css.videoBadge} data-testid="video-status">
+                      {videoStatusLabel[videoStatus]}
+                    </span>
+                  )}
+                </>
+              ) : showLiveVideo && photo.livePhotoUrl ? (
+                <video
+                  key={photo.livePhotoUrl}
+                  src={photo.livePhotoUrl}
+                  autoPlay
+                  loop
+                  playsInline
+                  muted
+                  className={css.media}
+                />
+              ) : (
+                <div className={css.photoFrame} style={zoomStyle}>
+                  {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */}
+                  <img
+                    src={photo.fullUrl}
+                    alt={photo.name}
+                    className={
+                      photoZoom.isZoomed
+                        ? `${css.photoMedia} ${css.zoomedMedia}`
+                        : css.photoMedia
+                    }
+                    onClick={handlePhotoClick}
+                    onWheel={handlePhotoWheel}
+                    onLoad={(e) => {
+                      const { naturalWidth, naturalHeight } = e.currentTarget;
+                      if (naturalWidth > 0 && naturalHeight > 0) {
+                        setPhotoAspectRatio(naturalWidth / naturalHeight);
                       }
                     }}
-                  >
-                    {transcriptTrackUrl ? (
-                      <track
-                        key={transcriptTrackUrl}
-                        kind="captions"
-                        src={transcriptTrackUrl}
-                        label="Transcript"
-                        default={showCaptions}
-                      />
-                    ) : (
-                      <track kind="captions" src="data:," label="Captions not provided" />
-                    )}
-                    Your browser does not support HTML video playback.
-                  </video>
-                </div>
-                {videoStatus && (
-                  <span className={css.videoBadge} data-testid="video-status">
-                    {videoStatusLabel[videoStatus]}
-                  </span>
-                )}
-              </>
-            ) : showLiveVideo && photo.livePhotoUrl ? (
-              <video
-                key={photo.livePhotoUrl}
-                src={photo.livePhotoUrl}
-                autoPlay
-                loop
-                playsInline
-                muted
-                className={css.media}
-              />
-            ) : (
-              <div className={css.photoFrame} style={zoomStyle}>
-                {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */}
-                <img
-                  src={photo.fullUrl}
-                  alt={photo.name}
-                  className={photoZoom.isZoomed ? `${css.photoMedia} ${css.zoomedMedia}` : css.photoMedia}
-                  onClick={handlePhotoClick}
-                  onWheel={handlePhotoWheel}
-                  onLoad={(e) => {
-                    const { naturalWidth, naturalHeight } = e.currentTarget;
-                    if (naturalWidth > 0 && naturalHeight > 0) {
-                      setPhotoAspectRatio(naturalWidth / naturalHeight);
-                    }
-                  }}
-                  style={zoomStyle}
-                />
-                {showFaces && (
-                  <FaceOverlay
-                    regionsRaw={photo.metadata?.regions}
-                    faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
-                    aspectRatio={photoAspectRatio}
+                    style={zoomStyle}
                   />
+                  {showFaces && (
+                    <FaceOverlay
+                      regionsRaw={photo.metadata?.regions}
+                      faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
+                      aspectRatio={photoAspectRatio}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+            {showFileInfo && (
+              <aside className={css.infoSidebar} aria-label="File info panel">
+                <h3 className={css.infoTitle}>File info</h3>
+
+                {/* Camera */}
+                {Boolean(meta?.cameraMake || meta?.cameraModel || meta?.lens) && (
+                  <>
+                    <h4 className={css.infoSubtitle}>Camera</h4>
+                    <dl className={css.infoList}>
+                      {Boolean(meta?.cameraMake || meta?.cameraModel) && (
+                        <div className={css.infoRow}>
+                          <dt>Camera</dt>
+                          <dd>
+                            {[meta?.cameraMake, meta?.cameraModel]
+                              .filter(Boolean)
+                              .join(" ")}
+                          </dd>
+                        </div>
+                      )}
+                      {Boolean(meta?.lens) && (
+                        <div className={css.infoRow}>
+                          <dt>Lens</dt>
+                          <dd>{String(meta?.lens)}</dd>
+                        </div>
+                      )}
+                    </dl>
+                  </>
                 )}
-              </div>
+
+                {/* Capture settings */}
+                {(meta?.aperture != null ||
+                  meta?.exposureTime != null ||
+                  meta?.iso != null ||
+                  meta?.focalLength != null) && (
+                  <>
+                    <h4 className={css.infoSubtitle}>Capture</h4>
+                    <dl className={css.infoList}>
+                      {meta.aperture != null && (
+                        <div className={css.infoRow}>
+                          <dt>Aperture</dt>
+                          <dd>{formatAperture(meta.aperture)}</dd>
+                        </div>
+                      )}
+                      {meta.exposureTime != null && (
+                        <div className={css.infoRow}>
+                          <dt>Shutter Speed</dt>
+                          <dd>{formatShutterSpeed(meta.exposureTime)}</dd>
+                        </div>
+                      )}
+                      {meta.iso != null && (
+                        <div className={css.infoRow}>
+                          <dt>ISO</dt>
+                          <dd>{String(meta.iso)}</dd>
+                        </div>
+                      )}
+                      {meta.focalLength != null && (
+                        <div className={css.infoRow}>
+                          <dt>Focal Length</dt>
+                          <dd>{formatFocalLength(meta.focalLength)}</dd>
+                        </div>
+                      )}
+                    </dl>
+                  </>
+                )}
+
+                {/* File details */}
+                <h4 className={css.infoSubtitle}>File</h4>
+                <dl className={css.infoList}>
+                  <div className={css.infoRow}>
+                    <dt>Filename</dt>
+                    <dd>{photo.name}</dd>
+                  </div>
+                  <div className={css.infoRow}>
+                    <dt>Path</dt>
+                    <dd>{photo.path}</dd>
+                  </div>
+                  {meta?.dateTaken && (
+                    <div className={css.infoRow}>
+                      <dt>Date Taken</dt>
+                      <dd>{new Date(String(meta.dateTaken)).toLocaleString()}</dd>
+                    </div>
+                  )}
+                  {meta?.dimensionWidth != null && meta?.dimensionHeight != null && (
+                    <div className={css.infoRow}>
+                      <dt>Dimensions</dt>
+                      <dd>
+                        {String(meta.dimensionWidth)} × {String(meta.dimensionHeight)}
+                      </dd>
+                    </div>
+                  )}
+                  {meta?.sizeInBytes != null && (
+                    <div className={css.infoRow}>
+                      <dt>File Size</dt>
+                      <dd>{formatFileSize(meta.sizeInBytes)}</dd>
+                    </div>
+                  )}
+                  {meta?.mimeType && (
+                    <div className={css.infoRow}>
+                      <dt>Type</dt>
+                      <dd>{String(meta.mimeType)}</dd>
+                    </div>
+                  )}
+                  {meta?.duration != null && (
+                    <div className={css.infoRow}>
+                      <dt>Duration</dt>
+                      <dd>{formatDuration(meta.duration)}</dd>
+                    </div>
+                  )}
+                  {meta?.framerate != null && (
+                    <div className={css.infoRow}>
+                      <dt>Frame Rate</dt>
+                      <dd>{String(meta.framerate)} fps</dd>
+                    </div>
+                  )}
+                  {meta?.videoCodec && (
+                    <div className={css.infoRow}>
+                      <dt>Codec</dt>
+                      <dd>{String(meta.videoCodec)}</dd>
+                    </div>
+                  )}
+                  {meta?.rating != null && (
+                    <div className={css.infoRow}>
+                      <dt>Rating</dt>
+                      <dd>{"★".repeat(Number(meta.rating))}</dd>
+                    </div>
+                  )}
+                  {Array.isArray(meta?.tags) && (meta.tags as string[]).length > 0 && (
+                    <div className={css.infoRow}>
+                      <dt>Tags</dt>
+                      <dd>{(meta.tags as string[]).join(", ")}</dd>
+                    </div>
+                  )}
+                </dl>
+
+                <MiniMap
+                  latitude={photo.metadata?.locationLatitude}
+                  longitude={photo.metadata?.locationLongitude}
+                />
+              </aside>
             )}
           </div>
-          {showFileInfo && (
-            <aside className={css.infoSidebar} aria-label="File info panel">
-              <h3 className={css.infoTitle}>File info</h3>
-
-              {/* Camera */}
-              {Boolean(meta?.cameraMake || meta?.cameraModel || meta?.lens) && (
-                <>
-                  <h4 className={css.infoSubtitle}>Camera</h4>
-                  <dl className={css.infoList}>
-                    {Boolean(meta?.cameraMake || meta?.cameraModel) && (
-                      <div className={css.infoRow}>
-                        <dt>Camera</dt>
-                        <dd>
-                          {[meta?.cameraMake, meta?.cameraModel]
-                            .filter(Boolean)
-                            .join(" ")}
-                        </dd>
-                      </div>
-                    )}
-                    {Boolean(meta?.lens) && (
-                      <div className={css.infoRow}>
-                        <dt>Lens</dt>
-                        <dd>{String(meta?.lens)}</dd>
-                      </div>
-                    )}
-                  </dl>
-                </>
-              )}
-
-              {/* Capture settings */}
-              {(meta?.aperture != null || meta?.exposureTime != null || meta?.iso != null || meta?.focalLength != null) && (
-                <>
-                  <h4 className={css.infoSubtitle}>Capture</h4>
-                  <dl className={css.infoList}>
-                    {meta.aperture != null && (
-                      <div className={css.infoRow}>
-                        <dt>Aperture</dt>
-                        <dd>{formatAperture(meta.aperture)}</dd>
-                      </div>
-                    )}
-                    {meta.exposureTime != null && (
-                      <div className={css.infoRow}>
-                        <dt>Shutter Speed</dt>
-                        <dd>{formatShutterSpeed(meta.exposureTime)}</dd>
-                      </div>
-                    )}
-                    {meta.iso != null && (
-                      <div className={css.infoRow}>
-                        <dt>ISO</dt>
-                        <dd>{String(meta.iso)}</dd>
-                      </div>
-                    )}
-                    {meta.focalLength != null && (
-                      <div className={css.infoRow}>
-                        <dt>Focal Length</dt>
-                        <dd>{formatFocalLength(meta.focalLength)}</dd>
-                      </div>
-                    )}
-                  </dl>
-                </>
-              )}
-
-              {/* File details */}
-              <h4 className={css.infoSubtitle}>File</h4>
-              <dl className={css.infoList}>
-                <div className={css.infoRow}>
-                  <dt>Filename</dt>
-                  <dd>{photo.name}</dd>
-                </div>
-                <div className={css.infoRow}>
-                  <dt>Path</dt>
-                  <dd>{photo.path}</dd>
-                </div>
-                {meta?.dateTaken && (
-                  <div className={css.infoRow}>
-                    <dt>Date Taken</dt>
-                    <dd>{new Date(String(meta.dateTaken)).toLocaleString()}</dd>
-                  </div>
-                )}
-                {meta?.dimensionWidth != null && meta?.dimensionHeight != null && (
-                  <div className={css.infoRow}>
-                    <dt>Dimensions</dt>
-                    <dd>{String(meta.dimensionWidth)} × {String(meta.dimensionHeight)}</dd>
-                  </div>
-                )}
-                {meta?.sizeInBytes != null && (
-                  <div className={css.infoRow}>
-                    <dt>File Size</dt>
-                    <dd>{formatFileSize(meta.sizeInBytes)}</dd>
-                  </div>
-                )}
-                {meta?.mimeType && (
-                  <div className={css.infoRow}>
-                    <dt>Type</dt>
-                    <dd>{String(meta.mimeType)}</dd>
-                  </div>
-                )}
-                {meta?.duration != null && (
-                  <div className={css.infoRow}>
-                    <dt>Duration</dt>
-                    <dd>{formatDuration(meta.duration)}</dd>
-                  </div>
-                )}
-                {meta?.framerate != null && (
-                  <div className={css.infoRow}>
-                    <dt>Frame Rate</dt>
-                    <dd>{String(meta.framerate)} fps</dd>
-                  </div>
-                )}
-                {meta?.videoCodec && (
-                  <div className={css.infoRow}>
-                    <dt>Codec</dt>
-                    <dd>{String(meta.videoCodec)}</dd>
-                  </div>
-                )}
-                {meta?.rating != null && (
-                  <div className={css.infoRow}>
-                    <dt>Rating</dt>
-                    <dd>{"★".repeat(Number(meta.rating))}</dd>
-                  </div>
-                )}
-                {Array.isArray(meta?.tags) && (meta.tags as string[]).length > 0 && (
-                  <div className={css.infoRow}>
-                    <dt>Tags</dt>
-                    <dd>{(meta.tags as string[]).join(", ")}</dd>
-                  </div>
-                )}
-              </dl>
-
-              <MiniMap
-                latitude={photo.metadata?.locationLatitude}
-                longitude={photo.metadata?.locationLongitude}
-              />
-            </aside>
-          )}
-        </div>
+        </>
       )}
     </dialog>
   );

@@ -18,6 +18,8 @@ import { processExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { processFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { processFaceClustering } from "./indexDatabase/processFaceClustering.ts";
+import { initAuthService } from "./auth/authService.ts";
+import { initPasskeyService } from "./auth/passkeyService.ts";
 import { measureOperation } from "./observability/requestTrace.ts";
 import { startTelemetry } from "./observability/telemetry.ts";
 import { createTaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
@@ -38,6 +40,8 @@ const startServer = async () => {
   const mediaRoot = process.env.MEDIA_ROOT || "./exampleFolder";
   const database = new IndexDatabase(mediaRoot);
   await database.init();
+  await initAuthService(database.asyncSqlite);
+  initPasskeyService(database.asyncSqlite);
 
   const taskOrchestrator = createTaskOrchestrator({
     // Freeze the heavy ML worker processes (SIGSTOP) while a user request is in

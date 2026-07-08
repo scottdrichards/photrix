@@ -140,7 +140,8 @@ vi.mock("ol/source/OSM", () => ({
 
 vi.mock("ol/source/Vector", () => ({
   default: class VectorSource {
-    private features: Array<{ getGeometry: () => { getCoordinates: () => number[] } }> = [];
+    private features: Array<{ getGeometry: () => { getCoordinates: () => number[] } }> =
+      [];
 
     clear = vi.fn(() => {
       this.features = [];

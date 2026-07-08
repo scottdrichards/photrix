@@ -19,6 +19,7 @@ export const queryHandler = async (
   const page = url.searchParams.get("page");
   const countOnly = url.searchParams.get("count") === "true";
   const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
+  const expandToFolder = url.searchParams.get("expandToFolder") === "true";
   const cluster = url.searchParams.get("cluster") === "true";
   const clusterSizeParam = url.searchParams.get("clusterSize");
   const westParam = url.searchParams.get("west");
@@ -70,6 +71,7 @@ export const queryHandler = async (
     metadata: metadata as QueryOptions["metadata"],
     ...(pageSize && { pageSize: parseInt(pageSize, 10) }),
     ...(page && { page: parseInt(page, 10) }),
+    ...(expandToFolder && { expandToFolder: true }),
   };
 
   if (aggregate === "dateRange") {
@@ -82,7 +84,12 @@ export const queryHandler = async (
   }
 
   if (aggregate === "dateHistogram") {
-    const histogram = await database.getDateHistogram(filter);
+    const bucketsParam = url.searchParams.get("buckets");
+    const parsedBuckets = bucketsParam ? Number.parseInt(bucketsParam, 10) : NaN;
+    const histogram = await database.getDateHistogram(
+      filter,
+      Number.isFinite(parsedBuckets) ? parsedBuckets : undefined,
+    );
     writeJson(res, 200, histogram);
     return;
   }
@@ -90,6 +97,12 @@ export const queryHandler = async (
   if (aggregate === "people") {
     const people = await database.queryFaceClusters({ filter });
     writeJson(res, 200, people);
+    return;
+  }
+
+  if (aggregate === "faceCentroidsPCA") {
+    const result = await database.getFaceClustersPCA(url.searchParams.get("clusterId") ?? undefined);
+    writeJson(res, 200, result);
     return;
   }
 

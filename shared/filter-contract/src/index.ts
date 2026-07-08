@@ -107,6 +107,12 @@ export type MediaTypeFilter = "all" | "photo" | "video" | "other";
 export type SearchSource = "image" | "audio" | "transcript";
 export const SEARCH_SOURCES: readonly SearchSource[] = ["image", "audio", "transcript"];
 
+export type ShareScope<TFilter = unknown> = {
+  filter: TFilter;
+  semanticQuery?: string;
+  searchSources?: SearchSource[];
+};
+
 export type RatingFilter = {
   rating: number;
   atLeast: boolean;
@@ -137,6 +143,12 @@ export type DateRangeSelection = {
 export type ClientFilterState = Partial<{
   includeSubfolders: boolean;
   path: string;
+  /**
+   * When true, results are expanded to include all files in any folder that
+   * contains a matched item. Useful with location or people filters to see
+   * the full set of related photos from the same shoot.
+   */
+  expandToFolder: boolean;
   mediaTypeFilter: MediaTypeFilter;
   hasAudioTranscript: boolean;
   peopleInImageFilter: string[] | null;

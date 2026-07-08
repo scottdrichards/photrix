@@ -1,5 +1,6 @@
 import * as http from "http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
+import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
 import { normalizeFolderPath } from "../indexDatabase/utils/pathUtils.ts";
 
 type Options = {
@@ -18,7 +19,9 @@ export const foldersRequestHandler = async (
     const pathMatch = url.pathname.match(/^\/api\/folders\/(.*)/);
     const subPath = pathMatch ? decodeURIComponent(pathMatch[1]) : "/";
     const normalizedPath = normalizeFolderPath(subPath || "/");
-    const folders = await (() => database.getFolders(normalizedPath))();
+    const filterParam = url.searchParams.get("filter");
+    const filter = filterParam ? (JSON.parse(filterParam) as FilterElement) : {};
+    const folders = await (() => database.getFolders(normalizedPath, filter))();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ folders }));
   } catch (error) {

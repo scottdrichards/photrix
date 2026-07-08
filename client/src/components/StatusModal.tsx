@@ -20,7 +20,8 @@ type ProgressSample = { timestamp: number; itemsProcessed: number };
 const formatEta = (remainingMs: number): string => {
   if (remainingMs < 60_000) return "< 1 minute remaining";
   const totalMinutes = Math.round(remainingMs / 60_000);
-  if (totalMinutes < 60) return `${totalMinutes} minute${totalMinutes !== 1 ? "s" : ""} remaining`;
+  if (totalMinutes < 60)
+    return `${totalMinutes} minute${totalMinutes !== 1 ? "s" : ""} remaining`;
   const hours = Math.floor(totalMinutes / 60);
   const mins = totalMinutes % 60;
   if (hours < 48) {
@@ -54,6 +55,23 @@ const computeEta = (
 };
 
 const capitalize = (value: string) => value[0]?.toUpperCase() + value.slice(1);
+
+const syncDialogOpenState = (dialog: HTMLDialogElement, isOpen: boolean) => {
+  try {
+    if (isOpen) {
+      if (!dialog.open) {
+        dialog.showModal();
+      }
+      return;
+    }
+
+    if (dialog.open) {
+      dialog.close();
+    }
+  } catch {
+    // Ignore dialog state races so the status modal never crashes the app.
+  }
+};
 
 const formatBytes = (bytes: number) => {
   const gb = bytes / (1024 * 1024 * 1024);
@@ -130,8 +148,12 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   const backgroundTasksEnabled = status?.maintenance.backgroundTasksEnabled ?? true;
 
   useEffect(() => {
-    if (isOpen) dialogRef.current?.showModal();
-    else dialogRef.current?.close();
+    const dialog = dialogRef.current;
+    if (!dialog) {
+      return;
+    }
+
+    syncDialogOpenState(dialog, isOpen);
   }, [isOpen]);
 
   useEffect(() => {
@@ -146,13 +168,15 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
           const history = progressHistoryRef.current.get(task.id) ?? [];
           const lastSample = history[history.length - 1];
           if (lastSample?.itemsProcessed === task.itemsProcessed) continue;
-          const updated = [...history, { timestamp: now, itemsProcessed: task.itemsProcessed }];
+          const updated = [
+            ...history,
+            { timestamp: now, itemsProcessed: task.itemsProcessed },
+          ];
           progressHistoryRef.current.set(task.id, updated.slice(-20));
         }
         setStatus(data);
       },
-      (_error) => {
-      },
+      (_error) => {},
     );
 
     return () => {
@@ -209,22 +233,24 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                   <UtilizationBar
                     label="Disk"
                     percent={status.system.disk.utilization ?? 0}
-                    detail={[
-                      status.system.disk.iopsRead != null
-                        ? `${status.system.disk.iopsRead} r/s`
-                        : null,
-                      status.system.disk.iopsWrite != null
-                        ? `${status.system.disk.iopsWrite} w/s`
-                        : null,
-                      status.system.disk.readLatencyMs != null
-                        ? `read ${status.system.disk.readLatencyMs}ms`
-                        : null,
-                      status.system.disk.writeLatencyMs != null
-                        ? `write ${status.system.disk.writeLatencyMs}ms`
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" • ") || undefined}
+                    detail={
+                      [
+                        status.system.disk.iopsRead != null
+                          ? `${status.system.disk.iopsRead} r/s`
+                          : null,
+                        status.system.disk.iopsWrite != null
+                          ? `${status.system.disk.iopsWrite} w/s`
+                          : null,
+                        status.system.disk.readLatencyMs != null
+                          ? `read ${status.system.disk.readLatencyMs}ms`
+                          : null,
+                        status.system.disk.writeLatencyMs != null
+                          ? `write ${status.system.disk.writeLatencyMs}ms`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" • ") || undefined
+                    }
                   />
                 )}
                 {status.system.gpu && (
@@ -261,7 +287,9 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
             <div className={css.taskList}>
               <span className={css.label}>Background tasks</span>
               {status.backgroundTasks.length === 0 ? (
-                <span className={css.emptyText}>No background tasks running or queued.</span>
+                <span className={css.emptyText}>
+                  No background tasks running or queued.
+                </span>
               ) : (
                 status.backgroundTasks.map((task) => {
                   const progress = toProgress(task);
@@ -308,4 +336,3 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     </dialog>
   );
 };
-

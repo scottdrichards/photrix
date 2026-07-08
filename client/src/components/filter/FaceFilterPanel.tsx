@@ -21,6 +21,8 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const getClusterLabel = (cluster: PersonCluster) => cluster.name ?? `${cluster.count} faces`;
+
   // Scope the pick list to everything in the current filter — including any
   // already-selected faces. With AND semantics that narrows the choices to
   // faces that co-occur with the current selection (people photographed
@@ -80,6 +82,8 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
         <div className={css.faceGrid}>
           {clusters.map((cluster) => {
             const isSelected = selected.includes(cluster.id);
+            const label = getClusterLabel(cluster);
+            const description = cluster.name ? `${cluster.name}, ${cluster.count} faces` : label;
             return (
               <button
                 key={cluster.id}
@@ -87,8 +91,8 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
                 className={`${css.faceButton} ${isSelected ? css.faceButtonSelected : ""}`}
                 onClick={() => toggleCluster(cluster.id)}
                 aria-pressed={isSelected}
-                aria-label={`${cluster.count} faces`}
-                title={`${cluster.count} faces`}
+                aria-label={description}
+                title={description}
               >
                 <div className={css.faceWrap}>
                   <img
@@ -98,7 +102,8 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
                     loading="lazy"
                   />
                 </div>
-                <span className={css.faceLabel}>{cluster.count}</span>
+                <span className={css.faceLabel}>{label}</span>
+                {cluster.name ? <span className={css.faceMeta}>{cluster.count} faces</span> : null}
               </button>
             );
           })}

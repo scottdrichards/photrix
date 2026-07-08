@@ -9,6 +9,7 @@ import { ViewToggle } from "./ViewToggle";
 import css from "./ThumbnailGrid.module.css";
 
 const PAGE_SIZE = 200;
+const numberFormatter = new Intl.NumberFormat();
 
 type ThumbnailGridProps = {
   view: "library" | "people";
@@ -119,11 +120,19 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   const emptyMessage = filter.semanticQuery
     ? "No results found for your search."
     : "No photos yet. Upload some to get started.";
+  const resultCountLabel = data
+    ? `${numberFormatter.format(data.total)} result${data.total === 1 ? "" : "s"}`
+    : null;
 
   return (
     <>
       <ViewToggle view={view} onViewChange={onViewChange} />
       {error ? <h3>{error}</h3> : null}
+      {resultCountLabel ? (
+        <div className={css.statusRow} aria-live="polite">
+          <span>{resultCountLabel}</span>
+        </div>
+      ) : null}
       <div className={css.grid}>
         {data?.items.map((item) => (
           <ThumbnailTile key={item.path} photo={item} />

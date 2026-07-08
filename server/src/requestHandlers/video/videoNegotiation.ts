@@ -6,6 +6,8 @@ import type { FilterElement } from "../../indexDatabase/indexDatabase.type.ts";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { writeJson } from "../../utils.ts";
 import path from "path";
+import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
+import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";
 
 type VideoPlaybackRequest = {
   path: string;
@@ -133,12 +135,17 @@ const buildDeps = (database: IndexDatabase, storageRoot: string): NegotiationDep
   resolveFilePath: (subPath: string) => path.join(storageRoot, subPath),
 });
 
-type Options = { database: IndexDatabase; storageRoot: string; shareFilter?: unknown };
+type Options = {
+  database: IndexDatabase;
+  storageRoot: string;
+  taskOrchestrator: TaskOrchestrator;
+  shareFilter?: unknown;
+};
 
 export const videoNegotiationRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
   res: http.ServerResponse,
-  { database, storageRoot, shareFilter }: Options,
+  { database, storageRoot, taskOrchestrator, shareFilter }: Options,
 ) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const videoPath = url.searchParams.get("path");
@@ -176,6 +183,19 @@ export const videoNegotiationRequestHandler = async (
 
   const deps = buildDeps(database, storageRoot);
   const result = await negotiateVideoPlayback(request, deps);
+
+  recordServerDiagnosticEvent({
+    level: result.mode === "error" ? "warn" : "info",
+    event: "video.negotiation.result",
+    message: `Negotiated ${result.mode} playback for ${videoPath}`,
+    data: {
+      path: videoPath,
+      bandwidthMbps: request.bandwidthMbps,
+      hevcSupported,
+      result,
+      queueSnapshot: taskOrchestrator.getDiagnosticsSnapshot(),
+    },
+  });
 
   if (result.mode === "error") {
     return writeJson(res, 422, result);

@@ -266,12 +266,32 @@ type ExifFieldMapping = {
   [K in keyof ExifMetadata]?: ExifSource<K> | ExifSource<K>[];
 };
 
+// exifr may hand back date fields as strings (e.g. non-standard EXIF timestamps
+// it can't revive) or even corrupt bytes. Coerce to a valid Date, or drop the
+// value — never let a raw string reach the DB, or MIN/MAX(dateTaken) breaks.
+const toExifDate = (value: unknown): Date | undefined => {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? undefined : value;
+  }
+  if (typeof value === "number") {
+    const fromNumber = new Date(value);
+    return Number.isNaN(fromNumber.getTime()) ? undefined : fromNumber;
+  }
+  if (typeof value === "string") {
+    // EXIF timestamps use "YYYY:MM:DD HH:MM:SS"; JS Date needs dashes in the date.
+    const normalized = value.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3");
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  }
+  return undefined;
+};
+
 const exifFieldMapping = {
   dateTaken: [
-    "DateTimeOriginal",
+    { exifField: "DateTimeOriginal", conversionFn: toExifDate },
     {
       exifField: ["photoshop:DateCreated", "xmp:CreateDate"],
-      conversionFn: (d) => new Date(d),
+      conversionFn: toExifDate,
     },
   ],
   dimensionWidth: {

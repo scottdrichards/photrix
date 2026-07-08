@@ -198,8 +198,28 @@ export const tables = {
       // the engine resets them for the backfill to redo.
       { name: "threshold", type: "REAL" },
       { name: "updatedAt", type: "INTEGER" },
+      // User-assigned display name for this cluster.
+      { name: "name", type: "TEXT" },
+      // When set, this centroid belongs to the named/merged person rooted at
+      // `personId`. Unadopted centroids keep this NULL.
+      { name: "personId", type: "INTEGER", indexExpression: true },
     ],
     compositeIndexes: [],
+  },
+  faceClusterMerges: {
+    columns: [
+      { name: "sourceClusterId", type: "INTEGER", isPrimaryKey: true },
+      { name: "targetClusterId", type: "INTEGER" },
+      { name: "sourceCount", type: "INTEGER" },
+      { name: "sourceName", type: "TEXT" },
+      { name: "mergedAt", type: "INTEGER" },
+    ],
+    compositeIndexes: [
+      {
+        name: "by_target",
+        expression: "targetClusterId, mergedAt DESC",
+      },
+    ],
   },
   audioSegments: {
     columns: [
@@ -216,5 +236,24 @@ export const tables = {
         expression: "folder, fileName",
       },
     ],
+  },
+  auth_sessions: {
+    columns: [
+      { name: "token", type: "TEXT", isPrimaryKey: true },
+      { name: "username", type: "TEXT" },
+      { name: "createdAt", type: "INTEGER" },
+    ],
+    compositeIndexes: [],
+  },
+  webauthn_credentials: {
+    columns: [
+      { name: "credentialId", type: "TEXT", isPrimaryKey: true },
+      { name: "username", type: "TEXT", indexExpression: true },
+      { name: "publicKey", type: "TEXT" },
+      { name: "counter", type: "INTEGER" },
+      { name: "transports", type: "TEXT" },
+      { name: "createdAt", type: "INTEGER" },
+    ],
+    compositeIndexes: [],
   },
 } as const satisfies Record<string, TableDefinition>;

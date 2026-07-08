@@ -74,11 +74,14 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   const longPressTriggeredRef = useRef(false);
   const supportsIntersectionObserver = typeof IntersectionObserver !== "undefined";
   const [isNearViewport, setIsNearViewport] = useState(!supportsIntersectionObserver);
-  const [canRequestThumbnail, setCanRequestThumbnail] = useState(!supportsIntersectionObserver);
+  const [canRequestThumbnail, setCanRequestThumbnail] = useState(
+    !supportsIntersectionObserver,
+  );
   const [isHovered, setIsHovered] = useState(false);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
-  const { setSelected, selectionMode, checkedPaths, enterSelectionMode, toggleChecked } = useSelectionContext();
+  const { setSelected, selectionMode, checkedPaths, enterSelectionMode, toggleChecked } =
+    useSelectionContext();
   const metadataRatio = getAspectRatio(photo);
   const ratio = loadedRatio ?? metadataRatio;
   const isChecked = checkedPaths.has(photo.path);
@@ -104,9 +107,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       (entries) => {
         entries.forEach(({ isIntersecting }) => {
           setIsNearViewport(isIntersecting);
-          if (isIntersecting) {
-            setCanRequestThumbnail(true);
-          }
+          setCanRequestThumbnail(isIntersecting);
         });
       },
       { rootMargin: "300px" },
@@ -205,9 +206,11 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           onClick={handleCheckboxClick}
           aria-hidden="true"
         >
-          {isChecked
-            ? <CheckmarkCircle24Filled className={css.checkboxChecked} />
-            : <Circle24Regular className={css.checkboxUnchecked} />}
+          {isChecked ? (
+            <CheckmarkCircle24Filled className={css.checkboxChecked} />
+          ) : (
+            <Circle24Regular className={css.checkboxUnchecked} />
+          )}
         </span>
       )}
       {isChecked && <span className={css.checkedOverlay} aria-hidden="true" />}
@@ -239,7 +242,10 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
             loading={loading}
             fetchPriority={fetchPriority}
             className={css.image}
-            style={{ opacity: isImageLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
+            style={{
+              opacity: isImageLoaded ? 1 : 0,
+              transition: "opacity 200ms ease-in",
+            }}
             onLoad={handleImageLoad}
           />
           {isHovered && (

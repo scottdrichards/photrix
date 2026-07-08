@@ -171,82 +171,94 @@ export const prepareMultibitrateHLSStructure = async (filePath: string): Promise
 };
 
 /**
- * Runs a single-variant HLS encode for one height, starting at segment
- * `startSegment` (0 = from the beginning). Writes segments + playlist into
- * `{height}p/`. Falls back to software encoding if GPU acceleration fails.
- *
- * `startSegment > 0` seeks the input to that segment boundary (`-ss`) and numbers
- * output segments from there (`-start_number`), so an encode can begin at the
- * player's current position rather than re-encoding from 0 — needed for mid-stream
- * ABR up-switches and forward seeks. `-copyts` preserves source timestamps so the
- * same segment index carries identical PTS across every variant, which is what lets
- * the player switch levels seamlessly.
+ * Runs a single-variant HLS encode for one height, always from segment 0.
+ * Writes segments + playlist into `{height}p/`. Falls back to software encoding
+ * if GPU acceleration fails.
  */
 const encodeVariant = (
   filePath: string,
   hlsDir: string,
   variant: Variant,
   gpu: GpuAcceleration | null,
-  startSegment: number,
   rotation: number,
   onSpawn?: (child: ReturnType<typeof spawn>) => void,
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
-    // Keep the whole pipeline on the GPU for NVIDIA: decode to CUDA frames, scale
-    // with scale_cuda, and feed NVENC directly — no per-frame GPU↔CPU copies.
-    // AMD/software stay on the CPU scaler. Output frame rate is forced with `-r`
-    // rather than an `fps` filter, since the CPU `fps` filter can't run on
-    // GPU-resident CUDA frames.
+    // Three encode pipelines, in order of preference:
     //
-    // EXCEPTION: when the source has rotation metadata (e.g. GoPro 180°, phone 90°),
-    // the GPU-resident pipeline is skipped. `-hwaccel_output_format cuda` keeps
-    // frames on the GPU where software transpose can't run, so ffmpeg's auto-rotation
-    // is silently skipped. Without that flag, decoded frames land in system memory
-    // and ffmpeg applies auto-rotation before the scale filter.
-    const useCuda = gpu?.vendor === "nvidia" && rotation === 0;
-    // Force 8-bit 4:2:0 output. Sources are frequently 10-bit HEVC (HDR/HLG — the
-    // default for iPhone and much GoPro footage). Two reasons this matters:
-    //   1. h264_nvenc rejects 10-bit input outright ("10 bit encode not supported"),
-    //      which trips the hardware-failure fallback onto a pure-software path that
-    //      decodes 4K HEVC + encodes libx264 at ~0.3x realtime — slower than playback,
-    //      so it stalls and rebuffers for the entire video.
-    //   2. Even if software succeeded, libx264 would emit 10-bit H.264 (High 10),
-    //      which browsers can't decode.
-    // Converting to 8-bit on the GPU (scale_cuda's `format` option) keeps the whole
-    // pipeline on NVENC at ~7x realtime; the CPU path appends an equivalent `format`.
-    const vf = useCuda
-      ? `scale_cuda=-2:${variant.height}:format=yuv420p`
-      : `scale=-2:${variant.height},format=yuv420p`;
-    const variantDir = join(hlsDir, `${variant.height}p`);
+    // 1. FULL CUDA (NVIDIA, landscape): decode→CUDA frames→scale_cuda→h264_nvenc.
+    //    No CPU roundtrip at all. ~7× realtime for 4K. Requires rotation=0 because
+    //    ffmpeg's auto-rotate (transpose) can't run on GPU-resident frames when
+    //    -hwaccel_output_format cuda keeps them there.
+    //
+    // 2. NVDEC+NVENC (NVIDIA, rotated/portrait): -hwaccel cuda WITHOUT
+    //    -hwaccel_output_format cuda. NVDEC decodes on GPU then transfers frames to
+    //    CPU memory. ffmpeg's auto-rotate runs on those CPU frames. h264_nvenc
+    //    re-uploads and encodes on GPU. ~4-6× realtime vs ~0.3× for pure CPU on
+    //    4K HEVC — critical for phone portrait videos to avoid buffer starvation.
+    //
+    // 3. CPU (no GPU or GPU-only-decode failed): libx264, all filters on CPU.
+    //
+    // All paths force 8-bit 4:2:0 output. Sources are frequently 10-bit HEVC
+    // (HDR/HLG — default for iPhone and much GoPro footage). h264_nvenc rejects
+    // 10-bit outright, and browsers can't play 10-bit H.264 anyway. The GPU paths
+    // convert on-chip; the CPU path uses format=yuv420p.
+    const useNvidia = gpu?.vendor === "nvidia";
+    const useCudaPipeline = useNvidia && rotation === 0;
 
-    // Offset encode: seek the input to the segment boundary and keep source
-    // timestamps (`-copyts`) so every variant's segment_N carries the same PTS.
-    // Omitted for startSegment 0 so the common from-the-start path is unchanged.
-    const seekArgs =
-      startSegment > 0
-        ? ["-ss", String(startSegment * HLS_SEGMENT_SECONDS), "-copyts"]
-        : [];
+    let hwaccelArgs: string[];
+    let vf: string;
+    let videoCodec: string;
+    let encoderArgs: readonly string[];
+
+    if (useCudaPipeline) {
+      // Full CUDA: frames never leave the GPU.
+      hwaccelArgs = [...(gpu?.hwaccelArgs ?? []), "-hwaccel_output_format", "cuda"];
+      vf = `scale_cuda=-2:${variant.height}:format=yuv420p`;
+      videoCodec = gpu?.h264Codec ?? "libx264";
+      encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
+    } else if (useNvidia) {
+      // NVDEC + CPU filters + NVENC: GPU decode, CPU auto-rotate, GPU encode.
+      hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -hwaccel cuda, no output format
+      vf = `fps=${HLS_FPS},scale=-2:${variant.height},format=yuv420p`;
+      videoCodec = gpu?.h264Codec ?? "libx264";
+      encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
+    } else {
+      // Pure CPU.
+      hwaccelArgs = [];
+      vf = `fps=${HLS_FPS},scale=-2:${variant.height},format=yuv420p`;
+      videoCodec = "libx264";
+      encoderArgs = ["-preset", "veryfast", "-crf", "28"];
+    }
+
+    const variantDir = join(hlsDir, `${variant.height}p`);
 
     const args: string[] = [
       "-y",
-      ...(gpu ? gpu.hwaccelArgs : []),
-      ...(useCuda ? ["-hwaccel_output_format", "cuda"] : []),
-      ...seekArgs,
+      ...hwaccelArgs,
       "-i",
       filePath,
       "-vf",
       vf,
-      "-r",
-      String(HLS_FPS),
+      // `-r` is only needed for the full CUDA pipeline: frames stay on the GPU so the
+      // CPU `fps` filter can't run. All other paths have `fps=` in the vf chain above.
+      ...(useCudaPipeline ? ["-r", String(HLS_FPS)] : []),
       "-c:v",
-      gpu ? gpu.h264Codec : "libx264",
-      ...(gpu ? gpu.vbrArgs(28) : ["-preset", "veryfast", "-crf", "28"]),
+      videoCodec,
+      ...encoderArgs,
       "-b:v",
       String(variant.bitrate),
       "-maxrate",
       variant.maxrate,
       "-bufsize",
       variant.bufsize,
+      // Force keyframes at exact integer-second boundaries so HLS segment cuts land
+      // on clean 1s boundaries. Plain `-g N` counts GOP frames from the first output
+      // PTS, which is non-zero for sources with B-frames before the first I-frame
+      // (e.g. Canon cameras, iPhones), producing irregular segment durations that
+      // mismatch the synthetic VOD playlist's fixed 1s EXTINFs.
+      "-force_key_frames",
+      `expr:gte(t,n_forced*${HLS_SEGMENT_SECONDS})`,
       "-g",
       String(HLS_GOP),
       "-c:a",
@@ -260,11 +272,11 @@ const encodeVariant = (
       "-hls_list_size",
       "0",
       "-start_number",
-      String(startSegment),
+      "0",
       "-hls_segment_type",
       "mpegts",
       "-hls_flags",
-      "independent_segments",
+      "independent_segments+temp_file",
       "-hls_segment_filename",
       join(variantDir, "segment_%03d.ts"),
       "-hls_playlist_type",
@@ -276,22 +288,19 @@ const encodeVariant = (
     const process = spawn("ffmpeg", args);
     onSpawn?.(process);
 
+    const encoderLabel = useCudaPipeline
+      ? `${gpu?.label ?? "NVIDIA"} (full CUDA)`
+      : useNvidia
+        ? `${gpu?.label ?? "NVIDIA"} (NVDEC+NVENC)`
+        : "software (libx264)";
+
     log.info(
-      {
-        hlsDir,
-        variant: `${variant.height}p`,
-        encoder: gpu ? gpu.label : "software (libx264)",
-        gpuResident: useCuda,
-      },
+      { hlsDir, variant: `${variant.height}p`, encoder: encoderLabel, rotation },
       "HLS encode spawned",
     );
 
-    // Time-to-first-segment: the user-perceived startup latency. Playback can't
-    // begin until the first segment is flushed. Polled (not fs.watch) so it owns no
-    // event-loop handles to leak; unref'd and cleared on close. Named from the
-    // encode's start segment, which may be > 0 for an offset (seek/up-switch) encode.
-    const firstSegmentName = `segment_${String(startSegment).padStart(3, "0")}.ts`;
-    const firstSegment = join(variantDir, firstSegmentName);
+    // Time-to-first-segment: the user-perceived startup latency.
+    const firstSegment = join(variantDir, "segment_000.ts");
     const firstSegmentPoll = setInterval(() => {
       if (!existsSync(firstSegment)) return;
       clearInterval(firstSegmentPoll);
@@ -318,8 +327,12 @@ const encodeVariant = (
         return;
       }
 
-      if (gpu && gpu.isHardwareFailure(stderr)) {
-        encodeVariant(filePath, hlsDir, variant, null, startSegment, rotation, onSpawn)
+      if ((useCudaPipeline || useNvidia) && gpu && gpu.isHardwareFailure(stderr)) {
+        log.warn(
+          { hlsDir, variant: `${variant.height}p` },
+          "GPU encode failed, falling back to software",
+        );
+        encodeVariant(filePath, hlsDir, variant, null, rotation, onSpawn)
           .then(resolve)
           .catch(reject);
         return;
@@ -335,19 +348,15 @@ const encodeVariant = (
 };
 
 /**
- * Generates a single HLS variant (one of SUPPORTED_HLS_HEIGHTS @ 30fps) on the fly.
- *
- * The master + variant directory should already exist (via prepareMultibitrateHLSStructure)
- * so the client can begin requesting segments immediately while this encodes. Segments not
- * yet written are long-polled by the segment handler (see waitForHlsFile) until ffmpeg
- * produces them. The output is ephemeral and is reaped once playback goes idle.
+ * Generates a single HLS variant (one of SUPPORTED_HLS_HEIGHTS @ 30fps) on the fly,
+ * always encoding from the beginning of the file. Segments not yet written are
+ * long-polled by the segment handler (see waitForHlsFile) until ffmpeg produces them.
+ * The output is ephemeral and is reaped once playback goes idle.
  */
 export const generateVariantHLS = async (
   filePath: string,
   height: number,
   opts?: {
-    /** Segment index to begin encoding at (0 = from the start). */
-    startSegment?: number;
     onSpawn?: (child: ReturnType<typeof spawn>) => void;
   },
 ): Promise<void> => {
@@ -359,5 +368,5 @@ export const generateVariantHLS = async (
   await mkdir(join(hlsDir, `${variant.height}p`), { recursive: true });
 
   const [gpu, rotation] = await Promise.all([getGpuAcceleration(), getVideoRotationDegrees(filePath)]);
-  await encodeVariant(filePath, hlsDir, variant, gpu, opts?.startSegment ?? 0, rotation, opts?.onSpawn);
+  await encodeVariant(filePath, hlsDir, variant, gpu, rotation, opts?.onSpawn);
 };

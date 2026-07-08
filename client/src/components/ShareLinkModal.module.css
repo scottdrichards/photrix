@@ -9,15 +9,20 @@
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .sheet {
   width: 100%;
   background: var(--bg0);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  padding: var(--space-m) var(--space-m) calc(var(--space-m) + env(safe-area-inset-bottom));
+  padding: var(--space-m) var(--space-m)
+    calc(var(--space-m) + env(safe-area-inset-bottom));
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
@@ -28,8 +33,12 @@
 }
 
 @keyframes slideUp {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
 }
 
 .handle {

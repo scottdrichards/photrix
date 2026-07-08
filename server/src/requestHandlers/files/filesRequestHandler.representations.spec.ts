@@ -16,6 +16,19 @@ const baseOrchestrator: TaskOrchestrator = {
   addTask: () => {},
   onQueueExhausted: () => {},
   noteUserActivity: () => {},
+  beginUserRequest: () => {},
+  endUserRequest: () => {},
+  getDiagnosticsSnapshot: () => ({
+    processBackgroundTasks: true,
+    activeRequests: 0,
+    userActive: false,
+    overloaded: false,
+    dutyOff: false,
+    workersSuspended: false,
+    queueLengths: { blocking: 0, implied: 0, background: 0 },
+    runningTasks: [],
+    resourcesInUse: { gpu: 0, cpu: 0, disk: 0, network: 0, memoryMB: 0 },
+  }),
 };
 
 const createStreamingResponse = () => {
@@ -514,4 +527,5 @@ describe("filesRequestHandler representation paths", () => {
     expect(cacheControl).toBe("no-store");
     expect(getBody()).toContain("#EXTM3U");
   });
+
 });

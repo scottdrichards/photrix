@@ -1,12 +1,17 @@
 import {
   createFallbackPhoto,
+  fetchClusterDetail,
+  fetchFaceClustersPCA,
   fetchFolders,
   fetchGeotaggedPhotos,
   fetchPeopleClusters,
   fetchPhotos,
+  mergeClusters,
+  renameCluster,
   setBackgroundTasksEnabled,
   fetchSuggestions,
   fetchSuggestionsWithCounts,
+  separateCluster,
   subscribeStatusStream,
 } from "./api";
 import {
@@ -17,21 +22,49 @@ import {
 describe("api", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    window.localStorage.clear();
   });
 
   it("fetchFolders normalizes path and returns folders", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
-      json: async () => ({ folders: ["a", "b"] }),
+      json: async () => ({
+        folders: [
+          { name: "a", count: 3 },
+          { name: "b", count: 1 },
+        ],
+      }),
     } as Response);
 
-    const result = await fetchFolders("/photos/2024/");
-
-    expect(result).toEqual(["a", "b"]);
-    expect(fetchMock).toHaveBeenCalledWith("/api/folders/photos/2024/", {
-      headers: {},
-      signal: undefined,
+    const result = await fetchFolders({
+      path: "/photos/2024/",
+      mediaTypeFilter: "video",
+      ratingFilter: { rating: 4, atLeast: true },
     });
+
+    expect(result).toEqual([
+      { name: "a", count: 3 },
+      { name: "b", count: 1 },
+    ]);
+
+    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const url = new URL(calledUrl, window.location.origin);
+
+    expect(url.pathname).toBe("/api/folders/photos/2024/");
+    expect(JSON.parse(url.searchParams.get("filter") ?? "{}")).toEqual({
+      operation: "and",
+      conditions: [{ rating: { min: 4 } }, { mimeType: { startsWith: "video/" } }],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/folders/photos/2024/"),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-Client-Session-Id": expect.any(String),
+          "X-Client-Request-Id": expect.any(String),
+        }),
+        signal: undefined,
+      }),
+    );
   });
 
   it("setBackgroundTasksEnabled posts toggle payload", async () => {
@@ -43,11 +76,18 @@ describe("api", () => {
     const result = await setBackgroundTasksEnabled(false);
 
     expect(result).toEqual({ enabled: false });
-    expect(fetchMock).toHaveBeenCalledWith("/api/status/background-tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: false }),
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/status/background-tasks",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Client-Session-Id": expect.any(String),
+          "X-Client-Request-Id": expect.any(String),
+        }),
+        body: JSON.stringify({ enabled: false }),
+      }),
+    );
   });
 
   it("fetchPhotos builds query and maps media urls/metadata", async () => {
@@ -199,6 +239,206 @@ describe("api", () => {
     expect(result.clusters[0]?.representative.photo.path).toBe("/trip/a.jpg");
     // Summaries should not have faces
     expect((result.clusters[0] as Record<string, unknown>)?.faces).toBeUndefined();
+  });
+
+  it("fetchClusterDetail returns centroids and merge suggestions", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        cluster: {
+          id: "person-1",
+          count: 4,
+          name: "Alex",
+          representative: {
+            path: "/trip/a.jpg",
+            fileName: "a.jpg",
+            box: { x: 0.2, y: 0.1, width: 0.3, height: 0.4 },
+            mimeType: "image/jpeg",
+            dimensionWidth: 1200,
+            dimensionHeight: 800,
+            regions: null,
+          },
+          faces: [
+            {
+              path: "/trip/a.jpg",
+              fileName: "a.jpg",
+              box: { x: 0.2, y: 0.1, width: 0.3, height: 0.4 },
+              mimeType: "image/jpeg",
+              dimensionWidth: 1200,
+              dimensionHeight: 800,
+              regions: null,
+            },
+          ],
+          centroids: [
+            {
+              id: "person-2",
+              count: 2,
+              representative: {
+                path: "/trip/b.jpg",
+                fileName: "b.jpg",
+                box: { x: 0.15, y: 0.15, width: 0.2, height: 0.2 },
+                mimeType: "image/jpeg",
+                dimensionWidth: 1000,
+                dimensionHeight: 700,
+                regions: null,
+              },
+            },
+          ],
+          mergeSuggestions: [
+            {
+              id: "person-3",
+              count: 3,
+              name: "Casey",
+              yearRangeLabel: "1998-2001",
+              representative: {
+                path: "/trip/c.jpg",
+                fileName: "c.jpg",
+                box: { x: 0.1, y: 0.2, width: 0.25, height: 0.25 },
+                mimeType: "image/jpeg",
+                dimensionWidth: 1000,
+                dimensionHeight: 700,
+                regions: null,
+              },
+            },
+          ],
+        },
+      }),
+    } as Response);
+
+    const result = await fetchClusterDetail({ clusterId: "person-1" });
+
+    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const url = new URL(calledUrl, window.location.origin);
+    expect(url.searchParams.get("aggregate")).toBe("peopleClusterDetail");
+    expect(url.searchParams.get("clusterId")).toBe("person-1");
+    expect(result.cluster?.centroids).toEqual([
+      expect.objectContaining({ id: "person-2", count: 2 }),
+    ]);
+    expect(result.cluster?.mergeSuggestions[0]).toEqual(
+      expect.objectContaining({
+        id: "person-3",
+        name: "Casey",
+        count: 3,
+        yearRangeLabel: "1998-2001",
+      }),
+    );
+    expect(result.cluster?.mergeSuggestions[0]?.representative.photo.path).toBe("/trip/c.jpg");
+  });
+
+  it("fetchFaceClustersPCA includes an optional focus cluster id", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        points: [{
+          id: "person-7",
+          count: 120,
+          name: null,
+          representative: {
+            path: "/trip/a.jpg",
+            fileName: "a.jpg",
+            box: { x: 0.2, y: 0.1, width: 0.3, height: 0.4 },
+            mimeType: "image/jpeg",
+            dimensionWidth: 1200,
+            dimensionHeight: 800,
+            regions: null,
+          },
+          x: 0,
+          y: 0,
+          z: 0,
+          focused: true,
+        }],
+      }),
+    } as Response);
+
+    const result = await fetchFaceClustersPCA({ clusterId: "person-7" });
+
+    const [calledUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const url = new URL(calledUrl, window.location.origin);
+    expect(url.pathname).toBe("/api/files/");
+    expect(url.searchParams.get("aggregate")).toBe("faceCentroidsPCA");
+    expect(url.searchParams.get("clusterId")).toBe("person-7");
+    expect(result[0]?.focused).toBe(true);
+  });
+
+  it("renameCluster sends auth and diagnostics headers", async () => {
+    window.localStorage.setItem("photrix_auth_token", "token-123");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ ok: true }),
+    } as Response);
+
+    await renameCluster("person-7", "Taylor");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/people/rename",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-123",
+          "Content-Type": "application/json",
+          "X-Client-Session-Id": expect.any(String),
+          "X-Client-Request-Id": expect.any(String),
+        }),
+        body: JSON.stringify({ clusterId: "person-7", name: "Taylor" }),
+      }),
+    );
+  });
+
+  it("mergeClusters sends auth and diagnostics headers", async () => {
+    window.localStorage.setItem("photrix_auth_token", "token-123");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ ok: true }),
+    } as Response);
+
+    await mergeClusters(["person-1", "person-2"], "person-3");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/people/merge",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-123",
+          "Content-Type": "application/json",
+          "X-Client-Session-Id": expect.any(String),
+          "X-Client-Request-Id": expect.any(String),
+        }),
+        body: JSON.stringify({
+          sourceClusterIds: ["person-1", "person-2"],
+          targetClusterId: "person-3",
+        }),
+      }),
+    );
+  });
+
+  it("separateCluster sends auth and diagnostics headers", async () => {
+    window.localStorage.setItem("photrix_auth_token", "token-123");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ ok: true }),
+    } as Response);
+
+    await separateCluster("person-7");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/people/separate",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-123",
+          "Content-Type": "application/json",
+          "X-Client-Session-Id": expect.any(String),
+          "X-Client-Request-Id": expect.any(String),
+        }),
+        body: JSON.stringify({ clusterId: "person-7" }),
+      }),
+    );
   });
 
   it("does not serialize nullable array UI state as API filter conditions", async () => {
@@ -389,9 +629,9 @@ describe("api", () => {
     expect(onUpdate).toHaveBeenCalledWith({ databaseSize: 1 });
     expect(onError).toHaveBeenCalledTimes(2);
 
+    globalThis.EventSource = OriginalEventSource;
+
     unsubscribe();
     expect(eventSources[0].close).toHaveBeenCalled();
-
-    globalThis.EventSource = OriginalEventSource;
   });
 });

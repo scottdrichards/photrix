@@ -5,6 +5,9 @@ import { fileURLToPath } from "url";
 import { StandardHeight } from "../common/standardHeights.ts";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
+import { bindChildProcessAbort } from "../common/abortableChildProcess.ts";
+import { scheduleMediaConversion } from "../common/mediaConversionScheduler.ts";
+import { createAbortError, getRequestAbortSignal } from "../common/requestAbort.ts";
 import { getLogger } from "../observability/logger.ts";
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 
@@ -164,9 +167,10 @@ export class ImageConversionError extends Error {
  */
 export type CropBox = { x: number; y: number; width: number; height: number };
 
-const generateImage = async (
+const generateImageUnthrottled = async (
   inputPath: string,
   outputs: Array<{ path: string; height: StandardHeight; crop?: CropBox }>,
+  signal?: AbortSignal,
 ): Promise<void> => {
   const args = [
     scriptPath,
@@ -188,6 +192,7 @@ const generateImage = async (
     void resolvePythonInvocation()
       .then(({ command, baseArgs }) => {
         const process = spawn(command, [...baseArgs, ...args], { windowsHide: true });
+        const abortBinding = bindChildProcessAbort(process, signal);
 
         let stderr = "";
 
@@ -196,6 +201,11 @@ const generateImage = async (
         });
 
         process.on("close", (code) => {
+          abortBinding.cleanup();
+          if (abortBinding.wasAborted()) {
+            reject(createAbortError());
+            return;
+          }
           if (code === 0) {
             resolve();
             return;
@@ -233,6 +243,11 @@ const generateImage = async (
         });
 
         process.on("error", (err) => {
+          abortBinding.cleanup();
+          if (abortBinding.wasAborted()) {
+            reject(createAbortError());
+            return;
+          }
           log.error({ err, inputPath }, "Failed to start image conversion python process");
           reject(err);
         });
@@ -240,6 +255,34 @@ const generateImage = async (
       .catch((error) => {
         reject(error);
       });
+  });
+};
+
+const generateImage = async (
+  inputPath: string,
+  outputs: Array<{ path: string; height: StandardHeight; crop?: CropBox }>,
+): Promise<void> => {
+  const key = outputs
+    .map((output) => output.path)
+    .sort()
+    .join("\n");
+  await scheduleMediaConversion(`image:${key}`, async (signal) => {
+    const missingOutputs = await Promise.all(
+      outputs.map(async (output) => ({
+        ...output,
+        exists: await access(output.path).then(
+          () => true,
+          () => false,
+        ),
+      })),
+    );
+    const uncachedOutputs = missingOutputs.filter((output) => !output.exists);
+    if (uncachedOutputs.length === 0) {
+      return;
+    }
+    await generateImageUnthrottled(inputPath, uncachedOutputs, signal);
+  }, {
+    signal: getRequestAbortSignal(),
   });
 };
 

@@ -40,61 +40,60 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
 
   return (
     <>
-    {showShareModal && (
-      <ShareOptionsModal
-        photos={selectedPhotos}
-        onClose={() => setShowShareModal(false)}
-      />
-    )}
-    <div
-      className={hidden ? `${css.toggleWrapper} ${css.toggleWrapperHidden}` : css.toggleWrapper}
-      style={{ top: stickyTop }}
-    >
-      {selectionMode ? (
-        <div className={css.selectionBar}>
-          <span className={css.selectionCount}>{checkedPaths.size} selected</span>
-          <button
-            className="btn btn-subtle"
-            onClick={() => setShowShareModal(true)}
-            disabled={checkedPaths.size === 0}
-          >
-            <Share24Regular fontSize={18} />
-            Share
-          </button>
-          <button className="btn btn-subtle" onClick={exitSelectionMode}>
-            <Dismiss24Regular fontSize={18} />
-            Clear
-          </button>
-        </div>
-      ) : (
-        <div className={css.toggleContainer} role="tablist" aria-label="Current view">
-          <div className={css.toggleTrack}>
-            <div
-              className={css.toggleSlider}
-              data-active={view}
-            />
+      {showShareModal && (
+        <ShareOptionsModal
+          photos={selectedPhotos}
+          onClose={() => setShowShareModal(false)}
+        />
+      )}
+      <div
+        className={
+          hidden ? `${css.toggleWrapper} ${css.toggleWrapperHidden}` : css.toggleWrapper
+        }
+        style={{ top: stickyTop }}
+      >
+        {selectionMode ? (
+          <div className={css.selectionBar}>
+            <span className={css.selectionCount}>{checkedPaths.size} selected</span>
             <button
-              type="button"
-              className={css.toggleButton}
-              onClick={() => onViewChange("library")}
-              role="tab"
-              aria-selected={view === "library"}
+              className="btn btn-subtle"
+              onClick={() => setShowShareModal(true)}
+              disabled={checkedPaths.size === 0}
             >
-              Thumbnails
+              <Share24Regular fontSize={18} />
+              Share
             </button>
-            <button
-              type="button"
-              className={css.toggleButton}
-              onClick={() => onViewChange("people")}
-              role="tab"
-              aria-selected={view === "people"}
-            >
-              People
+            <button className="btn btn-subtle" onClick={exitSelectionMode}>
+              <Dismiss24Regular fontSize={18} />
+              Clear
             </button>
           </div>
-        </div>
-      )}
-    </div>
+        ) : (
+          <div className={css.toggleContainer} role="tablist" aria-label="Current view">
+            <div className={css.toggleTrack}>
+              <div className={css.toggleSlider} data-active={view} />
+              <button
+                type="button"
+                className={css.toggleButton}
+                onClick={() => onViewChange("library")}
+                role="tab"
+                aria-selected={view === "library"}
+              >
+                Thumbnails
+              </button>
+              <button
+                type="button"
+                className={css.toggleButton}
+                onClick={() => onViewChange("people")}
+                role="tab"
+                aria-selected={view === "people"}
+              >
+                People
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </>
   );
 };

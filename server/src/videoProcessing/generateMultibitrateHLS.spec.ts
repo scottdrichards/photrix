@@ -54,7 +54,7 @@ describe("prepareMultibitrateHLSStructure", () => {
 });
 
 describe("generateVariantHLS", () => {
-  it("encodes exactly one variant, GPU-resident on NVIDIA", async () => {
+  it("uses full CUDA pipeline for landscape NVIDIA encode", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-variant-"));
     process.env.CACHE_DIR = root;
     process.env.HLS_CACHE_DIR = root;
@@ -64,7 +64,7 @@ describe("generateVariantHLS", () => {
     const spawnMock = jest.fn((command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
-        // Rotation probe — return no rotation so GPU pipeline is used.
+        // Rotation probe — return no rotation so full CUDA pipeline is used.
         if (command === "ffprobe") {
           proc.stdout.emit("data", JSON.stringify({ streams: [] }));
           proc.emit("close", 0);
@@ -89,37 +89,36 @@ describe("generateVariantHLS", () => {
 
     await generateVariantHLS(source, 720);
 
-    // 1 rotation probe (ffprobe) + 1 GPU detection + 1 encode call (a single variant).
+    // 1 rotation probe (ffprobe) + 1 GPU detection + 1 encode call.
     expect(spawnMock).toHaveBeenCalledTimes(3);
 
     const encodeArgs = spawnMock.mock.calls[2]?.[1] as string[];
+    // Full CUDA pipeline: frames stay on GPU via hwaccel_output_format cuda.
     expect(encodeArgs).toContain("-hwaccel_output_format");
-    // Scales to the chosen height and converts to 8-bit on the GPU so 10-bit HEVC
-    // (HDR) sources don't fail h264_nvenc and drop to slow software encoding.
+    expect(encodeArgs).toContain("cuda");
+    // Scales on GPU and forces 8-bit so h264_nvenc accepts 10-bit HEVC sources.
     expect(encodeArgs).toContain("scale_cuda=-2:720:format=yuv420p");
-    // No other variant is encoded.
-    expect(encodeArgs).not.toContain("scale_cuda=-2:360:format=yuv420p");
-    expect(encodeArgs).not.toContain("scale_cuda=-2:1080:format=yuv420p");
     // Frame rate forced with -r (no CPU fps filter on CUDA frames).
     expect(encodeArgs).toContain("-r");
-    // From-the-start encode: no input seek, segments numbered from 0.
+    // Always encodes from segment 0: no input seek, segments numbered from 0.
     expect(encodeArgs).not.toContain("-ss");
     expect(encodeArgs).not.toContain("-copyts");
-    expect(encodeArgs.slice(encodeArgs.indexOf("-start_number"))).toContain("0");
+    expect(encodeArgs[encodeArgs.indexOf("-start_number") + 1]).toBe("0");
   });
 
-  it("offset-encodes from a given start segment for mid-stream switches/seeks", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-variant-offset-"));
+  it("uses NVDEC+NVENC (CPU auto-rotate) for rotated/portrait videos on NVIDIA", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-portrait-"));
     process.env.CACHE_DIR = root;
     process.env.HLS_CACHE_DIR = root;
-    const source = path.join(root, "video.mp4");
+    const source = path.join(root, "portrait.mp4");
     writeFileSync(source, "video");
 
     const spawnMock = jest.fn((command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
         if (command === "ffprobe") {
-          proc.stdout.emit("data", JSON.stringify({ streams: [] }));
+          // Report 90° rotation (portrait phone video). codec_type required for detection.
+          proc.stdout.emit("data", JSON.stringify({ streams: [{ codec_type: "video", tags: { rotate: "90" } }] }));
           proc.emit("close", 0);
           return;
         }
@@ -138,18 +137,22 @@ describe("generateVariantHLS", () => {
 
     const { generateVariantHLS } = await import("./generateMultibitrateHLS.ts");
 
-    // HLS_SEGMENT_SECONDS is 1, so segment 300 starts at 300s.
-    await generateVariantHLS(source, 720, { startSegment: 300 });
+    await generateVariantHLS(source, 720);
 
-    // calls[0] = ffprobe (rotation), calls[1] = GPU detect, calls[2] = encode
     const encodeArgs = spawnMock.mock.calls[2]?.[1] as string[];
-    // Seeks the input to the segment boundary and preserves source timestamps so the
-    // same segment index has identical PTS across variants (seamless ABR switching).
-    expect(encodeArgs).toContain("-ss");
-    expect(encodeArgs[encodeArgs.indexOf("-ss") + 1]).toBe("300");
-    expect(encodeArgs).toContain("-copyts");
-    // Output segments numbered from 300 so they line up with the synthetic playlist.
-    expect(encodeArgs[encodeArgs.indexOf("-start_number") + 1]).toBe("300");
+    // NVDEC: use -hwaccel cuda for GPU decode, but WITHOUT -hwaccel_output_format cuda
+    // so decoded frames land on CPU where ffmpeg's auto-rotate (transpose) can run.
+    expect(encodeArgs).toContain("-hwaccel");
+    expect(encodeArgs).toContain("cuda");
+    expect(encodeArgs).not.toContain("-hwaccel_output_format");
+    // GPU encode: h264_nvenc re-uploads CPU frames to GPU.
+    expect(encodeArgs).toContain("h264_nvenc");
+    // CPU filter chain: fps= in vf, no -r flag needed.
+    const vfArg = encodeArgs[encodeArgs.indexOf("-vf") + 1] as string;
+    expect(vfArg).toContain("fps=");
+    expect(encodeArgs).not.toContain("-r");
+    // No seek: always from start.
+    expect(encodeArgs).not.toContain("-ss");
   });
 
   it("falls back to software encoding when hardware encode fails", async () => {

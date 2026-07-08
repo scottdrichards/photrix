@@ -16,6 +16,9 @@ type RequestTraceMeta = {
   method: string;
   url: string;
   requestId?: string;
+  clientSessionId?: string;
+  clientOperationId?: string;
+  clientRequestId?: string;
 };
 
 type RequestSpan = {
@@ -30,6 +33,9 @@ type RequestTraceContext = {
   requestId: string;
   method: string;
   url: string;
+  clientSessionId?: string;
+  clientOperationId?: string;
+  clientRequestId?: string;
   startMs: number;
   depth: number;
   rootSpan: Span;
@@ -95,6 +101,29 @@ const summarizeByCategory = (spans: RequestSpan[]) => {
 export const getCurrentRequestId = (): string | undefined =>
   requestTraceStorage.getStore()?.requestId;
 
+export const getCurrentRequestLogFields = () => {
+  const context = requestTraceStorage.getStore();
+  if (!context) {
+    return {} as {
+      requestId?: string;
+      method?: string;
+      url?: string;
+      clientSessionId?: string;
+      clientOperationId?: string;
+      clientRequestId?: string;
+    };
+  }
+
+  return {
+    requestId: context.requestId,
+    method: context.method,
+    url: getRequestPathname(context.url),
+    ...(context.clientSessionId ? { clientSessionId: context.clientSessionId } : {}),
+    ...(context.clientOperationId ? { clientOperationId: context.clientOperationId } : {}),
+    ...(context.clientRequestId ? { clientRequestId: context.clientRequestId } : {}),
+  };
+};
+
 export const setCurrentSpanAttributes = (attributes: Attributes): void => {
   const currentSpan = trace.getSpan(otelContext.active());
   if (!currentSpan) {
@@ -150,6 +179,9 @@ export const runWithRequestTrace = async <T>(
     requestId,
     method: meta.method,
     url: meta.url,
+    ...(meta.clientSessionId ? { clientSessionId: meta.clientSessionId } : {}),
+    ...(meta.clientOperationId ? { clientOperationId: meta.clientOperationId } : {}),
+    ...(meta.clientRequestId ? { clientRequestId: meta.clientRequestId } : {}),
     startMs: nowMs(),
     depth: 0,
     rootSpan,
@@ -206,6 +238,9 @@ export const finishRequestTrace = (statusCode: number): void => {
   logger[logLevel](
     {
       requestId: context.requestId,
+      ...(context.clientSessionId ? { clientSessionId: context.clientSessionId } : {}),
+      ...(context.clientOperationId ? { clientOperationId: context.clientOperationId } : {}),
+      ...(context.clientRequestId ? { clientRequestId: context.clientRequestId } : {}),
       method: context.method,
       url: getRequestPathname(context.url),
       status: statusCode,

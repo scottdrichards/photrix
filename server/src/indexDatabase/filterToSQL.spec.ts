@@ -62,6 +62,12 @@ describe("filterToSQL", () => {
     expect(result.params).toEqual(["R6", "A7 IV"]);
   });
 
+  it("treats an empty array constraint as matching nothing", () => {
+    const result = filterToSQL({ relativePath: [] });
+
+    expect(result).toEqual({ where: "1 = 0", params: [] });
+  });
+
   it("builds glob search with LIKE", () => {
     const result = filterToSQL({ fileName: { glob: "IMG_*.jpg" } });
     expect(result.where).toBe("fileName LIKE ?");
@@ -100,10 +106,10 @@ describe("filterToSQL", () => {
     expect(result.params).toEqual([]);
   });
 
-  it("requires a face from every selected cluster (AND semantics)", () => {
+  it("requires a face from every selected person (AND semantics)", () => {
     const result = filterToSQL({ faceCluster: [3, 12] });
     expect(result.where).toBe(
-      "EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND faces.clusterId = ?) AND EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND faces.clusterId = ?)",
+      "EXISTS (SELECT 1 FROM faces JOIN faceClusters ON faceClusters.id = faces.clusterId WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND COALESCE(faceClusters.personId, faces.clusterId) = ?) AND EXISTS (SELECT 1 FROM faces JOIN faceClusters ON faceClusters.id = faces.clusterId WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND COALESCE(faceClusters.personId, faces.clusterId) = ?)",
     );
     expect(result.params).toEqual([3, 12]);
   });
@@ -111,8 +117,26 @@ describe("filterToSQL", () => {
   it("accepts a single cluster id", () => {
     const result = filterToSQL({ faceCluster: 7 });
     expect(result.where).toBe(
-      "EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND faces.clusterId = ?)",
+      "EXISTS (SELECT 1 FROM faces JOIN faceClusters ON faceClusters.id = faces.clusterId WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND COALESCE(faceClusters.personId, faces.clusterId) = ?)",
     );
     expect(result.params).toEqual([7]);
+  });
+
+  it("builds runtime semantic image constraints", () => {
+    const result = filterToSQL({
+      semanticImage: { queryVector: [0.1, 0.2], minSimilarity: 0.18 },
+    });
+
+    expect(result.where).toContain("cosine_similarity_f32(imageEmbedding, ?) >= ?");
+    expect(result.params).toHaveLength(2);
+    expect(result.params[0]).toBeInstanceOf(Buffer);
+    expect(result.params[1]).toBe(0.18);
+  });
+
+  it("builds runtime transcript constraints", () => {
+    const result = filterToSQL({ transcriptSearch: { includes: "sunset" } });
+
+    expect(result.where).toBe("audioTranscript LIKE ? ESCAPE '\\'");
+    expect(result.params).toEqual(["%sunset%"]);
   });
 });

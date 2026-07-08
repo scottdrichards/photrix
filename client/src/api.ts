@@ -5,10 +5,13 @@ import type {
   GeoBoundsLike as GeoBounds,
   MediaTypeFilter,
   RatingFilter,
+  ShareScope,
   SearchSource,
   ServerStatus as SharedServerStatus,
 } from "../../shared/filter-contract/src";
+import { SEARCH_SOURCES } from "../../shared/filter-contract/src";
 import { getAuthHeaders, getToken, notifyUnauthorized } from "./auth";
+import { createClientOperationId, getClientSessionId, logClientEvent } from "./diagnostics";
 export type { BackgroundTaskStatus, DateRangeFilter, GeoBounds, SearchSource };
 
 export interface ApiPhotoItem {
@@ -69,7 +72,7 @@ export type DateHistogramResult = {
   bucketSizeMs: number;
   minDate: number | null;
   maxDate: number | null;
-  grouping: "day" | "month";
+  grouping: "day" | "month" | "year";
 };
 
 export type FaceBox = {
@@ -88,10 +91,20 @@ export type PersonCluster = {
   id: string;
   count: number;
   representative: ClusterFace;
+  name: string | null;
+  yearRangeLabel?: string | null;
 };
 
 export type PersonClusterWithFaces = PersonCluster & {
   faces: ClusterFace[];
+  centroids: PersonCentroid[];
+  mergeSuggestions: PersonCluster[];
+};
+
+export type PersonCentroid = {
+  id: string;
+  count: number;
+  representative: ClusterFace;
 };
 
 export type PeopleClustersResult = {
@@ -129,7 +142,13 @@ export interface FetchPhotosOptions {
   faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
+  expandToFolder?: boolean;
 }
+
+export type FetchFoldersOptions = Omit<
+  FetchPhotosOptions,
+  "page" | "pageSize" | "metadata" | "expandToFolder"
+>;
 
 export type SuggestionsField =
   | "personInImage"
@@ -171,6 +190,11 @@ export type SuggestionWithCount = {
   count: number;
 };
 
+export type FolderSummary = {
+  name: string;
+  count: number;
+};
+
 export interface FetchGeotaggedPhotosOptions extends Omit<
   FetchPhotosOptions,
   "page" | "pageSize" | "metadata"
@@ -188,7 +212,10 @@ export type FetchDateRangeOptions = Omit<
 export type FetchDateHistogramOptions = Omit<
   FetchPhotosOptions,
   "page" | "pageSize" | "metadata"
->;
+> & {
+  /** Desired number of histogram buckets; server clamps to [12, 80]. */
+  buckets?: number;
+};
 
 export type FetchPeopleClustersOptions = Omit<
   FetchPhotosOptions,
@@ -208,7 +235,9 @@ export const subscribeStatusStream = (
   onError?: (error: unknown) => void,
 ) => {
   const token = getToken();
-  const url = token ? `/api/status/stream?token=${encodeURIComponent(token)}` : "/api/status/stream";
+  const url = token
+    ? `/api/status/stream?token=${encodeURIComponent(token)}`
+    : "/api/status/stream";
   const source = new EventSource(url);
 
   source.onmessage = (event) => {
@@ -463,7 +492,9 @@ const buildFilters = ({
 // Builds the full server-side query filter for a share token, including the
 // folder/path constraint. This is the format stored server-side and enforced
 // on every request made with the resulting share token.
-export const buildFullShareFilter = (filter: ApiFilterOptions & { path?: string; includeSubfolders?: boolean }): unknown => {
+export const buildFullShareFilter = (
+  filter: ApiFilterOptions & { path?: string; includeSubfolders?: boolean },
+): unknown => {
   const conditions: unknown[] = [];
 
   const path = (filter.path ?? "").replace(/\/$/, "");
@@ -494,19 +525,106 @@ export const buildFullShareFilter = (filter: ApiFilterOptions & { path?: string;
   return { operation: "and", conditions };
 };
 
-const fetchJsonOrThrow = async <T>(
+export const buildShareScope = (
+  filter: ApiFilterOptions & {
+    path?: string;
+    includeSubfolders?: boolean;
+    semanticQuery?: string;
+    searchSources?: SearchSource[];
+  },
+): ShareScope<unknown> => {
+  const semanticQuery = filter.semanticQuery?.trim();
+  const normalizedSearchSources = filter.searchSources
+    ? SEARCH_SOURCES.filter((source) => filter.searchSources?.includes(source))
+    : undefined;
+
+  return {
+    filter: buildFullShareFilter(filter),
+    ...(semanticQuery ? { semanticQuery } : {}),
+    ...(normalizedSearchSources && normalizedSearchSources.length < SEARCH_SOURCES.length
+      ? { searchSources: normalizedSearchSources }
+      : {}),
+  };
+};
+
+const fetchWithDiagnostics = async (
   url: string,
   errorLabel: string,
-  init?: RequestInit,
-): Promise<T> => {
-  const response = await fetch(url, {
-    ...init,
-    headers: { ...getAuthHeaders(), ...(init?.headers ?? {}) },
+  init?: RequestInit & { diagnostics?: { clientOperationId?: string } },
+): Promise<Response> => {
+  const clientRequestId = createClientOperationId();
+  const clientOperationId = init?.diagnostics?.clientOperationId;
+
+  logClientEvent({
+    level: "info",
+    event: "client.request.started",
+    message: `Started ${errorLabel}`,
+    clientOperationId,
+    clientRequestId,
+    method: init?.method ?? "GET",
+    url,
   });
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: {
+        ...getAuthHeaders(),
+        "X-Client-Session-Id": getClientSessionId(),
+        "X-Client-Request-Id": clientRequestId,
+        ...(clientOperationId ? { "X-Client-Operation-Id": clientOperationId } : {}),
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (error) {
+    logClientEvent({
+      level: (error as Error).name === "AbortError" ? "warn" : "error",
+      event:
+        (error as Error).name === "AbortError"
+          ? "client.request.aborted"
+          : "client.request.failed",
+      message: `Failed to ${errorLabel}`,
+      clientOperationId,
+      clientRequestId,
+      method: init?.method ?? "GET",
+      url,
+      data: {
+        error: error instanceof Error ? error.message : String(error),
+      },
+      immediate: true,
+    });
+    throw error;
+  }
+
+  const requestId = response.headers?.get?.("X-Request-Id") ?? undefined;
+  logClientEvent({
+    level: response.ok ? "info" : response.status >= 500 ? "error" : "warn",
+    event: response.ok ? "client.request.completed" : "client.request.rejected",
+    message: `${errorLabel} returned ${response.status}`,
+    requestId,
+    clientOperationId,
+    clientRequestId,
+    method: init?.method ?? "GET",
+    url,
+    statusCode: response.status,
+    immediate: !response.ok,
+  });
+
   if (response.status === 401) {
     notifyUnauthorized();
     throw new Error(`Unauthorized`);
   }
+
+  return response;
+};
+
+const fetchJsonOrThrow = async <T>(
+  url: string,
+  errorLabel: string,
+  init?: RequestInit & { diagnostics?: { clientOperationId?: string } },
+): Promise<T> => {
+  const response = await fetchWithDiagnostics(url, errorLabel, init);
   if (!response.ok) {
     throw new Error(`Failed to ${errorLabel} (status ${response.status})`);
   }
@@ -601,13 +719,42 @@ export const setBackgroundTasksEnabled = async (
   );
 };
 
-export const fetchFolders = async (
-  path: string = "",
-  signal?: AbortSignal,
-): Promise<string[]> => {
+export const fetchFolders = async ({
+  path = "",
+  signal,
+  ratingFilter,
+  mediaTypeFilter = "all",
+  hasAudioTranscript,
+  locationBounds,
+  dateRange,
+  peopleInImageFilter,
+  faceClusterFilter,
+  cameraModelFilter,
+  lensFilter,
+}: FetchFoldersOptions = {}): Promise<FolderSummary[]> => {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
-  const data = await fetchJsonOrThrow<{ folders: string[] }>(
-    `/api/folders/${normalizedPath}`,
+  const params = new URLSearchParams();
+  const filters = buildFilters({
+    ratingFilter,
+    mediaTypeFilter,
+    hasAudioTranscript,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+    faceClusterFilter,
+    cameraModelFilter,
+    lensFilter,
+  });
+
+  if (filters.length > 0) {
+    const filterObj =
+      filters.length === 1 ? filters[0] : { operation: "and", conditions: filters };
+    params.set("filter", JSON.stringify(filterObj));
+  }
+
+  const querySuffix = params.size > 0 ? `?${params.toString()}` : "";
+  const data = await fetchJsonOrThrow<{ folders: FolderSummary[] }>(
+    `/api/folders/${normalizedPath}${querySuffix}`,
     "fetch folders",
     { signal },
   );
@@ -742,6 +889,7 @@ export const fetchPhotos = async ({
   faceClusterFilter,
   cameraModelFilter,
   lensFilter,
+  expandToFolder,
 }: FetchPhotosOptions = {}): Promise<FetchPhotosResult> => {
   const params = new URLSearchParams();
   params.set("metadata", Array.from(metadata).join(","));
@@ -749,6 +897,9 @@ export const fetchPhotos = async ({
   params.set("pageSize", pageSize.toString());
   if (includeSubfolders) {
     params.set("includeSubfolders", "true");
+  }
+  if (expandToFolder) {
+    params.set("expandToFolder", "true");
   }
 
   const filters = buildFilters({
@@ -937,8 +1088,15 @@ export const fetchPeopleClusters = async ({
     dimensionHeight: number | null;
     regions: string | null;
   }): ClusterFace => {
-    const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions } =
-      face;
+    const {
+      path: relativePath,
+      fileName,
+      mimeType,
+      dimensionWidth,
+      dimensionHeight,
+      box,
+      regions,
+    } = face;
     return {
       photo: createPhotoItem({
         folder: relativePath.slice(0, relativePath.length - fileName.length),
@@ -958,6 +1116,7 @@ export const fetchPeopleClusters = async ({
       id: cluster.id,
       count: cluster.count,
       representative: toClusterFace(cluster.representative),
+      name: (cluster as Record<string, unknown>).name as string | null ?? null,
     })),
     totalFaces: payload.totalFaces,
     totalClusters: payload.totalClusters,
@@ -965,21 +1124,23 @@ export const fetchPeopleClusters = async ({
   };
 };
 
-export const fetchClusterDetail = async ({
-  clusterId,
-  includeSubfolders = false,
-  path = "",
-  ratingFilter,
-  mediaTypeFilter = "all",
-  hasAudioTranscript,
-  locationBounds,
-  dateRange,
-  peopleInImageFilter,
-  faceClusterFilter,
-  cameraModelFilter,
-  lensFilter,
-  signal,
-}: FetchPeopleClustersOptions & { clusterId: string } = { clusterId: "" }): Promise<PersonClusterDetailResult> => {
+export const fetchClusterDetail = async (
+  {
+    clusterId,
+    includeSubfolders = false,
+    path = "",
+    ratingFilter,
+    mediaTypeFilter = "all",
+    hasAudioTranscript,
+    locationBounds,
+    dateRange,
+    peopleInImageFilter,
+    faceClusterFilter,
+    cameraModelFilter,
+    lensFilter,
+    signal,
+  }: FetchPeopleClustersOptions & { clusterId: string } = { clusterId: "" },
+): Promise<PersonClusterDetailResult> => {
   const params = new URLSearchParams();
   params.set("aggregate", "peopleClusterDetail");
   params.set("clusterId", clusterId);
@@ -1028,6 +1189,33 @@ export const fetchClusterDetail = async ({
         dimensionHeight: number | null;
         regions: string | null;
       }>;
+      centroids?: Array<{
+        id: string;
+        count: number;
+        representative: {
+          path: string;
+          fileName: string;
+          box: FaceBox;
+          mimeType: string | null;
+          dimensionWidth: number | null;
+          dimensionHeight: number | null;
+          regions: string | null;
+        };
+      }>;
+      mergeSuggestions?: Array<{
+        id: string;
+        count: number;
+        name: string | null;
+        representative: {
+          path: string;
+          fileName: string;
+          box: FaceBox;
+          mimeType: string | null;
+          dimensionWidth: number | null;
+          dimensionHeight: number | null;
+          regions: string | null;
+        };
+      }>;
     } | null;
   }>(url, "fetch cluster detail", { signal });
 
@@ -1040,8 +1228,15 @@ export const fetchClusterDetail = async ({
     dimensionHeight: number | null;
     regions: string | null;
   }): ClusterFace => {
-    const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions } =
-      face;
+    const {
+      path: relativePath,
+      fileName,
+      mimeType,
+      dimensionWidth,
+      dimensionHeight,
+      box,
+      regions,
+    } = face;
     return {
       photo: createPhotoItem({
         folder: relativePath.slice(0, relativePath.length - fileName.length),
@@ -1066,8 +1261,90 @@ export const fetchClusterDetail = async ({
       count: payload.cluster.count,
       representative: toClusterFace(payload.cluster.representative),
       faces: payload.cluster.faces.map(toClusterFace),
+      name: (payload.cluster as Record<string, unknown>).name as string | null ?? null,
+      centroids: (payload.cluster.centroids ?? []).map((centroid) => ({
+        id: centroid.id,
+        count: centroid.count,
+        representative: toClusterFace(centroid.representative),
+      })),
+      mergeSuggestions: (payload.cluster.mergeSuggestions ?? []).map((cluster) => ({
+        id: cluster.id,
+        count: cluster.count,
+        name: cluster.name,
+        yearRangeLabel:
+          (cluster as Record<string, unknown>).yearRangeLabel as string | null | undefined,
+        representative: toClusterFace(cluster.representative),
+      })),
     },
   };
+};
+
+export type FaceClusterPCAPoint = {
+  id: string;
+  count: number;
+  name: string | null;
+  representative: ClusterFace;
+  x: number;
+  y: number;
+  z: number;
+  focused: boolean;
+};
+
+export const fetchFaceClustersPCA = async ({
+  clusterId,
+  signal,
+}: {
+  clusterId?: string;
+  signal?: AbortSignal;
+} = {}): Promise<FaceClusterPCAPoint[]> => {
+  const params = new URLSearchParams();
+  params.set("aggregate", "faceCentroidsPCA");
+  if (clusterId) params.set("clusterId", clusterId);
+  const url = buildFilesQueryUrl("", params);
+  const payload = await fetchJsonOrThrow<{
+    points: Array<{
+      id: string;
+      count: number;
+      name: string | null;
+      representative: {
+        path: string;
+        fileName: string;
+        box: FaceBox;
+        mimeType: string | null;
+        dimensionWidth: number | null;
+        dimensionHeight: number | null;
+        regions: string | null;
+      };
+      x: number;
+      y: number;
+      z: number;
+      focused: boolean;
+    }>;
+  }>(url, "fetch face cluster PCA", { signal });
+
+  if (!Array.isArray(payload.points)) {
+    throw new Error("Server returned unexpected response — try restarting the server to pick up the new faceCentroidsPCA endpoint");
+  }
+
+  return payload.points.map((p) => ({
+    id: p.id,
+    count: p.count,
+    name: p.name,
+    representative: {
+      photo: createPhotoItem({
+        folder: p.representative.path.slice(0, p.representative.path.length - p.representative.fileName.length),
+        fileName: p.representative.fileName,
+        mimeType: p.representative.mimeType,
+        dimensionWidth: p.representative.dimensionWidth ?? undefined,
+        dimensionHeight: p.representative.dimensionHeight ?? undefined,
+      }),
+      box: p.representative.box,
+    },
+    x: p.x,
+    y: p.y,
+    z: p.z,
+    focused: p.focused,
+  }));
 };
 
 export const fetchDateRange = async ({
@@ -1130,12 +1407,16 @@ export const fetchDateHistogram = async ({
   faceClusterFilter,
   cameraModelFilter,
   lensFilter,
+  buckets,
   signal,
 }: FetchDateHistogramOptions = {}): Promise<DateHistogramResult> => {
   const params = new URLSearchParams();
   params.set("aggregate", "dateHistogram");
   if (includeSubfolders) {
     params.set("includeSubfolders", "true");
+  }
+  if (typeof buckets === "number" && Number.isFinite(buckets)) {
+    params.set("buckets", String(Math.round(buckets)));
   }
 
   const filters = buildFilters({
@@ -1353,8 +1634,9 @@ export const negotiateVideoPlayback = async (options: {
   path: string;
   bandwidthMbps: number | null;
   hevcSupported: boolean;
+  clientOperationId?: string;
 }): Promise<VideoNegotiationResult> => {
-  const { path, bandwidthMbps, hevcSupported } = options;
+  const { path, bandwidthMbps, hevcSupported, clientOperationId } = options;
   const params = new URLSearchParams();
   params.set("path", path);
   if (bandwidthMbps !== null && Number.isFinite(bandwidthMbps)) {
@@ -1362,10 +1644,13 @@ export const negotiateVideoPlayback = async (options: {
   }
   params.set("hevcSupported", String(hevcSupported));
 
-  const response = await fetch(`/api/video/negotiate?${params.toString()}`, {
-    headers: getAuthHeaders(),
-  });
-
+  const response = await fetchWithDiagnostics(
+    `/api/video/negotiate?${params.toString()}`,
+    "negotiate video playback",
+    {
+      diagnostics: { clientOperationId },
+    },
+  );
   return (await response.json()) as VideoNegotiationResult;
 };
 
@@ -1374,12 +1659,46 @@ export type TranscriptSegment = { start: number; end: number; text: string };
 export const fetchTranscriptSegments = async (
   path: string,
   signal?: AbortSignal,
+  clientOperationId?: string,
 ): Promise<TranscriptSegment[]> => {
   const url = buildFileUrl(path, { representation: "transcript" });
   const result = await fetchJsonOrThrow<{ segments: TranscriptSegment[] }>(
     url,
     "fetch transcript",
-    { signal },
+    { signal, diagnostics: { clientOperationId } },
   );
   return result.segments;
+};
+
+export const renameCluster = async (
+  clusterId: string,
+  name: string | null,
+): Promise<void> => {
+  const response = await fetchWithDiagnostics("/api/people/rename", "rename cluster", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clusterId, name }),
+  });
+  if (!response.ok) throw new Error(`Failed to rename cluster (status ${response.status})`);
+};
+
+export const mergeClusters = async (
+  sourceClusterIds: string[],
+  targetClusterId: string,
+): Promise<void> => {
+  const response = await fetchWithDiagnostics("/api/people/merge", "merge clusters", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sourceClusterIds, targetClusterId }),
+  });
+  if (!response.ok) throw new Error(`Failed to merge clusters (status ${response.status})`);
+};
+
+export const separateCluster = async (clusterId: string): Promise<void> => {
+  const response = await fetchWithDiagnostics("/api/people/separate", "separate cluster", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clusterId }),
+  });
+  if (!response.ok) throw new Error(`Failed to separate cluster (status ${response.status})`);
 };

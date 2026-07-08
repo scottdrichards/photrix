@@ -22,106 +22,52 @@ afterEach(() => {
 });
 
 describe("claimVariantEncode", () => {
-  it("claims once, then treats segments at/after the start point as already covered", async () => {
-    const { claimVariantEncode } = await loadSession();
+  it("returns true on first claim, then false while encode is live", async () => {
+    const { claimVariantEncode, registerHlsProcess } = await loadSession();
     const dir = "/hls/a";
 
-    // First request for a variant claims an encode starting at that segment.
-    expect(claimVariantEncode(dir, 720, 0)).toBe(0);
-    // Buffer-ahead requests are covered by the pending encode (child not spawned yet),
-    // so they must NOT claim again — that would double-spawn into the same directory.
-    expect(claimVariantEncode(dir, 720, 1)).toBeNull();
-    expect(claimVariantEncode(dir, 720, 50)).toBeNull();
+    // First request for a variant starts an encode.
+    expect(claimVariantEncode(dir, 720)).toBe(true);
+    registerHlsProcess(dir, 720, makeChild());
+
+    // Subsequent requests while encode is live must NOT restart it — that would
+    // double-spawn into the same directory.
+    expect(claimVariantEncode(dir, 720)).toBe(false);
+    expect(claimVariantEncode(dir, 720)).toBe(false);
   });
 
-  it("starts an independent encode per variant (ABR up-switch begins at the play position)", async () => {
+  it("starts an independent encode per variant (ABR variant switch)", async () => {
     const { claimVariantEncode } = await loadSession();
     const dir = "/hls/b";
 
-    expect(claimVariantEncode(dir, 360, 0)).toBe(0);
-    // Switching up to 720p mid-stream: a new variant with no encode begins exactly at
-    // the requested (current) position, not from 0.
-    expect(claimVariantEncode(dir, 720, 120)).toBe(120);
-    expect(claimVariantEncode(dir, 720, 121)).toBeNull();
+    expect(claimVariantEncode(dir, 360)).toBe(true);
+    // Switching up to 720p mid-stream: a new variant with no encode starts one.
+    expect(claimVariantEncode(dir, 720)).toBe(true);
+    // Subsequent 720p requests are covered by the running encode.
+    expect(claimVariantEncode(dir, 720)).toBe(false);
   });
 
-  it("does not mistake startup buffer-fill for a forward seek", async () => {
-    const { claimVariantEncode, touchVariant, registerHlsProcess } = await loadSession();
-    const dir = "/hls/fill";
-
-    // Sequential buffer-fill ahead of a from-0 encode that hasn't caught up yet.
-    let forwardSeek = touchVariant(dir, 720, 0);
-    expect(forwardSeek).toBe(false);
-    expect(claimVariantEncode(dir, 720, 0, forwardSeek)).toBe(0);
-    registerHlsProcess(dir, 720, makeChild());
-
-    // Requesting segments 1..40 in order must never look like a seek, even though the
-    // encode is far behind — the high-water mark advances one at a time.
-    for (let n = 1; n <= 40; n++) {
-      forwardSeek = touchVariant(dir, 720, n);
-      expect(forwardSeek).toBe(false);
-      expect(claimVariantEncode(dir, 720, n, forwardSeek)).toBeNull();
-    }
-  });
-
-  it("restarts at the seek target on a large forward jump", async () => {
-    const { claimVariantEncode, touchVariant, registerHlsProcess } = await loadSession();
-    const dir = "/hls/fwd";
-
-    touchVariant(dir, 720, 0);
-    expect(claimVariantEncode(dir, 720, 0, false)).toBe(0);
-    const child = makeChild();
-    registerHlsProcess(dir, 720, child);
-
-    // Player buffers a little, then seeks far ahead of everything requested so far.
-    touchVariant(dir, 720, 1);
-    const forwardSeek = touchVariant(dir, 720, 600);
-    expect(forwardSeek).toBe(true);
-    // The stale from-0 encode is killed and a new one starts at the seek target.
-    expect(claimVariantEncode(dir, 720, 600, forwardSeek)).toBe(600);
-    expect(child.kill).toHaveBeenCalled();
-
-    // Sequential playback after the seek does not keep restarting.
-    registerHlsProcess(dir, 720, makeChild());
-    const next = touchVariant(dir, 720, 601);
-    expect(next).toBe(false);
-    expect(claimVariantEncode(dir, 720, 601, next)).toBeNull();
-  });
-
-  it("restarts (killing the old encode) on a backward seek", async () => {
-    const { claimVariantEncode, registerHlsProcess } = await loadSession();
-    const dir = "/hls/c";
-
-    expect(claimVariantEncode(dir, 720, 300)).toBe(300);
-    const child = makeChild();
-    registerHlsProcess(dir, 720, child);
-
-    // Seeking back before the encode's start point can never be satisfied by it, so
-    // the slot restarts at the earlier segment and the stale encode is killed.
-    expect(claimVariantEncode(dir, 720, 100)).toBe(100);
-    expect(child.kill).toHaveBeenCalled();
-  });
-
-  it("restarts once the encode process has exited", async () => {
+  it("returns true once the encode process has exited, then false again after restart", async () => {
     const { claimVariantEncode, registerHlsProcess } = await loadSession();
     const dir = "/hls/d";
 
-    expect(claimVariantEncode(dir, 720, 0)).toBe(0);
+    expect(claimVariantEncode(dir, 720)).toBe(true);
     const child = makeChild();
     registerHlsProcess(dir, 720, child);
-    expect(claimVariantEncode(dir, 720, 10)).toBeNull(); // still running, covered
+    expect(claimVariantEncode(dir, 720)).toBe(false); // still running
 
     child.emit("exit"); // encoder finished/crashed → slot is dead
-    // A request for a segment the dead encode never produced restarts it.
-    expect(claimVariantEncode(dir, 720, 10)).toBe(10);
+    expect(claimVariantEncode(dir, 720)).toBe(true); // needs restart
+    registerHlsProcess(dir, 720, makeChild());
+    expect(claimVariantEncode(dir, 720)).toBe(false); // live again
   });
 
-  it("reaps an idle variant's encode and restarts it on re-selection", async () => {
+  it("reaps an idle variant's encode and restarts on re-selection", async () => {
     jest.useFakeTimers();
     const { claimVariantEncode, registerHlsProcess, touchVariant } = await loadSession(50);
     const dir = "/hls/e";
 
-    expect(claimVariantEncode(dir, 360, 0)).toBe(0);
+    expect(claimVariantEncode(dir, 360)).toBe(true);
     const child = makeChild();
     registerHlsProcess(dir, 360, child);
     touchVariant(dir, 360);
@@ -130,7 +76,7 @@ describe("claimVariantEncode", () => {
     jest.advanceTimersByTime(60);
     expect(child.kill).toHaveBeenCalled();
 
-    // Re-selecting it later restarts the encode at the newly requested position.
-    expect(claimVariantEncode(dir, 360, 200)).toBe(200);
+    // Re-selecting it later restarts the encode.
+    expect(claimVariantEncode(dir, 360)).toBe(true);
   });
 });

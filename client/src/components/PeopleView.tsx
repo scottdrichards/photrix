@@ -1,20 +1,39 @@
-import { memo, useEffect, useState } from "react";
-import type { ClusterFace, PersonCluster, PersonClusterWithFaces, PeopleClustersResult } from "../api";
-import { buildFaceCropUrl, fetchClusterDetail, fetchPeopleClusters } from "../api";
+import { memo, useEffect, useRef, useState } from "react";
+import type {
+  ClusterFace,
+  FaceClusterPCAPoint,
+  PersonCluster,
+  PersonCentroid,
+  PersonClusterWithFaces,
+  PeopleClustersResult,
+} from "../api";
+import {
+  buildFaceCropUrl,
+  fetchClusterDetail,
+  fetchFaceClustersPCA,
+  fetchPeopleClusters,
+  mergeClusters,
+  renameCluster,
+  separateCluster,
+} from "../api";
 import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { ViewToggle } from "./ViewToggle";
+import { FaceClusterViz } from "./FaceClusterViz";
 import css from "./PeopleView.module.css";
+
+type SelectedFaceGroup = {
+  id: string;
+  faces: ClusterFace[];
+  label: string;
+};
 
 type FaceImageProps = {
   face: ClusterFace;
   className: string;
 };
 
-// The server returns a JPEG cropped to the padded face region, so the browser
-// only downloads the face and just needs object-fit: cover to fill the square
-// viewport — no zoom/pan transform or aspect-ratio compensation required.
 const FaceImage = ({ face, className }: FaceImageProps) => (
   <img
     src={buildFaceCropUrl(face)}
@@ -43,18 +62,109 @@ const FaceThumb = ({ face, label, onClick }: FaceThumbProps) => (
   </button>
 );
 
+type InlineNameEditorProps = {
+  name: string | null;
+  onSave: (name: string | null) => void;
+};
+
+const InlineNameEditor = ({ name, onSave }: InlineNameEditorProps) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name ?? "");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDraft(name ?? "");
+    setEditing(true);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const commit = (e: React.MouseEvent | React.FormEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const trimmed = draft.trim();
+    onSave(trimmed || null);
+    setEditing(false);
+  };
+
+  const cancel = (e: React.MouseEvent | React.KeyboardEvent) => {
+    e.stopPropagation();
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <form
+        className={css.nameForm}
+        onSubmit={commit}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <input
+          ref={inputRef}
+          className={css.nameInput}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Enter name…"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") cancel(e);
+          }}
+        />
+        <button type="submit" className={css.nameSaveBtn}>
+          ✓
+        </button>
+        <button type="button" className={css.nameCancelBtn} onClick={cancel}>
+          ✕
+        </button>
+      </form>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={name ? css.clusterName : css.clusterNameEmpty}
+      onClick={startEdit}
+      title="Click to set name"
+    >
+      {name ?? "Add name…"}
+    </button>
+  );
+};
+
 type PersonDetailProps = {
   cluster: PersonClusterWithFaces;
   onBack: () => void;
+  onViewRelatedGroup: (cluster: PersonCentroid | PersonCluster, label: string) => void;
+  onClearSelectedFaceGroup: () => void;
+  selectedFaceGroup: SelectedFaceGroup | null;
+  selectedFaceGroupLoading: boolean;
+  onMergeSuggestion: (cluster: PersonCluster) => void;
+  mergingSuggestionId: string | null;
+  onSeparateCentroid: (centroid: PersonCentroid) => void;
+  separatingCentroidId: string | null;
+  onRename: (name: string | null) => void;
 };
 
-const PersonDetail = ({ cluster, onBack }: PersonDetailProps) => {
+const PersonDetail = ({
+  cluster,
+  onBack,
+  onViewRelatedGroup,
+  onClearSelectedFaceGroup,
+  selectedFaceGroup,
+  selectedFaceGroupLoading,
+  onMergeSuggestion,
+  mergingSuggestionId,
+  onSeparateCentroid,
+  separatingCentroidId,
+  onRename,
+}: PersonDetailProps) => {
   const { setItems, setSelected } = useSelectionContext();
+  const visibleFaces = selectedFaceGroup?.faces ?? cluster.faces;
 
   useEffect(() => {
-    setItems(cluster.faces.map((face) => face.photo));
+    setItems(visibleFaces.map((face) => face.photo));
     return () => setItems([]);
-  }, [cluster, setItems]);
+  }, [setItems, visibleFaces]);
 
   const handleFaceClick = (face: ClusterFace) => {
     setSelected(face.photo);
@@ -66,18 +176,148 @@ const PersonDetail = ({ cluster, onBack }: PersonDetailProps) => {
         <button type="button" className={css.backButton} onClick={onBack}>
           ← Back
         </button>
+        <InlineNameEditor name={cluster.name} onSave={onRename} />
         <span className={css.personDetailCount}>{cluster.count} faces</span>
       </div>
-      <div className={css.faceGrid}>
-        {cluster.faces.map((face, index) => (
-          <FaceThumb
-            key={`${face.photo.path}-${index}`}
-            face={face}
-            label={face.photo.name}
-            onClick={() => handleFaceClick(face)}
-          />
-        ))}
-      </div>
+      {(cluster.centroids.length > 0 || cluster.mergeSuggestions.length > 0) && (
+        <div className={css.personDetailSections}>
+          {cluster.centroids.length > 0 && (
+            <section className={css.detailSection}>
+              <div className={css.detailSectionHeader}>
+                <h3>Match Groups</h3>
+              </div>
+                <div className={css.relatedPeopleList}>
+                  {cluster.centroids.map((centroid) => (
+                  <article
+                    key={centroid.id}
+                    className={`${css.relatedPersonCard} ${selectedFaceGroup?.id === centroid.id ? css.relatedPersonCardSelected : ""}`}
+                  >
+                    <div className={css.relatedPersonFaceWrap}>
+                      <FaceImage
+                        face={centroid.representative}
+                        className={css.relatedPersonFaceImage}
+                      />
+                    </div>
+                    <div className={css.relatedPersonBody}>
+                      <div className={css.relatedPersonTitleRow}>
+                        <span>{centroid.count} faces</span>
+                      </div>
+                      <div className={css.relatedPersonActions}>
+                        <button
+                          type="button"
+                          className={css.relatedPersonActionButton}
+                          onClick={() => onViewRelatedGroup(centroid, `${centroid.count} faces`)}
+                        >
+                          View
+                        </button>
+                        {centroid.id !== cluster.id && (
+                          <button
+                            type="button"
+                            className={css.relatedPersonMergeButton}
+                            onClick={() => onSeparateCentroid(centroid)}
+                            disabled={separatingCentroidId === centroid.id}
+                            aria-label={`Separate ${centroid.id} from ${cluster.name ?? cluster.id}`}
+                          >
+                            {separatingCentroidId === centroid.id ? "Separating..." : "Separate"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {cluster.mergeSuggestions.length > 0 && (
+            <section className={css.detailSection}>
+              <div className={css.detailSectionHeader}>
+                <h3>Suggested matches</h3>
+              </div>
+                <div className={css.relatedPeopleList}>
+                  {cluster.mergeSuggestions.map((suggestion) => (
+                  <article
+                    key={suggestion.id}
+                    className={`${css.relatedPersonCard} ${selectedFaceGroup?.id === suggestion.id ? css.relatedPersonCardSelected : ""}`}
+                  >
+                    <div className={css.relatedPersonFaceWrap}>
+                      <FaceImage
+                        face={suggestion.representative}
+                        className={css.relatedPersonFaceImage}
+                      />
+                    </div>
+                    <div className={css.relatedPersonBody}>
+                      <div className={css.relatedPersonTitleRow}>
+                        {suggestion.name ? <strong>{suggestion.name}</strong> : null}
+                        <span>{suggestion.count} faces</span>
+                        {suggestion.yearRangeLabel ? <span>{suggestion.yearRangeLabel}</span> : null}
+                      </div>
+                      <div className={css.relatedPersonActions}>
+                        <button
+                          type="button"
+                          className={css.relatedPersonActionButton}
+                          onClick={() =>
+                            onViewRelatedGroup(
+                              suggestion,
+                              suggestion.name ?? `${suggestion.count} faces`,
+                            )
+                          }
+                        >
+                          View
+                        </button>
+                        <button
+                          type="button"
+                          className={css.relatedPersonMergeButton}
+                          onClick={() => onMergeSuggestion(suggestion)}
+                          disabled={mergingSuggestionId === suggestion.id}
+                          aria-label={`Merge ${suggestion.name ?? suggestion.id} into ${cluster.name ?? cluster.id}`}
+                        >
+                          {mergingSuggestionId === suggestion.id ? "Merging…" : "Merge"}
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+      <section className={css.detailSection}>
+        <div className={css.detailSectionHeader}>
+          <div className={css.selectedFacesHeader}>
+            <h3>{selectedFaceGroup ? "Selected Match Group Faces" : "All faces"}</h3>
+            {selectedFaceGroup ? (
+              <span className={css.selectedFacesMeta}>{selectedFaceGroup.label}</span>
+            ) : null}
+          </div>
+          {selectedFaceGroup ? (
+            <button
+              type="button"
+              className={css.clearFaceFilterButton}
+              onClick={onClearSelectedFaceGroup}
+            >
+              Show all faces
+            </button>
+          ) : null}
+        </div>
+        {selectedFaceGroupLoading ? (
+          <div className={css.spinnerWrap}>
+            <Spinner size="small" />
+          </div>
+        ) : (
+          <div className={css.faceGrid}>
+            {visibleFaces.map((face, index) => (
+              <FaceThumb
+                key={`${face.photo.path}-${index}`}
+                face={face}
+                label={face.photo.name}
+                onClick={() => handleFaceClick(face)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 };
@@ -85,6 +325,70 @@ const PersonDetail = ({ cluster, onBack }: PersonDetailProps) => {
 type PeopleViewProps = {
   view: "library" | "people";
   onViewChange: (view: "library" | "people") => void;
+};
+
+const sortPeopleClusters = (clusters: PersonCluster[]) =>
+  [...clusters].sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
+
+const chooseCanonicalMergeTarget = (target: PersonCluster, source: PersonCluster) =>
+  target.name == null && source.name != null ? source : target;
+
+const applyOptimisticClusterMerge = (
+  result: PeopleClustersResult | null,
+  mergedAwayClusters: PersonCluster[],
+  targetCluster: PersonCluster,
+): PeopleClustersResult | null => {
+  if (!result || mergedAwayClusters.length === 0) return result;
+
+  const sourceIds = new Set(mergedAwayClusters.map((cluster) => cluster.id));
+  const addedCount = mergedAwayClusters.reduce((sum, cluster) => sum + cluster.count, 0);
+  const nextClusters = result.clusters.flatMap((cluster) => {
+    if (sourceIds.has(cluster.id)) return [];
+    if (cluster.id !== targetCluster.id) return [cluster];
+    return [{ ...cluster, ...targetCluster, count: cluster.count + addedCount }];
+  });
+  const removedVisibleClusters = result.clusters.length - nextClusters.length;
+  const hasVisibleTarget = nextClusters.some((cluster) => cluster.id === targetCluster.id);
+  if (!hasVisibleTarget && removedVisibleClusters > 0) {
+    nextClusters.push({ ...targetCluster, count: targetCluster.count + addedCount });
+  }
+
+  return {
+    ...result,
+    clusters: sortPeopleClusters(nextClusters),
+    totalClusters: Math.max(0, result.totalClusters - mergedAwayClusters.length),
+  };
+};
+
+const applyOptimisticDetailMerge = (
+  detail: PersonClusterWithFaces,
+  sourceCluster: PersonCluster,
+): PersonClusterWithFaces => {
+  const currentCluster: PersonCluster = {
+    id: detail.id,
+    count: detail.count,
+    representative: detail.representative,
+    name: detail.name,
+  };
+  const canonicalTarget = chooseCanonicalMergeTarget(currentCluster, sourceCluster);
+  const movedCluster = canonicalTarget.id === currentCluster.id ? sourceCluster : currentCluster;
+  const nextCentroids = detail.centroids.some((centroid) => centroid.id === movedCluster.id)
+    ? detail.centroids
+    : [...detail.centroids, {
+        id: movedCluster.id,
+        count: movedCluster.count,
+        representative: movedCluster.representative,
+      }].sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
+
+  return {
+    ...detail,
+    id: canonicalTarget.id,
+    count: detail.count + sourceCluster.count,
+    name: canonicalTarget.name,
+    representative: canonicalTarget.representative,
+    centroids: nextCentroids,
+    mergeSuggestions: detail.mergeSuggestions.filter((cluster) => cluster.id !== sourceCluster.id),
+  };
 };
 
 const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
@@ -95,102 +399,427 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
   const [data, setData] = useState<PeopleClustersResult | null>(null);
   const [personDetail, setPersonDetail] = useState<PersonClusterWithFaces | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [merging, setMerging] = useState(false);
+  const [mergingSuggestionId, setMergingSuggestionId] = useState<string | null>(null);
+  const [separatingCentroidId, setSeparatingCentroidId] = useState<string | null>(null);
+  const [selectedFaceGroup, setSelectedFaceGroup] = useState<SelectedFaceGroup | null>(null);
+  const [selectedFaceGroupLoading, setSelectedFaceGroupLoading] = useState(false);
+  const [vizPoints, setVizPoints] = useState<FaceClusterPCAPoint[] | null>(null);
+  const [vizLoading, setVizLoading] = useState(false);
+  const vizRequestRef = useRef<AbortController | null>(null);
+  const selectedFaceGroupRequestRef = useRef<AbortController | null>(null);
 
-  // Load cluster summaries
   useEffect(() => {
     const abortOnDisposed = "disposed";
     const abortController = new AbortController();
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
     const load = (initial: boolean) => {
-      if (initial) {
-        setLoading(true);
-        setError(null);
-      }
-
       fetchPeopleClusters({
         signal: abortController.signal,
         ...filter,
       })
         .then((result) => {
           setData(result);
-          // While the background clustering task is still assigning faces,
-          // refresh periodically so newly formed clusters appear on their own.
           if (result.pendingFaces > 0 && !abortController.signal.aborted) {
             refreshTimer = setTimeout(() => load(false), 10_000);
           }
         })
         .catch((err) => {
-          if (err === abortOnDisposed || err.name === "AbortError") {
-            return;
-          }
+          if (err === abortOnDisposed || err.name === "AbortError") return;
           setError("Failed to fetch people clusters");
         })
         .finally(() => {
-          if (initial) {
-            setLoading(false);
-          }
+          if (initial) setLoading(false);
         });
+      if (initial) {
+        setLoading(true);
+        setError(null);
+      }
     };
 
     load(true);
-
     return () => {
       if (refreshTimer !== undefined) clearTimeout(refreshTimer);
       abortController.abort(abortOnDisposed);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
-  const handleClusterClick = (cluster: PersonCluster) => {
-    const abortController = new AbortController();
-    setDetailLoading(true);
+  useEffect(() => () => {
+    vizRequestRef.current?.abort();
+  }, []);
 
-    fetchClusterDetail({
-      clusterId: cluster.id,
-      signal: abortController.signal,
-      ...filter,
-    })
-      .then((result) => {
-        if (result.cluster) {
-          setPersonDetail(result.cluster);
-        }
-      })
+  useEffect(() => () => {
+    selectedFaceGroupRequestRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    selectedFaceGroupRequestRef.current?.abort();
+    selectedFaceGroupRequestRef.current = null;
+    setSelectedFaceGroup(null);
+    setSelectedFaceGroupLoading(false);
+  }, [personDetail?.id]);
+
+  const refreshPeopleClusters = async (signal?: AbortSignal) => {
+    const result = await fetchPeopleClusters({ ...filter, signal });
+    setData(result);
+    return result;
+  };
+
+  const loadClusterDetail = async (
+    clusterId: string,
+    signal?: AbortSignal,
+    options: { showSpinner?: boolean } = {},
+  ) => {
+    const { showSpinner = true } = options;
+    if (showSpinner) setDetailLoading(true);
+    try {
+      const result = await fetchClusterDetail({ clusterId, signal, ...filter });
+      if (result.cluster) setPersonDetail(result.cluster);
+      return result.cluster;
+    } finally {
+      if (showSpinner) setDetailLoading(false);
+    }
+  };
+
+  const handleClusterClick = (cluster: PersonCluster, event: React.MouseEvent) => {
+    // If any clusters are selected, treat click as toggle
+    if (selected.size > 0) {
+      event.preventDefault();
+      toggleSelect(cluster.id);
+      return;
+    }
+
+    const abortController = new AbortController();
+    loadClusterDetail(cluster.id, abortController.signal)
       .catch((err) => {
         if (err.name === "AbortError") return;
         console.error("Failed to fetch cluster detail:", err);
-      })
-      .finally(() => {
-        setDetailLoading(false);
       });
   };
 
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleLongPress = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  };
+
+  const handleMerge = async () => {
+    if (selected.size < 2) return;
+    // Use the largest cluster as target (first in list by count)
+    const ids = Array.from(selected);
+    const clusters = data?.clusters ?? [];
+    const ordered = ids
+      .map((id) => clusters.find((c) => c.id === id))
+      .filter(Boolean) as PersonCluster[];
+      ordered.sort(
+        (a, b) => Number(Boolean(b.name)) - Number(Boolean(a.name)) || b.count - a.count,
+      );
+    const [target, ...sources] = ordered;
+    const previousData = data;
+    const previousSelected = selected;
+    setMerging(true);
+    setData((prev) => applyOptimisticClusterMerge(prev, sources, target));
+    setSelected(new Set());
+    try {
+      await mergeClusters(
+        sources.map((c) => c.id),
+        target.id,
+      );
+      refreshPeopleClusters().catch((err) => {
+        console.error("Failed to refresh people clusters after merge:", err);
+      });
+    } catch (err) {
+      setData(previousData);
+      setSelected(previousSelected);
+      console.error("Failed to merge clusters:", err);
+    } finally {
+      setMerging(false);
+    }
+  };
+
+  const handleRenameInDetail = async (name: string | null) => {
+    if (!personDetail) return;
+    try {
+      await renameCluster(personDetail.id, name);
+      setPersonDetail({ ...personDetail, name });
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              clusters: prev.clusters.map((c) =>
+                c.id === personDetail.id ? { ...c, name } : c,
+              ),
+            }
+          : prev,
+      );
+    } catch (err) {
+      console.error("Failed to rename cluster:", err);
+    }
+  };
+
+  const handleRenameInGrid = async (cluster: PersonCluster, name: string | null) => {
+    try {
+      await renameCluster(cluster.id, name);
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              clusters: prev.clusters.map((c) => (c.id === cluster.id ? { ...c, name } : c)),
+            }
+          : prev,
+      );
+    } catch (err) {
+      console.error("Failed to rename cluster:", err);
+    }
+  };
+
   const handleBack = () => {
+    selectedFaceGroupRequestRef.current?.abort();
+    selectedFaceGroupRequestRef.current = null;
+    setSelectedFaceGroup(null);
+    setSelectedFaceGroupLoading(false);
     setPersonDetail(null);
     setItems([]);
+  };
+
+  const openClusterDetail = (id: string) => {
+    selectedFaceGroupRequestRef.current?.abort();
+    selectedFaceGroupRequestRef.current = null;
+    setSelectedFaceGroup(null);
+    setSelectedFaceGroupLoading(false);
+    vizRequestRef.current?.abort();
+    vizRequestRef.current = null;
+    setVizLoading(false);
+    setVizPoints(null);
+    // Open cluster detail directly, bypassing selection-mode toggle
+    loadClusterDetail(id)
+      .catch((err) => {
+        if (err.name === "AbortError") return;
+        console.error("Failed to fetch cluster detail:", err);
+      });
+  };
+
+  const clearSelectedFaceGroup = () => {
+    selectedFaceGroupRequestRef.current?.abort();
+    selectedFaceGroupRequestRef.current = null;
+    setSelectedFaceGroup(null);
+    setSelectedFaceGroupLoading(false);
+  };
+
+  const handleViewRelatedGroup = async (
+    relatedGroup: PersonCentroid | PersonCluster,
+    label: string,
+  ) => {
+    if (selectedFaceGroup?.id === relatedGroup.id) {
+      clearSelectedFaceGroup();
+      return;
+    }
+
+    selectedFaceGroupRequestRef.current?.abort();
+    const abortController = new AbortController();
+    selectedFaceGroupRequestRef.current = abortController;
+    setSelectedFaceGroup({ id: relatedGroup.id, faces: [], label });
+    setSelectedFaceGroupLoading(true);
+
+    try {
+      const result = await fetchClusterDetail({
+        clusterId: relatedGroup.id,
+        signal: abortController.signal,
+        ...filter,
+      });
+      if (abortController.signal.aborted) return;
+      if (!result.cluster) {
+        clearSelectedFaceGroup();
+        return;
+      }
+      setSelectedFaceGroup({
+        id: relatedGroup.id,
+        faces: result.cluster.faces,
+        label,
+      });
+    } catch (err) {
+      if (err === "disposed" || (err as { name?: string }).name === "AbortError") return;
+      clearSelectedFaceGroup();
+      console.error("Failed to load related group faces:", err);
+    } finally {
+      if (selectedFaceGroupRequestRef.current === abortController) {
+        selectedFaceGroupRequestRef.current = null;
+        setSelectedFaceGroupLoading(false);
+      }
+    }
+  };
+
+  const handleMergeSuggestion = async (suggestion: PersonCluster) => {
+    if (!personDetail) return;
+    if (selectedFaceGroup?.id === suggestion.id) clearSelectedFaceGroup();
+    const previousDetail = personDetail;
+    const previousData = data;
+    const currentCluster: PersonCluster = {
+      id: personDetail.id,
+      count: personDetail.count,
+      representative: personDetail.representative,
+      name: personDetail.name,
+    };
+    const canonicalTarget = chooseCanonicalMergeTarget(currentCluster, suggestion);
+    const mergedAwayCluster = canonicalTarget.id === currentCluster.id ? suggestion : currentCluster;
+    setMergingSuggestionId(suggestion.id);
+    setPersonDetail((prev) => (prev ? applyOptimisticDetailMerge(prev, suggestion) : prev));
+    setData((prev) => applyOptimisticClusterMerge(prev, [mergedAwayCluster], canonicalTarget));
+    try {
+      await mergeClusters([suggestion.id], personDetail.id);
+      loadClusterDetail(canonicalTarget.id, undefined, { showSpinner: false }).catch((err) => {
+        console.error("Failed to refresh merged cluster detail:", err);
+      });
+      refreshPeopleClusters().catch((err) => {
+        console.error("Failed to refresh people clusters after suggested merge:", err);
+      });
+    } catch (err) {
+      setPersonDetail(previousDetail);
+      setData(previousData);
+      console.error("Failed to merge suggested cluster:", err);
+    } finally {
+      setMergingSuggestionId(null);
+    }
+  };
+
+  const handleSeparateCentroid = async (centroid: PersonCentroid) => {
+    if (!personDetail || centroid.id === personDetail.id) return;
+    if (selectedFaceGroup?.id === centroid.id) clearSelectedFaceGroup();
+    setSeparatingCentroidId(centroid.id);
+    try {
+      await separateCluster(centroid.id);
+      await Promise.all([loadClusterDetail(personDetail.id), refreshPeopleClusters()]);
+    } catch (err) {
+      console.error("Failed to separate cluster:", err);
+    } finally {
+      setSeparatingCentroidId(null);
+    }
+  };
+
+  const loadViz = (clusterId?: string) => {
+    vizRequestRef.current?.abort();
+    const abortController = new AbortController();
+    vizRequestRef.current = abortController;
+    setVizLoading(true);
+    fetchFaceClustersPCA({ clusterId, signal: abortController.signal })
+      .then((points) => {
+        if (!abortController.signal.aborted) setVizPoints(points);
+      })
+      .catch((err) => {
+        if (err.name === "AbortError") return;
+        console.error("Failed to load face PCA:", err);
+      })
+      .finally(() => {
+        if (vizRequestRef.current === abortController) {
+          vizRequestRef.current = null;
+          setVizLoading(false);
+        }
+      });
+  };
+
+  const handleShowViz = () => {
+    loadViz();
+  };
+
+  const handleVizFocusCluster = (id: string) => {
+    loadViz(id);
+  };
+
+  const handleCloseViz = () => {
+    vizRequestRef.current?.abort();
+    vizRequestRef.current = null;
+    setVizLoading(false);
+    setVizPoints(null);
   };
 
   if (personDetail) {
     return (
       <section className={css.peopleView}>
         <ViewToggle view={view} onViewChange={onViewChange} />
-        <PersonDetail cluster={personDetail} onBack={handleBack} />
+        <PersonDetail
+          cluster={personDetail}
+          onBack={handleBack}
+          onViewRelatedGroup={handleViewRelatedGroup}
+          onClearSelectedFaceGroup={clearSelectedFaceGroup}
+          selectedFaceGroup={selectedFaceGroup}
+          selectedFaceGroupLoading={selectedFaceGroupLoading}
+          onMergeSuggestion={handleMergeSuggestion}
+          mergingSuggestionId={mergingSuggestionId}
+          onSeparateCentroid={handleSeparateCentroid}
+          separatingCentroidId={separatingCentroidId}
+          onRename={handleRenameInDetail}
+        />
       </section>
     );
   }
 
   return (
     <section className={css.peopleView}>
+      {vizPoints !== null && (
+        <FaceClusterViz
+          points={vizPoints}
+          onFocusCluster={handleVizFocusCluster}
+          onResetOverview={handleShowViz}
+          onOpenCluster={openClusterDetail}
+          onClose={handleCloseViz}
+        />
+      )}
       <ViewToggle view={view} onViewChange={onViewChange} />
       <div className={css.summaryRow}>
         <h3>People</h3>
-        {data ? (
-          <small>
-            {data.totalClusters} clusters • {data.totalFaces} faces
-            {data.pendingFaces > 0
-              ? ` • clustering ${data.pendingFaces.toLocaleString()} more…`
-              : ""}
-          </small>
-        ) : null}
+        <div className={css.summaryActions}>
+          {selected.size >= 2 && (
+            <button
+              type="button"
+              className={css.mergeButton}
+              onClick={handleMerge}
+              disabled={merging}
+            >
+              {merging ? "Merging…" : `Merge ${selected.size} people`}
+            </button>
+          )}
+          {selected.size > 0 && (
+            <button
+              type="button"
+              className={css.cancelSelectButton}
+              onClick={() => setSelected(new Set())}
+            >
+              Cancel
+            </button>
+          )}
+          {data ? (
+            <small>
+              {data.totalClusters} clusters • {data.totalFaces} faces
+              {data.pendingFaces > 0
+                ? ` • clustering ${data.pendingFaces.toLocaleString()} more…`
+                : ""}
+            </small>
+          ) : null}
+          <button
+            type="button"
+            className={css.vizButton}
+            onClick={handleShowViz}
+            disabled={vizLoading || !data || data.clusters.length < 2}
+            title="Explore face embedding space in 3D"
+            aria-label="Show 3D face embedding visualization"
+          >
+            {vizLoading ? "…" : "✦"}
+          </button>
+        </div>
       </div>
 
       {error ? <h3>{error}</h3> : null}
@@ -205,27 +834,85 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
         <h3>No clustered faces for the current filter.</h3>
       ) : null}
 
+      {selected.size === 0 && (
+        <p className={css.selectHint}>Long-press or right-click a person to select for merging</p>
+      )}
+
       {data && data.clusters.length > 0 ? (
         <div className={css.clusterList}>
           {data.clusters.map((cluster) => (
-            <button
+            <ClusterCard
               key={cluster.id}
-              type="button"
-              className={css.clusterButton}
-              onClick={() => handleClusterClick(cluster)}
-            >
-              <div className={css.clusterFaceWrap}>
-                <FaceImage
-                  face={cluster.representative}
-                  className={css.clusterFaceImage}
-                />
-              </div>
-              <span className={css.clusterLabel}>{cluster.count} faces</span>
-            </button>
+              cluster={cluster}
+              isSelected={selected.has(cluster.id)}
+              onClick={(e) => handleClusterClick(cluster, e)}
+              onLongPress={() => handleLongPress(cluster.id)}
+              onToggleSelect={() => toggleSelect(cluster.id)}
+              onRename={(name) => handleRenameInGrid(cluster, name)}
+            />
           ))}
         </div>
       ) : null}
     </section>
+  );
+};
+
+type ClusterCardProps = {
+  cluster: PersonCluster;
+  isSelected: boolean;
+  onClick: (e: React.MouseEvent) => void;
+  onLongPress: () => void;
+  onToggleSelect: () => void;
+  onRename: (name: string | null) => void;
+};
+
+const ClusterCard = ({
+  cluster,
+  isSelected,
+  onClick,
+  onLongPress,
+  onToggleSelect,
+  onRename,
+}: ClusterCardProps) => {
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const handlePointerDown = () => {
+    longPressTimer.current = setTimeout(() => {
+      onLongPress();
+    }, 500);
+  };
+
+  const handlePointerUp = () => {
+    clearTimeout(longPressTimer.current);
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    onToggleSelect();
+  };
+
+  return (
+    <div
+      className={`${css.clusterCard} ${isSelected ? css.clusterCardSelected : ""}`}
+      onContextMenu={handleContextMenu}
+    >
+      <button
+        type="button"
+        className={css.clusterButton}
+        onClick={onClick}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerUp}
+        aria-pressed={isSelected}
+      >
+        <div className={css.clusterFaceWrap}>
+          <FaceImage face={cluster.representative} className={css.clusterFaceImage} />
+          {isSelected && <div className={css.selectedOverlay}>✓</div>}
+        </div>
+        <span className={css.clusterCount}>{cluster.count} faces</span>
+      </button>
+      <InlineNameEditor name={cluster.name} onSave={onRename} />
+    </div>
   );
 };
 

@@ -154,7 +154,7 @@ describe("ThumbnailTile", () => {
     triggerIntersection(false);
     expect(image).toHaveAttribute("loading", "lazy");
     expect(image).toHaveAttribute("fetchpriority", "low");
-    expect(image).toHaveAttribute("src", "http://localhost/a/1.jpg");
+    expect(image).not.toHaveAttribute("src");
   });
 
   it("displays filename for non-image files", () => {
@@ -168,5 +168,4 @@ describe("ThumbnailTile", () => {
     expect(screen.getByText("document.pdf")).toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
-
 });

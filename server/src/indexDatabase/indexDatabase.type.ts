@@ -3,10 +3,21 @@ import type {
   FileQueryExtraField,
   FilterElement as SharedFilterElement,
   RecordFilterCondition,
+  StringSearch,
 } from "../../../shared/filter-contract/src/index.ts";
 export type { Range, StringSearch } from "../../../shared/filter-contract/src/index.ts";
 
-export type FilterField = keyof FileRecord | FileQueryExtraField;
+export type RuntimeSemanticSimilarityFilter = {
+  queryVector: number[];
+  minSimilarity: number;
+};
+
+export type FilterField =
+  | keyof FileRecord
+  | FileQueryExtraField
+  | "semanticImage"
+  | "semanticAudio"
+  | "transcriptSearch";
 
 type BaseFilterCondition = RecordFilterCondition<FileRecord, "relativePath">;
 
@@ -15,6 +26,9 @@ export type FilterCondition = BaseFilterCondition & {
   hasAudioTranscript?: boolean | null;
   /** Match files that contain a detected face assigned to any of these cluster ids. */
   faceCluster?: number | number[] | null;
+  semanticImage?: RuntimeSemanticSimilarityFilter | null;
+  semanticAudio?: RuntimeSemanticSimilarityFilter | null;
+  transcriptSearch?: StringSearch | null;
 };
 
 export type LogicalFilter = Extract<
@@ -30,6 +44,12 @@ export type QueryOptions = {
   pageSize?: number;
   /** 1-indexed */
   page?: number;
+  /**
+   * When true, results include all files in every folder that contains at
+   * least one file matching `filter`. Useful for location/people queries where
+   * the caller wants the full folder context alongside matched items.
+   */
+  expandToFolder?: boolean;
 };
 
 export type QueryResultItem<
@@ -82,10 +102,20 @@ export type FaceClusterSummary = {
   id: string;
   count: number;
   representative: FaceClusterFace;
+  name: string | null;
+  yearRangeLabel?: string | null;
 };
 
 export type FaceCluster = FaceClusterSummary & {
   faces: FaceClusterFace[];
+  centroids: FaceClusterCentroid[];
+  mergeSuggestions: FaceClusterSummary[];
+};
+
+export type FaceClusterCentroid = {
+  id: string;
+  count: number;
+  representative: FaceClusterFace;
 };
 
 export type FaceClusterResult = {
@@ -103,18 +133,35 @@ export type FaceClusterDetailResult = {
   cluster: FaceCluster | null;
 };
 
+export type FaceClusterPCAPoint = {
+  id: string;
+  count: number;
+  name: string | null;
+  representative: FaceClusterFace;
+  x: number;
+  y: number;
+  z: number;
+  focused: boolean;
+};
+
+export type FaceClusterPCAResult = {
+  points: FaceClusterPCAPoint[];
+};
+
 export type DateHistogramBucket = {
   start: number;
   end: number;
   count: number;
 };
 
+export type DateHistogramGrouping = "day" | "month" | "year";
+
 export type DateHistogramResult = {
   buckets: DateHistogramBucket[];
   bucketSizeMs: number;
   minDate: number | null;
   maxDate: number | null;
-  grouping: "day" | "month";
+  grouping: DateHistogramGrouping;
 };
 
 export type GetFiles = <TQueryOptions extends QueryOptions>(

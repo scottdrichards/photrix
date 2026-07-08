@@ -25,8 +25,21 @@ const SyncHarness = ({ initialView = "library" as ViewMode } = {}) => {
       >
         set-filter
       </button>
+      <button
+        type="button"
+        onClick={() =>
+          setFilter({
+            semanticQuery: "  sunset beach  ",
+            searchSources: ["transcript", "image", "transcript"],
+          })
+        }
+      >
+        set-semantic
+      </button>
       <div data-testid="path">{filter.path ?? ""}</div>
       <div data-testid="include">{String(filter.includeSubfolders ?? true)}</div>
+      <div data-testid="semantic-query">{filter.semanticQuery ?? ""}</div>
+      <div data-testid="search-sources">{(filter.searchSources ?? []).join(",")}</div>
       <div data-testid="view">{view}</div>
     </>
   );
@@ -59,12 +72,18 @@ describe("useSyncUrlWithFilter", () => {
       </FilterProvider>,
     );
 
-    window.history.pushState(null, "", "/travel/italy?includeSubfolders=false");
+    window.history.pushState(
+      null,
+      "",
+      "/travel/italy?includeSubfolders=false&q=sunset&sources=transcript,image",
+    );
     fireEvent.popState(window);
 
     await waitFor(() => {
       expect(screen.getByTestId("path")).toHaveTextContent("travel/italy/");
       expect(screen.getByTestId("include")).toHaveTextContent("false");
+      expect(screen.getByTestId("semantic-query")).toHaveTextContent("sunset");
+      expect(screen.getByTestId("search-sources")).toHaveTextContent("image,transcript");
     });
   });
 
@@ -84,6 +103,25 @@ describe("useSyncUrlWithFilter", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("view")).toHaveTextContent("people");
+    });
+  });
+
+  it("syncs semantic query and sources into the URL while preserving share tokens", async () => {
+    window.history.pushState(null, "", "/shared?token=share-token");
+
+    render(
+      <FilterProvider>
+        <SyncHarness />
+      </FilterProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "set-semantic" }));
+
+    await waitFor(() => {
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get("token")).toBe("share-token");
+      expect(params.get("q")).toBe("sunset beach");
+      expect(params.get("sources")).toBe("image,transcript");
     });
   });
 });

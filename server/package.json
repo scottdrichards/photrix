@@ -30,6 +30,7 @@
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",
     "@opentelemetry/sdk-node": "^0.213.0",
+    "@simplewebauthn/server": "^13.3.2",
     "better-sqlite3": "^12.5.0",
     "chokidar": "^3.6.0",
     "dotenv": "^16.4.5",

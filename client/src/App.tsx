@@ -2,7 +2,7 @@ import { Info24Regular, Share24Regular } from "@fluentui/react-icons";
 import { useEffect, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
-import { buildFullShareFilter } from "./api";
+import { buildShareScope } from "./api";
 import { FullscreenViewer } from "./components/FullscreenViewer";
 import { LoginScreen } from "./components/LoginScreen";
 import { PeopleView } from "./components/PeopleView";
@@ -15,6 +15,7 @@ import { FilterProvider, useFilter } from "./components/filter/FilterContext";
 import { SelectionProvider } from "./components/selection/SelectionContext";
 import { useSyncUrlWithFilter, type ViewMode } from "./hooks/useSyncUrlWithFilter";
 import { buildShareUrl, isSharedView } from "./hooks/useShareFilter";
+import { readViewModeFromSearch } from "./filterUrlState";
 import { probeVideoPlaybackProfile } from "./videoPlaybackProfile";
 import { extractUrlToken, getAuthHeaders, initAuth, onUnauthorized } from "./auth";
 
@@ -25,9 +26,7 @@ const sharedView = isSharedView();
 
 const initialViewFromUrl = (): ViewMode => {
   if (typeof window === "undefined") return "library";
-  return new URLSearchParams(window.location.search).get("view") === "people"
-    ? "people"
-    : "library";
+  return readViewModeFromSearch(window.location.search);
 };
 
 const copyToClipboard = async (text: string): Promise<boolean> => {
@@ -53,7 +52,7 @@ const copyToClipboard = async (text: string): Promise<boolean> => {
 
 type ShareModalState = { url: string; copied: boolean } | null;
 
-const ShareButton = ({ view }: { view: ViewMode }) => {
+const ShareButton = () => {
   const { filter } = useFilter();
   const [loading, setLoading] = useState(false);
   const [modal, setModal] = useState<ShareModalState>(null);
@@ -62,17 +61,19 @@ const ShareButton = ({ view }: { view: ViewMode }) => {
     if (loading) return;
     setLoading(true);
     try {
-      const shareFilter = buildFullShareFilter({ ...filter, path: filter.path, includeSubfolders: filter.includeSubfolders });
+      const shareScope = buildShareScope({
+        ...filter,
+        path: filter.path,
+        includeSubfolders: filter.includeSubfolders,
+      });
       const res = await fetch("/api/auth/share-token", {
         method: "POST",
         headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ filter: shareFilter }),
+        body: JSON.stringify(shareScope),
       });
       if (!res.ok) throw new Error("Failed to issue share token");
       const { token } = (await res.json()) as { token: string };
-      // Build the URL with view info in a query param (no filter — that's server-side only)
-      const base = buildShareUrl(token);
-      const url = view !== "library" ? `${base}&view=${view}` : base;
+      const url = buildShareUrl(token);
       const copied = await copyToClipboard(url);
       setModal({ url, copied });
     } catch {
@@ -126,7 +127,7 @@ const AppContent = () => {
         <div className={css.headerActions}>
           <SearchBar />
           <Filter />
-          <ShareButton view={view} />
+          <ShareButton />
           {!sharedView && (
             <button
               title="Server Status"
@@ -140,7 +141,9 @@ const AppContent = () => {
         </div>
       </header>
 
-      {!sharedView && <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />}
+      {!sharedView && (
+        <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
+      )}
 
       {view === "library" ? (
         <ThumbnailGrid view={view} onViewChange={setView} />

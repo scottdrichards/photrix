@@ -16,6 +16,16 @@ const makeSpawnProcess = () => {
   return proc;
 };
 
+const deferred = <T>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
+
 afterEach(() => {
   jest.resetModules();
   jest.restoreAllMocks();
@@ -99,6 +109,51 @@ describe("convertImage unit", () => {
     const conversionPromise = convertImage(source, 320);
     await expect(conversionPromise).rejects.toBeInstanceOf(ImageConversionError);
     await expect(conversionPromise).rejects.toThrow(/requirements\.txt/i);
+  });
+
+  it("kills the conversion subprocess when the request aborts", async () => {
+    const cacheRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-convert-cache-"));
+    process.env.CACHE_DIR = cacheRoot;
+
+    const source = path.join(cacheRoot, "source.jpg");
+    writeFileSync(source, "img");
+
+    const conversionStarted = deferred<void>();
+    let conversionProc: ReturnType<typeof makeSpawnProcess> | null = null;
+    const spawnMock = jest.fn((command: string, args: string[]) => {
+      const proc = makeSpawnProcess();
+      if (args.includes("-c")) {
+        queueMicrotask(() => {
+          proc.stdout.emit("data", Buffer.from("C:\\Python\\python.exe\n"));
+          proc.emit("close", 0);
+        });
+        return proc;
+      }
+
+      proc.kill = jest.fn(() => {
+        queueMicrotask(() => proc.emit("close", null));
+      });
+      conversionProc = proc;
+      conversionStarted.resolve();
+      return proc;
+    });
+
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+
+    const { runWithRequestAbortSignal } = await import("../common/requestAbort.ts");
+    const { convertImage } = await import("./convertImage.ts");
+    const abortController = new AbortController();
+
+    const conversionPromise = runWithRequestAbortSignal(abortController.signal, () =>
+      convertImage(source, 320),
+    );
+
+    await conversionStarted.promise;
+    abortController.abort();
+
+    await expect(conversionPromise).rejects.toMatchObject({ name: "AbortError" });
+    expect(conversionProc).not.toBeNull();
+    expect(conversionProc!.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
   it("skips multi-size generation when all outputs already cached", async () => {

@@ -6,12 +6,17 @@ import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts"
 import { statusBackgroundTasksRequestHandler } from "./requestHandlers/statusBackgroundTasksRequestHandler.ts";
 import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
 import { networkProbeRequestHandler } from "./requestHandlers/networkProbeRequestHandler.ts";
+import { diagnosticsEventsRequestHandler } from "./requestHandlers/diagnosticsRequestHandler.ts";
 import { videoNegotiationRequestHandler } from "./requestHandlers/video/videoNegotiation.ts";
 import { searchRequestHandler } from "./requestHandlers/searchRequestHandler.ts";
 import {
   authLoginHandler,
   authLogoutHandler,
   authShareTokenHandler,
+  passkeyAuthenticationOptionsHandler,
+  passkeyAuthenticationVerifyHandler,
+  passkeyRegistrationOptionsHandler,
+  passkeyRegistrationVerifyHandler,
 } from "./requestHandlers/authRequestHandler.ts";
 import {
   bindCurrentRequestTrace,
@@ -24,10 +29,15 @@ import { writeJson } from "./utils.ts";
 import { getLogger } from "./observability/logger.ts";
 import {
   extractToken,
-  getShareFilter,
+  getShareScope,
+  initAuthService,
   isAuthEnabled,
   validateToken,
 } from "./auth/authService.ts";
+import { initPasskeyService } from "./auth/passkeyService.ts";
+import { resolveShareFilter, ShareScopeError } from "./auth/shareScope.ts";
+import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
+import { peopleRequestHandler } from "./requestHandlers/peopleRequestHandler.ts";
 
 const log = getLogger("httpServer");
 
@@ -56,12 +66,27 @@ export const createServer = (
     const requestId = Array.isArray(requestIdHeader)
       ? requestIdHeader[0]
       : requestIdHeader;
+    const clientSessionIdHeader = req.headers["x-client-session-id"];
+    const clientOperationIdHeader = req.headers["x-client-operation-id"];
+    const clientRequestIdHeader = req.headers["x-client-request-id"];
+    const clientSessionId = Array.isArray(clientSessionIdHeader)
+      ? clientSessionIdHeader[0]
+      : clientSessionIdHeader;
+    const clientOperationId = Array.isArray(clientOperationIdHeader)
+      ? clientOperationIdHeader[0]
+      : clientOperationIdHeader;
+    const clientRequestId = Array.isArray(clientRequestIdHeader)
+      ? clientRequestIdHeader[0]
+      : clientRequestIdHeader;
 
     void runWithRequestTrace(
       {
         method: req.method ?? "UNKNOWN",
         url: req.url ?? "",
         ...(requestId ? { requestId } : {}),
+        ...(clientSessionId ? { clientSessionId } : {}),
+        ...(clientOperationId ? { clientOperationId } : {}),
+        ...(clientRequestId ? { clientRequestId } : {}),
       },
       async () => {
         let requestLogged = false;
@@ -81,10 +106,23 @@ export const createServer = (
           res.setHeader("X-Request-Id", currentRequestId);
         }
 
+        // Abort server-side work (queued DB reads, most importantly) when the
+        // client gives up on the request — fetch abort, tab close, a map zoom
+        // superseding earlier zoom steps. `close` also fires after a normal
+        // response, so only treat it as an abort when nothing was completed.
+        const requestAbort = new AbortController();
+        res.once("close", () => {
+          if (!res.writableEnded) requestAbort.abort();
+        });
+        bindRequestAbortSignal(requestAbort.signal);
+
         try {
           res.setHeader("Access-Control-Allow-Origin", "*");
-          res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-          res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+          res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
+          res.setHeader(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-Client-Session-Id, X-Client-Operation-Id, X-Client-Request-Id, X-Request-Id",
+          );
           res.setHeader("Vary", "Origin");
 
           if (req.method === "OPTIONS") {
@@ -100,6 +138,9 @@ export const createServer = (
 
           // Auth gate — bypass for health check and auth endpoints themselves
           let shareFilter: unknown = null;
+          let shareScope: ReturnType<typeof getShareScope> = null;
+          let shareFilterResolved = false;
+          let shareToken: string | null = null;
           if (
             isAuthEnabled() &&
             req.url !== "/api/health" &&
@@ -114,8 +155,29 @@ export const createServer = (
               writeJson(res, 401, { error: "Unauthorized" });
               return;
             }
-            shareFilter = getShareFilter(token);
+            shareToken = token;
+            shareScope = getShareScope(token);
           }
+
+          const getResolvedShareFilter = async (): Promise<unknown> => {
+            if (!shareScope) {
+              return null;
+            }
+            if (shareFilterResolved) {
+              return shareFilter;
+            }
+            try {
+              shareFilter = await resolveShareFilter(shareScope, shareToken ?? undefined);
+              shareFilterResolved = true;
+              return shareFilter;
+            } catch (error) {
+              if (error instanceof ShareScopeError) {
+                writeJson(res, error.statusCode, { error: error.message });
+                return null;
+              }
+              throw error;
+            }
+          };
 
           // Let the orchestrator back background work off for the *entire* time a
           // real user request is in flight, freeing disk/CPU for it. A search can
@@ -151,7 +213,27 @@ export const createServer = (
           }
 
           if (req.url === "/api/auth/share-token" && req.method === "POST") {
-            authShareTokenHandler(req, res);
+            await authShareTokenHandler(req, res);
+            return;
+          }
+
+          if (req.url === "/api/auth/passkey/registration-options" && req.method === "POST") {
+            await passkeyRegistrationOptionsHandler(req, res);
+            return;
+          }
+
+          if (req.url === "/api/auth/passkey/registration-verify" && req.method === "POST") {
+            await passkeyRegistrationVerifyHandler(req, res);
+            return;
+          }
+
+          if (req.url === "/api/auth/passkey/authentication-options" && req.method === "POST") {
+            await passkeyAuthenticationOptionsHandler(req, res);
+            return;
+          }
+
+          if (req.url === "/api/auth/passkey/authentication-verify" && req.method === "POST") {
+            await passkeyAuthenticationVerifyHandler(req, res);
             return;
           }
 
@@ -165,8 +247,16 @@ export const createServer = (
             return;
           }
 
+          if (req.url?.startsWith("/api/diagnostics/events")) {
+            await diagnosticsEventsRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+            );
+            return;
+          }
+
           if (req.url?.startsWith("/api/status/stream") && req.method === "GET") {
-            if (shareFilter) { writeJson(res, 403, { error: "Forbidden" }); return; }
+            if (shareScope) { writeJson(res, 403, { error: "Forbidden" }); return; }
             await statusRequestHandler(req, res, {
               stream: true,
               taskOrchestrator,
@@ -175,13 +265,13 @@ export const createServer = (
           }
 
           if (req.url === "/api/status/background-tasks" && req.method === "POST") {
-            if (shareFilter) { writeJson(res, 403, { error: "Forbidden" }); return; }
+            if (shareScope) { writeJson(res, 403, { error: "Forbidden" }); return; }
             await statusBackgroundTasksRequestHandler(req, res, { taskOrchestrator });
             return;
           }
 
           if (req.url?.startsWith("/api/status") && req.method === "GET") {
-            if (shareFilter) { writeJson(res, 403, { error: "Forbidden" }); return; }
+            if (shareScope) { writeJson(res, 403, { error: "Forbidden" }); return; }
             await statusRequestHandler(req, res, {
               stream: false,
               taskOrchestrator,
@@ -199,7 +289,7 @@ export const createServer = (
 
           // Get folders endpoint - list subfolders at a given path
           if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
-            if (shareFilter) {
+            if (shareScope) {
               // Folder browsing is not meaningful for a scoped share link; deny
               // to prevent enumeration of the full folder tree.
               writeJson(res, 403, { error: "Forbidden" });
@@ -214,28 +304,48 @@ export const createServer = (
           }
 
           if (req.url?.startsWith("/api/suggestions") && req.method === "GET") {
+            const resolvedShareFilter = await getResolvedShareFilter();
+            if (res.writableEnded) return;
             await suggestionsRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
-              { database, shareFilter },
+              { database, shareFilter: resolvedShareFilter },
             );
             return;
           }
 
           if (req.url?.startsWith("/api/video/negotiate") && req.method === "GET") {
+            const resolvedShareFilter = await getResolvedShareFilter();
+            if (res.writableEnded) return;
             await videoNegotiationRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
-              { database, storageRoot: storagePath, shareFilter },
+              {
+                database,
+                storageRoot: storagePath,
+                taskOrchestrator,
+                shareFilter: resolvedShareFilter,
+              },
             );
             return;
           }
 
           if (req.url?.startsWith("/api/search") && req.method === "GET") {
+            const resolvedShareFilter = await getResolvedShareFilter();
+            if (res.writableEnded) return;
             await searchRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
-              { database, shareFilter },
+              { database, shareFilter: resolvedShareFilter, shareScope },
+            );
+            return;
+          }
+
+          if (req.url?.startsWith("/api/people/") && req.method === "POST") {
+            await peopleRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              database,
             );
             return;
           }
@@ -244,6 +354,8 @@ export const createServer = (
           // Query mode REQUIRES trailing slash: /api/files/ or /api/files/subfolder/
           // File serving has NO trailing slash: /api/files/image.jpg
           if (req.url?.startsWith("/api/files/") && req.method === "GET") {
+            const resolvedShareFilter = await getResolvedShareFilter();
+            if (res.writableEnded) return;
             await filesEndpointRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
@@ -251,7 +363,7 @@ export const createServer = (
                 database,
                 storageRoot: storagePath,
                 taskOrchestrator,
-                shareFilter,
+                shareFilter: resolvedShareFilter,
               },
             );
             return;
@@ -261,6 +373,12 @@ export const createServer = (
           res.writeHead(404, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Not found" }));
         } catch (error) {
+          if (isAbortError(error)) {
+            // The client already disconnected; there is no one to answer and
+            // nothing actually failed.
+            res.destroy();
+            return;
+          }
           if (!res.headersSent) {
             writeJson(res, 500, {
               error: "Internal server error",

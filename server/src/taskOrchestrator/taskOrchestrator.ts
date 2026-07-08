@@ -1,5 +1,6 @@
 import type { BackgroundTaskStatus } from "../../../shared/filter-contract/src/index.ts";
 import { getLogger } from "../observability/logger.ts";
+import { recordServerDiagnosticEvent } from "../observability/diagnosticsStore.ts";
 import { isSystemOverloaded, getAvailableMemoryMB } from "./systemLoad.ts";
 
 const log = getLogger("TaskOrchestrator");
@@ -101,6 +102,17 @@ export type TaskOrchestrator = {
   // Every beginUserRequest must be paired with exactly one endUserRequest.
   beginUserRequest: () => void;
   endUserRequest: () => void;
+  getDiagnosticsSnapshot: () => {
+    processBackgroundTasks: boolean;
+    activeRequests: number;
+    userActive: boolean;
+    overloaded: boolean;
+    dutyOff: boolean;
+    workersSuspended: boolean;
+    queueLengths: Record<QueueType, number>;
+    runningTasks: Array<{ name: string; queue: QueueType; priority: TaskPriority }>;
+    resourcesInUse: Record<Resources, number>;
+  };
 };
 
 const canRunTask = (
@@ -372,6 +384,26 @@ export const createTaskOrchestrator = (
     memoryMB: 0,
   };
 
+  const getDiagnosticsSnapshot = () => ({
+    processBackgroundTasks,
+    activeRequests,
+    userActive: userActive(),
+    overloaded: overloadActive(),
+    dutyOff,
+    workersSuspended,
+    queueLengths: {
+      blocking: queues.blocking.length,
+      implied: queues.implied.length,
+      background: queues.background.length,
+    },
+    runningTasks: [...runningTasks].map((task) => ({
+      name: task.name,
+      queue: task.queue,
+      priority: task.priority,
+    })),
+    resourcesInUse: { ...resourcesInUse },
+  });
+
   const bareRunningStatus = (task: RunningTask): BackgroundTaskStatus => ({
     id: `${task.queue}:${task.name}`,
     name: task.name,
@@ -536,6 +568,16 @@ export const createTaskOrchestrator = (
       };
       runningTasks.add(runningTask);
       logTaskEvent("Started", queue, nextTask.name);
+      recordServerDiagnosticEvent({
+        level: queue === "blocking" ? "warn" : "info",
+        event: "task.started",
+        message: `Started ${nextTask.name}`,
+        data: {
+          task: nextTask.name,
+          queue,
+          snapshot: getDiagnosticsSnapshot(),
+        },
+      });
       // A task may start mid-cycle while pressure is on; pause it if we're OFF.
       reconcileBackoff();
 
@@ -545,11 +587,32 @@ export const createTaskOrchestrator = (
         .onComplete()
         .catch((err) => {
           log.error({ err, task: nextTask.name, queue }, "Task failed");
+          recordServerDiagnosticEvent({
+            level: "error",
+            event: "task.failed",
+            message: `Task failed: ${nextTask.name}`,
+            data: {
+              task: nextTask.name,
+              queue,
+              error: err instanceof Error ? err.message : String(err),
+              snapshot: getDiagnosticsSnapshot(),
+            },
+          });
         })
         .finally(() => {
           checkInResources(resourcesInUse, requirements);
           runningTasks.delete(runningTask);
           logTaskEvent("Completed", queue, nextTask.name);
+          recordServerDiagnosticEvent({
+            level: "info",
+            event: "task.completed",
+            message: `Completed ${nextTask.name}`,
+            data: {
+              task: nextTask.name,
+              queue,
+              snapshot: getDiagnosticsSnapshot(),
+            },
+          });
           reconcileBackoff(); // pressure may have cleared with this task gone
           wakeUp?.();
         });
@@ -568,6 +631,16 @@ export const createTaskOrchestrator = (
     getBackgroundTaskStatus,
     addTask: (task: Task, queue: QueueType) => {
       queues[queue].push(task);
+      recordServerDiagnosticEvent({
+        level: queue === "blocking" ? "warn" : "info",
+        event: "task.queued",
+        message: `Queued ${task.name}`,
+        data: {
+          task: task.name,
+          queue,
+          snapshot: getDiagnosticsSnapshot(),
+        },
+      });
       if (processBackgroundTasks || queues["blocking"].length) {
         wakeUp?.();
       }
@@ -591,5 +664,6 @@ export const createTaskOrchestrator = (
       userActiveUntil = now() + ACTIVITY_COOLDOWN_MS;
       reconcileBackoff();
     },
+    getDiagnosticsSnapshot,
   };
 };

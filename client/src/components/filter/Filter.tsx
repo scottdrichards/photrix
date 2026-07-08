@@ -2,6 +2,7 @@ import {
   Calendar24Regular,
   Camera24Regular,
   Folder24Regular,
+  FolderOpen24Regular,
   Image24Regular,
   Location24Regular,
   Person24Regular,
@@ -13,7 +14,7 @@ import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Spinner } from "../../Spinner";
 import css from "./Filter.module.css";
-import { fetchFolders, fetchSuggestionsWithCounts } from "../../api";
+import { fetchFolders, fetchSuggestionsWithCounts, type FolderSummary } from "../../api";
 import type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
 import { DateHistogram } from "../DateHistogram";
 import { MapFilter } from "../MapFilter";
@@ -47,20 +48,27 @@ export const Filter = () => {
     lensFilter,
     locationBounds,
     dateRange,
+    expandToFolder,
   } = filter;
 
-  const selectedPeople = peopleInImageFilter ?? [];
-  const selectedCameraModels = cameraModelFilter ?? [];
-  const selectedLensModels = lensFilter ?? [];
+  const selectedPeople = useMemo(() => peopleInImageFilter ?? [], [peopleInImageFilter]);
+  const selectedCameraModels = useMemo(
+    () => cameraModelFilter ?? [],
+    [cameraModelFilter],
+  );
+  const selectedLensModels = useMemo(() => lensFilter ?? [], [lensFilter]);
 
   const ratingValue = ratingFilter?.rating ?? null;
   const ratingAtLeast = ratingFilter?.atLeast ?? true;
 
   const [activePanel, setActivePanel] = useState<FilterPanel | null>(null);
-  const [activePanelTrigger, setActivePanelTrigger] =
-    useState<HTMLButtonElement | null>(null);
-  const [floatingPanelStyle, setFloatingPanelStyle] = useState<CSSProperties | undefined>();
-  const [folders, setFolders] = useState<string[]>([]);
+  const [activePanelTrigger, setActivePanelTrigger] = useState<HTMLButtonElement | null>(
+    null,
+  );
+  const [floatingPanelStyle, setFloatingPanelStyle] = useState<
+    CSSProperties | undefined
+  >();
+  const [folders, setFolders] = useState<FolderSummary[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
   const [ratingCounts, setRatingCounts] = useState<Record<number, number>>({});
   const [loadingRatingCounts, setLoadingRatingCounts] = useState(false);
@@ -92,7 +100,9 @@ export const Filter = () => {
       return;
     }
 
-    const preferredLeft = Math.round(activePanelTrigger.getBoundingClientRect().right - panelWidth);
+    const preferredLeft = Math.round(
+      activePanelTrigger.getBoundingClientRect().right - panelWidth,
+    );
     const left = Math.max(
       viewportPadding,
       Math.min(preferredLeft, window.innerWidth - viewportPadding - panelWidth),
@@ -194,13 +204,21 @@ export const Filter = () => {
     setFilter({ mediaTypeFilter: type });
   };
 
+  const folderCountFormatter = useMemo(() => new Intl.NumberFormat(), []);
+
   const handleTranscriptFilterToggle = () => {
     setFilter({ hasAudioTranscript: !isTranscriptFilterActive });
   };
 
+  const isExpandToFolderActive = Boolean(expandToFolder);
+  const handleExpandToFolderToggle = () => {
+    setFilter({ expandToFolder: !isExpandToFolderActive });
+  };
+
   const arrayFilterSetter = useCallback(
     (key: "peopleInImageFilter" | "cameraModelFilter" | "lensFilter") =>
-      (nextValues: string[]) => setFilter({ [key]: nextValues }),
+      (nextValues: string[]) =>
+        setFilter({ [key]: nextValues }),
     [setFilter],
   );
 
@@ -223,7 +241,19 @@ export const Filter = () => {
     const loadFolders = async () => {
       setLoadingFolders(true);
       try {
-        const folderList = await fetchFolders(currentPath, abortController.signal);
+        const folderList = await fetchFolders({
+          path: currentPath,
+          signal: abortController.signal,
+          ratingFilter,
+          mediaTypeFilter,
+          hasAudioTranscript,
+          locationBounds,
+          dateRange,
+          peopleInImageFilter: selectedPeople,
+          faceClusterFilter,
+          cameraModelFilter: selectedCameraModels,
+          lensFilter: selectedLensModels,
+        });
         setFolders(folderList);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
@@ -236,7 +266,18 @@ export const Filter = () => {
 
     void loadFolders();
     return () => abortController.abort();
-  }, [currentPath]);
+  }, [
+    currentPath,
+    ratingFilter,
+    mediaTypeFilter,
+    hasAudioTranscript,
+    locationBounds,
+    dateRange,
+    selectedPeople,
+    faceClusterFilter,
+    selectedCameraModels,
+    selectedLensModels,
+  ]);
 
   useEffect(() => {
     if (activePanel !== "rating") {
@@ -348,7 +389,10 @@ export const Filter = () => {
           <Folder24Regular fontSize={20} />
         </button>
         {activePanel === "folders" && (
-          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
+          <div
+            className={`popover-surface ${css.panelSurface}`}
+            style={floatingPanelStyle}
+          >
             <div className={css.panelSection}>
               <h3>Folders</h3>
               <label className="switch-label">
@@ -363,7 +407,10 @@ export const Filter = () => {
               </label>
               {currentPath ? (
                 <div className={css.breadcrumbRow}>
-                  <button className="btn btn-transparent" onClick={() => setFilter({ path: "" })}>
+                  <button
+                    className="btn btn-transparent"
+                    onClick={() => setFilter({ path: "" })}
+                  >
                     Home
                   </button>
                   {breadcrumbs.map((part, index) => (
@@ -385,13 +432,13 @@ export const Filter = () => {
                 <div className={css.folderGrid}>
                   {folders.map((folder) => (
                     <div
-                      key={folder}
+                      key={folder.name}
                       className={css.folderCard}
-                      onClick={() => handleFolderClick(folder)}
+                      onClick={() => handleFolderClick(folder.name)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          handleFolderClick(folder);
+                          handleFolderClick(folder.name);
                         }
                       }}
                       role="button"
@@ -400,7 +447,10 @@ export const Filter = () => {
                       <span className={css.folderIcon}>
                         <Folder24Regular fontSize={20} />
                       </span>
-                      <span>{folder}</span>
+                      <span>
+                        {folder.name}
+                        {` (${folderCountFormatter.format(folder.count)})`}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -424,7 +474,10 @@ export const Filter = () => {
           <Image24Regular fontSize={20} />
         </button>
         {activePanel === "type" && (
-          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
+          <div
+            className={`popover-surface ${css.panelSurface}`}
+            style={floatingPanelStyle}
+          >
             <div className={css.panelSection}>
               <h3>Media type</h3>
               <div className={css.controlsRow}>
@@ -455,7 +508,10 @@ export const Filter = () => {
           <ScanPerson24Regular fontSize={20} />
         </button>
         {activePanel === "faceCluster" && (
-          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
+          <div
+            className={`popover-surface ${css.panelSurface}`}
+            style={floatingPanelStyle}
+          >
             <FaceFilterPanel isActive={activePanel === "faceCluster"} />
           </div>
         )}
@@ -486,7 +542,10 @@ export const Filter = () => {
           <Person24Regular fontSize={20} />
         </button>
         {activePanel === "people" && (
-          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
+          <div
+            className={`popover-surface ${css.panelSurface}`}
+            style={floatingPanelStyle}
+          >
             <SuggestionFilterField
               title="People in image"
               placeholder="Search names (e.g. Scott)"
@@ -521,7 +580,10 @@ export const Filter = () => {
           <Camera24Regular fontSize={20} />
         </button>
         {activePanel === "gear" && (
-          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
+          <div
+            className={`popover-surface ${css.panelSurface}`}
+            style={floatingPanelStyle}
+          >
             <SuggestionFilterField
               title="Camera model"
               placeholder="Search camera model (e.g. R6 Mark II)"
@@ -575,7 +637,10 @@ export const Filter = () => {
           <Star24Regular fontSize={20} />
         </button>
         {activePanel === "rating" && (
-          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
+          <div
+            className={`popover-surface ${css.panelSurface}`}
+            style={floatingPanelStyle}
+          >
             <div className={css.panelSection}>
               <h3>Rating</h3>
               <div className={css.ratingFilter}>
@@ -637,7 +702,10 @@ export const Filter = () => {
           <Calendar24Regular fontSize={20} />
         </button>
         {activePanel === "date" && (
-          <div className={`popover-surface ${css.panelSurface}`} style={floatingPanelStyle}>
+          <div
+            className={`popover-surface ${css.panelSurface}`}
+            style={floatingPanelStyle}
+          >
             <DateHistogram label="Date taken" />
           </div>
         )}
@@ -655,10 +723,26 @@ export const Filter = () => {
           <Location24Regular fontSize={20} />
         </button>
         {activePanel === "map" && (
-          <div className={`popover-surface ${css.mapPanelSurface}`} style={floatingPanelStyle}>
+          <div
+            className={`popover-surface ${css.mapPanelSurface}`}
+            style={floatingPanelStyle}
+          >
             <MapFilter compact />
           </div>
         )}
+      </div>
+
+      {/* Expand to folder */}
+      <div className="popover-anchor">
+        <button
+          title="Expand to folder — include all files in folders containing a match"
+          aria-label="Expand to folder"
+          aria-pressed={isExpandToFolderActive}
+          className={`btn btn-icon ${css.filterIconButton} ${isExpandToFolderActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={handleExpandToFolderToggle}
+        >
+          <FolderOpen24Regular fontSize={20} />
+        </button>
       </div>
     </div>
   );

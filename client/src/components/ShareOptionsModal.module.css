@@ -9,15 +9,20 @@
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .sheet {
   width: 100%;
   background: var(--bg0);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  padding: var(--space-m) var(--space-m) calc(var(--space-m) + env(safe-area-inset-bottom));
+  padding: var(--space-m) var(--space-m)
+    calc(var(--space-m) + env(safe-area-inset-bottom));
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
@@ -28,8 +33,12 @@
 }
 
 @keyframes slideUp {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
 }
 
 .handle {
@@ -78,7 +87,9 @@
   background: var(--bg1);
   cursor: pointer;
   text-align: left;
-  transition: background-color var(--dur-fast), border-color var(--dur-fast);
+  transition:
+    background-color var(--dur-fast),
+    border-color var(--dur-fast);
 }
 
 .option:hover {
@@ -111,6 +122,42 @@
   font-size: 0.9rem;
 }
 
+.readyState {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s);
+  margin-block: var(--space-xs);
+  padding: var(--space-m);
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  background: var(--bg1);
+}
+
+.readyMessage,
+.readyNote {
+  margin: 0;
+  text-align: center;
+}
+
+.readyMessage {
+  color: var(--fg1);
+}
+
+.readyNote {
+  font-size: 0.8rem;
+  color: var(--fg3);
+}
+
+.readyActions {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.readyActions > button {
+  flex: 1;
+  justify-content: center;
+}
+
 .spinner {
   width: 20px;
   height: 20px;
@@ -122,7 +169,9 @@
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .error {

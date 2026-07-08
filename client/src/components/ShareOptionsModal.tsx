@@ -2,7 +2,10 @@ import { useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 import css from "./ShareOptionsModal.module.css";
 
-type ShareQuality = "original" | "compatible-full" | "compatible-share";
+type ShareQuality = "original" | "websafe-full" | "websafe-small";
+type ShareAction = "share" | "download";
+type DownloadItem = { url: string; filename: string };
+type PreparedShare = { files: File[]; videoDownloads: DownloadItem[] };
 
 type QualityDef = {
   id: ShareQuality;
@@ -14,20 +17,20 @@ type QualityDef = {
 const QUALITIES: QualityDef[] = [
   {
     id: "original",
-    label: "Original file",
+    label: "Original",
     imageDesc: "Exact file as stored — any format, full fidelity",
     videoDesc: "Exact video file as stored",
   },
   {
-    id: "compatible-full",
-    label: "Most compatible, original quality",
-    imageDesc: "JPEG at full resolution — works in any app",
+    id: "websafe-full",
+    label: "Web-safe, original size",
+    imageDesc: "JPEG at the original dimensions — easier to share",
     videoDesc: "Original video (no server-side transcoding available)",
   },
   {
-    id: "compatible-share",
-    label: "Most compatible, high quality",
-    imageDesc: "JPEG up to 1440p — ideal size for messaging and social",
+    id: "websafe-small",
+    label: "Smaller size",
+    imageDesc: "JPEG up to 1440p — ideal for messaging and social",
     videoDesc: "Original video (no server-side transcoding available)",
   },
 ];
@@ -36,7 +39,7 @@ const getImageShareUrl = (photo: PhotoItem, quality: ShareQuality): string => {
   if (quality === "original") return photo.originalUrl;
   const url = new URL(photo.originalUrl);
   url.searchParams.set("representation", "webSafe");
-  if (quality === "compatible-share") url.searchParams.set("height", "1440");
+  if (quality === "websafe-small") url.searchParams.set("height", "1440");
   return url.toString();
 };
 
@@ -56,26 +59,94 @@ const triggerDownload = (url: string, filename: string) => {
 
 type Props = {
   photos: PhotoItem[];
+  mode?: ShareAction;
   onClose: () => void;
 };
 
-export const ShareOptionsModal: React.FC<Props> = ({ photos, onClose }) => {
+export const ShareOptionsModal: React.FC<Props> = ({
+  photos,
+  mode = "share",
+  onClose,
+}) => {
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [preparedShare, setPreparedShare] = useState<PreparedShare | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const images = photos.filter((p) => p.mediaType !== "video");
   const videos = photos.filter((p) => p.mediaType === "video");
   const hasVideos = videos.length > 0;
   const hasImages = images.length > 0;
+  const actionLabel = mode === "download" ? "Download" : "Share";
 
-  const handleShare = async (quality: ShareQuality) => {
+  const triggerDownloads = (items: DownloadItem[]) => {
+    for (const item of items) {
+      triggerDownload(item.url, item.filename);
+    }
+  };
+
+  const handlePreparedShare = async () => {
+    if (!preparedShare || typeof navigator.share !== "function") return;
+
     setError(null);
-    setProgress("Preparing…");
+    setProgress("Opening share sheet…");
+
+    try {
+      await navigator.share({ files: preparedShare.files });
+
+      if (preparedShare.videoDownloads.length > 0) {
+        triggerDownloads(preparedShare.videoDownloads);
+      }
+
+      onClose();
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        setProgress(null);
+        return;
+      }
+      setError("Something went wrong. Please try again.");
+      setProgress(null);
+    }
+  };
+
+  const handleAction = async (quality: ShareQuality) => {
+    setError(null);
+    setPreparedShare(null);
     const abort = new AbortController();
     abortRef.current = abort;
 
     try {
+      if (mode === "download") {
+        const itemsToDownload = [
+          ...images.map((photo) => ({
+            url: getImageShareUrl(photo, quality),
+            filename: getImageFilename(photo, quality),
+          })),
+          ...videos.map((video) => ({
+            url: video.originalUrl,
+            filename: video.name,
+          })),
+        ];
+
+        if (itemsToDownload.length > 0) {
+          setProgress(
+            itemsToDownload.length === 1
+              ? "Starting download…"
+              : `Starting ${itemsToDownload.length} downloads…`,
+          );
+        }
+
+        for (const item of itemsToDownload) {
+          if (abort.signal.aborted) return;
+          triggerDownload(item.url, item.filename);
+        }
+
+        onClose();
+        return;
+      }
+
+      setProgress("Preparing…");
+
       // Images: fetch as blobs so the OS share sheet can pass them to other apps
       const imageFiles: File[] = [];
       for (let i = 0; i < images.length; i++) {
@@ -90,15 +161,28 @@ export const ShareOptionsModal: React.FC<Props> = ({ photos, onClose }) => {
         const response = await fetch(url, { signal: abort.signal });
         if (!response.ok) throw new Error(`Failed to fetch ${photo.name}`);
         const blob = await response.blob();
-        imageFiles.push(new File([blob], getImageFilename(photo, quality), { type: blob.type }));
+        imageFiles.push(
+          new File([blob], getImageFilename(photo, quality), { type: blob.type }),
+        );
       }
 
       if (abort.signal.aborted) return;
 
+      const videoDownloads = videos.map((video) => ({
+        url: video.originalUrl,
+        filename: video.name,
+      }));
+      const canUseNativeFileShare =
+        typeof navigator.share === "function" &&
+        typeof navigator.canShare === "function" &&
+        navigator.canShare({ files: imageFiles });
+
       // Share or download images
       if (imageFiles.length > 0) {
-        if (navigator.canShare?.({ files: imageFiles }) && navigator.share) {
-          await navigator.share({ files: imageFiles });
+        if (canUseNativeFileShare) {
+          setPreparedShare({ files: imageFiles, videoDownloads });
+          setProgress(null);
+          return;
         } else {
           for (const file of imageFiles) {
             const objectUrl = URL.createObjectURL(file);
@@ -116,14 +200,13 @@ export const ShareOptionsModal: React.FC<Props> = ({ photos, onClose }) => {
             ? "Starting video download…"
             : `Starting ${videos.length} video downloads…`,
         );
-        for (const video of videos) {
-          triggerDownload(video.originalUrl, video.name);
-        }
+        triggerDownloads(videoDownloads);
       }
 
       onClose();
     } catch (err) {
-      if (err instanceof Error && (err.name === "AbortError" || abort.signal.aborted)) return;
+      if (err instanceof Error && (err.name === "AbortError" || abort.signal.aborted))
+        return;
       setError("Something went wrong. Please try again.");
       setProgress(null);
     }
@@ -131,6 +214,7 @@ export const ShareOptionsModal: React.FC<Props> = ({ photos, onClose }) => {
 
   const handleClose = () => {
     abortRef.current?.abort();
+    setPreparedShare(null);
     onClose();
   };
 
@@ -148,14 +232,18 @@ export const ShareOptionsModal: React.FC<Props> = ({ photos, onClose }) => {
       <div className={css.sheet} onClick={(e) => e.stopPropagation()}>
         <div className={css.handle} />
         <h3 className={css.title}>
-          Share {count} {noun}
+          {actionLabel} {count} {noun}
         </h3>
 
         {hasVideos && (
           <p className={css.videoNote}>
-            {hasImages
-              ? "Images will be shared via the system share sheet. Videos will be downloaded directly."
-              : `Video${videos.length > 1 ? "s" : ""} will be downloaded directly — no server-side transcoding is available.`}
+            {mode === "share"
+              ? hasImages
+                ? "Images will be shared via the system share sheet. Videos will be downloaded directly."
+                : `Video${videos.length > 1 ? "s" : ""} will be downloaded directly — no server-side transcoding is available.`
+              : hasImages
+                ? "Image size changes apply to photos. Videos always download as the original file."
+                : `Video${videos.length > 1 ? "s" : ""} will be downloaded as the original file — no server-side transcoding is available.`}
           </p>
         )}
 
@@ -164,10 +252,40 @@ export const ShareOptionsModal: React.FC<Props> = ({ photos, onClose }) => {
             <div className={css.spinner} />
             {progress}
           </div>
+        ) : preparedShare ? (
+          <div className={css.readyState}>
+            <p className={css.readyMessage}>
+              Files are ready. Tap Share to open the system share sheet.
+            </p>
+            {preparedShare.videoDownloads.length > 0 && (
+              <p className={css.readyNote}>
+                Videos will still download as original files after sharing.
+              </p>
+            )}
+            <div className={css.readyActions}>
+              <button
+                type="button"
+                className="btn btn-subtle"
+                onClick={() => {
+                  setPreparedShare(null);
+                  setError(null);
+                }}
+              >
+                Back
+              </button>
+              <button type="button" className="btn" onClick={() => void handlePreparedShare()}>
+                Share
+              </button>
+            </div>
+          </div>
         ) : (
           <div className={css.options}>
             {QUALITIES.map((q) => (
-              <button key={q.id} className={css.option} onClick={() => void handleShare(q.id)}>
+              <button
+                key={q.id}
+                className={css.option}
+                onClick={() => void handleAction(q.id)}
+              >
                 <span className={css.optionLabel}>{q.label}</span>
                 <span className={css.optionDesc}>{getDesc(q)}</span>
               </button>

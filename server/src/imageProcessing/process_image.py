@@ -1,6 +1,8 @@
 import sys
 import argparse
 import json
+import math
+import struct
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 import os
@@ -9,6 +11,119 @@ import os
 register_heif_opener()
 
 RAW_EXTENSIONS = {'.cr3', '.cr2', '.nef', '.arw', '.orf', '.raf', '.srw', '.rw2', '.dng', '.raw'}
+HEIC_EXTENSIONS = {'.heic', '.heif'}
+
+
+def _get_exif_orientation(exif_bytes):
+    """Parse raw EXIF bytes to extract the orientation tag (0x0112)."""
+    if not exif_bytes or len(exif_bytes) < 8:
+        return 1
+    if exif_bytes[:4] == b'Exif':
+        exif_bytes = exif_bytes[6:]
+    if len(exif_bytes) < 8:
+        return 1
+    endian = '<' if exif_bytes[:2] == b'II' else '>' if exif_bytes[:2] == b'MM' else None
+    if endian is None:
+        return 1
+    try:
+        ifd_offset = struct.unpack_from(endian + 'I', exif_bytes, 4)[0]
+        n_entries = struct.unpack_from(endian + 'H', exif_bytes, ifd_offset)[0]
+        for i in range(n_entries):
+            entry_offset = ifd_offset + 2 + i * 12
+            tag = struct.unpack_from(endian + 'H', exif_bytes, entry_offset)[0]
+            if tag == 0x0112:
+                return struct.unpack_from(endian + 'H', exif_bytes, entry_offset + 8)[0]
+    except Exception:
+        pass
+    return 1
+
+
+def _open_heic_via_pyav(input_path):
+    """Decode tiled Apple HEIC using pyav (FFmpeg), bypassing the libde265
+    green-tile artifact that affects some iPhone photos.
+
+    Returns a PIL Image in the correct display orientation, or None if the
+    file is not a tiled HEIC or pyav is unavailable.
+    """
+    try:
+        import av
+    except ImportError:
+        return None
+
+    import pillow_heif
+
+    container = av.open(input_path)
+
+    # Identify tile streams: multiple HEVC streams of identical dimensions.
+    stream_sizes: dict[tuple[int, int], int] = {}
+    for s in container.streams.video:
+        key = (s.width, s.height)
+        stream_sizes[key] = stream_sizes.get(key, 0) + 1
+
+    candidates = [(sz, cnt) for sz, cnt in stream_sizes.items() if cnt >= 4]
+    if not candidates:
+        return None  # Not a tiled HEIC
+
+    tile_w, tile_h = max(candidates, key=lambda x: x[1])[0]
+    tile_streams = [s for s in container.streams.video if (s.width, s.height) == (tile_w, tile_h)]
+    n_tiles = len(tile_streams)
+
+    # Get image dimensions and EXIF orientation from pillow_heif metadata
+    # (no pixel decode happens here — pillow_heif is lazy).
+    pillow_heif.options.THUMBNAILS = False
+    hf = pillow_heif.open_heif(input_path)
+    heif_img = hf[0]
+    displayed_w, displayed_h = heif_img.size
+    orientation = _get_exif_orientation(heif_img.info.get('exif', b''))
+
+    # Derive native HEVC canvas size (before EXIF rotation is applied).
+    # Orientations 5–8 transpose width and height.
+    if orientation in (5, 6, 7, 8):
+        native_w, native_h = displayed_h, displayed_w
+    else:
+        native_w, native_h = displayed_w, displayed_h
+
+    grid_cols = math.ceil(native_w / tile_w)
+    grid_rows = math.ceil(native_h / tile_h)
+
+    if grid_cols * grid_rows != n_tiles:
+        return None  # Tile count doesn't match expected grid layout
+
+    canvas = __import__('numpy').zeros((native_h, native_w, 3), dtype='uint8')
+
+    for i, stream in enumerate(tile_streams):
+        col = i % grid_cols
+        row = i // grid_cols
+        x, y = col * tile_w, row * tile_h
+        try:
+            for packet in container.demux(stream):
+                frames = list(packet.decode())
+                if frames:
+                    arr = frames[0].to_ndarray(format='rgb24')
+                    h = min(tile_h, native_h - y)
+                    w = min(tile_w, native_w - x)
+                    canvas[y:y+h, x:x+w] = arr[:h, :w]
+                    break
+        except Exception:
+            pass  # Leave failed tiles black (far better than solid green)
+
+    img = Image.fromarray(canvas)
+
+    # Apply EXIF orientation using the same mapping as PIL's exif_transpose.
+    _TRANSPOSE = {
+        2: Image.FLIP_LEFT_RIGHT,
+        3: Image.ROTATE_180,
+        4: Image.FLIP_TOP_BOTTOM,
+        5: Image.TRANSPOSE,
+        6: Image.ROTATE_270,
+        7: Image.TRANSVERSE,
+        8: Image.ROTATE_90,
+    }
+    if orientation in _TRANSPOSE:
+        img = img.transpose(_TRANSPOSE[orientation])
+
+    return img
+
 
 def open_image(input_path):
     ext = os.path.splitext(input_path)[1].lower()
@@ -18,6 +133,10 @@ def open_image(input_path):
         with rawpy.imread(input_path) as raw:
             rgb = raw.postprocess(use_camera_wb=True, output_bps=8)
         return Image.fromarray(rgb)
+    if ext in HEIC_EXTENSIONS:
+        img = _open_heic_via_pyav(input_path)
+        if img is not None:
+            return img
     return Image.open(input_path)
 
 def process_image(input_path, outputs):
@@ -28,7 +147,8 @@ def process_image(input_path, outputs):
 
         img = open_image(input_path)
         with img:
-            # Apply EXIF rotation
+            # Apply EXIF rotation (no-op for HEIC files decoded via pyav,
+            # which already have orientation applied).
             img = ImageOps.exif_transpose(img)
 
             # Convert to RGB (remove alpha channel if present, needed for JPEG)

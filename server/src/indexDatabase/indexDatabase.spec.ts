@@ -276,6 +276,58 @@ describe("IndexDatabase", () => {
     });
   });
 
+  it("returns immediate child folders with counts scoped to the filter", async () => {
+    await withTempDb(async (db) => {
+      const exifProcessedAt = "2026-01-01T00:00:00.000Z";
+      await db.addFile(
+        createRecord("trips/a.jpg", {
+          rating: 5,
+          mimeType: "image/jpeg",
+          exifProcessedAt,
+        }),
+      );
+      await db.addFile(
+        createRecord("trips/2024/b.mp4", {
+          rating: 5,
+          mimeType: "video/mp4",
+          exifProcessedAt,
+        }),
+      );
+      await db.addFile(
+        createRecord("family/c.mp4", {
+          rating: 3,
+          mimeType: "video/mp4",
+          exifProcessedAt,
+        }),
+      );
+      await db.addFile(
+        createRecord("family/2020/d.mp4", {
+          rating: 5,
+          mimeType: "video/mp4",
+          exifProcessedAt,
+        }),
+      );
+
+      await expect(db.getFolders("/", {})).resolves.toEqual([
+        { name: "family", count: 2 },
+        { name: "trips", count: 2 },
+      ]);
+
+      await expect(
+        db.getFolders("/", {
+          rating: { min: 4 },
+        }),
+      ).resolves.toEqual([
+        { name: "family", count: 1 },
+        { name: "trips", count: 2 },
+      ]);
+
+      await expect(db.getFolders("/family/", { rating: { min: 5 } })).resolves.toEqual([
+        { name: "2020", count: 1 },
+      ]);
+    });
+  });
+
   describe("face detection persistence", () => {
     const makeEmbedding = (seed: number) => {
       const arr = new Float64Array(128);
@@ -489,9 +541,354 @@ describe("IndexDatabase", () => {
         expect(detailResult.cluster?.id).toBe(result.clusters[0]!.id);
       });
     });
+
+    it("stores person names on the face cluster record and returns them in people queries", async () => {
+      await withTempDb(async (db) => {
+        const unit = (values: number[]) => {
+          const arr = new Float64Array(128);
+          values.forEach((value, index) => {
+            arr[index] = value;
+          });
+          return arr;
+        };
+
+        await db.addFile(createRecord("people/named-1.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(createRecord("people/named-2.jpg", { dimensionsWidth: 2000 }));
+
+        await db.saveFaceDetectionResult("people/named-1.jpg", [
+          {
+            box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
+            confidence: 0.9,
+            embedding: unit([1, 0, 0]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/named-2.jpg", [
+          {
+            box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
+            confidence: 0.9,
+            embedding: unit([0.99, 0.01, 0]),
+          },
+        ]);
+
+        const initial = await db.queryFaceClusters({ filter: {} });
+        const clusterId = initial.clusters[0]?.id;
+
+        expect(clusterId).toBeDefined();
+        await expect(db.renameCluster(clusterId!, "Taylor")).resolves.toBe(true);
+
+        const renamed = await db.queryFaceClusters({ filter: {} });
+        expect(renamed.clusters[0]?.name).toBe("Taylor");
+
+        const detail = await db.getFaceClusterDetail({
+          filter: {},
+          clusterId: clusterId!,
+        });
+        expect(detail.cluster?.name).toBe("Taylor");
+
+        await expect(db.renameCluster(clusterId!, null)).resolves.toBe(true);
+        const cleared = await db.getFaceClusterDetail({
+          filter: {},
+          clusterId: clusterId!,
+        });
+        expect(cleared.cluster?.name).toBeNull();
+      });
+    });
+
+      it("returns person centroids and only unadopted merge suggestions in cluster detail", async () => {
+        await withTempDb(async (db) => {
+        const unit = (values: number[]) => {
+          const arr = new Float64Array(128);
+          values.forEach((value, index) => {
+            arr[index] = value;
+          });
+          return arr;
+        };
+
+        await db.addFile(createRecord("people/alex-1.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(createRecord("people/alex-2.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(createRecord("people/jordan-1.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(createRecord("people/jordan-2.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(
+          createRecord("people/casey-1.jpg", {
+            dimensionsWidth: 2000,
+            exifProcessedAt: "2026-01-01T00:00:00.000Z",
+            dateTaken: new Date("1998-06-01T00:00:00.000Z"),
+          }),
+        );
+        await db.addFile(
+          createRecord("people/casey-2.jpg", {
+            dimensionsWidth: 2000,
+            exifProcessedAt: "2026-01-01T00:00:00.000Z",
+            dateTaken: new Date("2001-08-15T00:00:00.000Z"),
+          }),
+        );
+        await db.addFile(createRecord("people/taylor-1.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(createRecord("people/taylor-2.jpg", { dimensionsWidth: 2000 }));
+
+        await db.saveFaceDetectionResult("people/alex-1.jpg", [
+          {
+            box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([1, 0, 0]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/alex-2.jpg", [
+          {
+            box: { x: 0.12, y: 0.1, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([0.99, 0.01, 0]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/jordan-1.jpg", [
+          {
+            box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([0, 1, 0]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/jordan-2.jpg", [
+          {
+            box: { x: 0.22, y: 0.2, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([0.01, 0.99, 0]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/casey-1.jpg", [
+          {
+            box: { x: 0.3, y: 0.3, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([0.55, 0.4, 0.73]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/casey-2.jpg", [
+          {
+            box: { x: 0.32, y: 0.3, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([0.57, 0.38, 0.72]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/taylor-1.jpg", [
+          {
+            box: { x: 0.38, y: 0.34, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([-1, 0, 0]),
+          },
+        ]);
+        await db.saveFaceDetectionResult("people/taylor-2.jpg", [
+          {
+            box: { x: 0.4, y: 0.34, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([-0.99, 0.01, 0]),
+          },
+        ]);
+
+        const initial = await db.queryFaceClusters({ filter: {} });
+
+        const alex = initial.clusters.find((cluster) => cluster.representative.path.includes("/people/alex-"));
+        const jordan = initial.clusters.find((cluster) =>
+          cluster.representative.path.includes("/people/jordan-"),
+        );
+        const casey = initial.clusters.find((cluster) =>
+          cluster.representative.path.includes("/people/casey-"),
+        );
+
+        expect(alex).toBeDefined();
+        expect(jordan).toBeDefined();
+        expect(casey).toBeDefined();
+
+        const taylor = initial.clusters.find((cluster) =>
+          cluster.representative.path.includes("/people/taylor-"),
+        );
+
+        expect(taylor).toBeDefined();
+
+        await expect(db.renameCluster(jordan!.id, "Scott Douglas Richards")).resolves.toBe(true);
+        await expect(db.renameCluster(taylor!.id, "Taylor")).resolves.toBe(true);
+        await expect(db.mergeClusters(jordan!.id, alex!.id)).resolves.toBe(true);
+
+        const detail = await db.getFaceClusterDetail({
+          filter: {},
+          clusterId: alex!.id,
+        });
+
+        expect(detail.cluster?.name).toBe("Scott Douglas Richards");
+        expect(detail.cluster?.centroids).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: alex!.id, count: 2 }),
+            expect.objectContaining({ id: jordan!.id, count: 2 }),
+          ]),
+        );
+        expect(detail.cluster?.mergeSuggestions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: casey!.id,
+              count: 2,
+              name: null,
+              yearRangeLabel: "1998-2001",
+            }),
+          ]),
+        );
+        expect(detail.cluster?.mergeSuggestions).not.toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: taylor!.id }),
+          ]),
+        );
+      });
+      });
+
+      it("separates a centroid back into an unadopted match group", async () => {
+        await withTempDb(async (db) => {
+          const unit = (values: number[]) => {
+            const arr = new Float64Array(128);
+            values.forEach((value, index) => {
+              arr[index] = value;
+            });
+            return arr;
+          };
+
+          await db.addFile(createRecord("people/alex-1.jpg", { dimensionsWidth: 2000 }));
+          await db.addFile(createRecord("people/alex-2.jpg", { dimensionsWidth: 2000 }));
+          await db.addFile(createRecord("people/jordan-1.jpg", { dimensionsWidth: 2000 }));
+          await db.addFile(createRecord("people/jordan-2.jpg", { dimensionsWidth: 2000 }));
+
+          await db.saveFaceDetectionResult("people/alex-1.jpg", [{
+            box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([1, 0, 0]),
+          }]);
+          await db.saveFaceDetectionResult("people/alex-2.jpg", [{
+            box: { x: 0.12, y: 0.1, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([0.99, 0.01, 0]),
+          }]);
+          await db.saveFaceDetectionResult("people/jordan-1.jpg", [{
+            box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([0, 1, 0]),
+          }]);
+          await db.saveFaceDetectionResult("people/jordan-2.jpg", [{
+            box: { x: 0.22, y: 0.2, width: 0.2, height: 0.2 },
+            confidence: 0.99,
+            embedding: unit([0.01, 0.99, 0]),
+          }]);
+
+          const initial = await db.queryFaceClusters({ filter: {} });
+          const alex = initial.clusters.find((cluster) =>
+            cluster.representative.path.includes("/people/alex-"),
+          );
+          const jordan = initial.clusters.find((cluster) =>
+            cluster.representative.path.includes("/people/jordan-"),
+          );
+
+          expect(alex).toBeDefined();
+          expect(jordan).toBeDefined();
+
+          await expect(db.renameCluster(alex!.id, "Alex")).resolves.toBe(true);
+          await expect(db.mergeClusters(jordan!.id, alex!.id)).resolves.toBe(true);
+          await expect(db.separateCluster(jordan!.id)).resolves.toBe(true);
+
+          const alexDetail = await db.getFaceClusterDetail({ filter: {}, clusterId: alex!.id });
+          const jordanDetail = await db.getFaceClusterDetail({ filter: {}, clusterId: jordan!.id });
+
+          expect(alexDetail.cluster?.centroids).toEqual([
+            expect.objectContaining({ id: alex!.id, count: 2 }),
+          ]);
+          expect(jordanDetail.cluster?.id).toBe(jordan!.id);
+          expect(jordanDetail.cluster?.name).toBeNull();
+          expect(jordanDetail.cluster?.centroids).toEqual([
+            expect.objectContaining({ id: jordan!.id, count: 2 }),
+          ]);
+        });
+      });
+    it("filters the PCA overview to 100+ faces and recenters focused views on 10 neighbors", async () => {
+      await withTempDb(async (db) => {
+        const unit = (axis: number) => {
+          const embedding = new Float64Array(128);
+          embedding[axis] = 1;
+          return embedding;
+        };
+
+        const addCluster = async (relativePath: string, axis: number, count: number) => {
+          await db.addFile(createRecord(relativePath, {
+            dimensionsWidth: 2000,
+            dimensionsHeight: 1500,
+          }));
+          await db.saveFaceDetectionResult(
+            relativePath,
+            Array.from({ length: count }, (_, index) => ({
+              box: {
+                x: 0.1 + (index % 5) * 0.01,
+                y: 0.1 + (index % 4) * 0.01,
+                width: 0.2,
+                height: 0.2,
+              },
+              confidence: 0.99,
+              embedding: unit(axis),
+            })),
+          );
+        };
+
+        await addCluster("people/focus.jpg", 0, 120);
+        for (let i = 1; i <= 11; i++) {
+          await addCluster(`people/neighbor-${i}.jpg`, i, 100);
+        }
+        await addCluster("people/excluded.jpg", 12, 99);
+
+        const overview = await db.getFaceClustersPCA();
+
+        expect(overview.points).toHaveLength(12);
+        expect(overview.points.every((point) => point.count >= 100)).toBe(true);
+        expect(overview.points.some((point) => point.focused)).toBe(false);
+
+        const focusedClusterId = overview.points.find((point) => point.count === 120)?.id;
+        expect(focusedClusterId).toBeDefined();
+
+        const focused = await db.getFaceClustersPCA(focusedClusterId);
+        expect(focused.points).toHaveLength(11);
+
+        const centerPoint = focused.points.find((point) => point.id === focusedClusterId);
+        expect(centerPoint).toBeDefined();
+        expect(centerPoint?.focused).toBe(true);
+        expect(centerPoint?.x).toBeCloseTo(0, 8);
+        expect(centerPoint?.y).toBeCloseTo(0, 8);
+        expect(centerPoint?.z).toBeCloseTo(0, 8);
+      });
+    });
   });
 
   describe("semanticSearch", () => {
+    const addVideoWithTranscript = async (
+      db: IndexDatabase,
+      relativePath: string,
+      transcript: string,
+    ) => {
+      await db.addFile(createRecord(relativePath, { mimeType: "video/mp4" }));
+      await db.saveAudioTranscription(relativePath, [{ start: 0, end: 1, text: transcript }]);
+    };
+
+    it("matches transcript queries on whole words instead of raw substrings", async () => {
+      await withTempDb(async (db) => {
+        await addVideoWithTranscript(db, "cat.mp4", "the cat meows at dinner time");
+        await addVideoWithTranscript(db, "vacation.mp4", "our family vacation montage");
+
+        const results = await db.audioTranscriptSearch("cat", {}, 10);
+
+        expect(results.map((r) => r.fileName)).toEqual(["cat.mp4"]);
+      });
+    });
+
+    it("ranks exact transcript phrases above loose multi-word matches", async () => {
+      await withTempDb(async (db) => {
+        await addVideoWithTranscript(db, "exact.mp4", "happy birthday to you and many more");
+        await addVideoWithTranscript(db, "loose.mp4", "the birthday party made everyone happy");
+
+        const results = await db.audioTranscriptSearch("happy birthday", {}, 10);
+
+        expect(results.map((r) => r.fileName)).toEqual(["exact.mp4", "loose.mp4"]);
+        expect(results[0]?.similarity).toBeGreaterThan(results[1]?.similarity ?? 0);
+      });
+    });
+
     const addImageWithEmbedding = async (
       db: IndexDatabase,
       relativePath: string,

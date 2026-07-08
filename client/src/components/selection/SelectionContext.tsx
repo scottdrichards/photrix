@@ -96,7 +96,19 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
       exitSelectionMode,
       toggleChecked,
     }),
-    [items, selected, setSelected, setItems, selectNext, selectPrevious, selectionMode, checkedPaths, enterSelectionMode, exitSelectionMode, toggleChecked],
+    [
+      items,
+      selected,
+      setSelected,
+      setItems,
+      selectNext,
+      selectPrevious,
+      selectionMode,
+      checkedPaths,
+      enterSelectionMode,
+      exitSelectionMode,
+      toggleChecked,
+    ],
   );
 
   return <SelectionContext.Provider value={value}>{children}</SelectionContext.Provider>;

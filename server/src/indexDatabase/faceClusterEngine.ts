@@ -1,4 +1,5 @@
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
+import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
 import { getLogger } from "../observability/logger.ts";
 
 const log = getLogger("faceClusterEngine");
@@ -65,13 +66,18 @@ export class FaceClusterEngine {
   }
 
   private runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const result = this.chain.then(fn, fn);
+    // The chain's results are shared state, not per-request responses; never
+    // let a requester's disconnect abort a chained operation midway.
+    const run = () => runWithoutRequestAbortSignal(fn);
+    const result = this.chain.then(run, run);
     this.chain = result.catch(() => undefined);
     return result;
   }
 
   private ensureLoaded(): Promise<void> {
-    this.loadPromise ??= this.load();
+    // Memoized across requests: the first caller's abort signal must not leak
+    // into the load and cache a rejected promise for everyone after it.
+    this.loadPromise ??= runWithoutRequestAbortSignal(() => this.load());
     return this.loadPromise;
   }
 
@@ -301,6 +307,56 @@ export class FaceClusterEngine {
   }
 
   /**
+   * Merges sourceId cluster into targetId: combines the running means and
+   * reassigns all source faces to target in the DB. The source cluster is
+   * deleted. Caller must separately UPDATE faces SET clusterId = targetId.
+   */
+  mergeCluster(sourceId: number, targetId: number): Promise<void> {
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      const source = this.clustersById.get(sourceId);
+      const target = this.clustersById.get(targetId);
+      if (!source || !target) return;
+
+      // Combine running means: weighted average of both unnormalized sums.
+      const totalWeight = source.weight + target.weight;
+      for (let i = 0; i < target.mean.length; i += 1) {
+        target.mean[i] =
+          (target.mean[i] * target.weight + source.mean[i] * source.weight) / totalWeight;
+      }
+      target.weight = totalWeight;
+      target.magnitude = magnitudeOf(target.mean);
+
+      this.clustersById.delete(sourceId);
+      this.clusters.splice(this.clusters.indexOf(source), 1);
+      this.mutationsSinceSort += 1;
+
+      await this.db.transaction([
+        {
+          sql: "UPDATE faces SET clusterId = ?, clusterSimilarity = NULL WHERE clusterId = ?",
+          params: [targetId, sourceId],
+        },
+        { sql: "DELETE FROM faceClusters WHERE id = ?", params: [sourceId] },
+        {
+          sql: `INSERT INTO faceClusters (id, centroid, weight, threshold, updatedAt)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  centroid = excluded.centroid,
+                  weight = excluded.weight,
+                  updatedAt = excluded.updatedAt`,
+          params: [
+            targetId,
+            Buffer.from(target.mean.buffer.slice(0)),
+            target.weight,
+            FACE_CLUSTER_SIMILARITY_THRESHOLD,
+            Date.now(),
+          ],
+        },
+      ]);
+    });
+  }
+
+  /**
    * Keeps the scan order roughly weight-descending so the early-exit match
    * scan hits large clusters first. Exact order doesn't matter, so re-sorting
    * every so often is enough.
@@ -313,7 +369,7 @@ export class FaceClusterEngine {
 }
 
 /** Copies a possibly-unaligned BLOB into an aligned Float32Array view. */
-const toAlignedFloat32 = (buffer: Buffer | Uint8Array): Float32Array => {
+export const toAlignedFloat32 = (buffer: Buffer | Uint8Array): Float32Array => {
   const aligned = new Uint8Array(buffer.byteLength);
   aligned.set(buffer);
   return new Float32Array(aligned.buffer);

@@ -2,6 +2,7 @@ import type http from "node:http";
 import {
   SEARCH_SOURCES,
   type SearchSource,
+  type ShareScope,
 } from "../../../shared/filter-contract/src/index.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { embedText } from "../imageAnalysis/imageAnalysisWorker.ts";
@@ -27,17 +28,21 @@ const log = getLogger("searchRequestHandler");
 // toward precision: its noise can score ~0.40 (sunset) — higher than some real
 // matches (dog barking ~0.34) — so a high floor lets CLAP contribute only when
 // it is confident (music/waves/laughing ~0.50+) at the cost of weak audio
-// recall. Transcript search is a substring match (already a hard relevance
-// gate), so it has no floor.
+// recall. Transcript search now requires whole-word matches (all query terms for
+// multi-word queries), so it stays precise enough without a separate floor.
 const CLIP_MIN_SIMILARITY = Number(process.env.PHOTRIX_SEARCH_CLIP_MIN_SIMILARITY ?? 0.18);
-const CLAP_MIN_SIMILARITY = Number(process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.45);
+const CLAP_MIN_SIMILARITY = Number(process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.52);
 
-type Options = { database: IndexDatabase; shareFilter?: unknown };
+type Options = {
+  database: IndexDatabase;
+  shareFilter?: unknown;
+  shareScope?: ShareScope<unknown> | null;
+};
 
 export const searchRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
   res: http.ServerResponse,
-  { database, shareFilter }: Options,
+  { database, shareFilter, shareScope }: Options,
 ): Promise<void> => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const q = url.searchParams.get("q")?.trim();
@@ -85,7 +90,7 @@ export const searchRequestHandler = async (
   // default); a comma-separated subset lets the client disable sources — both to
   // narrow results and to skip the slow ML workers when debugging one modality.
   const sourcesParam = url.searchParams.get("sources");
-  const enabledSources: Set<SearchSource> =
+  const requestedSources: Set<SearchSource> =
     sourcesParam === null
       ? new Set(SEARCH_SOURCES)
       : new Set(
@@ -96,6 +101,12 @@ export const searchRequestHandler = async (
               (SEARCH_SOURCES as readonly string[]).includes(s),
             ),
         );
+  const shareSources = shareScope?.searchSources
+    ? new Set(shareScope.searchSources)
+    : new Set(SEARCH_SOURCES);
+  const enabledSources = new Set(
+    [...requestedSources].filter((source) => shareSources.has(source)),
+  );
   const useImage = enabledSources.has("image");
   const useAudio = enabledSources.has("audio");
   const useTranscript = enabledSources.has("transcript");

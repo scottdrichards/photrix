@@ -26,7 +26,11 @@ const WIDE_BREAKPOINT = "(min-width: 700px)";
 const SOURCE_TOGGLES: { source: SearchSource; label: string; icon: React.ReactNode }[] = [
   { source: "image", label: "Image vector", icon: <Image24Regular fontSize={18} /> },
   { source: "audio", label: "Audio vector", icon: <MusicNote224Regular fontSize={18} /> },
-  { source: "transcript", label: "Transcript", icon: <ClosedCaption24Regular fontSize={18} /> },
+  {
+    source: "transcript",
+    label: "Transcript",
+    icon: <ClosedCaption24Regular fontSize={18} />,
+  },
 ];
 
 export const SearchBar = () => {
@@ -111,7 +115,9 @@ export const SearchBar = () => {
       ? activeSources.filter((s) => s !== source)
       : SEARCH_SOURCES.filter((s) => activeSources.includes(s) || s === source);
     if (next.length === 0) return;
-    setFilter({ searchSources: next.length === SEARCH_SOURCES.length ? undefined : next });
+    setFilter({
+      searchSources: next.length === SEARCH_SOURCES.length ? undefined : next,
+    });
   };
 
   return (

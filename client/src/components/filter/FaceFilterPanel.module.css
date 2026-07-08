@@ -61,5 +61,14 @@
 
 .faceLabel {
   font-size: 0.8rem;
+  color: var(--fg1);
+  text-align: center;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.faceMeta {
+  font-size: 0.75rem;
   color: var(--fg2);
+  text-align: center;
 }

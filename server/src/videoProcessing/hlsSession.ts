@@ -17,31 +17,17 @@ const IDLE_MS = Number(process.env.PHOTRIX_HLS_IDLE_MS) || 90_000;
 // instead of leaving every level's encode running.
 const VARIANT_IDLE_MS = Number(process.env.PHOTRIX_HLS_VARIANT_IDLE_MS) || 8_000;
 
-// Forward-seek detection. The player fills its buffer by requesting segments one
-// after another, so the furthest segment it has asked for advances ~1 at a time.
-// A jump of more than this many segments past that high-water mark is a seek, not
-// buffer-fill, and the encode is restarted at the seek target rather than letting
-// the player wait for the linear encode to crawl there. Comfortably above any
-// request look-ahead (which never jumps) and above the break-even point where
-// restarting beats waiting (~encode-speed × restart latency).
-const FORWARD_SEEK_GAP = Number(process.env.PHOTRIX_HLS_FORWARD_SEEK_GAP) || 12;
 
 type VariantEncode = {
   // Running encoder process for this variant. Null while the encode is still queued
   // (claimed but not yet spawned) or after it has ended.
   child: ChildProcess | null;
-  // Segment index this encode began at (via -ss/-start_number). A live/pending encode
-  // produces segments forward from here, so it covers any requested segment >= this.
-  startSegment: number;
   // True once the encode has ended or been killed (process exit, idle reap, or being
   // replaced). A dead slot covers nothing, so the next request restarts it. Kept
   // distinct from `child === null` so the still-queued (not-yet-spawned) window — when
   // child is also null — is NOT mistaken for "needs another encode", which would spawn
   // a duplicate writer into the same directory.
   dead: boolean;
-  // Highest segment index the player has requested for this variant. Advances ~1 per
-  // request during normal buffer-fill; a request far beyond it signals a forward seek.
-  maxRequested: number;
   // Idle reaper that kills this variant's encode after VARIANT_IDLE_MS of no fetches.
   idleTimer: ReturnType<typeof setTimeout>;
 };
@@ -131,89 +117,53 @@ const armVariantIdle = (
 const newVariantEntry = (
   hlsDir: string,
   height: number,
-  startSegment: number,
   dead: boolean,
-  maxRequested: number,
 ): VariantEncode => ({
   child: null,
-  startSegment,
   dead,
-  maxRequested,
   idleTimer: armVariantIdle(hlsDir, height),
 });
 
 /**
  * Marks a single variant as actively in use, re-arming its idle reaper. Call on
- * every request that touches a specific variant (its playlist or a segment). When a
- * segment index is given, also tracks the request high-water mark and returns whether
- * this request is a forward seek (a jump well past it) so the caller can restart the
- * encode at the seek target instead of waiting for the linear encode to reach it.
+ * every request that touches a specific variant (its playlist or a segment).
  */
-export const touchVariant = (
-  hlsDir: string,
-  height: number,
-  segmentIndex?: number,
-): boolean => {
+export const touchVariant = (hlsDir: string, height: number): void => {
   const session = ensureSession(hlsDir);
   let entry = session.variants.get(height);
   if (!entry) {
-    // First touch with no encode yet: a dead slot the next claim will start.
-    entry = newVariantEntry(hlsDir, height, 0, true, segmentIndex ?? 0);
+    entry = newVariantEntry(hlsDir, height, true);
     session.variants.set(height, entry);
-    return false;
+    return;
   }
   clearTimeout(entry.idleTimer);
   entry.idleTimer = armVariantIdle(hlsDir, height);
-  if (segmentIndex === undefined) return false;
-
-  // Only a live/pending encode can be "behind" — a dead slot is restarted anyway.
-  const forwardSeek = !entry.dead && segmentIndex > entry.maxRequested + FORWARD_SEEK_GAP;
-  if (segmentIndex > entry.maxRequested) entry.maxRequested = segmentIndex;
-  return forwardSeek;
 };
 
 /**
- * Decides — atomically — whether a fresh encode is needed so that variant `height`
- * will produce `segmentIndex`, and if so claims the slot. Returns the segment the
- * caller should start encoding from, or null if a live/pending encode already covers
- * this request (caller does nothing and lets the long-poll wait for it).
+ * Decides — atomically — whether a fresh encode is needed for variant `height`, and
+ * if so claims the slot. Returns true if the caller should start encoding, or false
+ * if a live/pending encode is already running (caller does nothing and lets the
+ * long-poll wait for the segment to be produced).
  *
- * A live or still-queued encode that began at or before `segmentIndex` normally
- * covers it (it writes segments forward), so we only (re)start when:
- *   - there is no slot, or it is dead (process ended or was idle-reaped);
- *   - the request is behind the slot's start point — a backward seek, or an ABR switch
- *     whose encode must begin at the player's current position rather than from 0; or
- *   - `forwardSeek` is set — the request jumped far ahead of the encode (see
- *     touchVariant), so restarting at the seek target beats waiting for the linear
- *     encode to crawl there.
- * When restarting, the new encode begins exactly at `segmentIndex`. Runs synchronously
- * with no `await`, and the slot is mutated in place (preserving the request high-water
- * mark), so two near-simultaneous requests for the same start point can't double-spawn.
+ * Encodes always start from segment 0. The only restart condition is that the encode
+ * slot is dead (process ended or was idle-reaped). Runs synchronously with no `await`
+ * so two near-simultaneous requests can't double-spawn.
  */
-export const claimVariantEncode = (
-  hlsDir: string,
-  height: number,
-  segmentIndex: number,
-  forwardSeek = false,
-): number | null => {
+export const claimVariantEncode = (hlsDir: string, height: number): boolean => {
   const session = ensureSession(hlsDir);
   const entry = session.variants.get(height);
   if (!entry) {
-    session.variants.set(height, newVariantEntry(hlsDir, height, segmentIndex, false, segmentIndex));
-    return segmentIndex;
+    session.variants.set(height, newVariantEntry(hlsDir, height, false));
+    return true;
   }
 
-  const needsRestart =
-    entry.dead ||
-    segmentIndex < entry.startSegment ||
-    (forwardSeek && entry.startSegment < segmentIndex);
-  if (!needsRestart) return null;
+  if (!entry.dead) return false; // live/pending encode covers all future segments
 
   entry.child?.kill("SIGKILL");
   entry.child = null;
   entry.dead = false;
-  entry.startSegment = segmentIndex;
-  return segmentIndex;
+  return true;
 };
 
 /**

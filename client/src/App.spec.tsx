@@ -37,7 +37,13 @@ vi.mock("./components/selection/SelectionContext", () => ({
 }));
 
 vi.mock("./components/ViewToggle", () => ({
-  ViewToggle: ({ view, onViewChange }: { view: string; onViewChange: (v: string) => void }) => (
+  ViewToggle: ({
+    view,
+    onViewChange,
+  }: {
+    view: string;
+    onViewChange: (v: string) => void;
+  }) => (
     <div role="tablist" aria-label="Current view">
       <button
         type="button"
@@ -60,7 +66,13 @@ vi.mock("./components/ViewToggle", () => ({
 }));
 
 vi.mock("./components/ThumbnailGrid", () => ({
-  ThumbnailGrid: ({ view, onViewChange }: { view: string; onViewChange: (v: string) => void }) => (
+  ThumbnailGrid: ({
+    view,
+    onViewChange,
+  }: {
+    view: string;
+    onViewChange: (v: string) => void;
+  }) => (
     <div data-testid="thumbnail-grid">
       <div role="tablist" aria-label="Current view">
         <button
@@ -86,7 +98,13 @@ vi.mock("./components/ThumbnailGrid", () => ({
 }));
 
 vi.mock("./components/PeopleView", () => ({
-  PeopleView: ({ view, onViewChange }: { view: string; onViewChange: (v: string) => void }) => (
+  PeopleView: ({
+    view,
+    onViewChange,
+  }: {
+    view: string;
+    onViewChange: (v: string) => void;
+  }) => (
     <div data-testid="people-view">
       <div role="tablist" aria-label="Current view">
         <button
@@ -132,7 +150,9 @@ describe("App", () => {
   });
 
   it("calls url sync hook", async () => {
-    await act(async () => { render(<App />); });
+    await act(async () => {
+      render(<App />);
+    });
 
     expect(probeVideoPlaybackProfileMock).toHaveBeenCalledTimes(1);
     expect(useSyncUrlWithFilterMock).toHaveBeenCalledWith(
@@ -142,7 +162,9 @@ describe("App", () => {
   });
 
   it("opens status modal from Status button", async () => {
-    await act(async () => { render(<App />); });
+    await act(async () => {
+      render(<App />);
+    });
 
     expect(screen.getByTestId("status-modal")).toHaveTextContent("closed");
     fireEvent.click(screen.getByRole("button", { name: "Status" }));
@@ -150,7 +172,9 @@ describe("App", () => {
   });
 
   it("switches between thumbnail and people views", async () => {
-    await act(async () => { render(<App />); });
+    await act(async () => {
+      render(<App />);
+    });
 
     expect(screen.getByTestId("thumbnail-grid")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "People" }));

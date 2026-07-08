@@ -129,6 +129,42 @@ describe("queryHandler", () => {
     });
   });
 
+  it("passes the optional cluster id through for face PCA", async () => {
+    const { res, getBody } = createMockResponse();
+    const database = {
+      getFaceClustersPCA: jest.fn(async () => ({
+        points: [{
+          id: "person-7",
+          count: 120,
+          name: null,
+          representative: {
+            path: "/a.jpg",
+            fileName: "a.jpg",
+            box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+            mimeType: "image/jpeg",
+            dimensionWidth: 1000,
+            dimensionHeight: 800,
+          },
+          x: 0,
+          y: 0,
+          z: 0,
+          focused: true,
+        }],
+      })),
+    } as unknown as IndexDatabase;
+
+    await queryHandler(
+      new URL("http://localhost/api/files/?aggregate=faceCentroidsPCA&clusterId=person-7"),
+      "/",
+      database,
+      res,
+    );
+
+    expect(database.getFaceClustersPCA).toHaveBeenCalledWith("person-7");
+    expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
+    expect(JSON.parse(getBody()).points[0]?.focused).toBe(true);
+  });
+
   it("returns cluster response with parsed bounds and default cluster size", async () => {
     const { res, getBody } = createMockResponse();
     const database = {

@@ -103,13 +103,14 @@ const constraintToSQL = (
     if (clusterIds.length === 0) {
       return null;
     }
-    // AND semantics: the file must contain a face from *every* selected cluster,
-    // so each id gets its own EXISTS subquery joined with AND.
+    // AND semantics: the file must contain a face from *every* selected person.
+    // A person can span multiple adopted clusters, so match against the effective
+    // person id rather than the raw face cluster id.
     return {
       where: clusterIds
         .map(
           () =>
-            "EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND faces.clusterId = ?)",
+            "EXISTS (SELECT 1 FROM faces JOIN faceClusters ON faceClusters.id = faces.clusterId WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND COALESCE(faceClusters.personId, faces.clusterId) = ?)",
         )
         .join(" AND "),
       params: clusterIds,
@@ -123,6 +124,92 @@ const constraintToSQL = (
     if (constraint === false) {
       return { where: "audioTranscribedAt IS NULL", params: [] };
     }
+    return null;
+  }
+
+  if (fieldName === "semanticImage") {
+    if (
+      !constraint ||
+      typeof constraint !== "object" ||
+      !("queryVector" in constraint) ||
+      !("minSimilarity" in constraint) ||
+      !Array.isArray(constraint.queryVector)
+    ) {
+      return null;
+    }
+
+    const queryVector = Float32Array.from(
+      constraint.queryVector.filter(
+        (value): value is number => typeof value === "number" && Number.isFinite(value),
+      ),
+    );
+    if (queryVector.length === 0 || !Number.isFinite(constraint.minSimilarity)) {
+      return null;
+    }
+
+    return {
+      where:
+        "mimeType LIKE 'image/%' AND imageEmbedding IS NOT NULL AND cosine_similarity_f32(imageEmbedding, ?) >= ?",
+      params: [
+        Buffer.from(queryVector.buffer, queryVector.byteOffset, queryVector.byteLength),
+        constraint.minSimilarity,
+      ],
+    };
+  }
+
+  if (fieldName === "semanticAudio") {
+    if (
+      !constraint ||
+      typeof constraint !== "object" ||
+      !("queryVector" in constraint) ||
+      !("minSimilarity" in constraint) ||
+      !Array.isArray(constraint.queryVector)
+    ) {
+      return null;
+    }
+
+    const queryVector = Float32Array.from(
+      constraint.queryVector.filter(
+        (value): value is number => typeof value === "number" && Number.isFinite(value),
+      ),
+    );
+    if (queryVector.length === 0 || !Number.isFinite(constraint.minSimilarity)) {
+      return null;
+    }
+
+    return {
+      where:
+        "audioEmbedding IS NOT NULL AND (((mimeType LIKE 'video/%' AND audioCodec IS NOT NULL) OR mimeType LIKE 'audio/%')) AND cosine_similarity_f32(audioEmbedding, ?) >= ?",
+      params: [
+        Buffer.from(queryVector.buffer, queryVector.byteOffset, queryVector.byteLength),
+        constraint.minSimilarity,
+      ],
+    };
+  }
+
+  if (fieldName === "transcriptSearch") {
+    if (typeof constraint === "string") {
+      return stringSearchToSQL("audioTranscript", { includes: constraint });
+    }
+
+    if (
+      constraint &&
+      typeof constraint === "object" &&
+      ("includes" in constraint ||
+        "glob" in constraint ||
+        "regex" in constraint ||
+        "startsWith" in constraint ||
+        "notStartsWith" in constraint)
+    ) {
+      return stringSearchToSQL("audioTranscript", constraint as {
+        includes?: string;
+        glob?: string;
+        regex?: string;
+        startsWith?: string;
+        notStartsWith?: string;
+      });
+    }
+
     return null;
   }
 
@@ -178,7 +265,7 @@ const constraintToSQL = (
   if (Array.isArray(constraint)) {
     // Array of values - could be strings or numbers
     if (constraint.length === 0) {
-      return null;
+      return { where: "1 = 0", params: [] };
     }
 
     // Check if array contains strings (for glob/regex matching) or primitives

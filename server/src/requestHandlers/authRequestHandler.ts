@@ -1,12 +1,22 @@
 import type http from "node:http";
+import { SEARCH_SOURCES, type ShareScope } from "../../../shared/filter-contract/src/index.ts";
 import {
   extractToken,
   isShareToken,
   issueShareToken,
+  issueToken,
   revokeToken,
-  validatePassword,
+  validateCredentials,
   validateToken,
 } from "../auth/authService.ts";
+import {
+  generatePasskeyAuthenticationOptions,
+  generatePasskeyRegistrationOptions,
+  isPasskeySupported,
+  verifyPasskeyAuthentication,
+  verifyPasskeyRegistration,
+} from "../auth/passkeyService.ts";
+import { normalizeShareSearchSources } from "../auth/shareScope.ts";
 import { writeJson } from "../utils.ts";
 
 const readBody = (req: http.IncomingMessage): Promise<string> =>
@@ -21,22 +31,22 @@ export const authLoginHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ) => {
-  let body: { password?: unknown };
+  let body: { username?: unknown; password?: unknown };
   try {
-    body = JSON.parse(await readBody(req)) as { password?: unknown };
+    body = JSON.parse(await readBody(req)) as { username?: unknown; password?: unknown };
   } catch {
     writeJson(res, 400, { error: "Invalid JSON" });
     return;
   }
 
-  if (typeof body.password !== "string") {
-    writeJson(res, 400, { error: "password required" });
+  if (typeof body.username !== "string" || typeof body.password !== "string") {
+    writeJson(res, 400, { error: "username and password required" });
     return;
   }
 
-  const token = validatePassword(body.password);
+  const token = validateCredentials(body.username, body.password);
   if (!token) {
-    writeJson(res, 401, { error: "Invalid password" });
+    writeJson(res, 401, { error: "Invalid username or password" });
     return;
   }
 
@@ -66,9 +76,9 @@ export const authShareTokenHandler = async (
     return;
   }
 
-  let body: { filter?: unknown };
+  let body: ShareScope<unknown>;
   try {
-    body = JSON.parse(await readBody(req)) as { filter?: unknown };
+    body = JSON.parse(await readBody(req)) as ShareScope<unknown>;
   } catch {
     writeJson(res, 400, { error: "Invalid JSON" });
     return;
@@ -81,7 +91,150 @@ export const authShareTokenHandler = async (
     return;
   }
 
-  writeJson(res, 200, { token: issueShareToken(body.filter) });
+  const semanticQuery = body.semanticQuery?.trim();
+  const searchSources = normalizeShareSearchSources(body.searchSources);
+  if (body.searchSources !== undefined && searchSources === null) {
+    writeJson(res, 400, { error: "searchSources must contain at least one valid source" });
+    return;
+  }
+
+  writeJson(res, 200, {
+    token: issueShareToken({
+      filter: body.filter,
+      ...(semanticQuery ? { semanticQuery } : {}),
+      ...(searchSources && searchSources.length < SEARCH_SOURCES.length
+        ? { searchSources }
+        : {}),
+    }),
+  });
+};
+
+// --- Passkey endpoints ---
+
+export const passkeyRegistrationOptionsHandler = async (
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> => {
+  if (!isPasskeySupported()) {
+    writeJson(res, 503, { error: "Passkeys not available" });
+    return;
+  }
+
+  const parsedUrl = new URL(req.url ?? "/", "http://localhost");
+  const token = extractToken(
+    req.headers["authorization"],
+    parsedUrl.searchParams.get("token"),
+  );
+  if (!token || !validateToken(token)) {
+    writeJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+  if (isShareToken(token)) {
+    writeJson(res, 403, { error: "Forbidden" });
+    return;
+  }
+
+  let body: { username?: unknown };
+  try {
+    body = JSON.parse(await readBody(req)) as { username?: unknown };
+  } catch {
+    writeJson(res, 400, { error: "Invalid JSON" });
+    return;
+  }
+
+  if (typeof body.username !== "string") {
+    writeJson(res, 400, { error: "username required" });
+    return;
+  }
+
+  const { options, sessionId } = await generatePasskeyRegistrationOptions(body.username);
+  writeJson(res, 200, { options, sessionId });
+};
+
+export const passkeyRegistrationVerifyHandler = async (
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> => {
+  if (!isPasskeySupported()) {
+    writeJson(res, 503, { error: "Passkeys not available" });
+    return;
+  }
+
+  const parsedUrl = new URL(req.url ?? "/", "http://localhost");
+  const token = extractToken(
+    req.headers["authorization"],
+    parsedUrl.searchParams.get("token"),
+  );
+  if (!token || !validateToken(token)) {
+    writeJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+
+  let body: { sessionId?: unknown; response?: unknown };
+  try {
+    body = JSON.parse(await readBody(req)) as { sessionId?: unknown; response?: unknown };
+  } catch {
+    writeJson(res, 400, { error: "Invalid JSON" });
+    return;
+  }
+
+  if (typeof body.sessionId !== "string" || !body.response) {
+    writeJson(res, 400, { error: "sessionId and response required" });
+    return;
+  }
+
+  const ok = await verifyPasskeyRegistration(body.sessionId, body.response as never);
+  if (!ok) {
+    writeJson(res, 400, { error: "Passkey registration failed" });
+    return;
+  }
+
+  writeJson(res, 200, { ok: true });
+};
+
+export const passkeyAuthenticationOptionsHandler = async (
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> => {
+  if (!isPasskeySupported()) {
+    writeJson(res, 503, { error: "Passkeys not available" });
+    return;
+  }
+
+  const { options, sessionId } = await generatePasskeyAuthenticationOptions();
+  writeJson(res, 200, { options, sessionId });
+};
+
+export const passkeyAuthenticationVerifyHandler = async (
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> => {
+  if (!isPasskeySupported()) {
+    writeJson(res, 503, { error: "Passkeys not available" });
+    return;
+  }
+
+  let body: { sessionId?: unknown; response?: unknown };
+  try {
+    body = JSON.parse(await readBody(req)) as { sessionId?: unknown; response?: unknown };
+  } catch {
+    writeJson(res, 400, { error: "Invalid JSON" });
+    return;
+  }
+
+  if (typeof body.sessionId !== "string" || !body.response) {
+    writeJson(res, 400, { error: "sessionId and response required" });
+    return;
+  }
+
+  const username = await verifyPasskeyAuthentication(body.sessionId, body.response as never);
+  if (!username) {
+    writeJson(res, 401, { error: "Passkey authentication failed" });
+    return;
+  }
+
+  const token = issueToken(username);
+  writeJson(res, 200, { token });
 };
 
 export const authLogoutHandler = async (

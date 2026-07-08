@@ -27,13 +27,12 @@ export const ProgressItem = ({
     <div className={css.progressCard}>
       <div className={css.progressHeader}>
         <span className={css.label}>{label}</span>
-        <span className={css.percent}>
-          {percentFormatter.format(progress.percent)}
-        </span>
+        <span className={css.percent}>{percentFormatter.format(progress.percent)}</span>
       </div>
       <progress value={progress.percent} max={1} />
       <span className={css.muted}>
-        {valueFormatter(progress.completed)} / {valueFormatter(progress.total)} {summaryLabel}
+        {valueFormatter(progress.completed)} / {valueFormatter(progress.total)}{" "}
+        {summaryLabel}
         {eta ? ` (${eta})` : ""}
         {detail ? ` • ${detail}` : ""}
       </span>

@@ -1,7 +1,7 @@
 import * as http from "http";
 import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../../indexDatabase/indexDatabase.type.ts";
-import { stat, readFile } from "fs/promises";
+import { stat, readFile, rm, mkdir } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { createReadStream, existsSync, type Stats } from "fs";
 import path from "path";
@@ -39,6 +39,7 @@ import { StandardHeight, parseToStandardHeight } from "../../common/standardHeig
 import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";
 import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../utils.ts";
+import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -277,6 +278,12 @@ const tryHLSStream = async (
 
   const segment = url.searchParams.get("segment");
   const variant = url.searchParams.get("variant"); // e.g., "360" or "720"
+  // Propagate the auth token through rewritten playlist/segment URLs so that
+  // native HLS players (Safari) and any client that can't add Authorization
+  // headers can still authenticate sub-requests.
+  const tokenSuffix = url.searchParams.get("token")
+    ? `&token=${encodeURIComponent(url.searchParams.get("token")!)}`
+    : "";
 
   try {
     // Get duration from database, falling back to ffprobe if not indexed yet
@@ -305,7 +312,7 @@ const tryHLSStream = async (
 
     // If not initialized, set up the directory structure immediately so the master
     // playlist can be returned to the client right away. Encodes are started lazily
-    // per variant when the client requests segments (see ensureEncodeCovers below);
+    // per variant when the client requests segments (see ensureEncoding below);
     // segments become available as FFmpeg writes them and are served via the watcher.
     if (!multibitrateInfo.initialized) {
       if (!(await getGpuAcceleration())) {
@@ -322,49 +329,45 @@ const tryHLSStream = async (
       await prepareMultibitrateHLSStructure(normalizedPath);
     }
 
-    // Ensure a live/pending encode for `variantHeight` will produce `startSegment`,
-    // (re)starting one if needed. `claimVariantEncode` makes the decision atomically
-    // (see there) and returns the segment to begin at, or null if already covered.
+    // Ensure a live encode is running for `variantHeight`. Encodes always start from
+    // segment 0 — no offset encodes. When a dead encode is restarted, we first clear
+    // the variant's cached segments so the new encode starts with a clean slate (no
+    // stale segments from a previous encode session causing inconsistent playback).
     // Queued as a user-blocking task. The output is ephemeral — served while the
     // player fetches, then reaped once that variant goes idle (an ABR switch away) or
     // the whole tree goes idle, so we persist no DB marker.
-    const ensureEncodeCovers = (
-      variantHeight: number,
-      segmentIndex: number,
-      forwardSeek = false,
-    ): void => {
-      const startSegment = claimVariantEncode(
-        hlsDir,
-        variantHeight,
-        segmentIndex,
-        forwardSeek,
-      );
-      if (startSegment === null) return;
+    const ensureEncoding = (variantHeight: number): void => {
+      const needsStart = claimVariantEncode(hlsDir, variantHeight);
+      if (!needsStart) return;
+      const variantDir = path.join(hlsDir, `${variantHeight}p`);
+      recordServerDiagnosticEvent({
+        level: "warn",
+        event: "video.hls.encode.queued",
+        message: `Queued ${variantHeight}p encode (from start)`,
+        data: { path: subPath, hlsDir, variantHeight, queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot() },
+      });
       ctx.taskOrchestrator.addTask(
         {
-          name: `HLS encode ${variantHeight}p @${startSegment}`,
+          name: `HLS encode ${variantHeight}p`,
           type: "videoConversion",
           start: () => {
-            const promise = generateVariantHLS(normalizedPath, variantHeight, {
-              startSegment,
-              onSpawn: (child) => registerHlsProcess(hlsDir, variantHeight, child),
-            }).then(
+            const promise = (async () => {
+              // Clear stale segments so the new encode is the sole author of this
+              // variant's cache — prevents mixed-session segments causing stutter.
+              await rm(variantDir, { recursive: true, force: true });
+              await mkdir(variantDir, { recursive: true });
+              await generateVariantHLS(normalizedPath, variantHeight, {
+                onSpawn: (child) => registerHlsProcess(hlsDir, variantHeight, child),
+              });
+            })().then(
               () => {},
               (error) => {
                 // A reaped session/variant kills ffmpeg on purpose; expected for
                 // ephemeral HLS, not a real failure.
-                hlsLog.debug(
-                  { err: error, hlsDir, variantHeight, startSegment },
-                  "HLS encode ended early",
-                );
+                hlsLog.debug({ err: error, hlsDir, variantHeight }, "HLS encode ended early");
               },
             );
-
-            return {
-              onComplete: async () => {
-                await promise;
-              },
-            };
+            return { onComplete: async () => { await promise; } };
           },
         },
         "blocking",
@@ -376,23 +379,56 @@ const tryHLSStream = async (
       const variantHeight = clampToSupportedHeight(parseInt(variant, 10));
       const segmentPath = getVariantSegmentPath(hlsDir, variantHeight, segment);
       const segmentIndex = parseSegmentIndex(segment);
-      // Touch the variant (re-arm idle reaper) and learn whether this request is a
-      // forward seek — a jump well past the furthest segment requested so far.
-      const forwardSeek = touchVariant(hlsDir, variantHeight, segmentIndex ?? undefined);
+      touchVariant(hlsDir, variantHeight);
 
-      // Only (re)start an encode when the segment isn't already on disk. Buffer-ahead
-      // requests for not-yet-produced segments fall through to the long-poll below,
-      // letting the running encode reach them rather than spuriously restarting it —
-      // unless this is a forward seek, where we restart at the seek target.
+      // If the segment isn't on disk yet, make sure an encode is running.
       if (!existsSync(segmentPath) && segmentIndex !== null) {
-        ensureEncodeCovers(variantHeight, segmentIndex, forwardSeek);
+        ensureEncoding(variantHeight);
       }
+
+      recordServerDiagnosticEvent({
+        level: "info",
+        event: "video.hls.segment.requested",
+        message: `Requested HLS segment ${segment}`,
+        data: {
+          path: subPath,
+          hlsDir,
+          variantHeight,
+          segment,
+          segmentIndex,
+          queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
+        },
+      });
 
       const available = await waitForHlsFile(hlsDir, segmentPath);
       if (!available) {
+        recordServerDiagnosticEvent({
+          level: "error",
+          event: "video.hls.segment.timeout",
+          message: `Timed out waiting for HLS segment ${segment}`,
+          data: {
+            path: subPath,
+            hlsDir,
+            variantHeight,
+            segment,
+            segmentIndex,
+            queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
+          },
+        });
         writeJson(res, 404, { error: "HLS segment not found or timed out" });
         return true;
       }
+      recordServerDiagnosticEvent({
+        level: "info",
+        event: "video.hls.segment.ready",
+        message: `Served HLS segment ${segment}`,
+        data: {
+          path: subPath,
+          hlsDir,
+          variantHeight,
+          segment,
+        },
+      });
       await streamHlsSegment(res, segmentPath);
       return true;
     }
@@ -401,19 +437,24 @@ const tryHLSStream = async (
     if (variant) {
       const variantHeight = clampToSupportedHeight(parseInt(variant, 10));
       touchVariant(hlsDir, variantHeight);
-      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}&segment=`;
+      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}${tokenSuffix}&segment=`;
 
       // When the total duration is known, synthesize a complete VOD playlist that
       // lists every segment up front and ends with #EXT-X-ENDLIST. This gives the
       // player the true total length immediately, instead of FFmpeg's growing EVENT
-      // playlist whose duration creeps up as segments are appended. The encode itself
-      // is started lazily by the segment handler at the position the player asks for,
-      // so a mid-stream switch to this variant begins encoding there, not from 0.
+      // playlist whose duration creeps up as segments are appended. The encode runs
+      // from segment 0; the segment handler waits for each segment to be produced.
       if (
         typeof knownDuration === "number" &&
         Number.isFinite(knownDuration) &&
         knownDuration > 0
       ) {
+        recordServerDiagnosticEvent({
+          level: "info",
+          event: "video.hls.variant.playlist",
+          message: `Served synthetic VOD playlist for ${variantHeight}p`,
+          data: { path: subPath, hlsDir, variantHeight, knownDuration },
+        });
         const playlist = buildVodVariantPlaylist({
           durationSeconds: knownDuration,
           segmentBaseUrl: baseUrl,
@@ -424,10 +465,8 @@ const tryHLSStream = async (
         return true;
       }
 
-      // Duration unknown — we can't synthesize the VOD playlist, so fall back to
-      // FFmpeg's own growing EVENT playlist. That requires an encode from the start;
-      // kick one off and wait for the playlist to be written.
-      ensureEncodeCovers(variantHeight, 0);
+      // Duration unknown — fall back to FFmpeg's own growing EVENT playlist.
+      ensureEncoding(variantHeight);
       const variantPlaylistPath = getVariantPlaylistPath(
         multibitrateInfo.hlsDir,
         variantHeight,
@@ -438,6 +477,17 @@ const tryHLSStream = async (
         variantPlaylistPath,
       );
       if (!available) {
+        recordServerDiagnosticEvent({
+          level: "error",
+          event: "video.hls.variant.playlist.timeout",
+          message: `Timed out waiting for ${variantHeight}p playlist`,
+          data: {
+            path: subPath,
+            hlsDir,
+            variantHeight,
+            queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
+          },
+        });
         writeJson(res, 404, { error: "HLS variant playlist not found or timed out" });
         return true;
       }
@@ -454,10 +504,20 @@ const tryHLSStream = async (
     }
 
     // Serve master playlist
+    recordServerDiagnosticEvent({
+      level: "info",
+      event: "video.hls.master.playlist",
+      message: `Served HLS master playlist for ${subPath}`,
+      data: {
+        path: subPath,
+        hlsDir,
+        queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
+      },
+    });
     let masterContent = await readFile(multibitrateInfo.masterPlaylistPath, "utf-8");
 
     // Rewrite variant playlist paths to use API endpoint
-    const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=`;
+    const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls${tokenSuffix}&variant=`;
     masterContent = masterContent.replace(
       /^(\d+)p\/playlist\.m3u8$/gm,
       (_, variantHeight) => `${baseVariantUrl}${variantHeight}`,

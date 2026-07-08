@@ -11,7 +11,15 @@ vi.mock("ol/Map", () => ({
       animate: typeof animateSpy;
     };
 
-    constructor({ view, target, layers }: { view: MockMap["view"]; target?: HTMLElement; layers?: unknown[] }) {
+    constructor({
+      view,
+      target,
+      layers,
+    }: {
+      view: MockMap["view"];
+      target?: HTMLElement;
+      layers?: unknown[];
+    }) {
       this.view = view;
     }
 

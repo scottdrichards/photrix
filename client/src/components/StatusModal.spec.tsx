@@ -113,6 +113,19 @@ describe("StatusModal", () => {
     expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
   });
 
+  it("ignores dialog showModal state races", () => {
+    subscribeStatusStreamMock.mockReturnValue(() => undefined);
+    const showModalSpy = vi
+      .spyOn(HTMLDialogElement.prototype, "showModal")
+      .mockImplementation(() => {
+        throw new DOMException("Already open", "InvalidStateError");
+      });
+
+    expect(() => render(<StatusModal isOpen={true} onDismiss={vi.fn()} />)).not.toThrow();
+
+    showModalSpy.mockRestore();
+  });
+
   it("updates stats on successive status events", async () => {
     const unsubscribe = vi.fn();
     let onUpdate: ((status: unknown) => void) | undefined;
@@ -185,4 +198,3 @@ describe("StatusModal", () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });
-

@@ -207,14 +207,71 @@ describe("searchRequestHandler resilience", () => {
     expect(json._diagnostics.clap).toEqual({ status: "skipped" });
   });
 
+  it("runs the user's new query against the already shared result set", async () => {
+    const embedText = jest.fn(async () => new Float32Array([1]));
+    const handler = await loadHandler({ embedText });
+
+    const database = {
+      semanticSearch: jest.fn(async () => []),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => []),
+    } as unknown as IndexDatabase;
+
+    const { res, getStatus } = createJsonResponse();
+    await handler(makeReq("beach"), res, {
+      database,
+      shareScope: {
+        filter: { relativePath: ["/albums/sunset.jpg"] },
+      },
+      shareFilter: { relativePath: ["/albums/sunset.jpg"] },
+    });
+
+    expect(getStatus()).toBe(200);
+    expect(embedText).toHaveBeenCalledWith("beach");
+  });
+
+  it("does not let shared searches enable sources outside the shared scope", async () => {
+    const handler = await loadHandler({});
+    const semanticSearch = jest.fn(async () => []);
+    const audioTranscriptSearch = jest.fn(async () => [transcriptRow]);
+    const req = {
+      url: `/api/search?q=${encodeURIComponent("hello")}&sources=transcript&debug=1`,
+      headers: { host: "localhost" },
+    } as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
+    const database = {
+      semanticSearch,
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch,
+    } as unknown as IndexDatabase;
+
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(req, res, {
+      database,
+      shareScope: {
+        filter: { relativePath: ["/albums/sunset.jpg"] },
+        semanticQuery: "sunset",
+        searchSources: ["image"],
+      },
+      shareFilter: { relativePath: ["/albums/sunset.jpg"] },
+    });
+
+    expect(getStatus()).toBe(200);
+    expect(audioTranscriptSearch).not.toHaveBeenCalled();
+    expect(semanticSearch).not.toHaveBeenCalled();
+    const json = getJson();
+    expect(json.items).toEqual([]);
+    expect(json._diagnostics.clip).toEqual({ status: "skipped" });
+    expect(json._diagnostics.transcript).toEqual({ status: "skipped" });
+  });
+
   it("drops low-confidence CLAP audio hits below the relevance floor but keeps confident ones", async () => {
     const handler = await loadHandler({});
 
     // CLAP cosine sits on a higher scale than CLIP and is not relevance-calibrated
     // across queries, so noise can score ~0.4. Only confident audio (>= floor)
     // should reach the results; a sub-floor "match" is dropped before fusion.
-    const noiseVideo = { folder: "/a/", fileName: "noise.mp4", mimeType: "video/mp4", similarity: 0.41 };
-    const confidentVideo = { folder: "/a/", fileName: "music.mp4", mimeType: "video/mp4", similarity: 0.52 };
+    const noiseVideo = { folder: "/a/", fileName: "noise.mp4", mimeType: "video/mp4", similarity: 0.49 };
+    const confidentVideo = { folder: "/a/", fileName: "music.mp4", mimeType: "video/mp4", similarity: 0.58 };
 
     const database = {
       semanticSearch: jest.fn(async () => []),

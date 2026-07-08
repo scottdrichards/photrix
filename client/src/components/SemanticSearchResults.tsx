@@ -70,7 +70,9 @@ export const SemanticSearchResults = ({ query }: Props) => {
     return (
       <div className={css.center}>
         <p>No results for &ldquo;{query}&rdquo;</p>
-        <p className={css.hint}>Images need to be indexed first (check the Status panel).</p>
+        <p className={css.hint}>
+          Images need to be indexed first (check the Status panel).
+        </p>
       </div>
     );
   }

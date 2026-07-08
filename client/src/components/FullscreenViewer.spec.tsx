@@ -10,19 +10,29 @@ const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
 });
 
 const negotiateVideoPlaybackMock = vi.fn();
+const logClientEventMock = vi.fn();
+const createClientOperationIdMock = vi.fn(() => "client-op-1");
 
 const {
   hlsIsSupportedMock,
   hlsLoadSourceMock,
   hlsAttachMediaMock,
   hlsOnMock,
+  hlsOffMock,
   hlsDestroyMock,
+  hlsStartLoadMock,
+  hlsRecoverMediaErrorMock,
+  hlsEventHandlers,
 } = vi.hoisted(() => ({
   hlsIsSupportedMock: vi.fn(() => false),
   hlsLoadSourceMock: vi.fn(),
   hlsAttachMediaMock: vi.fn(),
   hlsOnMock: vi.fn(),
+  hlsOffMock: vi.fn(),
   hlsDestroyMock: vi.fn(),
+  hlsStartLoadMock: vi.fn(),
+  hlsRecoverMediaErrorMock: vi.fn(),
+  hlsEventHandlers: new Map<string, (...args: unknown[]) => void>(),
 }));
 
 const useSelectionContextMock = vi.fn();
@@ -40,12 +50,24 @@ vi.mock("../api", () => ({
   fetchTranscriptSegments: () => Promise.resolve([]),
 }));
 
+vi.mock("../diagnostics", () => ({
+  logClientEvent: (...args: unknown[]) => logClientEventMock(...args),
+  createClientOperationId: () => createClientOperationIdMock(),
+}));
+
 vi.mock("hls.js", () => ({
   default: class MockHls {
     static isSupported = hlsIsSupportedMock;
     static Events = {
       MANIFEST_PARSED: "manifestParsed",
+      LEVEL_LOADED: "levelLoaded",
+      BUFFER_APPENDED: "bufferAppended",
+      LEVEL_SWITCHED: "levelSwitched",
       ERROR: "error",
+    };
+    static ErrorTypes = {
+      NETWORK_ERROR: "networkError",
+      MEDIA_ERROR: "mediaError",
     };
     static DefaultConfig = {
       loader: class MockLoader {
@@ -54,10 +76,18 @@ vi.mock("hls.js", () => ({
     };
 
     media = null;
+    levels = [{ height: 720 }];
+    currentLevel = -1;
     loadSource = hlsLoadSourceMock;
     attachMedia = hlsAttachMediaMock;
-    on = hlsOnMock;
+    on = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      hlsOnMock(event, handler);
+      hlsEventHandlers.set(event, handler);
+    });
+    off = hlsOffMock;
     destroy = hlsDestroyMock;
+    startLoad = hlsStartLoadMock;
+    recoverMediaError = hlsRecoverMediaErrorMock;
   },
 }));
 
@@ -78,7 +108,9 @@ const createPhoto = (overrides: Partial<PhotoItem> = {}): PhotoItem => ({
 
 describe("FullscreenViewer", () => {
   beforeAll(() => {
-    HTMLDialogElement.prototype.showModal = vi.fn(function showModal(this: HTMLDialogElement) {
+    HTMLDialogElement.prototype.showModal = vi.fn(function showModal(
+      this: HTMLDialogElement,
+    ) {
       this.setAttribute("open", "");
     });
     HTMLDialogElement.prototype.close = vi.fn(function close(this: HTMLDialogElement) {
@@ -95,6 +127,9 @@ describe("FullscreenViewer", () => {
       hevcSupported: true,
     });
     negotiateVideoPlaybackMock.mockReset();
+    logClientEventMock.mockReset();
+    createClientOperationIdMock.mockReset();
+    createClientOperationIdMock.mockReturnValue("client-op-1");
     negotiateVideoPlaybackMock.mockResolvedValue({
       mode: "direct",
       url: "/api/files/video.mp4",
@@ -105,7 +140,11 @@ describe("FullscreenViewer", () => {
     hlsLoadSourceMock.mockReset();
     hlsAttachMediaMock.mockReset();
     hlsOnMock.mockReset();
+    hlsOffMock.mockReset();
     hlsDestroyMock.mockReset();
+    hlsStartLoadMock.mockReset();
+    hlsRecoverMediaErrorMock.mockReset();
+    hlsEventHandlers.clear();
   });
 
   it("renders selected image and closes via close button", () => {
@@ -123,6 +162,35 @@ describe("FullscreenViewer", () => {
     expect(screen.getByRole("img", { name: "1.jpg" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(setSelected).toHaveBeenCalledWith(null);
+  });
+
+  it("opens share and download quality options from preview actions", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto(),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    render(<FullscreenViewer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Share item" }));
+
+    expect(screen.getByRole("heading", { name: "Share 1 item" })).toBeInTheDocument();
+    expect(screen.getByText("Original")).toBeInTheDocument();
+    expect(screen.getByText("Web-safe, original size")).toBeInTheDocument();
+    expect(screen.getByText("Smaller size")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(
+      screen.queryByRole("heading", { name: "Share 1 item" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Download item" }));
+
+    expect(screen.getByRole("heading", { name: "Download 1 item" })).toBeInTheDocument();
   });
 
   it("shows file info and keeps the info panel open across close/open", () => {
@@ -218,9 +286,7 @@ describe("FullscreenViewer", () => {
     const layers = container.querySelectorAll(`.${css.faceBackdropLayer}`);
     expect(layers).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Hide faces" })).toBeInTheDocument();
-    expect(
-      (layers[0] as HTMLElement).style.maskImage,
-    ).toContain("data:image/svg+xml");
+    expect((layers[0] as HTMLElement).style.maskImage).toContain("data:image/svg+xml");
   });
 
   it("renders face rectangles from stringified regions metadata", () => {
@@ -555,9 +621,46 @@ describe("FullscreenViewer", () => {
         path: "a/hevc.mov",
         bandwidthMbps: 20,
         hevcSupported: true,
+        clientOperationId: "client-op-1",
       });
       expect(video?.getAttribute("src")).toBe("http://localhost/a/hevc.mov");
       expect(screen.getByTestId("video-status")).toHaveTextContent("Raw Video");
+    });
+  });
+
+  it("logs media element waiting and stalled events for videos", async () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/clip.mp4",
+        name: "clip.mp4",
+        mediaType: "video",
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    const video = container.querySelector("video");
+
+    expect(video).not.toBeNull();
+    fireEvent(video!, new Event("waiting"));
+    fireEvent(video!, new Event("stalled"));
+
+    await waitFor(() => {
+      expect(logClientEventMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "video.element.waiting",
+          clientOperationId: "client-op-1",
+        }),
+      );
+      expect(logClientEventMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "video.element.stalled",
+          clientOperationId: "client-op-1",
+        }),
+      );
     });
   });
 
@@ -600,6 +703,106 @@ describe("FullscreenViewer", () => {
     });
   });
 
+  it("stops retrying forever and falls back to raw playback after repeated HLS network failures", async () => {
+    hlsIsSupportedMock.mockReturnValue(true);
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "hls",
+      url: "http://localhost/a/standard.m3u8",
+      reason: "Cached HLS available",
+    });
+
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/standard.mp4",
+        name: "standard.mp4",
+        mediaType: "video",
+        fullUrl: "http://localhost/a/standard.mp4",
+        originalUrl: "http://localhost/a/standard.mp4",
+        metadata: {
+          sizeInBytes: 2_000_000,
+          duration: 2,
+          videoCodec: "h264",
+        },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    const video = container.querySelector("video");
+
+    expect(video).not.toBeNull();
+    await waitFor(() => {
+      expect(hlsLoadSourceMock).toHaveBeenCalledWith("http://localhost/a/standard.m3u8");
+    });
+
+    const errorHandler = hlsEventHandlers.get("error");
+    expect(errorHandler).toBeDefined();
+
+    errorHandler?.("error", {
+      fatal: true,
+      type: "networkError",
+      details: "manifestLoadError",
+    });
+    errorHandler?.("error", {
+      fatal: true,
+      type: "networkError",
+      details: "manifestLoadError",
+    });
+    errorHandler?.("error", {
+      fatal: true,
+      type: "networkError",
+      details: "manifestLoadError",
+    });
+
+    expect(hlsStartLoadMock).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(video?.getAttribute("src")).toBe("http://localhost/a/standard.mp4");
+      expect(screen.getByTestId("video-status")).toHaveTextContent("Raw Video");
+    });
+  });
+
+  it("marks playback unavailable when the direct video source errors", async () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/direct.mp4",
+        name: "direct.mp4",
+        mediaType: "video",
+        fullUrl: "http://localhost/a/direct.mp4",
+        originalUrl: "http://localhost/a/direct.mp4",
+        metadata: {
+          sizeInBytes: 2_000_000,
+          duration: 2,
+          videoCodec: "h264",
+        },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    const video = container.querySelector("video");
+
+    expect(video).not.toBeNull();
+    await waitFor(() => {
+      expect(video?.getAttribute("src")).toBe("/api/files/video.mp4");
+      expect(screen.getByTestId("video-status")).toHaveTextContent("Raw Video");
+    });
+
+    fireEvent(video!, new Event("error"));
+
+    await waitFor(() => {
+      expect(video?.getAttribute("src")).toBeNull();
+      expect(screen.getByTestId("video-status")).toHaveTextContent(
+        "Playback Unavailable",
+      );
+    });
+  });
+
   it("falls back to fullUrl when server negotiates error mode", async () => {
     negotiateVideoPlaybackMock.mockResolvedValue({
       mode: "error",
@@ -631,7 +834,9 @@ describe("FullscreenViewer", () => {
     expect(video).not.toBeNull();
     await waitFor(() => {
       expect(video?.getAttribute("src")).toBe("http://localhost/a/weird-websafe.mp4");
-      expect(screen.getByTestId("video-status")).toHaveTextContent("No Compatible Stream");
+      expect(screen.getByTestId("video-status")).toHaveTextContent(
+        "No Compatible Stream",
+      );
     });
   });
 
@@ -661,7 +866,9 @@ describe("FullscreenViewer", () => {
 
       render(<FullscreenViewer />);
 
-      expect(screen.queryByRole("button", { name: "Play live photo" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Play live photo" }),
+      ).not.toBeInTheDocument();
     });
 
     it("does not show live photo button for video media items", () => {
@@ -678,7 +885,9 @@ describe("FullscreenViewer", () => {
 
       const { container } = render(<FullscreenViewer />);
 
-      expect(screen.queryByRole("button", { name: "Play live photo" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Play live photo" }),
+      ).not.toBeInTheDocument();
       expect(container.querySelector("video")).not.toBeNull();
     });
 
@@ -699,7 +908,9 @@ describe("FullscreenViewer", () => {
       fireEvent.click(screen.getByRole("button", { name: "Play live photo" }));
 
       expect(screen.queryByRole("img", { name: "1.jpg" })).not.toBeInTheDocument();
-      expect(container.querySelector("video[src='http://localhost/a/1.MOV']")).not.toBeNull();
+      expect(
+        container.querySelector("video[src='http://localhost/a/1.MOV']"),
+      ).not.toBeNull();
       expect(screen.getByRole("button", { name: "Show photo" })).toBeInTheDocument();
     });
 
