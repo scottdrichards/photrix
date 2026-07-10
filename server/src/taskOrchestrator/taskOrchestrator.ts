@@ -40,8 +40,14 @@ const getResourceRequirements = (type?: TaskType): Partial<Record<Resources, num
     diskInfo: { disk: 0.5 },
     // Heavy combined pass (decode + face detection + CLIP). The dominant
     // background CPU consumer; leaves only a sliver so a single user-triggered
-    // image conversion can still slip alongside it.
-    imageAnalysis: { cpu: 0.75, memoryMB: 2500 },
+    // image conversion can still slip alongside it. When CUDA is present the
+    // face (ONNX) and CLIP (torch) models run on the GPU, so it claims a GPU
+    // share too: without it the budget saw image analysis as CPU-only and let
+    // it become a third resident GPU model on top of both audio workers,
+    // exhausting an 8 GB card's VRAM (cudaErrorMemoryAllocation). At gpu: 0.5,
+    // any two of the three GPU workers may run concurrently but the third is
+    // gated until one frees VRAM.
+    imageAnalysis: { cpu: 0.75, gpu: 0.5, memoryMB: 2500 },
     audioTranscription: { gpu: 0.5, cpu: 0.5, memoryMB: 3500 },
     audioEmbedding: { gpu: 0.5, cpu: 0.5, memoryMB: 2000 },
   };
