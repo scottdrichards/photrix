@@ -43,6 +43,14 @@ from pillow_heif import register_heif_opener
 # models downscale internally so the decompression-bomb guard adds no safety.
 Image.MAX_IMAGE_PIXELS = None
 
+# Cap the long edge of the decoded image. Both models shrink their input far
+# below this (InsightFace det_size 640, CLIP 224), so this loses no accuracy —
+# it just bounds peak RAM. Without it a single high-megapixel panorama decodes to
+# a full-resolution RGB buffer (plus a full BGR copy for face detection), which
+# can spike hundreds of MB per image past the task's fixed memory reservation and
+# OOM the box. 2048px keeps ~3x headroom over the largest model input.
+MAX_DECODE_EDGE = int(os.environ.get("PHOTRIX_IMAGE_MAX_DECODE_EDGE") or 2048)
+
 # Suppress pthread_setaffinity_np / onnx warnings logged by ORT's thread pool in
 # container/VM environments where CPU affinity doesn't cover all logical cores.
 import onnxruntime as ort
@@ -50,7 +58,8 @@ ort.set_default_logger_severity(4)
 
 register_heif_opener()
 
-PROVIDER = (sys.argv[1] if len(sys.argv) > 1 else "CPUExecutionProvider").strip()
+FACE_PROVIDER = (sys.argv[1] if len(sys.argv) > 1 else "CPUExecutionProvider").strip()
+CLIP_DEVICE = (sys.argv[2] if len(sys.argv) > 2 else "cpu").strip().lower()
 
 # Lock held during any CLIP forward pass so the text-embedding thread and the
 # image-analysis main thread don't run the model concurrently.
@@ -103,7 +112,7 @@ def _purge_insightface_cache(model_name: str) -> None:
 def _create_face_app(allow_redownload: bool = True):
     from insightface.app import FaceAnalysis
 
-    ctx_id = -1 if PROVIDER == "CPUExecutionProvider" else 0
+    ctx_id = -1 if FACE_PROVIDER == "CPUExecutionProvider" else 0
 
     devnull = open(os.devnull, "w")
     old_stderr = sys.stderr
@@ -111,7 +120,7 @@ def _create_face_app(allow_redownload: bool = True):
         sys.stderr = devnull
         with contextlib.redirect_stdout(sys.stderr):
             try:
-                app = FaceAnalysis(name="buffalo_l", providers=[PROVIDER])
+                app = FaceAnalysis(name="buffalo_l", providers=[FACE_PROVIDER])
                 app.prepare(ctx_id=ctx_id)
             except Exception as exc:
                 if allow_redownload and "INVALID_PROTOBUF" in str(exc):
@@ -135,7 +144,7 @@ def _create_clip():
     import open_clip
     import torch
 
-    device = "cuda" if PROVIDER == "CUDAExecutionProvider" else "cpu"
+    device = "cuda" if CLIP_DEVICE == "cuda" else "cpu"
 
     devnull = open(os.devnull, "w")
     old_stderr = sys.stderr
@@ -165,12 +174,23 @@ def _get_clip():
 
 
 def _load_oriented_rgb(image_path: str) -> Image.Image:
-    """Decode the image once, applying EXIF orientation. Shared by both models."""
+    """Decode the image once, applying EXIF orientation. Shared by both models.
+
+    The decode is capped at MAX_DECODE_EDGE on the long edge to bound peak RAM.
+    For JPEGs, draft() asks the decoder to produce a reduced-scale image directly,
+    so an oversized photo never materialises at full resolution; thumbnail() then
+    enforces the cap for formats draft() can't shrink (HEIC, PNG, ...).
+    """
     path = Path(image_path)
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
     with Image.open(path) as image:
-        return ImageOps.exif_transpose(image).convert("RGB")
+        # Must run before the pixels are loaded (exif_transpose loads them).
+        image.draft("RGB", (MAX_DECODE_EDGE, MAX_DECODE_EDGE))
+        rgb = ImageOps.exif_transpose(image).convert("RGB")
+    if max(rgb.size) > MAX_DECODE_EDGE:
+        rgb.thumbnail((MAX_DECODE_EDGE, MAX_DECODE_EDGE), Image.Resampling.LANCZOS)
+    return rgb
 
 
 def _normalize_box(bbox, width: int, height: int) -> dict:
