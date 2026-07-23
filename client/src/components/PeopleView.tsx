@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { readClusterFromSearch, readGroupFromSearch } from "../filterUrlState";
 import type {
   ClusterFace,
   FaceClusterPCAPoint,
@@ -94,22 +95,23 @@ const InlineNameEditor = ({ name, onSave }: InlineNameEditorProps) => {
 
   if (editing) {
     return (
-      <form
-        className={css.nameForm}
-        onSubmit={commit}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <form className={css.nameForm} onSubmit={commit}>
         <input
           ref={inputRef}
           className={css.nameInput}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Enter name…"
+          onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => {
             if (e.key === "Escape") cancel(e);
           }}
         />
-        <button type="submit" className={css.nameSaveBtn}>
+        <button
+          type="submit"
+          className={css.nameSaveBtn}
+          onClick={(e) => e.stopPropagation()}
+        >
           ✓
         </button>
         <button type="button" className={css.nameCancelBtn} onClick={cancel}>
@@ -134,7 +136,7 @@ const InlineNameEditor = ({ name, onSave }: InlineNameEditorProps) => {
 type PersonDetailProps = {
   cluster: PersonClusterWithFaces;
   onBack: () => void;
-  onViewRelatedGroup: (cluster: PersonCentroid | PersonCluster, label: string) => void;
+  onViewRelatedGroup: (cluster: { id: string }, label: string) => void;
   onClearSelectedFaceGroup: () => void;
   selectedFaceGroup: SelectedFaceGroup | null;
   selectedFaceGroupLoading: boolean;
@@ -327,6 +329,8 @@ type PeopleViewProps = {
   onViewChange: (view: "library" | "people") => void;
 };
 
+const PEOPLE_PAGE_SIZE = 120;
+
 const sortPeopleClusters = (clusters: PersonCluster[]) =>
   [...clusters].sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
 
@@ -407,6 +411,11 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
   const [selectedFaceGroupLoading, setSelectedFaceGroupLoading] = useState(false);
   const [vizPoints, setVizPoints] = useState<FaceClusterPCAPoint[] | null>(null);
   const [vizLoading, setVizLoading] = useState(false);
+  // Only render this many cluster cards at once. The server lists up to 1000
+  // clusters (a long tail of tiny noise groups), and each card loads a
+  // server-generated face crop; rendering all of them floods the browser with
+  // DOM nodes and crop requests. Reveal more on demand instead.
+  const [visibleCount, setVisibleCount] = useState(PEOPLE_PAGE_SIZE);
   const vizRequestRef = useRef<AbortController | null>(null);
   const selectedFaceGroupRequestRef = useRef<AbortController | null>(null);
 
@@ -436,6 +445,7 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
       if (initial) {
         setLoading(true);
         setError(null);
+        setVisibleCount(PEOPLE_PAGE_SIZE);
       }
     };
 
@@ -444,7 +454,6 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
       if (refreshTimer !== undefined) clearTimeout(refreshTimer);
       abortController.abort(abortOnDisposed);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
   useEffect(() => () => {
@@ -461,6 +470,89 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
     setSelectedFaceGroup(null);
     setSelectedFaceGroupLoading(false);
   }, [personDetail?.id]);
+
+  // Sync personDetail to URL: pushState when entering a cluster, replaceState when leaving
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const currentCluster = params.get("cluster") || null;
+    const nextCluster = personDetail?.id ?? null;
+    if (currentCluster === nextCluster) return;
+
+    if (nextCluster) {
+      params.set("cluster", nextCluster);
+      params.delete("group");
+      window.history.pushState(null, "", `${window.location.pathname}?${params}`);
+    } else {
+      params.delete("cluster");
+      params.delete("group");
+      const qs = params.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+    }
+  }, [personDetail?.id]);
+
+  // Sync selectedFaceGroup to URL via replaceState (no new history entry)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const currentGroup = params.get("group") || null;
+    const nextGroup = selectedFaceGroup?.id ?? null;
+    if (currentGroup === nextGroup) return;
+
+    if (nextGroup) {
+      params.set("group", nextGroup);
+    } else {
+      params.delete("group");
+    }
+    window.history.replaceState(null, "", `${window.location.pathname}?${params}`);
+  }, [selectedFaceGroup?.id]);
+
+  // Keep a ref to handlers so the popstate listener doesn't need re-registration
+  const popstateHandlerRef = useRef<(() => void) | undefined>(undefined);
+  popstateHandlerRef.current = () => {
+    const newClusterId = readClusterFromSearch(window.location.search);
+    if (!newClusterId) {
+      selectedFaceGroupRequestRef.current?.abort();
+      selectedFaceGroupRequestRef.current = null;
+      setSelectedFaceGroup(null);
+      setSelectedFaceGroupLoading(false);
+      setPersonDetail(null);
+      setDetailLoading(false);
+      setItems([]);
+    } else if (newClusterId !== personDetail?.id) {
+      loadClusterDetail(newClusterId).catch((err) => {
+        if (err?.name === "AbortError") return;
+        console.error("Failed to load cluster from navigation:", err);
+      });
+    } else {
+      // Same cluster — sync group (e.g. navigating forward to a group URL)
+      const newGroupId = readGroupFromSearch(window.location.search);
+      if (!newGroupId) clearSelectedFaceGroup();
+    }
+  };
+
+  useEffect(() => {
+    const handler = () => popstateHandlerRef.current?.();
+    window.addEventListener("popstate", handler);
+    return () => window.removeEventListener("popstate", handler);
+  }, []);
+
+  // Deep-link initial load: if URL has ?cluster=, load it on mount
+  useEffect(() => {
+    const clusterId = readClusterFromSearch(window.location.search);
+    if (!clusterId) return;
+    const groupId = readGroupFromSearch(window.location.search);
+    const abortController = new AbortController();
+    loadClusterDetail(clusterId, abortController.signal)
+      .then(() => {
+        if (!groupId || abortController.signal.aborted) return;
+        return handleViewRelatedGroup({ id: groupId }, "");
+      })
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
+        console.error("Failed to load people deep link:", err);
+      });
+    return () => abortController.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const refreshPeopleClusters = async (signal?: AbortSignal) => {
     const result = await fetchPeopleClusters({ ...filter, signal });
@@ -621,7 +713,7 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
   };
 
   const handleViewRelatedGroup = async (
-    relatedGroup: PersonCentroid | PersonCluster,
+    relatedGroup: { id: string },
     label: string,
   ) => {
     if (selectedFaceGroup?.id === relatedGroup.id) {
@@ -839,19 +931,30 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
       )}
 
       {data && data.clusters.length > 0 ? (
-        <div className={css.clusterList}>
-          {data.clusters.map((cluster) => (
-            <ClusterCard
-              key={cluster.id}
-              cluster={cluster}
-              isSelected={selected.has(cluster.id)}
-              onClick={(e) => handleClusterClick(cluster, e)}
-              onLongPress={() => handleLongPress(cluster.id)}
-              onToggleSelect={() => toggleSelect(cluster.id)}
-              onRename={(name) => handleRenameInGrid(cluster, name)}
-            />
-          ))}
-        </div>
+        <>
+          <div className={css.clusterList}>
+            {data.clusters.slice(0, visibleCount).map((cluster) => (
+              <ClusterCard
+                key={cluster.id}
+                cluster={cluster}
+                isSelected={selected.has(cluster.id)}
+                onClick={(e) => handleClusterClick(cluster, e)}
+                onLongPress={() => handleLongPress(cluster.id)}
+                onToggleSelect={() => toggleSelect(cluster.id)}
+                onRename={(name) => handleRenameInGrid(cluster, name)}
+              />
+            ))}
+          </div>
+          {data.clusters.length > visibleCount ? (
+            <button
+              type="button"
+              className={css.showMoreButton}
+              onClick={() => setVisibleCount((n) => n + PEOPLE_PAGE_SIZE)}
+            >
+              Show more ({data.clusters.length - visibleCount} more)
+            </button>
+          ) : null}
+        </>
       ) : null}
     </section>
   );

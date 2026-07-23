@@ -139,6 +139,33 @@ def open_image(input_path):
             return img
     return Image.open(input_path)
 
+def _draft_target(outputs):
+    """Smallest full-image size (long edge, px) that still satisfies every
+    output at full quality, or None if any output needs original resolution.
+
+    A plain resize output needs the source at least as large as `height`.
+    A cropped output only samples a `cw`x`ch` fraction, so the source must be
+    `height / max(cw, ch)` for that crop's long edge to still reach `height`
+    pixels — tiny faces therefore keep near-full resolution, close-ups relax
+    to a fraction of it. Passing this to Image.draft() lets the JPEG decoder
+    skip the discarded detail (~4x faster decode) with no visible quality loss;
+    draft never returns an image smaller than the requested size.
+    """
+    need = 0.0
+    for output in outputs:
+        max_dimension = output.get('height')
+        if not max_dimension:  # None/"original" → must decode at full resolution
+            return None
+        crop = output.get('crop')
+        if crop:
+            _, _, cw, ch = crop
+            longest_fraction = max(cw, ch, 1e-6)
+            need = max(need, max_dimension / longest_fraction)
+        else:
+            need = max(need, float(max_dimension))
+    return int(math.ceil(need)) if need else None
+
+
 def process_image(input_path, outputs):
     try:
         if not os.path.exists(input_path):
@@ -146,6 +173,12 @@ def process_image(input_path, outputs):
             sys.exit(1)
 
         img = open_image(input_path)
+        # Hint the (JPEG) decoder to emit only as many pixels as the outputs
+        # need, before any pixels are loaded. No-op for formats/decoders that
+        # don't support draft mode (RAW/HEIC are already fully decoded here).
+        draft_target = _draft_target(outputs)
+        if draft_target is not None:
+            img.draft('RGB', (draft_target, draft_target))
         with img:
             # Apply EXIF rotation (no-op for HEIC files decoded via pyav,
             # which already have orientation applied).

@@ -75,6 +75,23 @@
   gap: var(--space-s);
 }
 
+.showMoreButton {
+  display: block;
+  margin: var(--space-m) auto 0;
+  background: none;
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-m);
+  cursor: pointer;
+  color: var(--fg2);
+  font-size: 0.85rem;
+}
+
+.showMoreButton:hover {
+  border-color: var(--stroke3);
+  background: var(--bg2);
+}
+
 .clusterCard {
   display: flex;
   flex-direction: column;
