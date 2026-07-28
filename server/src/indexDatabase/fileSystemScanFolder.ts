@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { walkFiles } from "../fileHandling/fileUtils.ts";
 import { batch } from "../utils.ts";
@@ -29,9 +30,22 @@ export const fileSystemScanFolder = (
       await ctrl.waitUntilResumed();
       ctrl.checkCancelled();
 
-      const relativePathsBatch = absolutePathsBatch.map((absolutePath) =>
-        path.relative(database.storagePath, absolutePath),
+      const discoveredPaths = await Promise.all(
+        absolutePathsBatch.map(async (absolutePath) => {
+          const stats = await stat(absolutePath).catch(() => null);
+          if (!stats?.isFile() || stats.size === 0) {
+            return null;
+          }
+          return path.relative(database.storagePath, absolutePath);
+        }),
       );
+      const relativePathsBatch = discoveredPaths.filter(
+        (relativePath) => relativePath !== null,
+      );
+      if (!relativePathsBatch.length) {
+        continue;
+      }
+
       await database.addPaths(relativePathsBatch);
       for (const relativePath of relativePathsBatch) {
         seenPaths.add(canonicalRelativePath(relativePath));

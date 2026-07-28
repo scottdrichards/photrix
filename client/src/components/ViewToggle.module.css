@@ -5,7 +5,7 @@
   justify-content: center;
   padding-block: var(--space-s);
   /* Blurred backdrop so content scrolling beneath looks clean */
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--surface-glass);
   backdrop-filter: blur(8px);
   /* Negative margin to let the backdrop bleed to the panel edges */
   margin-inline: calc(var(--space-m) * -1);

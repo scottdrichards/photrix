@@ -1,11 +1,18 @@
-import { Buffer } from "node:buffer";
-import { SEARCH_SOURCES, type SearchSource, type ShareScope } from "../../../shared/filter-contract/src/index.ts";
+import {
+  SEARCH_SOURCES,
+  type SearchSource,
+  type ShareScope,
+} from "../../../shared/filter-contract/src/index.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
 import { embedText } from "../imageAnalysis/imageAnalysisWorker.ts";
 import { embedTextWithClap } from "../audioProcessing/clapWorker.ts";
 
-const CLIP_MIN_SIMILARITY = Number(process.env.PHOTRIX_SEARCH_CLIP_MIN_SIMILARITY ?? 0.18);
-const CLAP_MIN_SIMILARITY = Number(process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.45);
+const CLIP_MIN_SIMILARITY = Number(
+  process.env.PHOTRIX_SEARCH_CLIP_MIN_SIMILARITY ?? 0.18,
+);
+const CLAP_MIN_SIMILARITY = Number(
+  process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.45,
+);
 const SEARCH_TIMEOUT_MS = Number(process.env.PHOTRIX_SEARCH_TIMEOUT_MS) || 15_000;
 const SHARE_FILTER_CACHE_TTL_MS = 5_000;
 
@@ -121,7 +128,7 @@ export const resolveShareFilter = async (
 
     const semanticFilter =
       semanticFilters.length === 1
-        ? semanticFilters[0] ?? {}
+        ? (semanticFilters[0] ?? {})
         : { operation: "or" as const, conditions: semanticFilters };
     const resolved = combineFilters([baseFilter, semanticFilter]);
 

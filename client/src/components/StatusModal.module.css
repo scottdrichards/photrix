@@ -120,3 +120,91 @@
   color: var(--fg3);
   font-variant-numeric: tabular-nums;
 }
+
+/* Stacked per-process VRAM bar */
+.vramBar {
+  display: flex;
+  width: 100%;
+  height: 12px;
+  border-radius: var(--radius-sm, 4px);
+  overflow: hidden;
+  border: 1px solid var(--stroke1);
+  background-color: var(--bg2);
+}
+
+.vramSegment {
+  height: 100%;
+}
+
+.vramFree {
+  height: 100%;
+  background-color: var(--bg2);
+}
+
+.role-image {
+  background-color: #3b82f6;
+}
+
+.role-clap {
+  background-color: #a855f7;
+}
+
+.role-whisper {
+  background-color: #f97316;
+}
+
+.role-other {
+  background-color: #14b8a6;
+}
+
+/* VRAM held by pids we can't see (host / sibling containers on a shared GPU). */
+.role-external {
+  background-color: #6b7280;
+}
+
+.workerRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.85rem;
+}
+
+.roleDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.workerLabel {
+  font-weight: var(--fw-semi);
+}
+
+.workerStat {
+  color: var(--fg2);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
+.arbLine {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  align-items: center;
+}
+
+.badge {
+  font-size: 0.75rem;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background-color: var(--bg2);
+  border: 1px solid var(--stroke1);
+  color: var(--fg2);
+  white-space: nowrap;
+}
+
+.badgeHot {
+  background-color: var(--danger, #c62828);
+  border-color: var(--danger, #c62828);
+  color: #fff;
+}

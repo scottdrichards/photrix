@@ -1,7 +1,11 @@
 import {
+  DEFAULT_SORT,
+  parseSort,
   SEARCH_SOURCES,
+  serializeSort,
   type ClientFilterState,
   type SearchSource,
+  type SortOption,
 } from "../../shared/filter-contract/src";
 
 export type ViewMode = "library" | "people";
@@ -39,12 +43,18 @@ export const parseSearchSources = (
 export const readViewModeFromSearch = (search: string): ViewMode =>
   new URLSearchParams(search).get("view") === "people" ? "people" : "library";
 
+export const readClusterFromSearch = (search: string): string | null =>
+  new URLSearchParams(search).get("cluster") || null;
+
+export const readGroupFromSearch = (search: string): string | null =>
+  new URLSearchParams(search).get("group") || null;
+
 export const createFilterStateFromUrl = (location: {
   pathname: string;
   search: string;
 }): Pick<
   ClientFilterState,
-  "includeSubfolders" | "path" | "semanticQuery" | "searchSources"
+  "includeSubfolders" | "path" | "semanticQuery" | "searchSources" | "sortBy"
 > => {
   const params = new URLSearchParams(location.search);
   const pathFromLocation = decodeURIComponent(location.pathname.slice(1));
@@ -54,8 +64,12 @@ export const createFilterStateFromUrl = (location: {
     path: pathFromLocation ? `${pathFromLocation}/` : "",
     semanticQuery: normalizeSemanticQuery(params.get("q")),
     searchSources: parseSearchSources(params.get("sources")),
+    sortBy: parseSort(params.get("sort")),
   };
 };
+
+const isDefaultSort = (sort: SortOption | undefined): boolean =>
+  !sort || (sort.field === DEFAULT_SORT.field && sort.direction === DEFAULT_SORT.direction);
 
 export const buildFilterSearchParams = (
   filter: ClientFilterState,
@@ -71,6 +85,10 @@ export const buildFilterSearchParams = (
   if (token) {
     params.set("token", token);
   }
+  // Only persist a non-default sort so ordinary library URLs stay clean.
+  if (!isDefaultSort(filter.sortBy)) {
+    params.set("sort", serializeSort(filter.sortBy as SortOption));
+  }
   if (filter.includeSubfolders === false) {
     params.set("includeSubfolders", "false");
   }
@@ -82,6 +100,12 @@ export const buildFilterSearchParams = (
   }
   if (view !== "library") {
     params.set("view", view);
+  }
+  if (view === "people") {
+    const cluster = currentParams.get("cluster");
+    const group = currentParams.get("group");
+    if (cluster) params.set("cluster", cluster);
+    if (group) params.set("group", group);
   }
 
   return params;

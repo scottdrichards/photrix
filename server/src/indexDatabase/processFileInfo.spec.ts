@@ -154,4 +154,53 @@ describe("processFileInfoMetadata", () => {
     expect(updates).toEqual([]);
     expect(removed).toEqual(["c.jpg"]);
   });
+
+  it("removes zero-byte files so they can be rediscovered later", async () => {
+    const stat = jest.fn().mockResolvedValue({
+      size: 0,
+      birthtimeMs: new Date("2025-01-01T00:00:00.000Z").getTime(),
+      mtimeMs: new Date("2025-01-02T00:00:00.000Z").getTime(),
+    });
+
+    jest.unstable_mockModule("node:fs/promises", () => ({ stat }));
+
+    const updates: Array<{ relativePath: string; data: Record<string, unknown> }> = [];
+    const removed: string[] = [];
+    let callCount = 0;
+    const db = {
+      storagePath: path.join(os.tmpdir(), "photrix-file-info-zero-size-test"),
+      getStatusCounts: () => ({
+        allEntries: 1,
+        imageEntries: 1,
+        videoEntries: 0,
+        missingFileMetadata: 0,
+        missingMediaMetadata: 0,
+        missingThumbnails: 0,
+      }),
+      getFilesNeedingMetadataUpdate: () => {
+        callCount += 1;
+        if (callCount === 1) {
+          return [{ relativePath: "copying.jpg", sizeInBytes: undefined }];
+        }
+        return [];
+      },
+      addOrUpdateFileData: async (
+        relativePath: string,
+        data: Record<string, unknown>,
+      ) => {
+        updates.push({ relativePath, data });
+      },
+      removeFile: async (relativePath: string) => {
+        removed.push(relativePath);
+      },
+    } as unknown as IndexDatabase;
+
+    const { processFileInfoMetadata } = await import("./processFileInfo.ts");
+    const runner = processFileInfoMetadata(db);
+    await runner.onComplete();
+
+    expect(stat).toHaveBeenCalledTimes(1);
+    expect(updates).toEqual([]);
+    expect(removed).toEqual(["copying.jpg"]);
+  });
 });

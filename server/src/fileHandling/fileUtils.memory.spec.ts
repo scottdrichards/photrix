@@ -123,6 +123,8 @@ describe("EXIF fallback path memory behavior", () => {
     // Validates the fix prevents OOM scenario
     expect(worstCaseOldApproachBytes * parallelism).toBeGreaterThan(1024 * 1024 * 1024); // Old: > 1 GB
     // New approach is negligible in comparison (~97 GB vs ~23 KB)
-    expect(worstCaseOldApproachBytes / worstCaseNewApproachBytes).toBeGreaterThan(1000000);
+    expect(worstCaseOldApproachBytes / worstCaseNewApproachBytes).toBeGreaterThan(
+      1000000,
+    );
   });
 });

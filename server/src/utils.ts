@@ -41,4 +41,3 @@ export const batch = <T>(
   };
   return batchIterator;
 };
-

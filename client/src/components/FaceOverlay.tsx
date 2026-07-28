@@ -11,10 +11,23 @@ type FaceRegion = {
   };
 };
 
+/** A detected face resolved to its People cluster, for name labels. */
+export type NamedFace = {
+  box: { x: number; y: number; width: number; height: number };
+  personId: string;
+  name: string | null;
+};
+
 type FaceOverlayProps = {
   regionsRaw: unknown;
   faceTableBoxesRaw?: unknown;
   aspectRatio: number;
+  /** Detected faces with resolved People names, rendered as clickable labels. */
+  namedFaces?: NamedFace[];
+  /** Invoked with the `person-N` cluster id when a name label is clicked. */
+  onSelectPerson?: (personId: string) => void;
+  /** Hide labels while the photo is zoomed (the frame layer scales, they don't). */
+  labelsHidden?: boolean;
 };
 
 const unwrapJsonString = (value: unknown): unknown => {
@@ -205,15 +218,22 @@ export function FaceOverlay({
   regionsRaw,
   faceTableBoxesRaw,
   aspectRatio,
+  namedFaces,
+  onSelectPerson,
+  labelsHidden = false,
 }: FaceOverlayProps) {
   const exifFaceRegions = useMemo(() => parseFaceRegions(regionsRaw), [regionsRaw]);
   const tableFaceRegions = useMemo(
     () => parseFaceTableBoxes(faceTableBoxesRaw),
     [faceTableBoxesRaw],
   );
+  const namedFaceRegions = useMemo<FaceRegion[]>(
+    () => (namedFaces ?? []).map((face) => ({ area: face.box })),
+    [namedFaces],
+  );
   const allRegions = useMemo(
-    () => [...exifFaceRegions, ...tableFaceRegions],
-    [exifFaceRegions, tableFaceRegions],
+    () => [...exifFaceRegions, ...tableFaceRegions, ...namedFaceRegions],
+    [exifFaceRegions, tableFaceRegions, namedFaceRegions],
   );
   const faceMaskImage = useMemo(
     () =>
@@ -226,6 +246,8 @@ export function FaceOverlay({
   if (!faceMaskImage) {
     return null;
   }
+
+  const nameLabels = (namedFaces ?? []).filter((face) => face.name);
 
   return (
     <>
@@ -257,7 +279,34 @@ export function FaceOverlay({
           aspectRatio={aspectRatio}
           className={`${css.faceFrameRect} ${css.faceTableFrameRect}`}
         />
+        <FaceRects
+          regions={namedFaceRegions}
+          aspectRatio={aspectRatio}
+          className={`${css.faceFrameRect} ${css.faceTableFrameRect}`}
+        />
       </svg>
+      {onSelectPerson && !labelsHidden && nameLabels.length > 0 && (
+        <div className={css.faceLabelLayer}>
+          {nameLabels.map((face, index) => (
+            <button
+              key={index}
+              type="button"
+              className={css.faceLabel}
+              style={{
+                left: `${face.box.x * 100}%`,
+                top: `${(face.box.y - face.box.height / 2) * 100}%`,
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelectPerson(face.personId);
+              }}
+              title={`View ${face.name}`}
+            >
+              {face.name}
+            </button>
+          ))}
+        </div>
+      )}
     </>
   );
 }

@@ -19,10 +19,7 @@ export const getHLSSegmentPath = (hlsDir: string, segmentName: string): string =
  * Runs FFmpeg HLS generation with the given args.
  * Returns a promise that resolves on success or rejects with the stderr on failure.
  */
-const generateHLSWithFFMPEG = (
-  args: string[],
-  hlsDir: string,
-): Promise<void> =>
+const generateHLSWithFFMPEG = (args: string[]): Promise<void> =>
   new Promise<void>((resolve, reject) => {
     const process = spawn("ffmpeg", args);
 
@@ -105,7 +102,7 @@ export const generateHLS = async (
       maxBitrate,
       ...outputArgs,
     ];
-    await generateHLSWithFFMPEG(hwArgs, hlsDir);
+    await generateHLSWithFFMPEG(hwArgs);
   } else {
     const softwareArgs = [
       ...inputArgs,
@@ -119,7 +116,7 @@ export const generateHLS = async (
       "yuv420p",
       ...outputArgs,
     ];
-    await generateHLSWithFFMPEG(softwareArgs, hlsDir);
+    await generateHLSWithFFMPEG(softwareArgs);
   }
 
   return playlistPath;

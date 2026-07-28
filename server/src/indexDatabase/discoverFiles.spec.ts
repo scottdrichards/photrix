@@ -73,6 +73,27 @@ describe("discoverFiles", () => {
     }
   });
 
+  it("ignores zero-byte files during discovery", async () => {
+    const rootDir = await mkTempDir("photrix-zero-byte-root-");
+    const dbDir = await mkTempDir("photrix-zero-byte-db-");
+    process.env.INDEX_DB_LOCATION = dbDir;
+
+    try {
+      await fs.writeFile(path.join(rootDir, "ready.jpg"), "x");
+      await fs.writeFile(path.join(rootDir, "copying.jpg"), Buffer.alloc(0));
+
+      const db = new IndexDatabase(rootDir);
+      await db.init();
+      await fileSystemScanFolder(db).onComplete();
+
+      expect(await db.getFileRecord("ready.jpg")).toBeDefined();
+      expect(await db.getFileRecord("copying.jpg")).toBeUndefined();
+      expect(await db.countAllEntries()).toBe(1);
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("pauses and resumes a scan in-flight", async () => {
     const rootDir = await mkTempDir("photrix-scan-controls-root-");
 

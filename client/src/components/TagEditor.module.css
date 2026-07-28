@@ -1,0 +1,88 @@
+.editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-size: 0.82rem;
+  color: inherit;
+  max-width: 220px;
+}
+
+.chipLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.chipRemove:hover {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.inputWrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+.input {
+  min-width: 90px;
+  width: 110px;
+  padding: 4px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-md, 8px);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  font-size: 0.82rem;
+}
+
+.input::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.input:focus {
+  outline: none;
+  border-color: rgba(120, 180, 255, 0.65);
+}
+
+.addButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+  padding: 4px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(120, 180, 255, 0.4);
+  color: inherit;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.addButton:hover {
+  background: rgba(120, 180, 255, 0.6);
+}

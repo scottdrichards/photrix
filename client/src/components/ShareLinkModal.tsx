@@ -19,9 +19,29 @@ export const ShareLinkModal = ({ url, copied, onClose }: Props) => {
     input.select();
   }, []);
 
+  // Close on Escape
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return createPortal(
-    <div className={css.backdrop} onClick={onClose}>
-      <div className={css.sheet} onClick={(e) => e.stopPropagation()}>
+    <div
+      className={css.backdrop}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      role="presentation"
+    >
+      <div
+        className={css.sheet}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Share this view"
+      >
         <div className={css.handle} />
         <h3 className={css.title}>Share this view</h3>
 

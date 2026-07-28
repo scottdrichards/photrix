@@ -37,6 +37,26 @@ export const processFaceClustering = (database: IndexDatabase): TaskRunner => {
     if (totalAssigned > 0) {
       log.info({ totalAssigned }, "Face clustering backlog drained");
     }
+
+    // Now that membership is settled, rescore drifted clusters' stored
+    // similarities so the People tab's representative tracks the real centroid
+    // instead of the (stale) seed face. Cheap when nothing is stale — it's an
+    // in-memory weight check that reads no embeddings unless a cluster grew
+    // past the refresh threshold.
+    let totalRefreshed = 0;
+    while (true) {
+      ctrl.checkCancelled();
+      await ctrl.waitUntilResumed();
+      ctrl.checkCancelled();
+
+      const refreshed = await database.refreshStaleClusterSimilarities();
+      if (!refreshed) break;
+      totalRefreshed += refreshed;
+    }
+    if (totalRefreshed > 0) {
+      log.info({ totalRefreshed }, "Refreshed drifted cluster similarities");
+    }
+
     ctrl.markComplete();
   })();
 

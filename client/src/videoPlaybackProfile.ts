@@ -1,3 +1,5 @@
+import { fetchWithDiagnostics } from "./api/http";
+
 const getHEVCMimeTypes = (): readonly string[] => {
   const envValue = import.meta.env.VITE_HEVC_MIME_TYPES;
   if (!envValue) {
@@ -16,14 +18,19 @@ const getHEVCMimeTypes = (): readonly string[] => {
 
 const HEVC_MIME_TYPES = getHEVCMimeTypes();
 
-type NetworkInformationLike = {
-  downlink?: number;
-};
-
 export type VideoPlaybackProfile = {
   bandwidthMbps: number | null;
   hevcSupported: boolean;
 };
+
+// Active-measurement parameters. navigator.connection.downlink is unusable here —
+// it's capped at ~10 Mbps, rounded for privacy, and null on Safari/Firefox — so we
+// time an actual download instead. The window is bounded in *time* (not bytes) so a
+// slow link doesn't stall playback startup: we read as much of the payload as fits
+// in the budget and derive Mbps from bytes-over-elapsed. The server caps the probe
+// at 20 MB, which is enough to estimate links fast enough to matter for raw playback.
+const PROBE_BYTES = 20 * 1024 * 1024;
+const PROBE_TIME_BUDGET_MS = 2500;
 
 let cachedPlaybackProfile: VideoPlaybackProfile | null = null;
 let pendingPlaybackProfile: Promise<VideoPlaybackProfile> | null = null;
@@ -40,28 +47,61 @@ const detectHevcSupport = (): boolean => {
   });
 };
 
-const getNavigatorBandwidthEstimate = (): number | null => {
-  if (typeof navigator === "undefined") {
+/**
+ * Measure real downlink throughput by streaming the network probe for a bounded
+ * time window. Returns Mbps, or null if it couldn't be measured (fetch failed, no
+ * streaming body, or nothing arrived). Aborting when the budget elapses is the
+ * normal path on a link that can't drain the whole payload in time.
+ */
+const measureBandwidthMbps = async (): Promise<number | null> => {
+  if (typeof fetch === "undefined") {
     return null;
   }
 
-  const connection = (navigator as Navigator & { connection?: NetworkInformationLike })
-    .connection;
-  if (typeof connection?.downlink !== "number" || !Number.isFinite(connection.downlink)) {
-    return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIME_BUDGET_MS);
+  const start = performance.now();
+  let received = 0;
+  try {
+    const response = await fetchWithDiagnostics(
+      `/api/network-probe?bytes=${PROBE_BYTES}`,
+      "measure playback bandwidth",
+      { signal: controller.signal },
+    );
+    if (!response.ok || !response.body) {
+      return null;
+    }
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value?.byteLength ?? 0;
+    }
+  } catch (error) {
+    // The time-budget abort is expected on a link that can't finish the payload in
+    // time — we still measured the bytes that arrived. Anything else is a real
+    // failure and yields an unknown (null) estimate.
+    if ((error as Error).name !== "AbortError") {
+      return null;
+    }
+  } finally {
+    clearTimeout(timer);
   }
 
-  return connection.downlink;
+  const elapsedSeconds = (performance.now() - start) / 1000;
+  if (received === 0 || elapsedSeconds <= 0) {
+    return null;
+  }
+  return (received * 8) / elapsedSeconds / 1_000_000;
 };
 
 const buildPlaybackProfile = async (): Promise<VideoPlaybackProfile> => {
-  const hevcSupported = detectHevcSupport();
+  const [hevcSupported, bandwidthMbps] = await Promise.all([
+    Promise.resolve(detectHevcSupport()),
+    measureBandwidthMbps(),
+  ]);
 
-  const profile = {
-    bandwidthMbps: getNavigatorBandwidthEstimate(),
-    hevcSupported,
-  };
-  return profile;
+  return { bandwidthMbps, hevcSupported };
 };
 
 export const probeVideoPlaybackProfile = (): Promise<VideoPlaybackProfile> => {
@@ -80,6 +120,17 @@ export const probeVideoPlaybackProfile = (): Promise<VideoPlaybackProfile> => {
   });
 
   return pendingPlaybackProfile;
+};
+
+/**
+ * Discard the cached bandwidth measurement so the next probe re-measures. Called
+ * when direct playback stalled: the link is slower than the earlier estimate (which
+ * may predate a network change or DevTools throttle), so future videos should be
+ * negotiated against a fresh number rather than the stale optimistic one.
+ */
+export const invalidateVideoPlaybackProfile = () => {
+  cachedPlaybackProfile = null;
+  pendingPlaybackProfile = null;
 };
 
 export const resetVideoPlaybackProfileForTests = () => {

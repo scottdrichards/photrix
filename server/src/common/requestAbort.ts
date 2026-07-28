@@ -24,10 +24,8 @@ export const bindRequestAbortSignal = (signal: AbortSignal): void => {
  * only (unlike bindRequestAbortSignal, it cannot leak into the caller's
  * context).
  */
-export const runWithRequestAbortSignal = <T>(
-  signal: AbortSignal,
-  fn: () => T,
-): T => requestAbortStorage.run(signal, fn);
+export const runWithRequestAbortSignal = <T>(signal: AbortSignal, fn: () => T): T =>
+  requestAbortStorage.run(signal, fn);
 
 /**
  * Runs `fn` with no ambient abort signal. Use for work whose result outlives

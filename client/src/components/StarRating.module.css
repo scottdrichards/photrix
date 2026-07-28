@@ -1,0 +1,29 @@
+.stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  line-height: 0;
+  color: inherit;
+}
+
+.filled {
+  color: #ffc94f;
+}
+
+.empty {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.star:hover .empty {
+  color: rgba(255, 201, 79, 0.8);
+}

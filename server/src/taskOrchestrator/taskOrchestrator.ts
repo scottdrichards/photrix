@@ -21,7 +21,6 @@ export type QueueType = "blocking" | "implied" | "background";
 type Resources = "gpu" | "cpu" | "disk" | "network" | "memoryMB";
 
 type TaskType =
-  | "imageConversion"
   | "videoConversion"
   | "mediaMedatadata"
   | "diskInfo"
@@ -29,30 +28,32 @@ type TaskType =
   | "audioTranscription"
   | "audioEmbedding";
 
-// Notional fractions of each resource's capacity (cap 1.0). They exist to bound
-// how much heavy work runs at once; they are deliberately conservative so the
-// box is not oversubscribed. The real-load gate below is the dynamic backstop.
-const getResourceRequirements = (type?: TaskType): Partial<Record<Resources, number>> => {
-  const mappings = {
-    imageConversion: { cpu: 0.25 },
-    videoConversion: { gpu: 0.5, cpu: 0.5 },
-    mediaMedatadata: { disk: 0.5 },
-    diskInfo: { disk: 0.5 },
-    // Heavy combined pass (decode + face detection + CLIP). The dominant
-    // background CPU consumer; leaves only a sliver so a single user-triggered
-    // image conversion can still slip alongside it. When CUDA is present the
-    // face (ONNX) and CLIP (torch) models run on the GPU, so it claims a GPU
-    // share too: without it the budget saw image analysis as CPU-only and let
-    // it become a third resident GPU model on top of both audio workers,
-    // exhausting an 8 GB card's VRAM (cudaErrorMemoryAllocation). At gpu: 0.5,
-    // any two of the three GPU workers may run concurrently but the third is
-    // gated until one frees VRAM.
-    imageAnalysis: { cpu: 0.75, gpu: 0.5, memoryMB: 2500 },
-    audioTranscription: { gpu: 0.5, cpu: 0.5, memoryMB: 3500 },
-    audioEmbedding: { gpu: 0.5, cpu: 0.5, memoryMB: 2000 },
-  };
-  return type ? mappings[type] : {};
+// Default notional fractions of each resource's capacity (cap 1.0), keyed by
+// task type. They exist to bound how much heavy work runs at once and are
+// deliberately conservative so the box is not oversubscribed; the real-load gate
+// below is the dynamic backstop.
+//
+// Some types intentionally have no entry and default to no reservation because
+// they don't use this static table: audio tasks pass explicit `resources` (their
+// GPU/CPU split depends on CUDA availability, decided at runtime in main.ts), and
+// video encodes run on the blocking queue, which bypasses the budget entirely.
+const RESOURCE_BUDGETS: Partial<Record<TaskType, Partial<Record<Resources, number>>>> = {
+  mediaMedatadata: { disk: 0.5 },
+  diskInfo: { disk: 0.5 },
+  // Heavy combined pass (decode + face detection + CLIP). The dominant
+  // background CPU consumer; leaves only a sliver so a single user-triggered
+  // image conversion can still slip alongside it. When CUDA is present the
+  // face (ONNX) and CLIP (torch) models run on the GPU, so it claims a GPU
+  // share too: without it the budget saw image analysis as CPU-only and let
+  // it become a third resident GPU model on top of both audio workers,
+  // exhausting an 8 GB card's VRAM (cudaErrorMemoryAllocation). At gpu: 0.5,
+  // any two of the three GPU workers may run concurrently but the third is
+  // gated until one frees VRAM.
+  imageAnalysis: { cpu: 0.75, gpu: 0.5, memoryMB: 2500 },
 };
+
+const getResourceRequirements = (type?: TaskType): Partial<Record<Resources, number>> =>
+  (type && RESOURCE_BUDGETS[type]) || {};
 
 export type TaskRunner = {
   onComplete: () => Promise<void>;
@@ -192,8 +193,14 @@ export type TaskOrchestratorOptions = {
   // calls suspend() when background work must fully stop (a user request is in
   // flight, or background is explicitly disabled) so their in-flight native
   // passes yield the CPU at once, and resume() when the pressure clears.
-  // Defaults to a no-op (e.g. in tests, or before workers exist).
-  computeThrottle?: { suspend: () => void; resume: () => void };
+  // releaseReclaim() is called alongside resume() to clear any user-driven GPU
+  // VRAM reclaim (see reclaimGpuForUser) so the killed background workers may
+  // respawn once the user is idle. Defaults to no-ops (e.g. in tests).
+  computeThrottle?: {
+    suspend: () => void;
+    resume: () => void;
+    releaseReclaim?: () => void;
+  };
 };
 
 export const createTaskOrchestrator = (
@@ -284,6 +291,10 @@ export const createTaskOrchestrator = (
     if (!workersSuspended) return;
     workersSuspended = false;
     computeThrottle.resume();
+    // The user is idle again (workers only thaw when not in a full stop), so any
+    // GPU VRAM reclaimed for a user request can be released: the killed
+    // background workers may now respawn on their next job.
+    computeThrottle.releaseReclaim?.();
   };
 
   const pauseAllRunners = () => {

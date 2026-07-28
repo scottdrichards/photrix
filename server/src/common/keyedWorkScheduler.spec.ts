@@ -133,11 +133,9 @@ describe("createKeyedWorkScheduler", () => {
       },
       { signal: firstAbort.signal },
     );
-    const second = scheduler.schedule(
-      "shared",
-      async () => "unreachable",
-      { signal: secondAbort.signal },
-    );
+    const second = scheduler.schedule("shared", async () => "unreachable", {
+      signal: secondAbort.signal,
+    });
 
     expect(workerSignal?.aborted).toBe(false);
 

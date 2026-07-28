@@ -32,7 +32,11 @@ describe("generateWebSafeVideo", () => {
     writeFileSync(source, "video");
 
     const { getHash, getCachedFilePath } = await import("../common/cacheUtils.ts");
-    const cachedPath = getCachedFilePath(getHash(source, statSync(source).mtimeMs), "original", "mp4");
+    const cachedPath = getCachedFilePath(
+      getHash(source, statSync(source).mtimeMs),
+      "original",
+      "mp4",
+    );
     const { mkdirSync } = await import("node:fs");
     mkdirSync(path.dirname(cachedPath), { recursive: true });
     writeFileSync(cachedPath, "cached");

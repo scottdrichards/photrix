@@ -29,8 +29,7 @@ type CredentialRow = {
 
 const getRpConfig = () => {
   const origin =
-    process.env.PHOTRIX_RP_ORIGIN ??
-    `http://localhost:${process.env.PORT ?? 3000}`;
+    process.env.PHOTRIX_RP_ORIGIN ?? `http://localhost:${process.env.PORT ?? 3000}`;
   const rpID = new URL(origin).hostname;
   return { origin, rpID };
 };
@@ -140,9 +139,8 @@ export const verifyPasskeyRegistration = async (
 
   const { credential } = verification.registrationInfo;
 
-  const transports = (
-    response.response.transports as AuthenticatorTransportFuture[] | undefined
-  ) ?? [];
+  const transports =
+    (response.response.transports as AuthenticatorTransportFuture[] | undefined) ?? [];
 
   await db!.run(
     `INSERT OR REPLACE INTO webauthn_credentials
@@ -158,6 +156,40 @@ export const verifyPasskeyRegistration = async (
     ],
   );
 
+  return true;
+};
+
+// --- Management ---
+
+export type PasskeyInfo = {
+  credentialId: string;
+  name: string | null;
+  transports: string | null;
+  createdAt: number;
+};
+
+export const listPasskeys = async (username: string): Promise<PasskeyInfo[]> => {
+  if (!db) return [];
+  return db.all<PasskeyInfo>(
+    "SELECT credentialId, name, transports, createdAt FROM webauthn_credentials WHERE username = ? ORDER BY createdAt DESC",
+    [username],
+  );
+};
+
+export const deletePasskey = async (
+  username: string,
+  credentialId: string,
+): Promise<boolean> => {
+  if (!db) return false;
+  const existing = await db.all<{ credentialId: string }>(
+    "SELECT credentialId FROM webauthn_credentials WHERE credentialId = ? AND username = ?",
+    [credentialId, username],
+  );
+  if (!existing[0]) return false;
+  await db.run(
+    "DELETE FROM webauthn_credentials WHERE credentialId = ? AND username = ?",
+    [credentialId, username],
+  );
   return true;
 };
 
@@ -207,10 +239,10 @@ export const verifyPasskeyAuthentication = async (
   if (!verification.verified) return null;
 
   // Update counter to prevent replay attacks.
-  await db!.run(
-    "UPDATE webauthn_credentials SET counter = ? WHERE credentialId = ?",
-    [verification.authenticationInfo.newCounter, credRow.credentialId],
-  );
+  await db!.run("UPDATE webauthn_credentials SET counter = ? WHERE credentialId = ?", [
+    verification.authenticationInfo.newCounter,
+    credRow.credentialId,
+  ]);
 
   return credRow.username;
 };

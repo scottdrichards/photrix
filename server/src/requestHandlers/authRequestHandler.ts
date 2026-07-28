@@ -1,10 +1,15 @@
 import type http from "node:http";
-import { SEARCH_SOURCES, type ShareScope } from "../../../shared/filter-contract/src/index.ts";
+import {
+  SEARCH_SOURCES,
+  type ShareScope,
+} from "../../../shared/filter-contract/src/index.ts";
 import {
   extractToken,
+  getSessionUsername,
   isShareToken,
   issueShareToken,
   issueToken,
+  recordShareLink,
   revokeToken,
   validateCredentials,
   validateToken,
@@ -94,19 +99,34 @@ export const authShareTokenHandler = async (
   const semanticQuery = body.semanticQuery?.trim();
   const searchSources = normalizeShareSearchSources(body.searchSources);
   if (body.searchSources !== undefined && searchSources === null) {
-    writeJson(res, 400, { error: "searchSources must contain at least one valid source" });
+    writeJson(res, 400, {
+      error: "searchSources must contain at least one valid source",
+    });
     return;
   }
 
-  writeJson(res, 200, {
-    token: issueShareToken({
-      filter: body.filter,
-      ...(semanticQuery ? { semanticQuery } : {}),
-      ...(searchSources && searchSources.length < SEARCH_SOURCES.length
-        ? { searchSources }
-        : {}),
-    }),
+  const rawLabel = (body as { label?: unknown }).label;
+  const label =
+    typeof rawLabel === "string" && rawLabel.trim()
+      ? rawLabel.trim()
+      : semanticQuery || "Filtered view";
+
+  const shareToken = issueShareToken({
+    filter: body.filter,
+    ...(semanticQuery ? { semanticQuery } : {}),
+    ...(searchSources && searchSources.length < SEARCH_SOURCES.length
+      ? { searchSources }
+      : {}),
+    description: label,
   });
+
+  // Track the link so the owner can list and revoke it from the account panel.
+  const username = getSessionUsername(token);
+  if (username) {
+    recordShareLink(username, shareToken, label);
+  }
+
+  writeJson(res, 200, { token: shareToken });
 };
 
 // --- Passkey endpoints ---
@@ -227,7 +247,10 @@ export const passkeyAuthenticationVerifyHandler = async (
     return;
   }
 
-  const username = await verifyPasskeyAuthentication(body.sessionId, body.response as never);
+  const username = await verifyPasskeyAuthentication(
+    body.sessionId,
+    body.response as never,
+  );
   if (!username) {
     writeJson(res, 401, { error: "Passkey authentication failed" });
     return;

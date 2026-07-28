@@ -70,10 +70,7 @@ describe("processExifMetadata", () => {
       ) => {
         updates.push({ relativePath, data });
       },
-      saveFacesFromMetadataRegions: async (
-        relativePath: string,
-        regions: unknown[],
-      ) => {
+      saveFacesFromMetadataRegions: async (relativePath: string, regions: unknown[]) => {
         metadataFaceWrites.push({ relativePath, regions });
       },
       getImagesMissingDimensions: () => [],
@@ -241,5 +238,102 @@ describe("processExifMetadata", () => {
       total: 10,
       portionComplete: 1,
     });
+  });
+
+  it("completes after a best-effort dimension backfill pass even when dimensions stay missing", async () => {
+    const getFastMediaDimensions = jest.fn().mockResolvedValue({});
+
+    jest.unstable_mockModule("../fileHandling/fileUtils.ts", () => ({
+      getExifMetadataFromFile: jest.fn().mockResolvedValue({ cameraMake: "Canon" }),
+      getFastMediaDimensions,
+    }));
+
+    let metadataPassComplete = false;
+    const db = {
+      storagePath: path.join(os.tmpdir(), "photrix-exif-dimension-fill-test"),
+      getStatusCounts: () => ({
+        allEntries: 1,
+        imageEntries: 1,
+        videoEntries: 0,
+        missingFileMetadata: 0,
+        missingMediaMetadata: metadataPassComplete ? 0 : 1,
+        missingThumbnails: 0,
+      }),
+      getFilesNeedingMetadataUpdate: (() => {
+        let called = false;
+        return () => {
+          if (called) return [];
+          called = true;
+          return [{ relativePath: "stubborn.jpg", sizeInBytes: 100 }];
+        };
+      })(),
+      addOrUpdateFileData: async () => {
+        metadataPassComplete = true;
+      },
+      saveFacesFromMetadataRegions: async () => undefined,
+      getImagesMissingDimensions: jest.fn(async () => [{ relativePath: "stubborn.jpg" }]),
+    } as unknown as IndexDatabase;
+
+    const { processExifMetadata } = await import("./processExifMetadata.ts");
+    const runner = processExifMetadata(db);
+
+    await expect(runner.onComplete()).resolves.toBeUndefined();
+    expect(getFastMediaDimensions).toHaveBeenCalledTimes(1);
+    await expect(runner.getStatus?.()).resolves.toMatchObject({
+      state: "complete",
+      itemsProcessed: 1,
+      total: 1,
+      portionComplete: 1,
+    });
+  });
+
+  it("drops zero-byte files instead of marking EXIF as processed", async () => {
+    const getExifMetadataFromFile = jest.fn();
+
+    jest.unstable_mockModule("../fileHandling/fileUtils.ts", () => ({
+      getExifMetadataFromFile,
+      getFastMediaDimensions: jest.fn().mockResolvedValue(null),
+    }));
+
+    const removed: string[] = [];
+    const updates: Array<{ relativePath: string; data: Record<string, unknown> }> = [];
+    let callCount = 0;
+    const db = {
+      storagePath: path.join(os.tmpdir(), "photrix-exif-zero-byte-test"),
+      getStatusCounts: () => ({
+        allEntries: 1,
+        imageEntries: 1,
+        videoEntries: 0,
+        missingFileMetadata: 0,
+        missingMediaMetadata: 1,
+        missingThumbnails: 0,
+      }),
+      getFilesNeedingMetadataUpdate: () => {
+        callCount += 1;
+        if (callCount === 1) {
+          return [{ relativePath: "copying.jpg", sizeInBytes: 0 }];
+        }
+        return [];
+      },
+      addOrUpdateFileData: async (
+        relativePath: string,
+        data: Record<string, unknown>,
+      ) => {
+        updates.push({ relativePath, data });
+      },
+      removeFile: async (relativePath: string) => {
+        removed.push(relativePath);
+      },
+      saveFacesFromMetadataRegions: async () => undefined,
+      getImagesMissingDimensions: () => [],
+    } as unknown as IndexDatabase;
+
+    const { processExifMetadata } = await import("./processExifMetadata.ts");
+    const runner = processExifMetadata(db);
+    await runner.onComplete();
+
+    expect(getExifMetadataFromFile).not.toHaveBeenCalled();
+    expect(updates).toEqual([]);
+    expect(removed).toEqual(["copying.jpg"]);
   });
 });

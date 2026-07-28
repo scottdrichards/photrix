@@ -5,6 +5,8 @@ import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { ThumbnailTile } from "./ThumbnailTile";
+import { SelectionActionBar } from "./SelectionActionBar";
+import { SortControl } from "./SortControl";
 import { ViewToggle } from "./ViewToggle";
 import css from "./ThumbnailGrid.module.css";
 
@@ -31,7 +33,8 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
 
   useEffect(() => {
     setPage(1);
-    setData(null);
+    // Keep stale data visible while the new query is in flight (stale-while-revalidate).
+    // The grid dims via isStale until the fetch resolves.
   }, [filter]);
 
   useEffect(() => {
@@ -117,6 +120,7 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
     };
   }, [loading, data?.items.length, data?.total, filter.semanticQuery]);
 
+  const isStale = loading && !!data && page === 1;
   const emptyMessage = filter.semanticQuery
     ? "No results found for your search."
     : "No photos yet. Upload some to get started.";
@@ -131,9 +135,19 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
       {resultCountLabel ? (
         <div className={css.statusRow} aria-live="polite">
           <span>{resultCountLabel}</span>
+          {isStale && <Spinner size="extra-tiny" />}
+          <SortControl />
+        </div>
+      ) : loading && !data ? (
+        <div className={css.statusRow}>
+          <Spinner size="extra-tiny" />
         </div>
       ) : null}
-      <div className={css.grid}>
+      <div
+        data-testid="thumbnail-grid"
+        className={css.grid}
+        style={isStale ? { opacity: 0.5, pointerEvents: "none" } : undefined}
+      >
         {data?.items.map((item) => (
           <ThumbnailTile key={item.path} photo={item} />
         ))}
@@ -143,7 +157,8 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
           </div>
         )}
       </div>
-      {data && data.items.length === 0 && <h3>{emptyMessage}</h3>}
+      {!loading && data && data.items.length === 0 && <h3>{emptyMessage}</h3>}
+      <SelectionActionBar />
     </>
   );
 };

@@ -1,7 +1,7 @@
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { existsSync } from "fs";
-import { mkdir } from "fs/promises";
-import { tmpdir } from "os";
+import { mkdir, rm, stat, writeFile } from "fs/promises";
+import { tmpdir, userInfo } from "os";
 import { basename, dirname, extname, join, parse, resolve } from "path";
 
 export const CACHE_DIR = process.env.CACHE_DIR || join(process.cwd(), ".cache");
@@ -14,9 +14,41 @@ export const HLS_CACHE_DIR =
   process.env.HLS_CACHE_DIR ||
   join(existsSync("/dev/shm") ? "/dev/shm" : tmpdir(), "photrix-hls");
 
+// mkdir(recursive) succeeds silently when the directory already exists, even if
+// it's owned by another user and unwritable to us — so a cache dir left behind by
+// a prior root-run instance passes creation but then EACCES-es on the first
+// per-file mkdir, surfacing as an opaque 500 at request time. Probe writability
+// explicitly here so a misowned cache dir fails loudly at boot instead.
+const assertWritableDirectory = async (dir: string): Promise<void> => {
+  const probe = join(dir, `.write-probe-${randomBytes(6).toString("hex")}`);
+  try {
+    await writeFile(probe, "");
+  } catch (error) {
+    const owner = await stat(dir)
+      .then(({ uid }) => `uid ${uid}`)
+      .catch(() => "unknown owner");
+    const { username, uid } = userInfo();
+    throw new Error(
+      `Cache directory ${dir} is not writable (owned by ${owner}; ` +
+        `server runs as ${username}/uid ${uid}). This usually means the ` +
+        `directory was created by a different user (e.g. a prior root-run ` +
+        `instance). Fix ownership (chown -R ${username} ${dir}) or remove it, ` +
+        `then restart. Original error: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+    );
+  } finally {
+    await rm(probe, { force: true });
+  }
+};
+
 export const initializeCacheDirectories = async () =>
-  Promise.all([CACHE_DIR, MEDIA_CACHE_DIR, HLS_CACHE_DIR]
-    .map(dir => mkdir(dir, { recursive: true })));
+  Promise.all(
+    [CACHE_DIR, MEDIA_CACHE_DIR, HLS_CACHE_DIR].map(async (dir) => {
+      await mkdir(dir, { recursive: true });
+      await assertWritableDirectory(dir);
+    }),
+  );
 
 export const getHash = (filePath: string, modifiedTimeMs: number): string => {
   const hashInput = `${filePath}:${modifiedTimeMs}`;
@@ -79,4 +111,18 @@ export const getMirroredHLSDirectory = (
     "hls",
     ...subdirectories,
   );
+};
+
+/**
+ * Removes every cached derivative (thumbnails, image variants, HLS segments) for
+ * a source file. The mirrored media cache is keyed by path only — unlike
+ * {@link getHash} it does not fold in the modified time — so when a file's bytes
+ * change in place the old derivatives must be deleted explicitly or they would
+ * be served stale.
+ */
+export const clearMirroredCacheForFile = async (filePath: string): Promise<void> => {
+  await Promise.all([
+    rm(getMirroredCacheBaseDirectory(filePath), { recursive: true, force: true }),
+    rm(getMirroredHLSDirectory(filePath), { recursive: true, force: true }),
+  ]);
 };

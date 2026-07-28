@@ -32,8 +32,11 @@ describe("prepareMultibitrateHLSStructure", () => {
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const { prepareMultibitrateHLSStructure, getMasterPlaylistPath, getMultibitrateHLSDirectory } =
-      await import("./generateMultibitrateHLS.ts");
+    const {
+      prepareMultibitrateHLSStructure,
+      getMasterPlaylistPath,
+      getMultibitrateHLSDirectory,
+    } = await import("./generateMultibitrateHLS.ts");
 
     await prepareMultibitrateHLSStructure(source);
 
@@ -118,7 +121,12 @@ describe("generateVariantHLS", () => {
       queueMicrotask(() => {
         if (command === "ffprobe") {
           // Report 90° rotation (portrait phone video). codec_type required for detection.
-          proc.stdout.emit("data", JSON.stringify({ streams: [{ codec_type: "video", tags: { rotate: "90" } }] }));
+          proc.stdout.emit(
+            "data",
+            JSON.stringify({
+              streams: [{ codec_type: "video", tags: { rotate: "90" } }],
+            }),
+          );
           proc.emit("close", 0);
           return;
         }

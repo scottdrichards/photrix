@@ -19,7 +19,10 @@ export const generateWebSafeVideo = async (
   const hash = getHash(filePath, modifiedTimeMs);
   const cachedPath = getCachedFilePath(hash, height, "mp4");
 
-  const cachedExists = await access(cachedPath).then(() => true, () => false);
+  const cachedExists = await access(cachedPath).then(
+    () => true,
+    () => false,
+  );
   if (cachedExists) {
     return cachedPath;
   }

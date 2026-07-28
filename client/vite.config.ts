@@ -18,7 +18,13 @@ export default defineConfig({
     ],
     proxy: {
       "/api": {
-        target: "http://localhost:3000",
+        // Override for isolated e2e runs (points at the test API port); defaults
+        // to the standard dev server otherwise.
+        target: process.env.PHOTRIX_API_TARGET || "http://localhost:3000",
+        changeOrigin: true,
+      },
+      "/share": {
+        target: process.env.PHOTRIX_API_TARGET || "http://localhost:3000",
         changeOrigin: true,
       },
     },

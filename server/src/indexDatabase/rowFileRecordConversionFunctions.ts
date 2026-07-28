@@ -28,6 +28,7 @@ export const rowToFileRecord = (
     ["dateTaken", date],
     ["regions", json],
     ["personInImage", json],
+    "description",
     "cameraMake",
     "cameraModel",
     "exposureTime",
@@ -140,6 +141,7 @@ export const fileRecordToColumnNamesAndValues = (
     );
     addColumn("regions", JSON.stringify(entry.regions));
     addColumn("personInImage", JSON.stringify(entry.personInImage));
+    addColumn("description", entry.description);
     addColumn("dimensionsWidth", entry.dimensionWidth);
     addColumn("dimensionsHeight", entry.dimensionHeight);
     addColumn("locationLatitude", entry.locationLatitude);

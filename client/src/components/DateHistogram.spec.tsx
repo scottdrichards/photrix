@@ -102,6 +102,35 @@ describe("DateHistogram", () => {
     expect(setFilterMock).toHaveBeenCalledWith({ dateRange: null });
   });
 
+  it("selects the clicked bucket's range on a single click", async () => {
+    fetchDateHistogramMock.mockResolvedValueOnce({
+      buckets: [
+        { start: 1700000000000, end: 1700086400000, count: 2 },
+        { start: 1700086400000, end: 1700172800000, count: 5 },
+      ],
+      bucketSizeMs: 86400000,
+      minDate: 1700000000000,
+      maxDate: 1700172800000,
+      grouping: "day",
+    });
+
+    const { container } = render(<DateHistogram />);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Loading dates")).not.toBeInTheDocument();
+    });
+
+    const overlay = container.querySelector(
+      'svg rect[pointer-events="all"]',
+    ) as SVGRectElement;
+    fireEvent.pointerDown(overlay, { clientX: 0, pointerId: 1 });
+    fireEvent.pointerUp(overlay, { clientX: 0, pointerId: 1 });
+
+    expect(setFilterMock).toHaveBeenCalledWith({
+      dateRange: { start: 1700000000000, end: 1700086400000 },
+    });
+  });
+
   it("renders error message when histogram fetch fails", async () => {
     const consoleErrorSpy = vi
       .spyOn(console, "error")

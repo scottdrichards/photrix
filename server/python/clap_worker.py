@@ -124,6 +124,9 @@ def main():
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
         model = ClapModel.from_pretrained(MODEL_ID, cache_dir=hf_home)
         processor = ClapProcessor.from_pretrained(MODEL_ID, cache_dir=hf_home)
         model = model.to(device)
@@ -162,6 +165,15 @@ def main():
 
         except Exception as e:
             send({"id": req_id, "error": str(e)})
+        finally:
+            # Hand transient CUDA blocks back to the driver between requests so an
+            # on-demand video transcode can claim the headroom. Model weights stay
+            # resident. CLAP requests are infrequent, so the cost is negligible.
+            if device == "cuda":
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":

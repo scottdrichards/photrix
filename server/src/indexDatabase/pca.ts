@@ -3,13 +3,19 @@
  * Uses deflated power iteration so it never materializes a D×D covariance
  * matrix — only N×D passes per component, which is fast when N (clusters) << D (512).
  */
-export function computePCA3D(vectors: Float32Array<ArrayBuffer>[]): [number, number, number][] {
+export function computePCA3D(
+  vectors: Float32Array<ArrayBuffer>[],
+): [number, number, number][] {
   const N = vectors.length;
   if (N === 0) return [];
   const D = vectors[0].length;
 
   if (N === 1) return [[0, 0, 0]];
-  if (N === 2) return [[-1, 0, 0], [1, 0, 0]];
+  if (N === 2)
+    return [
+      [-1, 0, 0],
+      [1, 0, 0],
+    ];
 
   // Center the data
   const mean = new Float32Array(D) as Float32Array<ArrayBuffer>;

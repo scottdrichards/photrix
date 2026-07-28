@@ -6,10 +6,8 @@ import { runWithRequestAbortSignal } from "./requestAbort.ts";
 
 // Scopes a signal to one query, mirroring how createServer binds a signal per
 // HTTP request.
-const queryWithSignal = <T>(
-  signal: AbortSignal,
-  fn: () => Promise<T>,
-): Promise<T> => runWithRequestAbortSignal(signal, fn);
+const queryWithSignal = <T>(signal: AbortSignal, fn: () => Promise<T>): Promise<T> =>
+  runWithRequestAbortSignal(signal, fn);
 
 // Burns a few hundred ms inside the synchronous read worker so queries queued
 // behind it are demonstrably not yet running.
@@ -51,9 +49,7 @@ describe("AsyncSqlite read queue abort", () => {
     const slow = db.all<{ n: number }>(SLOW_QUERY);
 
     const aborted = new AbortController();
-    const abortedQuery = queryWithSignal(aborted.signal, () =>
-      db.all("SELECT v FROM t"),
-    );
+    const abortedQuery = queryWithSignal(aborted.signal, () => db.all("SELECT v FROM t"));
     const survivor = db.all<{ v: string }>("SELECT v FROM t");
 
     aborted.abort();
@@ -67,9 +63,7 @@ describe("AsyncSqlite read queue abort", () => {
 
   it("unblocks the caller when the running read aborts, then continues the queue", async () => {
     const running = new AbortController();
-    const runningQuery = queryWithSignal(running.signal, () =>
-      db.all(SLOW_QUERY),
-    );
+    const runningQuery = queryWithSignal(running.signal, () => db.all(SLOW_QUERY));
     // Give the slow query time to be dispatched to the worker.
     await new Promise((resolve) => setTimeout(resolve, 50));
     const next = db.all<{ v: string }>("SELECT v FROM t");

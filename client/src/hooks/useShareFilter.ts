@@ -5,9 +5,7 @@ export const isSharedView = (): boolean => {
 };
 
 export const buildShareUrl = (token: string): string => {
-  const url = new URL(window.location.href);
-  url.searchParams.delete("q");
-  url.searchParams.delete("sources");
+  const url = new URL("/share", window.location.origin);
   url.searchParams.set("token", token);
   return url.toString();
 };

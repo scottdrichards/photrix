@@ -28,7 +28,10 @@ def send(payload: dict) -> None:
 def load_model(device: str):
     from faster_whisper import WhisperModel
 
-    compute_type = "float16" if device == "cuda" else "int8"
+    # int8_float16 keeps compute in fp16 but stores weights as int8, roughly
+    # halving resident VRAM (~3.1GB -> ~1.7GB for large-v3) with negligible
+    # accuracy loss. Leaves more headroom for image previews / transcode.
+    compute_type = "int8_float16" if device == "cuda" else "int8"
     # On CPU, cap threads so transcription doesn't starve foreground work.
     # SIGSTOP already freezes the worker during user requests; this keeps
     # background CPU usage bounded while the worker is running.

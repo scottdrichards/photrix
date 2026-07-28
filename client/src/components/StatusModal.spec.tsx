@@ -197,4 +197,57 @@ describe("StatusModal", () => {
     unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
+
+  it("renders per-worker VRAM and the GPU-reclaimed state", async () => {
+    let onUpdate: ((status: unknown) => void) | undefined;
+    subscribeStatusStreamMock.mockImplementation((update) => {
+      onUpdate = update as (status: unknown) => void;
+      return () => undefined;
+    });
+
+    render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
+
+    await act(async () => {
+      onUpdate?.(
+        makeStatus({
+          system: {
+            cpu: { usage: 10, cores: 8 },
+            memory: { used: 4_000_000_000, total: 16_000_000_000, usage: 25 },
+            gpu: {
+              usage: 11,
+              memory: { used: 4000, total: 8000 },
+              processes: [
+                { pid: 111, role: "whisper", vramMB: 3326 },
+                { pid: 222, role: "other", vramMB: 500 },
+              ],
+            },
+            workers: [
+              {
+                id: "whisper-audio",
+                role: "whisper",
+                pid: 111,
+                vramMB: 3326,
+                rssMB: 2048,
+                suspended: true,
+                leases: 0,
+              },
+            ],
+          },
+          arbitration: {
+            userActive: true,
+            workersSuspended: true,
+            gpuReclaimed: true,
+            overloaded: false,
+            runningTasks: [],
+          },
+        }),
+      );
+    });
+
+    expect(await screen.findByText("Compute workers / VRAM")).toBeInTheDocument();
+    expect(screen.getByText("Transcription (Whisper)")).toBeInTheDocument();
+    expect(screen.getByText("Transcode / other")).toBeInTheDocument();
+    expect(screen.getByText("GPU reclaimed for playback")).toBeInTheDocument();
+    expect(screen.getByText("frozen")).toBeInTheDocument();
+  });
 });

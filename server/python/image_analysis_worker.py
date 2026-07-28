@@ -98,6 +98,18 @@ _face_app = None
 _clip = None  # (model, preprocess, tokenizer, torch, device)
 
 
+def _release_gpu_cache() -> None:
+    """Return cached-but-unused CUDA blocks to the driver. No-op on CPU or before
+    the CLIP model (which carries the torch handle) has loaded."""
+    if _clip is None:
+        return
+    torch, device = _clip[3], _clip[4]
+    if device != "cuda":
+        return
+    with contextlib.suppress(Exception):
+        torch.cuda.empty_cache()
+
+
 def _purge_insightface_cache(model_name: str) -> None:
     model_root = Path.home() / ".insightface" / "models"
     for path in [model_root / f"{model_name}.zip", model_root / model_name]:
@@ -381,6 +393,11 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - keep the worker alive no matter what
             req_id = item.get("id") if isinstance(item, dict) else None
             send({"id": req_id, "error": str(exc)})
+        # Once the backlog drains, hand freed GPU blocks back to the driver so an
+        # on-demand video transcode can claim them. The model weights stay
+        # resident (cheap re-use); only the transient activation cache is released.
+        if _image_queue.empty():
+            _release_gpu_cache()
 
     text_thread.join()
     return 0

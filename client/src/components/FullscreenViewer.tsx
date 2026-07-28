@@ -1,24 +1,47 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowDownload24Regular,
+  ChevronLeft48Regular,
+  ChevronRight48Regular,
   ClosedCaption24Regular,
   ClosedCaptionOff24Regular,
   Dismiss24Regular,
   Filmstrip24Regular,
+  ImageEdit24Regular,
   Info24Regular,
   ScanPerson24Regular,
   Share24Regular,
 } from "@fluentui/react-icons";
 import Hls from "hls.js";
-import { probeVideoPlaybackProfile } from "../videoPlaybackProfile";
-import { fetchTranscriptSegments, negotiateVideoPlayback } from "../api";
+import {
+  probeVideoPlaybackProfile,
+  invalidateVideoPlaybackProfile,
+} from "../videoPlaybackProfile";
+import {
+  fetchPeopleFacesForFile,
+  fetchTranscriptSegments,
+  negotiateVideoPlayback,
+  updatePhotoMetadata,
+} from "../api";
+import type { PhotoPersonFace } from "../api/types";
+import { StarRating } from "./StarRating";
+import { TagEditor } from "./TagEditor";
 import { getToken } from "../auth";
 import { createClientOperationId, logClientEvent } from "../diagnostics";
 import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes } from "./FaceOverlay";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { MiniMap } from "./MiniMap";
 import { ShareOptionsModal } from "./ShareOptionsModal";
+import { PhotoEditor, type EditStyle } from "./PhotoEditor";
+import { SwipePhotoViewer } from "./SwipePhotoViewer";
+import { isSharedView } from "../hooks/useShareFilter";
 import css from "./FullscreenViewer.module.css";
+
+// Star ratings and tags persist to the DB via PATCH, which the server rejects
+// for share tokens — so hide the tagging bar entirely in a shared view.
+const READ_ONLY = isSharedView();
+
+const CLEAN_EDIT_STYLE: EditStyle = { filter: "", transform: "", clipPath: "" };
 
 const SWIPE_THRESHOLD_PX = 60;
 const PHOTO_ZOOM_DEFAULT_SCALE = 2.5;
@@ -103,12 +126,16 @@ const syncDialogOpenState = (dialog: HTMLDialogElement, isOpen: boolean) => {
   }
 };
 
-type VideoStatus = "hls" | "direct" | "incompatible" | "unavailable" | null;
+type VideoStatus = "hls" | "direct" | "unavailable" | null;
+
+// How long a direct stream may stay stalled before we give up on it and switch to
+// adaptive HLS. Long enough to ride out a brief buffering blip, short enough that a
+// genuinely under-provisioned link recovers quickly.
+const DIRECT_STALL_FALLBACK_MS = 3000;
 
 const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
   hls: "HLS",
   direct: "Raw Video",
-  incompatible: "No Compatible Stream",
   unavailable: "Playback Unavailable",
 };
 
@@ -162,18 +189,61 @@ const formatDuration = (seconds: unknown): string | null => {
   return `${m}:${String(sec).padStart(2, "0")}`;
 };
 
+// Size the photo frame from known metadata dimensions so the cached thumbnail
+// placeholder occupies the correct box before the full image reports its size.
+const readMetadataAspectRatio = (metadata: Record<string, unknown> | undefined): number => {
+  const width = Number(metadata?.dimensionWidth);
+  const height = Number(metadata?.dimensionHeight);
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    return width / height;
+  }
+  return 1;
+};
+
 export function FullscreenViewer() {
   const {
+    items = [],
     selected: selectedPhoto,
     setSelected,
     selectNext,
     selectPrevious,
+    applyMetadataOverride,
   } = useSelectionContext();
   const photo = selectedPhoto;
+
+  // Prefetch adjacent images so arrow-key navigation feels instant.
+  useEffect(() => {
+    if (!photo) return;
+    const idx = items.findIndex((item) => item.path === photo.path);
+    const neighbors = [items[idx - 1], items[idx + 1]].filter(
+      (item) => item?.mediaType === "photo",
+    );
+    const links: HTMLLinkElement[] = neighbors.map((item) => {
+      const link = document.createElement("link");
+      link.rel = "prefetch";
+      link.as = "image";
+      link.href = item.previewUrl;
+      document.head.appendChild(link);
+      return link;
+    });
+    return () => {
+      links.forEach((link) => link.remove());
+    };
+  }, [photo, items]);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const playbackOperationIdRef = useRef<string | null>(null);
+  // Set to a video's path once direct playback stalled on buffering, so the load
+  // effect re-negotiates that video as adaptive HLS. Reset implicitly when the
+  // path changes (see the derived forceTranscode below).
+  const [forcedTranscodePath, setForcedTranscodePath] = useState<string | null>(null);
+  // Playback position to restore after a direct→HLS switch, so the fallback resumes
+  // where buffering stalled instead of jumping to the start.
+  const resumeTimeRef = useRef<number | null>(null);
+  // Derived so navigating to a different video clears the flag in the same render
+  // (no extra effect run / flicker) — a fresh video starts by trying direct again.
+  const forceTranscode = forcedTranscodePath !== null && forcedTranscodePath === photo?.path;
 
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
@@ -185,12 +255,17 @@ export function FullscreenViewer() {
   const [activeLevelHeight, setActiveLevelHeight] = useState<number | null>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null);
   const [photoAspectRatio, setPhotoAspectRatio] = useState(1);
+  const [fullImageLoaded, setFullImageLoaded] = useState(false);
   const [showLiveVideo, setShowLiveVideo] = useState(false);
   const [showFileInfo, setShowFileInfo] = useState(false);
   const [showFaces, setShowFaces] = useState(false);
   const [hasFaceOverlayData, setHasFaceOverlayData] = useState(false);
+  const [peopleFaces, setPeopleFaces] = useState<PhotoPersonFace[]>([]);
   const [exportMode, setExportMode] = useState<"share" | "download" | null>(null);
   const [showCaptions, setShowCaptions] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editStyle, setEditStyle] = useState<EditStyle>(CLEAN_EDIT_STYLE);
+  const [cropContainerEl, setCropContainerEl] = useState<HTMLDivElement | null>(null);
   const [transcriptTrackUrl, setTranscriptTrackUrl] = useState<string | null>(null);
   const captionBlobUrlRef = useRef<string | null>(null);
   const [photoZoom, setPhotoZoom] = useState({
@@ -213,8 +288,12 @@ export function FullscreenViewer() {
     setShowLiveVideo(false);
     setShowFaces(false);
     setHasFaceOverlayData(hasFaceRegions || hasFaceTableBoxes);
+    setPeopleFaces([]);
     setExportMode(null);
-    setPhotoAspectRatio(1);
+    setEditMode(false);
+    setEditStyle(CLEAN_EDIT_STYLE);
+    setPhotoAspectRatio(readMetadataAspectRatio(photo?.metadata));
+    setFullImageLoaded(false);
     setPhotoZoom({
       isZoomed: false,
       originXPercent: 50,
@@ -246,6 +325,22 @@ export function FullscreenViewer() {
 
     playbackOperationIdRef.current = null;
   }, [photo?.path]);
+
+  // Fetch the photo's detected faces (with resolved People names) so the face
+  // overlay can label each face and link to its person page.
+  useEffect(() => {
+    if (!photo || photo.mediaType === "video") return;
+
+    const abortController = new AbortController();
+    fetchPeopleFacesForFile(photo.path, abortController.signal)
+      .then((faces) => setPeopleFaces(faces))
+      .catch(() => {
+        // Face names are a non-essential enhancement; leave the overlay to fall
+        // back to metadata boxes if the lookup fails or is aborted.
+      });
+
+    return () => abortController.abort();
+  }, [photo?.path, photo?.mediaType]);
 
   // Fetch transcript segments for videos
   useEffect(() => {
@@ -312,26 +407,6 @@ export function FullscreenViewer() {
       setActiveLevelHeight(null);
     };
 
-    let directFallbackAttempted = false;
-
-    const fallbackToDirectPlayback = () => {
-      if (!photo.fullUrl) {
-        markPlaybackUnavailable();
-        return;
-      }
-
-      directFallbackAttempted = true;
-      destroyHls();
-      if (!cancelled) {
-        setVideoStatus("direct");
-        setHlsLevels([]);
-        setManualLevel(-1);
-        setActiveLevelHeight(null);
-      }
-      video.src = photo.fullUrl;
-      safePlay(video, "[HLS] Autoplay prevented (fallback):");
-    };
-
     // Clean up previous HLS instance
     destroyHls();
     clearVideoSource(video);
@@ -358,9 +433,33 @@ export function FullscreenViewer() {
           path: photo.path,
           bandwidthMbps: playbackProfile.bandwidthMbps,
           hevcSupported: playbackProfile.hevcSupported,
+          forceTranscode,
           clientOperationId,
         });
         if (cancelled) return;
+
+        // Restore playback position after a direct→HLS fallback (the ref is only
+        // set on that path). Registered before the source is attached so it catches
+        // the fresh element's metadata load.
+        const restorePlaybackPosition = () => {
+          const resumeAt = resumeTimeRef.current;
+          resumeTimeRef.current = null;
+          if (resumeAt === null || !Number.isFinite(resumeAt) || resumeAt <= 0) return;
+          video.addEventListener(
+            "loadedmetadata",
+            () => {
+              if (!cancelled) {
+                try {
+                  video.currentTime = resumeAt;
+                } catch {
+                  // Seeking may be rejected if the media isn't seekable yet; the
+                  // stream still plays from the start, which is acceptable.
+                }
+              }
+            },
+            { once: true },
+          );
+        };
 
         logClientEvent({
           level: negotiation.mode === "error" ? "warn" : "info",
@@ -376,15 +475,21 @@ export function FullscreenViewer() {
         });
 
         if (negotiation.mode === "error") {
-          if (!cancelled) setVideoStatus("incompatible");
-          // Fall back to full-res web-safe MP4 as last resort
-          video.src = photo.fullUrl;
+          // No transcode is available (e.g. no GPU) and the link can't carry the
+          // raw file. We deliberately do NOT fall back to the raw original — it
+          // would only buffer endlessly — so fail visibly instead.
+          markPlaybackUnavailable();
           return;
         }
 
         if (negotiation.mode === "direct") {
+          // The server measured the connection as fast enough for the untranscoded
+          // file (and the browser supports its codec), so play it directly — no GPU.
           if (!cancelled) setVideoStatus("direct");
-          video.src = negotiation.url;
+          restorePlaybackPosition();
+          // negotiation.url is server-built and token-less; use photo.originalUrl
+          // (client-built, token-bearing) for the same file.
+          video.src = photo.originalUrl;
           safePlay(video, "[Video] Autoplay prevented (direct):");
           return;
         }
@@ -465,6 +570,7 @@ export function FullscreenViewer() {
             levelLoadingRetryDelay: 1000,
           });
 
+          restorePlaybackPosition();
           hls.loadSource(hlsUrl);
           hls.attachMedia(video);
           if (!cancelled) setVideoStatus("hls");
@@ -553,11 +659,8 @@ export function FullscreenViewer() {
               hls.recoverMediaError();
               return;
             }
-            if (!directFallbackAttempted) {
-              fallbackToDirectPlayback();
-              return;
-            }
-
+            // No raw fallback: an unrecoverable HLS error fails visibly rather
+            // than dropping to the full-size original.
             markPlaybackUnavailable();
           });
           hlsRef.current = hls;
@@ -566,6 +669,7 @@ export function FullscreenViewer() {
 
         if (nativeHlsSupport) {
           if (!cancelled) setVideoStatus("hls");
+          restorePlaybackPosition();
           // For native HLS (Safari), Authorization headers can't be set, so
           // embed the token as a query param. The server propagates it through
           // all rewritten variant/segment URLs.
@@ -577,7 +681,8 @@ export function FullscreenViewer() {
           return;
         }
 
-        video.src = photo.fullUrl;
+        // Browser can play neither hls.js nor native HLS: no raw fallback.
+        markPlaybackUnavailable();
       } catch (error) {
         logClientEvent({
           level: "error",
@@ -590,7 +695,7 @@ export function FullscreenViewer() {
           },
           immediate: true,
         });
-        fallbackToDirectPlayback();
+        markPlaybackUnavailable();
       }
     };
 
@@ -608,7 +713,8 @@ export function FullscreenViewer() {
       destroyHls();
       clearVideoSource(video);
     };
-  }, [photo]);
+    // forceTranscode re-runs this to switch a stalled direct stream over to HLS.
+  }, [photo, forceTranscode]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -632,10 +738,50 @@ export function FullscreenViewer() {
       });
     };
 
-    const onPlaying = () => logVideoEvent("video.element.playing", "info");
+    // Direct playback is a single fixed-bitrate file with no adaptation, so a link
+    // that can't sustain it just buffers forever. If a direct stream stalls and
+    // doesn't recover within the grace window, abandon it and re-negotiate as HLS
+    // (which does real ABR). Only armed in direct mode — HLS adapts on its own.
+    let stallTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearStallTimer = () => {
+      if (stallTimer !== null) {
+        clearTimeout(stallTimer);
+        stallTimer = null;
+      }
+    };
+    const armDirectStallFallback = () => {
+      if (videoStatus !== "direct" || stallTimer !== null) return;
+      stallTimer = setTimeout(() => {
+        stallTimer = null;
+        resumeTimeRef.current = video.currentTime;
+        // A fresh probe next time — the earlier estimate was too optimistic for
+        // this link (it may predate a network change or throttle).
+        invalidateVideoPlaybackProfile();
+        logClientEvent({
+          level: "warn",
+          event: "video.direct.fallback",
+          message: `Direct playback stalled; switching to HLS for ${photoPath}`,
+          clientOperationId,
+          data: { path: photoPath, currentTime: video.currentTime },
+          immediate: true,
+        });
+        setForcedTranscodePath(photoPath);
+      }, DIRECT_STALL_FALLBACK_MS);
+    };
+
+    const onPlaying = () => {
+      clearStallTimer();
+      logVideoEvent("video.element.playing", "info");
+    };
     const onCanPlay = () => logVideoEvent("video.element.canplay", "info");
-    const onWaiting = () => logVideoEvent("video.element.waiting", "warn");
-    const onStalled = () => logVideoEvent("video.element.stalled", "warn");
+    const onWaiting = () => {
+      logVideoEvent("video.element.waiting", "warn");
+      armDirectStallFallback();
+    };
+    const onStalled = () => {
+      logVideoEvent("video.element.stalled", "warn");
+      armDirectStallFallback();
+    };
     const onError = () => {
       logVideoEvent("video.element.error", "error");
       if (
@@ -660,6 +806,7 @@ export function FullscreenViewer() {
     video.addEventListener("error", onError);
 
     return () => {
+      clearStallTimer();
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("canplay", onCanPlay);
       video.removeEventListener("waiting", onWaiting);
@@ -688,24 +835,24 @@ export function FullscreenViewer() {
   useEffect(() => {
     if (!photo) return;
 
-    const operations = {
-      ArrowRight: selectNext,
-      ArrowLeft: selectPrevious,
-      Escape: () => setSelected(null),
-    } as const satisfies Record<KeyboardEvent["key"], (() => void) | undefined>;
-
     const handleKeyDown = (e: KeyboardEvent) => {
-      const operation = operations[e.key as keyof typeof operations];
-      if (!operation) return;
-
-      e.preventDefault();
-      operation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (editMode) {
+          setEditMode(false);
+        } else {
+          setSelected(null);
+        }
+        return;
+      }
+      if (editMode) return;
+      if (e.key === "ArrowRight") { e.preventDefault(); selectNext(); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); selectPrevious(); }
     };
 
     window.addEventListener("keydown", handleKeyDown);
-
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [photo, selectNext, selectPrevious, setSelected]);
+  }, [photo, editMode, selectNext, selectPrevious, setSelected]);
 
   const handleClose = () => {
     setSelected(null);
@@ -794,7 +941,81 @@ export function FullscreenViewer() {
 
   const meta = photo?.metadata;
 
-  const faceToggleDisabled = photo?.mediaType === "video" || !hasFaceOverlayData;
+  const currentRating =
+    typeof meta?.rating === "number" && meta.rating > 0 ? meta.rating : 0;
+  const currentTags = Array.isArray(meta?.tags) ? (meta.tags as string[]) : [];
+
+  // Optimistically apply a tagging change to the selected item, then persist it.
+  // The override survives grid re-pushes; a failed PATCH just logs (the value is
+  // reconciled on the next refetch).
+  const persistTagging = useCallback(
+    (patch: { rating?: number; tags?: string[] }) => {
+      const path = photo?.path;
+      if (!path) return;
+      const override: { rating?: number | null; tags?: string[] } = {};
+      if (patch.rating !== undefined) override.rating = patch.rating > 0 ? patch.rating : null;
+      if (patch.tags !== undefined) override.tags = patch.tags;
+      applyMetadataOverride([path], override);
+      void updatePhotoMetadata(path, patch).catch(() => {
+        // Best-effort; optimistic value stays until the next refetch.
+      });
+    },
+    [photo?.path, applyMetadataOverride],
+  );
+
+  // Number keys 1–5 set the star rating, 0 clears it — quick tagging while
+  // stepping through a slideshow. Ignored while typing in the label field.
+  useEffect(() => {
+    if (!photo || editMode || READ_ONLY) return;
+
+    const handleRatingKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key >= "1" && e.key <= "5") {
+        e.preventDefault();
+        persistTagging({ rating: Number(e.key) });
+      } else if (e.key === "0") {
+        e.preventDefault();
+        persistTagging({ rating: 0 });
+      }
+    };
+
+    window.addEventListener("keydown", handleRatingKey);
+    return () => window.removeEventListener("keydown", handleRatingKey);
+  }, [photo, editMode, persistTagging]);
+
+  // Neighbours for the swipe carousel (photos in normal viewing mode).
+  const currentIndex = photo ? items.findIndex((item) => item.path === photo.path) : -1;
+  const prevPhoto = currentIndex > 0 ? items[currentIndex - 1] : null;
+  const nextPhoto =
+    currentIndex >= 0 && currentIndex < items.length - 1 ? items[currentIndex + 1] : null;
+  // The carousel owns swipe navigation for still photos; the container-level
+  // swipe fallback stays for video / live-photo / editing.
+  const usesSwipeViewer =
+    photo != null && photo.mediaType !== "video" && !showLiveVideo && !editMode;
+
+  const faceToggleDisabled =
+    photo?.mediaType === "video" || (!hasFaceOverlayData && peopleFaces.length === 0);
+
+  // Close the viewer and deep-link to the clicked person's page in the People
+  // view. pushState doesn't emit popstate, so dispatch it manually to drive the
+  // app's URL-sync handler (which flips to the People view and loads the cluster).
+  const openPersonPage = (personId: string) => {
+    setSelected(null);
+    const params = new URLSearchParams(window.location.search);
+    params.set("view", "people");
+    params.set("cluster", personId);
+    params.delete("group");
+    window.history.pushState(null, "", `${window.location.pathname}?${params}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
 
   const zoomStyle = {
     "--zoom-origin-x": `${photoZoom.originXPercent}%`,
@@ -826,8 +1047,8 @@ export function FullscreenViewer() {
             <div
               className={css.container}
               onClick={handleContainerClick}
-              onTouchStart={handleTouchStart}
-              onTouchEnd={handleTouchEnd}
+              onTouchStart={usesSwipeViewer ? undefined : handleTouchStart}
+              onTouchEnd={usesSwipeViewer ? undefined : handleTouchEnd}
             >
               <div className={css.topRightActions}>
                 {photo.mediaType === "video" &&
@@ -899,6 +1120,20 @@ export function FullscreenViewer() {
                 >
                   <ScanPerson24Regular />
                 </button>
+                {photo.mediaType !== "video" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditMode((m) => !m);
+                      if (!editMode) setShowFileInfo(false);
+                    }}
+                    className={editMode ? `${css.infoButton} ${css.infoButtonActive}` : css.infoButton}
+                    aria-label={editMode ? "Close editor" : "Edit photo"}
+                    title={editMode ? "Close editor" : "Edit photo"}
+                  >
+                    <ImageEdit24Regular />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setShowFileInfo((current) => !current)}
@@ -926,6 +1161,34 @@ export function FullscreenViewer() {
                   title={showLiveVideo ? "Show photo" : "Play live photo"}
                 >
                   <Filmstrip24Regular />
+                </button>
+              )}
+              {!editMode && currentIndex > 0 && (
+                <button
+                  type="button"
+                  className={`${css.navButton} ${css.navPrev}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    selectPrevious();
+                  }}
+                  aria-label="Previous"
+                  title="Previous"
+                >
+                  <ChevronLeft48Regular />
+                </button>
+              )}
+              {!editMode && currentIndex >= 0 && currentIndex < items.length - 1 && (
+                <button
+                  type="button"
+                  className={`${css.navButton} ${css.navNext}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    selectNext();
+                  }}
+                  aria-label="Next"
+                  title="Next"
+                >
+                  <ChevronRight48Regular />
                 </button>
               )}
               {photo.mediaType === "video" ? (
@@ -989,8 +1252,29 @@ export function FullscreenViewer() {
                   muted
                   className={css.media}
                 />
-              ) : (
-                <div className={css.photoFrame} style={zoomStyle}>
+              ) : editMode ? (
+                <div
+                  className={css.photoFrame}
+                  style={
+                    {
+                      ...zoomStyle,
+                      "--photo-ar": String(photoAspectRatio),
+                      ...(editStyle.transform ? { transform: editStyle.transform } : {}),
+                    } as React.CSSProperties
+                  }
+                >
+                  {/* Cached grid thumbnail shown instantly until the full-size
+                      image finishes decoding. */}
+                  <div
+                    className={css.thumbnailClip}
+                    aria-hidden="true"
+                    style={{ opacity: fullImageLoaded ? 0 : 1 }}
+                  >
+                    <div
+                      className={css.thumbnailUnderlay}
+                      style={{ backgroundImage: `url("${photo.thumbnailUrl}")` }}
+                    />
+                  </div>
                   {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */}
                   <img
                     src={photo.fullUrl}
@@ -1003,26 +1287,109 @@ export function FullscreenViewer() {
                     onClick={handlePhotoClick}
                     onWheel={handlePhotoWheel}
                     onLoad={(e) => {
+                      setFullImageLoaded(true);
                       const { naturalWidth, naturalHeight } = e.currentTarget;
                       if (naturalWidth > 0 && naturalHeight > 0) {
                         setPhotoAspectRatio(naturalWidth / naturalHeight);
                       }
                     }}
-                    style={zoomStyle}
+                    style={{
+                      ...zoomStyle,
+                      opacity: fullImageLoaded ? 1 : 0,
+                      ...(editStyle.filter ? { filter: editStyle.filter } : {}),
+                      ...(editStyle.clipPath ? { clipPath: editStyle.clipPath } : {}),
+                    }}
                   />
                   {showFaces && (
                     <FaceOverlay
                       regionsRaw={photo.metadata?.regions}
                       faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
                       aspectRatio={photoAspectRatio}
+                      namedFaces={peopleFaces}
+                      onSelectPerson={openPersonPage}
+                      labelsHidden={photoZoom.isZoomed}
                     />
                   )}
+                  <div ref={setCropContainerEl} className={css.cropOverlayContainer} />
+                </div>
+              ) : (
+                <SwipePhotoViewer
+                  photo={photo}
+                  prevPhoto={prevPhoto}
+                  nextPhoto={nextPhoto}
+                  photoAspectRatio={photoAspectRatio}
+                  fullImageLoaded={fullImageLoaded}
+                  onImageLoad={(e) => {
+                    setFullImageLoaded(true);
+                    const { naturalWidth, naturalHeight } = e.currentTarget;
+                    if (naturalWidth > 0 && naturalHeight > 0) {
+                      setPhotoAspectRatio(naturalWidth / naturalHeight);
+                    }
+                  }}
+                  onNext={selectNext}
+                  onPrev={selectPrevious}
+                  onClose={() => setSelected(null)}
+                >
+                  {showFaces && (
+                    <FaceOverlay
+                      regionsRaw={photo.metadata?.regions}
+                      faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
+                      aspectRatio={photoAspectRatio}
+                      namedFaces={peopleFaces}
+                      onSelectPerson={openPersonPage}
+                      labelsHidden={photoZoom.isZoomed}
+                    />
+                  )}
+                </SwipePhotoViewer>
+              )}
+              {!editMode && !READ_ONLY && photo.mediaType !== "video" && (
+                // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
+                <div
+                  className={css.taggingBar}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <StarRating
+                    value={currentRating}
+                    onChange={(rating) => persistTagging({ rating })}
+                    label="Star rating"
+                  />
+                  <span className={css.taggingDivider} aria-hidden="true" />
+                  <TagEditor
+                    tags={currentTags}
+                    onChange={(tags) => persistTagging({ tags })}
+                  />
                 </div>
               )}
             </div>
-            {showFileInfo && (
+            {editMode && photo.mediaType !== "video" && (
+              <PhotoEditor
+                photoName={photo.name}
+                photoFullUrl={photo.fullUrl}
+                imageAspectRatio={photoAspectRatio}
+                cropContainerEl={cropContainerEl}
+                onStyleChange={setEditStyle}
+                onClose={() => setEditMode(false)}
+              />
+            )}
+            {!editMode && showFileInfo && (
               <aside className={css.infoSidebar} aria-label="File info panel">
                 <h3 className={css.infoTitle}>File info</h3>
+
+                {/* Human-authored caption embedded in the file */}
+                {Boolean(meta?.description) && (
+                  <>
+                    <h4 className={css.infoSubtitle}>Description</h4>
+                    <p className={css.infoDescription}>{String(meta?.description)}</p>
+                  </>
+                )}
+
+                {/* AI-generated description */}
+                {Boolean(meta?.aiDescription) && (
+                  <>
+                    <h4 className={css.infoSubtitle}>AI Description</h4>
+                    <p className={css.infoDescription}>{String(meta?.aiDescription)}</p>
+                  </>
+                )}
 
                 {/* Camera */}
                 {Boolean(meta?.cameraMake || meta?.cameraModel || meta?.lens) && (

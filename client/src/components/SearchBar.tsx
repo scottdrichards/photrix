@@ -140,7 +140,6 @@ export const SearchBar = () => {
       <form
         className={css.searchBar}
         onSubmit={handleSubmit}
-        onKeyDown={handleKeyDown}
         role="search"
         aria-hidden={!showExpanded}
       >
@@ -154,6 +153,7 @@ export const SearchBar = () => {
             defaultValue={query}
             aria-label="Search your photos"
             tabIndex={showExpanded ? 0 : -1}
+            onKeyDown={handleKeyDown}
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
           />

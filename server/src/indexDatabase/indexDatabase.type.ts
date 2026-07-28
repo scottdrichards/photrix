@@ -3,9 +3,14 @@ import type {
   FileQueryExtraField,
   FilterElement as SharedFilterElement,
   RecordFilterCondition,
+  SortOption,
   StringSearch,
 } from "../../../shared/filter-contract/src/index.ts";
-export type { Range, StringSearch } from "../../../shared/filter-contract/src/index.ts";
+export type {
+  Range,
+  SortOption,
+  StringSearch,
+} from "../../../shared/filter-contract/src/index.ts";
 
 export type RuntimeSemanticSimilarityFilter = {
   queryVector: number[];
@@ -23,7 +28,6 @@ type BaseFilterCondition = RecordFilterCondition<FileRecord, "relativePath">;
 
 export type FilterCondition = BaseFilterCondition & {
   hasFaces?: boolean | null;
-  hasAudioTranscript?: boolean | null;
   /** Match files that contain a detected face assigned to any of these cluster ids. */
   faceCluster?: number | number[] | null;
   semanticImage?: RuntimeSemanticSimilarityFilter | null;
@@ -44,6 +48,11 @@ export type QueryOptions = {
   pageSize?: number;
   /** 1-indexed */
   page?: number;
+  /**
+   * Result ordering. Defaults to newest-first by capture date. The `relevance`
+   * field only applies to semantic search, so it is treated as `date` here.
+   */
+  sort?: SortOption;
   /**
    * When true, results include all files in every folder that contains at
    * least one file matching `filter`. Useful for location/people queries where

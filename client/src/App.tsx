@@ -1,9 +1,10 @@
-import { Info24Regular, Share24Regular } from "@fluentui/react-icons";
+import { Info24Regular, Person24Regular, Share24Regular } from "@fluentui/react-icons";
 import { useEffect, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
 import { buildShareScope } from "./api";
 import { FullscreenViewer } from "./components/FullscreenViewer";
+import { AccountPanel } from "./components/AccountPanel";
 import { LoginScreen } from "./components/LoginScreen";
 import { PeopleView } from "./components/PeopleView";
 import { SearchBar } from "./components/SearchBar";
@@ -16,6 +17,15 @@ import { SelectionProvider } from "./components/selection/SelectionContext";
 import { useSyncUrlWithFilter, type ViewMode } from "./hooks/useSyncUrlWithFilter";
 import { buildShareUrl, isSharedView } from "./hooks/useShareFilter";
 import { readViewModeFromSearch } from "./filterUrlState";
+import {
+  applyTheme,
+  getStoredThemeOverride,
+  getSystemTheme,
+  persistThemeOverride,
+  subscribeToSystemTheme,
+  type Theme,
+  type ThemeOverride,
+} from "./theme";
 import { probeVideoPlaybackProfile } from "./videoPlaybackProfile";
 import { extractUrlToken, getAuthHeaders, initAuth, onUnauthorized } from "./auth";
 
@@ -51,6 +61,41 @@ const copyToClipboard = async (text: string): Promise<boolean> => {
 };
 
 type ShareModalState = { url: string; copied: boolean } | null;
+
+type ThemeToggleProps = {
+  theme: Theme;
+  followsSystem: boolean;
+  onToggle: () => void;
+};
+
+const ThemeToggle = ({ theme, followsSystem, onToggle }: ThemeToggleProps) => {
+  const title = followsSystem
+    ? `Following system theme: ${theme}`
+    : `Theme override: ${theme}`;
+
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-label="Theme"
+      aria-checked={theme === "dark"}
+      title={title}
+      className={css.themeToggle}
+      data-theme={theme}
+      data-following-system={followsSystem}
+      onClick={onToggle}
+    >
+      <span className={css.themeToggleTrack} aria-hidden="true">
+        <span className={css.themeToggleGlow} />
+        <span className={css.themeToggleStars} />
+        <span className={css.themeToggleSun} />
+        <span className={css.themeToggleMoon} />
+        <span className={css.themeToggleThumb} />
+        {followsSystem && <span className={css.themeToggleModeDot} />}
+      </span>
+    </button>
+  );
+};
 
 const ShareButton = () => {
   const { filter } = useFilter();
@@ -92,7 +137,7 @@ const ShareButton = () => {
         disabled={loading}
       >
         <Share24Regular fontSize={20} />
-        {loading ? "Sharing…" : "Share"}
+        <span className={css.btnLabel}>{loading ? "Sharing…" : "Share"}</span>
       </button>
 
       {modal && (
@@ -106,8 +151,15 @@ const ShareButton = () => {
   );
 };
 
-const AppContent = () => {
+type AppContentProps = {
+  theme: Theme;
+  followsSystem: boolean;
+  onThemeToggle: () => void;
+};
+
+const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) => {
   const [isStatusOpen, setIsStatusOpen] = useState(false);
+  const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [view, setView] = useState<ViewMode>(initialViewFromUrl);
 
   useSyncUrlWithFilter(view, setView);
@@ -126,23 +178,42 @@ const AppContent = () => {
 
         <div className={css.headerActions}>
           <SearchBar />
-          <Filter />
+          <div className={css.filterSlot}>
+            <Filter />
+          </div>
+          <ThemeToggle theme={theme} followsSystem={followsSystem} onToggle={onThemeToggle} />
           <ShareButton />
           {!sharedView && (
-            <button
-              title="Server Status"
-              className="btn btn-subtle"
-              onClick={() => setIsStatusOpen(true)}
-            >
-              <Info24Regular fontSize={20} />
-              Status
-            </button>
+            <>
+              <button
+                title="Account"
+                className="btn btn-subtle"
+                onClick={() => setIsAccountOpen(true)}
+              >
+                <Person24Regular fontSize={20} />
+                <span className={css.btnLabel}>Account</span>
+              </button>
+              <button
+                title="Server Status"
+                className="btn btn-subtle"
+                onClick={() => setIsStatusOpen(true)}
+              >
+                <Info24Regular fontSize={20} />
+                <span className={css.btnLabel}>Status</span>
+              </button>
+            </>
           )}
         </div>
       </header>
 
       {!sharedView && (
-        <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
+        <>
+          <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
+          <AccountPanel
+            isOpen={isAccountOpen}
+            onDismiss={() => setIsAccountOpen(false)}
+          />
+        </>
       )}
 
       {view === "library" ? (
@@ -159,6 +230,23 @@ type AuthState = "loading" | "authenticated" | "unauthenticated";
 
 export default function App() {
   const [authState, setAuthState] = useState<AuthState>("loading");
+  const [systemTheme, setSystemTheme] = useState<Theme>(getSystemTheme);
+  const [themeOverride, setThemeOverride] = useState<ThemeOverride>(getStoredThemeOverride);
+
+  const theme = themeOverride ?? systemTheme;
+  const followsSystem = themeOverride === null;
+
+  const handleThemeToggle = () => {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    setThemeOverride(nextTheme === systemTheme ? null : nextTheme);
+  };
+
+  useEffect(() => {
+    applyTheme(theme);
+    persistThemeOverride(themeOverride);
+  }, [theme, themeOverride]);
+
+  useEffect(() => subscribeToSystemTheme(setSystemTheme), []);
 
   useEffect(() => {
     void initAuth().then((ok) => setAuthState(ok ? "authenticated" : "unauthenticated"));
@@ -168,13 +256,20 @@ export default function App() {
   if (authState === "loading") return null;
 
   if (authState === "unauthenticated") {
-    return <LoginScreen onAuthenticated={() => setAuthState("authenticated")} />;
+    return (
+      <>
+        <div className={css.themeToggleFloating}>
+          <ThemeToggle theme={theme} followsSystem={followsSystem} onToggle={handleThemeToggle} />
+        </div>
+        <LoginScreen onAuthenticated={() => setAuthState("authenticated")} />
+      </>
+    );
   }
 
   return (
     <FilterProvider>
       <SelectionProvider>
-        <AppContent />
+        <AppContent theme={theme} followsSystem={followsSystem} onThemeToggle={handleThemeToggle} />
       </SelectionProvider>
     </FilterProvider>
   );

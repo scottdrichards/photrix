@@ -17,7 +17,6 @@ const IDLE_MS = Number(process.env.PHOTRIX_HLS_IDLE_MS) || 90_000;
 // instead of leaving every level's encode running.
 const VARIANT_IDLE_MS = Number(process.env.PHOTRIX_HLS_VARIANT_IDLE_MS) || 8_000;
 
-
 type VariantEncode = {
   // Running encoder process for this variant. Null while the encode is still queued
   // (claimed but not yet spawned) or after it has ended.
@@ -42,6 +41,25 @@ type Session = {
 // Keyed by the HLS base directory (the whole tree is reaped together).
 const sessions = new Map<string, Session>();
 
+// Lifecycle hooks bracketing each session from creation to reap. Wired (in
+// main.ts) to the task orchestrator's beginUserRequest/endUserRequest so an
+// active playback counts as user activity for its whole lifetime, not just the
+// instants of individual segment fetches. An HLS player buffers ahead and goes
+// HTTP-quiet for many seconds mid-playback; without this bracket the
+// orchestrator declares the user idle in those gaps, resumes background ML
+// work, and releases the GPU VRAM reclaim — so the workers respawn, refill
+// VRAM, and the next ABR variant switch can't get NVENC and falls back to
+// realtime-starved libx264.
+type PlaybackLifecycleHooks = {
+  onSessionStart: () => void;
+  onSessionEnd: () => void;
+};
+let playbackHooks: PlaybackLifecycleHooks | undefined;
+
+export const setPlaybackLifecycleHooks = (hooks: PlaybackLifecycleHooks): void => {
+  playbackHooks = hooks;
+};
+
 const killVariant = (encode: VariantEncode): void => {
   clearTimeout(encode.idleTimer);
   encode.child?.kill("SIGKILL");
@@ -53,6 +71,7 @@ const reap = async (hlsDir: string): Promise<void> => {
   const session = sessions.get(hlsDir);
   if (!session) return;
   sessions.delete(hlsDir);
+  playbackHooks?.onSessionEnd();
 
   // Stop every encoder first so nothing is writing into a directory we're removing.
   for (const encode of session.variants.values()) killVariant(encode);
@@ -77,6 +96,7 @@ const ensureSession = (hlsDir: string): Session => {
   if (!session) {
     session = { treeTimer: armTreeTimer(hlsDir), variants: new Map() };
     sessions.set(hlsDir, session);
+    playbackHooks?.onSessionStart();
   }
   return session;
 };

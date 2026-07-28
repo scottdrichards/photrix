@@ -1,6 +1,7 @@
 import {
   Calendar24Regular,
   Camera24Regular,
+  Filmstrip24Regular,
   Folder24Regular,
   FolderOpen24Regular,
   Image24Regular,
@@ -8,7 +9,6 @@ import {
   Person24Regular,
   ScanPerson24Regular,
   Star24Regular,
-  Subtitles24Regular,
 } from "@fluentui/react-icons";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -25,7 +25,6 @@ import { FaceFilterPanel } from "./FaceFilterPanel";
 
 type FilterPanel =
   | "folders"
-  | "type"
   | "faceCluster"
   | "people"
   | "gear"
@@ -40,7 +39,6 @@ export const Filter = () => {
     includeSubfolders,
     ratingFilter,
     mediaTypeFilter,
-    hasAudioTranscript,
     path,
     peopleInImageFilter,
     faceClusterFilter,
@@ -164,10 +162,22 @@ export const Filter = () => {
   }, [activePanel, applyPanelLayout]);
 
   const currentPath = path?.replace(/\/$/, "");
+  const resolvedMediaTypeFilter = mediaTypeFilter ?? "all";
+  const photoMediaVisible =
+    resolvedMediaTypeFilter === "all" || resolvedMediaTypeFilter === "photo";
+  const videoMediaVisible =
+    resolvedMediaTypeFilter === "all" || resolvedMediaTypeFilter === "video";
+  const mediaTypeStateLabel =
+    resolvedMediaTypeFilter === "photo"
+      ? "Photos only"
+      : resolvedMediaTypeFilter === "video"
+        ? "Videos only"
+        : resolvedMediaTypeFilter === "other"
+          ? "Other files only"
+          : "Photos and videos";
   const isFolderFilterActive = Boolean(currentPath) || includeSubfolders === false;
   const isMediaTypeFilterActive = Boolean(mediaTypeFilter && mediaTypeFilter !== "all");
   const isFaceClusterFilterActive = (faceClusterFilter ?? []).length > 0;
-  const isTranscriptFilterActive = Boolean(hasAudioTranscript);
   const isPeopleFilterActive = selectedPeople.length > 0;
   const isGearFilterActive =
     selectedCameraModels.length > 0 || selectedLensModels.length > 0;
@@ -178,7 +188,7 @@ export const Filter = () => {
   const handleRatingClick = (star: number) => {
     if (ratingValue === star) {
       setFilter((prev) => {
-        const { ratingFilter, ...rest } = prev;
+        const { ratingFilter: _ratingFilter, ...rest } = prev;
         return rest;
       });
       return;
@@ -195,20 +205,22 @@ export const Filter = () => {
 
   const handleClearRating = () => {
     setFilter((prev) => {
-      const { ratingFilter, ...rest } = prev;
+      const { ratingFilter: _ratingFilter, ...rest } = prev;
       return rest;
     });
   };
 
-  const handleMediaTypeChange = (type: MediaTypeFilter) => {
-    setFilter({ mediaTypeFilter: type });
+  const handleMediaTypeCycle = () => {
+    const nextMediaTypeFilter: MediaTypeFilter =
+      resolvedMediaTypeFilter === "all"
+        ? "photo"
+        : resolvedMediaTypeFilter === "photo"
+          ? "video"
+          : "all";
+    setFilter({ mediaTypeFilter: nextMediaTypeFilter });
   };
 
   const folderCountFormatter = useMemo(() => new Intl.NumberFormat(), []);
-
-  const handleTranscriptFilterToggle = () => {
-    setFilter({ hasAudioTranscript: !isTranscriptFilterActive });
-  };
 
   const isExpandToFolderActive = Boolean(expandToFolder);
   const handleExpandToFolderToggle = () => {
@@ -246,7 +258,6 @@ export const Filter = () => {
           signal: abortController.signal,
           ratingFilter,
           mediaTypeFilter,
-          hasAudioTranscript,
           locationBounds,
           dateRange,
           peopleInImageFilter: selectedPeople,
@@ -270,7 +281,6 @@ export const Filter = () => {
     currentPath,
     ratingFilter,
     mediaTypeFilter,
-    hasAudioTranscript,
     locationBounds,
     dateRange,
     selectedPeople,
@@ -465,35 +475,25 @@ export const Filter = () => {
       {/* Media type */}
       <div className="popover-anchor">
         <button
-          title="Media type"
+          title={`Media type: ${mediaTypeStateLabel}`}
           aria-label="Media type filter"
           aria-pressed={isMediaTypeFilterActive}
-          className={`btn btn-icon ${css.filterIconButton} ${activePanel === "type" || isMediaTypeFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={(e) => handlePanelToggle("type", e.currentTarget)}
+          className={`btn btn-icon ${css.filterIconButton} ${isMediaTypeFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={handleMediaTypeCycle}
         >
-          <Image24Regular fontSize={20} />
+          <span className={css.mediaTypeIconStack} aria-hidden="true">
+            <span
+              className={`${css.mediaTypeGlyph} ${css.mediaTypePhotoGlyph} ${photoMediaVisible ? css.mediaTypeGlyphActive : css.mediaTypeGlyphInactive}`}
+            >
+              <Image24Regular fontSize={13} />
+            </span>
+            <span
+              className={`${css.mediaTypeGlyph} ${css.mediaTypeVideoGlyph} ${videoMediaVisible ? css.mediaTypeGlyphActive : css.mediaTypeGlyphInactive}`}
+            >
+              <Filmstrip24Regular fontSize={13} />
+            </span>
+          </span>
         </button>
-        {activePanel === "type" && (
-          <div
-            className={`popover-surface ${css.panelSurface}`}
-            style={floatingPanelStyle}
-          >
-            <div className={css.panelSection}>
-              <h3>Media type</h3>
-              <div className={css.controlsRow}>
-                {(["all", "photo", "video", "other"] as const).map((type) => (
-                  <button
-                    key={type}
-                    className={`btn btn-sm ${mediaTypeFilter === type ? "btn-primary" : "btn-subtle"}`}
-                    onClick={() => handleMediaTypeChange(type)}
-                  >
-                    {type.charAt(0).toUpperCase() + type.slice(1)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* People face */}
@@ -515,19 +515,6 @@ export const Filter = () => {
             <FaceFilterPanel isActive={activePanel === "faceCluster"} />
           </div>
         )}
-      </div>
-
-      {/* Transcript */}
-      <div className="popover-anchor">
-        <button
-          title="Has transcript"
-          aria-label="Has transcript filter"
-          aria-pressed={isTranscriptFilterActive}
-          className={`btn btn-icon ${css.filterIconButton} ${isTranscriptFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={handleTranscriptFilterToggle}
-        >
-          <Subtitles24Regular fontSize={20} />
-        </button>
       </div>
 
       {/* People */}

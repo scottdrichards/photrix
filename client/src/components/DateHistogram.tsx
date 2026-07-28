@@ -308,18 +308,34 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
     [clampToDomain, domain, invertX],
   );
 
+  // Snap a raw pointer range to the bucket edges it covers so a selection
+  // always aligns to whole bars. A click (start === end) collapses to the
+  // single bucket under the pointer.
+  const snapToBuckets = useCallback(
+    (rawStart: number, rawEnd: number): Range => {
+      if (buckets.length === 0) return null;
+      const lo = Math.min(rawStart, rawEnd);
+      const hi = Math.max(rawStart, rawEnd);
+      const bucketAt = (ms: number) =>
+        buckets.find((b) => ms >= b.start && ms <= b.end) ??
+        (ms < buckets[0].start ? buckets[0] : buckets[buckets.length - 1]);
+      const startBucket = bucketAt(lo);
+      const endBucket = bucketAt(hi);
+      return { start: startBucket.start, end: endBucket.end };
+    },
+    [buckets],
+  );
+
   const endDrag = useCallback(() => {
     if (!isDragging.current) return;
     isDragging.current = false;
     setDragRange((current) => {
       if (!current) return current;
-      const start = Math.min(current.start, current.end);
-      const end = Math.max(current.start, current.end);
-      const next = start === end ? null : { start, end };
+      const next = snapToBuckets(current.start, current.end);
       onChange(next);
       return next;
     });
-  }, [onChange]);
+  }, [onChange, snapToBuckets]);
 
   useEffect(() => {
     const handleUp = () => {
@@ -332,6 +348,33 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
   }, [endDrag]);
 
   const activeRange = dragRange ?? value;
+
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+
+  const bucketIndexAt = useCallback(
+    (ms: number) => {
+      if (buckets.length === 0) return null;
+      const idx = buckets.findIndex((b) => ms >= b.start && ms <= b.end);
+      if (idx !== -1) return idx;
+      return ms < buckets[0].start ? 0 : buckets.length - 1;
+    },
+    [buckets],
+  );
+
+  const updateHover = useCallback(
+    (event: React.PointerEvent<SVGRectElement>) => {
+      const svg = event.currentTarget.ownerSVGElement;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      const pos = invertX(event.clientX, rect);
+      if (pos === null) {
+        setHoverIndex(null);
+        return;
+      }
+      setHoverIndex(bucketIndexAt(pos));
+    },
+    [bucketIndexAt, invertX],
+  );
 
   const bars = useMemo(() => {
     if (!domain || maxCount === 0)
@@ -383,6 +426,23 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
     return { x: left, width: Math.max(0, right - left) };
   }, [activeRange, domain, xFor]);
 
+  const hoverBar =
+    hoverIndex !== null && hoverIndex < bars.length ? bars[hoverIndex] : null;
+
+  const hoverTooltip = useMemo(() => {
+    if (hoverIndex === null) return null;
+    const bucket = buckets[hoverIndex];
+    const bar = bars[hoverIndex];
+    if (!bucket || !bar) return null;
+    const center = bar.x + bar.width / 2;
+    const left = Math.min(Math.max(center, 40), width - 40);
+    const label =
+      bucket.end - bucket.start > 24 * 60 * 60 * 1000 + 1000
+        ? `${formatDate(bucket.start)} – ${formatDate(bucket.end)}`
+        : formatDate(bucket.start);
+    return { left, count: bucket.count, label };
+  }, [bars, buckets, hoverIndex, width]);
+
   const showEmpty = !loading && (buckets.length === 0 || !domain);
   const canClear = Boolean(value);
 
@@ -411,18 +471,6 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
           role="presentation"
           style={{ touchAction: "none" }}
         >
-          <rect
-            x={0}
-            y={0}
-            width={width}
-            height={height}
-            fill="transparent"
-            pointerEvents="all"
-            style={{ touchAction: "none" }}
-            onPointerDown={beginDrag}
-            onPointerMove={updateDrag}
-            onPointerUp={endDrag}
-          />
           {bars.map((bar, idx) => (
             <rect
               key={idx}
@@ -431,13 +479,14 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
               width={bar.width}
               height={bar.height}
               style={{ fill: "var(--blue-bg2)" }}
-              opacity={0.9}
+              opacity={hoverIndex === idx ? 1 : 0.9}
+              pointerEvents="none"
             />
           ))}
           {filteredTicks.map((t, idx) => {
             const x = xFor(t);
             return (
-              <g key={idx}>
+              <g key={idx} pointerEvents="none">
                 <line
                   x1={x}
                   x2={x}
@@ -469,7 +518,47 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
               pointerEvents="none"
             />
           ) : null}
+          {/* Interactive overlay sits on top so bars/ticks never swallow
+              pointer events; visuals below are all pointerEvents="none". */}
+          <rect
+            x={0}
+            y={0}
+            width={width}
+            height={height}
+            fill="transparent"
+            pointerEvents="all"
+            style={{ touchAction: "none" }}
+            onPointerDown={beginDrag}
+            onPointerMove={(event) => {
+              updateDrag(event);
+              updateHover(event);
+            }}
+            onPointerUp={endDrag}
+            onPointerLeave={() => setHoverIndex(null)}
+          />
+          {hoverBar ? (
+            <g pointerEvents="none">
+              <rect
+                x={hoverBar.x - 1}
+                y={padding.top}
+                width={hoverBar.width + 2}
+                height={height - padding.top - padding.bottom}
+                style={{ fill: "var(--fg2)" }}
+                opacity={0.08}
+              />
+            </g>
+          ) : null}
         </svg>
+        {hoverTooltip ? (
+          <div
+            className={css.tooltip}
+            style={{ left: hoverTooltip.left }}
+            role="presentation"
+          >
+            <strong>{hoverTooltip.count}</strong>
+            <span>{hoverTooltip.label}</span>
+          </div>
+        ) : null}
       </div>
       <div className={css.labels}>
         <small>{minDate ? formatDate(minDate) : ""}</small>

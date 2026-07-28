@@ -8,6 +8,7 @@ import { createTaskController } from "../taskOrchestrator/taskController.ts";
 import type { DetectedFace } from "../faceDetection/faceDetector.type.ts";
 import type { AnalyzeImageOptions, ImageAnalysisResult } from "./imageAnalysisWorker.ts";
 import { PermanentImageError } from "./imageAnalysisWorker.ts";
+import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
 
 const log = getLogger("processImageAnalysis");
 
@@ -55,10 +56,7 @@ export const processImageAnalysis = (
 
   const saveFaceResult = async (relativePath: string, result: ImageAnalysisResult) => {
     if (result.facesError) {
-      log.warn(
-        { err: result.facesError, path: relativePath },
-        "Face detection failed",
-      );
+      log.warn({ err: result.facesError, path: relativePath }, "Face detection failed");
       await database.addOrUpdateFileData(relativePath, {
         facesLastErrorAt: new Date().toISOString(),
       });
@@ -108,7 +106,9 @@ export const processImageAnalysis = (
         }
         await ctrl.waitUntilResumed();
         ctrl.checkCancelled();
-        await new Promise<void>((resolve) => setTimeout(resolve, PREREQ_POLL_INTERVAL_MS));
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, PREREQ_POLL_INTERVAL_MS),
+        );
         ctrl.checkCancelled();
         continue;
       }
@@ -132,7 +132,16 @@ export const processImageAnalysis = (
               if (needsFaces) await saveFaceResult(relativePath, result);
               if (needsEmbedding) await saveEmbeddingResult(relativePath, result);
             } catch (error) {
-              if (error instanceof PermanentImageError) {
+              if (isWorkerEvictedError(error)) {
+                // The worker was killed by us (GPU reclaimed for playback /
+                // shutdown), not because this file is bad. Leave it pending so
+                // the next pass retries it promptly instead of stamping error
+                // markers that demote it behind the rest of the backlog.
+                log.info(
+                  { path: relativePath },
+                  "Image analysis interrupted by worker eviction; will retry",
+                );
+              } else if (error instanceof PermanentImageError) {
                 // The image itself is unreadable (truncated, corrupt, missing).
                 // Record a permanent skip so it is never re-queued on restart.
                 log.warn(
@@ -183,9 +192,7 @@ export const processImageAnalysis = (
         itemsProcessed: done,
         total,
         portionComplete: total > 0 ? done / total : undefined,
-        ...(stages.length
-          ? { description: `Processing ${stages.join(" + ")}` }
-          : {}),
+        ...(stages.length ? { description: `Processing ${stages.join(" + ")}` } : {}),
       };
     },
     onComplete: () => completion,

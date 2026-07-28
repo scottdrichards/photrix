@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../api";
 import css from "./ShareOptionsModal.module.css";
 
@@ -218,6 +218,16 @@ export const ShareOptionsModal: React.FC<Props> = ({
     onClose();
   };
 
+  // Close on Escape
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const count = photos.length;
   const noun = count === 1 ? "item" : "items";
 
@@ -228,8 +238,19 @@ export const ShareOptionsModal: React.FC<Props> = ({
   };
 
   return (
-    <div className={css.backdrop} onClick={handleClose}>
-      <div className={css.sheet} onClick={(e) => e.stopPropagation()}>
+    <div
+      className={css.backdrop}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleClose();
+      }}
+      role="presentation"
+    >
+      <div
+        className={css.sheet}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${actionLabel} ${count} ${noun}`}
+      >
         <div className={css.handle} />
         <h3 className={css.title}>
           {actionLabel} {count} {noun}

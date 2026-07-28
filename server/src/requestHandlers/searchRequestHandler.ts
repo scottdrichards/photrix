@@ -1,8 +1,10 @@
 import type http from "node:http";
 import {
+  parseSort,
   SEARCH_SOURCES,
   type SearchSource,
   type ShareScope,
+  type SortOption,
 } from "../../../shared/filter-contract/src/index.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { embedText } from "../imageAnalysis/imageAnalysisWorker.ts";
@@ -30,13 +32,63 @@ const log = getLogger("searchRequestHandler");
 // it is confident (music/waves/laughing ~0.50+) at the cost of weak audio
 // recall. Transcript search now requires whole-word matches (all query terms for
 // multi-word queries), so it stays precise enough without a separate floor.
-const CLIP_MIN_SIMILARITY = Number(process.env.PHOTRIX_SEARCH_CLIP_MIN_SIMILARITY ?? 0.18);
-const CLAP_MIN_SIMILARITY = Number(process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.52);
+const CLIP_MIN_SIMILARITY = Number(
+  process.env.PHOTRIX_SEARCH_CLIP_MIN_SIMILARITY ?? 0.18,
+);
+const CLAP_MIN_SIMILARITY = Number(
+  process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.52,
+);
 
 type Options = {
   database: IndexDatabase;
   shareFilter?: unknown;
   shareScope?: ShareScope<unknown> | null;
+};
+
+// Effective capture time (ms) for a search hit, mirroring the DB's
+// COALESCE(dateTaken, created, modified). Records carry Date objects here
+// (rowToFileRecord), so normalise to a number; missing dates sort last.
+const effectiveTime = (record: Record<string, unknown>): number => {
+  for (const key of ["dateTaken", "created", "modified"] as const) {
+    const value = record[key];
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === "number") return value;
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+  }
+  return Number.NEGATIVE_INFINITY;
+};
+
+/**
+ * Reorder the relevance-ranked search hits by the requested sort.
+ *
+ * Selection stays relevance-based (the caller has already taken the top-N by
+ * fused rank); this only changes the display order of that set. `relevance`
+ * (and the default) keeps the incoming RRF order untouched. A stable sort keeps
+ * relevance as the tiebreaker within equal dates/ratings.
+ */
+const sortSearchResults = <T extends Record<string, unknown>>(
+  hits: T[],
+  sort: SortOption | undefined,
+): T[] => {
+  if (!sort || sort.field === "relevance") return hits;
+  const factor = sort.direction === "asc" ? 1 : -1;
+
+  if (sort.field === "rating") {
+    // Unrated hits always sink to the bottom regardless of direction.
+    return [...hits].sort((a, b) => {
+      const ra = typeof a.rating === "number" ? a.rating : null;
+      const rb = typeof b.rating === "number" ? b.rating : null;
+      if (ra === null && rb === null) return 0;
+      if (ra === null) return 1;
+      if (rb === null) return -1;
+      return (ra - rb) * factor;
+    });
+  }
+
+  return [...hits].sort((a, b) => (effectiveTime(a) - effectiveTime(b)) * factor);
 };
 
 export const searchRequestHandler = async (
@@ -55,6 +107,10 @@ export const searchRequestHandler = async (
 
   const rawLimit = parseInt(url.searchParams.get("limit") ?? "50", 10);
   const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, rawLimit)) : 50;
+
+  // Result ordering. Defaults to relevance (RRF rank). date/rating reorder the
+  // top-N most-relevant hits by that field rather than re-selecting the library.
+  const sort = parseSort(url.searchParams.get("sort"));
 
   const path = url.searchParams.get("path") ?? "";
   const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
@@ -170,7 +226,13 @@ export const searchRequestHandler = async (
     );
   };
 
-  type SearchResult = { folder: string; fileName: string; mimeType: string | null; similarity: number; [key: string]: unknown };
+  type SearchResult = {
+    folder: string;
+    fileName: string;
+    mimeType: string | null;
+    similarity: number;
+    [key: string]: unknown;
+  };
 
   // Run the enabled searches in parallel; failures in audio workers are
   // non-fatal. A disabled source resolves to `[]` without touching its worker,
@@ -224,12 +286,15 @@ export const searchRequestHandler = async (
       const reason =
         result.reason instanceof Error ? result.reason.message : String(result.reason);
       diagnostics[label] = { status: "rejected", ms: timings[label], reason };
-      log.warn({
-        source: label,
-        reason,
-        embedMs: stageTimings[`${label}Embed`],
-        scanMs: stageTimings[`${label}Scan`],
-      }, "search source failed");
+      log.warn(
+        {
+          source: label,
+          reason,
+          embedMs: stageTimings[`${label}Embed`],
+          scanMs: stageTimings[`${label}Scan`],
+        },
+        "search source failed",
+      );
       return [];
     }
     const all = result.value;
@@ -254,7 +319,9 @@ export const searchRequestHandler = async (
   const clipHits = applyFloor("clip", useImage, clipResult, CLIP_MIN_SIMILARITY);
   const clapHits = applyFloor("clap", useAudio, clapResult, CLAP_MIN_SIMILARITY);
   const transcriptHits =
-    useTranscript && transcriptResult.status === "fulfilled" ? transcriptResult.value : [];
+    useTranscript && transcriptResult.status === "fulfilled"
+      ? transcriptResult.value
+      : [];
   diagnostics.transcript = !useTranscript
     ? { status: "skipped" }
     : transcriptResult.status === "fulfilled"
@@ -307,10 +374,13 @@ export const searchRequestHandler = async (
   fuseResults(clapHits, "audio");
   fuseResults(transcriptHits, "transcript");
 
-  const items = [...fused.values()]
+  const ranked = [...fused.values()]
     .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, limit)
-    .map(({ sources, ...rest }) => ({ ...rest, sources: [...sources] }));
+    .slice(0, limit);
+  const items = sortSearchResults(ranked, sort).map(({ sources, ...rest }) => ({
+    ...rest,
+    sources: [...sources],
+  }));
 
   // Only surface a hard failure when there is nothing to show AND both embedding
   // workers failed — otherwise partial results (e.g. transcript matches alone)
@@ -323,7 +393,9 @@ export const searchRequestHandler = async (
     clapResult.status === "rejected"
   ) {
     const message =
-      clipResult.reason instanceof Error ? clipResult.reason.message : String(clipResult.reason);
+      clipResult.reason instanceof Error
+        ? clipResult.reason.message
+        : String(clipResult.reason);
     return writeJson(res, 503, {
       error: "Search workers unavailable",
       message,

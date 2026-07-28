@@ -26,7 +26,11 @@ export const createKeyedWorkScheduler = (maxConcurrent: number) => {
   const workByKey = new Map<string, WorkEntry<unknown>>();
   const pendingStack: WorkEntry<unknown>[] = [];
 
-  const removeWaiter = <T>(entry: WorkEntry<T>, waiter: PendingEntry<T>, error: unknown) => {
+  const removeWaiter = <T>(
+    entry: WorkEntry<T>,
+    waiter: PendingEntry<T>,
+    error: unknown,
+  ) => {
     const index = entry.waiters.indexOf(waiter);
     if (index === -1) {
       return;

@@ -1,7 +1,8 @@
 import { buildShareUrl } from "./useShareFilter";
 
 describe("buildShareUrl", () => {
-  it("hides the original semantic query and sources when adding a share token", () => {
+  it("returns a /share URL with only the token", () => {
+    // Any current path/params should be irrelevant — share links are self-contained.
     window.history.pushState(
       null,
       "",
@@ -10,11 +11,9 @@ describe("buildShareUrl", () => {
 
     const url = new URL(buildShareUrl("shared-token"));
 
-    expect(url.pathname).toBe("/travel/italy");
+    expect(url.pathname).toBe("/share");
     expect(url.searchParams.get("token")).toBe("shared-token");
-    expect(url.searchParams.get("includeSubfolders")).toBe("false");
-    expect(url.searchParams.get("q")).toBeNull();
-    expect(url.searchParams.get("sources")).toBeNull();
-    expect(url.searchParams.get("view")).toBe("people");
+    // No other params — filter state is encoded in the token itself.
+    expect([...url.searchParams.keys()]).toEqual(["token"]);
   });
 });

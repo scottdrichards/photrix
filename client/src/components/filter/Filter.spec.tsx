@@ -242,15 +242,32 @@ describe("Filter", () => {
     );
   });
 
-  it("updates media type through media type panel", async () => {
+  it("cycles the photo and video filter directly from the toolbar button", async () => {
     renderFilter();
 
-    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Video" }));
+    const mediaTypeButton = screen.getByRole("button", { name: "Media type filter" });
+
+    fireEvent.click(mediaTypeButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("filter-state").textContent).toContain(
+        '"mediaTypeFilter":"photo"',
+      );
+    });
+
+    fireEvent.click(mediaTypeButton);
 
     await waitFor(() => {
       expect(screen.getByTestId("filter-state").textContent).toContain(
         '"mediaTypeFilter":"video"',
+      );
+    });
+
+    fireEvent.click(mediaTypeButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("filter-state").textContent).toContain(
+        '"mediaTypeFilter":"all"',
       );
     });
   });
@@ -418,8 +435,9 @@ describe("Filter", () => {
       );
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Video" }));
+    const mediaTypeButton = screen.getByRole("button", { name: "Media type filter" });
+    fireEvent.click(mediaTypeButton);
+    fireEvent.click(mediaTypeButton);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Media type filter" })).toHaveAttribute(
@@ -438,9 +456,9 @@ describe("Filter", () => {
 
     renderFilter();
 
-    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
 
-    const panelTitle = await screen.findByText("Media type");
+    const panelTitle = await screen.findByText("Folders");
     const panel = panelTitle.closest(".popover-surface");
 
     expect(panel).not.toBeNull();
@@ -460,9 +478,9 @@ describe("Filter", () => {
 
     renderFilter();
 
-    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
 
-    const panelTitle = await screen.findByText("Media type");
+    const panelTitle = await screen.findByText("Folders");
     const panel = panelTitle.closest(".popover-surface");
 
     expect(panel).not.toBeNull();

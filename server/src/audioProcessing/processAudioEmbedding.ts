@@ -6,11 +6,15 @@ import { batch } from "../utils.ts";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
+import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
 
 const log = getLogger("processAudioEmbedding");
 
 const DB_BATCH_SIZE = 10;
-const PARALLELISM = 2;
+// CLAP runs in a single shared worker process. Dispatching multiple background
+// embeds at once only queues them inside that worker, so later requests burn
+// their timeout budget before they even start running.
+const PARALLELISM = 1;
 
 export const processAudioEmbedding = (
   database: IndexDatabase,
@@ -42,7 +46,10 @@ export const processAudioEmbedding = (
             try {
               await access(fullPath);
             } catch {
-              log.warn({ path: relativePath }, "Audio embedding skipped: file not found at storage path");
+              log.warn(
+                { path: relativePath },
+                "Audio embedding skipped: file not found at storage path",
+              );
               await database.markAudioEmbeddingSkipped(relativePath);
               return;
             }
@@ -50,6 +57,16 @@ export const processAudioEmbedding = (
               const embedding = await embedAudio(fullPath);
               await database.saveAudioEmbedding(relativePath, embedding);
             } catch (error) {
+              if (isWorkerEvictedError(error)) {
+                // The worker was killed by us (GPU reclaimed for playback /
+                // shutdown), not because this file is bad. Leave it pending so
+                // the next pass retries it instead of poisoning its record.
+                log.info(
+                  { path: relativePath },
+                  "Audio embedding interrupted by worker eviction; will retry",
+                );
+                return;
+              }
               log.warn({ err: error, path: relativePath }, "Audio embedding failed");
               await database.saveAudioEmbeddingError(relativePath);
             }

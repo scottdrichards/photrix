@@ -6,7 +6,6 @@ import {
   ROOT_CONTEXT,
   SpanStatusCode,
   trace,
-  type Attributes,
   type Span,
 } from "@opentelemetry/api";
 
@@ -119,27 +118,11 @@ export const getCurrentRequestLogFields = () => {
     method: context.method,
     url: getRequestPathname(context.url),
     ...(context.clientSessionId ? { clientSessionId: context.clientSessionId } : {}),
-    ...(context.clientOperationId ? { clientOperationId: context.clientOperationId } : {}),
+    ...(context.clientOperationId
+      ? { clientOperationId: context.clientOperationId }
+      : {}),
     ...(context.clientRequestId ? { clientRequestId: context.clientRequestId } : {}),
   };
-};
-
-export const setCurrentSpanAttributes = (attributes: Attributes): void => {
-  const currentSpan = trace.getSpan(otelContext.active());
-  if (!currentSpan) {
-    return;
-  }
-
-  currentSpan.setAttributes(attributes);
-};
-
-export const addCurrentSpanEvent = (name: string, attributes?: Attributes): void => {
-  const currentSpan = trace.getSpan(otelContext.active());
-  if (!currentSpan) {
-    return;
-  }
-
-  currentSpan.addEvent(name, attributes);
 };
 
 export const bindCurrentRequestTrace = <TArgs extends unknown[]>(
@@ -189,10 +172,12 @@ export const runWithRequestTrace = async <T>(
     spans: [],
   };
 
-  return await requestTraceStorage.run(context, async () =>
-    await otelContext.with(trace.setSpan(otelContext.active(), rootSpan), async () => {
-      return await fn();
-    }),
+  return await requestTraceStorage.run(
+    context,
+    async () =>
+      await otelContext.with(trace.setSpan(otelContext.active(), rootSpan), async () => {
+        return await fn();
+      }),
   );
 };
 
@@ -239,7 +224,9 @@ export const finishRequestTrace = (statusCode: number): void => {
     {
       requestId: context.requestId,
       ...(context.clientSessionId ? { clientSessionId: context.clientSessionId } : {}),
-      ...(context.clientOperationId ? { clientOperationId: context.clientOperationId } : {}),
+      ...(context.clientOperationId
+        ? { clientOperationId: context.clientOperationId }
+        : {}),
       ...(context.clientRequestId ? { clientRequestId: context.clientRequestId } : {}),
       method: context.method,
       url: getRequestPathname(context.url),
@@ -255,11 +242,7 @@ export const measureOperation = async <T>(
   fn: () => T | Promise<T>,
   options: MeasureOperationOptions = {},
 ): Promise<T> => {
-  const {
-    category = "other",
-    detail,
-    logWithoutRequest = false,
-  } = options;
+  const { category = "other", detail, logWithoutRequest = false } = options;
   const context = requestTraceStorage.getStore();
   const depth = context?.depth ?? 0;
 
@@ -278,7 +261,9 @@ export const measureOperation = async <T>(
       attributes: {
         "photrix.category": category,
         ...(detail ? { "photrix.detail": detail } : {}),
-        ...(context ? { "photrix.request_id": context.requestId } : { "photrix.standalone": true }),
+        ...(context
+          ? { "photrix.request_id": context.requestId }
+          : { "photrix.standalone": true }),
       },
     },
     parentContext,
@@ -322,93 +307,6 @@ export const measureOperation = async <T>(
       trace.setSpan(parentContext, span),
       async () => await Promise.resolve(fn()),
     )) as T;
-    recordDuration(nowMs() - startMs);
-    return result;
-  } catch (error) {
-    span.recordException(error instanceof Error ? error : new Error(String(error)));
-    span.setStatus({
-      code: SpanStatusCode.ERROR,
-      message: error instanceof Error ? error.message : String(error),
-    });
-    recordDuration(nowMs() - startMs);
-    throw error;
-  } finally {
-    if (context) {
-      context.spanStack.pop();
-    }
-    span.end();
-  }
-};
-
-export const measureSyncOperation = <T>(
-  name: string,
-  fn: () => T,
-  options: MeasureOperationOptions = {},
-): T => {
-  const {
-    category = "other",
-    detail,
-    logWithoutRequest = false,
-  } = options;
-  const context = requestTraceStorage.getStore();
-  const depth = context?.depth ?? 0;
-
-  if (context) {
-    context.depth += 1;
-  }
-
-  const startMs = nowMs();
-  const parentSpan = context?.spanStack.at(-1);
-  const parentContext = parentSpan
-    ? trace.setSpan(otelContext.active(), parentSpan)
-    : ROOT_CONTEXT;
-  const span = getTracer().startSpan(
-    name,
-    {
-      attributes: {
-        "photrix.category": category,
-        ...(detail ? { "photrix.detail": detail } : {}),
-        ...(context ? { "photrix.request_id": context.requestId } : { "photrix.standalone": true }),
-      },
-    },
-    parentContext,
-  );
-
-  if (context) {
-    context.spanStack.push(span);
-  }
-
-  const recordDuration = (durationMs: number) => {
-    span.setAttribute("photrix.duration_ms", durationMs);
-
-    if (context) {
-      context.depth = Math.max(context.depth - 1, 0);
-      context.spans.push({
-        name,
-        category,
-        detail,
-        depth,
-        durationMs,
-      });
-
-      if (durationMs >= getSpanLogThresholdMs()) {
-        const indent = "  ".repeat(Math.min(depth, 5));
-        const suffix = detail ? ` (${detail})` : "";
-        logger.debug(
-          { requestId: context.requestId, category, durationMs },
-          `${indent}[${category}] ${name}${suffix}`,
-        );
-      }
-    }
-
-    if (logWithoutRequest && durationMs >= getSpanLogThresholdMs()) {
-      const suffix = detail ? ` (${detail})` : "";
-      logger.debug({ category, durationMs }, `[${category}] ${name}${suffix}`);
-    }
-  };
-
-  try {
-    const result = otelContext.with(trace.setSpan(parentContext, span), fn);
     recordDuration(nowMs() - startMs);
     return result;
   } catch (error) {

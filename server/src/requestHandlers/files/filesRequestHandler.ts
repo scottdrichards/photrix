@@ -8,10 +8,13 @@ import path from "path";
 import {
   convertImage,
   convertImageCrop,
+  contentTypeForImageFormat,
   IMAGE_OUTPUT_CONTENT_TYPE,
   ImageConversionError,
   type CropBox,
+  type ImageOutputFormat,
 } from "../../imageProcessing/convertImage.ts";
+import { convertEmbeddedThumbnail } from "../../imageProcessing/embeddedThumbnail.ts";
 import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
 import { markCacheAccess } from "../../common/cacheEviction.ts";
 import {
@@ -58,8 +61,18 @@ export const filesEndpointRequestHandler = async (
     const pathMatch = url.pathname.match(/^\/api\/files\/(.*)/);
     if (!pathMatch) return writeJson(res, 400, { error: "Bad request" });
     const subPath = decodeURIComponent(pathMatch[1]) || "/";
-    if (subPath.endsWith("/")) return queryHandler(url, subPath, database, res, shareFilter);
-    await fileHandler(req, url, subPath, storageRoot, res, database, taskOrchestrator, shareFilter);
+    if (subPath.endsWith("/"))
+      return queryHandler(url, subPath, database, res, shareFilter);
+    await fileHandler(
+      req,
+      url,
+      subPath,
+      storageRoot,
+      res,
+      database,
+      taskOrchestrator,
+      shareFilter,
+    );
   } catch (error) {
     if (!res.headersSent)
       writeJson(res, 500, {
@@ -158,7 +171,11 @@ const streamCachedFile = (
   filePath: string,
   opts: { contentType: string; size: number; cacheControl?: string },
 ) => {
-  const { contentType, size, cacheControl = "public, max-age=31536000" } = opts;
+  const {
+    contentType,
+    size,
+    cacheControl = "public, max-age=31536000, immutable",
+  } = opts;
   // Bump the file's timestamp so the cache eviction policy treats it as
   // recently used (approximate LRU).
   markCacheAccess(filePath);
@@ -214,6 +231,7 @@ type FileHandlingContext = {
   height: StandardHeight;
   res: http.ServerResponse;
   representation: string | null;
+  outputFormat: ImageOutputFormat;
   needsResize: boolean;
   needsFormatChange: boolean;
   isImage: boolean;
@@ -344,7 +362,12 @@ const tryHLSStream = async (
         level: "warn",
         event: "video.hls.encode.queued",
         message: `Queued ${variantHeight}p encode (from start)`,
-        data: { path: subPath, hlsDir, variantHeight, queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot() },
+        data: {
+          path: subPath,
+          hlsDir,
+          variantHeight,
+          queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
+        },
       });
       ctx.taskOrchestrator.addTask(
         {
@@ -364,10 +387,17 @@ const tryHLSStream = async (
               (error) => {
                 // A reaped session/variant kills ffmpeg on purpose; expected for
                 // ephemeral HLS, not a real failure.
-                hlsLog.debug({ err: error, hlsDir, variantHeight }, "HLS encode ended early");
+                hlsLog.debug(
+                  { err: error, hlsDir, variantHeight },
+                  "HLS encode ended early",
+                );
               },
             );
-            return { onComplete: async () => { await promise; } };
+            return {
+              onComplete: async () => {
+                await promise;
+              },
+            };
           },
         },
         "blocking",
@@ -557,17 +587,57 @@ const tryImageCrop = async (ctx: FileHandlingContext) => {
   }
 };
 
+// Fixed size for the progressive-grid micro thumbnail. Matches the largest
+// commonly-available embedded EXIF thumbnail; the grid upgrades to the 320 tile
+// lazily on dwell/hover.
+const MICRO_THUMBNAIL_HEIGHT = 160;
+
+// Instant, I/O-cheap grid tile: serve a JPEG's embedded EXIF thumbnail (a
+// header-only read) instead of decoding the full source. Falls back to a normal
+// 160 full-decode conversion for files without an embedded thumbnail (all HEIC,
+// ~11% of JPEGs), so a `micro` request always resolves to a 160 tile.
+const tryMicroThumbnail = async (ctx: FileHandlingContext) => {
+  const { representation, isImage, normalizedPath, res } = ctx;
+  if (representation !== "micro" || !isImage) return false;
+
+  try {
+    const embeddedPath = await convertEmbeddedThumbnail(
+      normalizedPath,
+      MICRO_THUMBNAIL_HEIGHT,
+    );
+    const cachedPath =
+      embeddedPath ??
+      (await convertImage(normalizedPath, MICRO_THUMBNAIL_HEIGHT, {
+        priority: "userBlocked",
+      }));
+    const cachedStats = await stat(cachedPath);
+    streamCachedFile(res, cachedPath, {
+      contentType: IMAGE_OUTPUT_CONTENT_TYPE,
+      size: cachedStats.size,
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof ImageConversionError) {
+      writeJson(res, 422, { error: "Invalid image", message: error.message });
+      return true;
+    }
+    return false;
+  }
+};
+
 const tryImageVariant = async (ctx: FileHandlingContext) => {
   const { needsFormatChange, needsResize, isImage, normalizedPath, height, res } = ctx;
-  if (!(needsFormatChange || needsResize) || !isImage) return false;
+  const forcesFormat = ctx.outputFormat !== "webp";
+  if (!(needsFormatChange || needsResize || forcesFormat) || !isImage) return false;
 
   try {
     const cachedPath = await convertImage(normalizedPath, height, {
       priority: "userBlocked",
+      format: ctx.outputFormat,
     });
     const cachedStats = await stat(cachedPath);
     streamCachedFile(res, cachedPath, {
-      contentType: IMAGE_OUTPUT_CONTENT_TYPE,
+      contentType: contentTypeForImageFormat(ctx.outputFormat),
       size: cachedStats.size,
     });
     return true;
@@ -601,7 +671,10 @@ const fileHandler = async (
   }
 
   if (shareFilter) {
-    const allowed = await database.fileMatchesFilter(subPath, shareFilter as FilterElement);
+    const allowed = await database.fileMatchesFilter(
+      subPath,
+      shareFilter as FilterElement,
+    );
     if (!allowed) {
       return writeJson(res, 403, { error: "Access denied" });
     }
@@ -634,6 +707,10 @@ const fileHandler = async (
       mimeType === "image/x-canon-cr3");
   const isImage = mimeType.startsWith("image/");
   const isVideo = mimeType.startsWith("video/");
+  // Link-unfurl bots (Teams/Outlook) can't decode WebP and drop the whole
+  // preview card; og:image URLs request `format=jpeg` for a universal encoding.
+  const outputFormat: ImageOutputFormat =
+    url.searchParams.get("format") === "jpeg" ? "jpeg" : "webp";
 
   let crop: CropBox | null;
   try {
@@ -657,6 +734,7 @@ const fileHandler = async (
     height,
     res,
     representation,
+    outputFormat,
     needsResize,
     needsFormatChange,
     isImage,
@@ -676,7 +754,7 @@ const fileHandler = async (
   const hlsHandled = await tryHLSStream({ ...handlingContext, url });
   if (hlsHandled) return;
 
-  const handlers = [tryVideoThumbnail, tryImageCrop, tryImageVariant];
+  const handlers = [tryVideoThumbnail, tryImageCrop, tryMicroThumbnail, tryImageVariant];
   for (const handler of handlers) {
     const handled = await handler(handlingContext);
     if (handled) return;
@@ -699,7 +777,7 @@ const fileHandler = async (
   streamFile(req, res, normalizedPath, {
     contentType: mimeType,
     size: fileStats.size,
-    cacheControl: "public, max-age=31536000",
+    cacheControl: "public, max-age=31536000, immutable",
     acceptRanges: isVideo,
   });
 };

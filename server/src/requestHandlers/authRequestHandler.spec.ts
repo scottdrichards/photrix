@@ -21,7 +21,11 @@ const createJsonResponse = () => {
       return res as unknown as http.ServerResponse;
     }),
   } as unknown as http.ServerResponse;
-  return { res, getStatus: () => status, getJson: () => JSON.parse(body) as { token?: string } };
+  return {
+    res,
+    getStatus: () => status,
+    getJson: () => JSON.parse(body) as { token?: string },
+  };
 };
 
 const makeReq = (token: string, body: unknown) => {
@@ -71,6 +75,7 @@ describe("authShareTokenHandler", () => {
       },
       semanticQuery: "sunset beach",
       searchSources: ["image"],
+      description: "sunset beach",
     });
 
     authService.revokeToken(authToken);

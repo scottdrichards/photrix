@@ -286,7 +286,30 @@ const toExifDate = (value: unknown): Date | undefined => {
   return undefined;
 };
 
+// Human-authored captions arrive in several shapes: a plain string (EXIF
+// ImageDescription / IPTC Caption-Abstract), or an XMP language-alternative that
+// exifr surfaces as `{ value, lang }` or a bare string. Coerce to a trimmed
+// string; drop empty/whitespace-only values so blank captions never render.
+const toDescriptionString = (value: unknown): string | undefined => {
+  const raw =
+    typeof value === "object" && value !== null && "value" in value
+      ? (value as { value?: unknown }).value
+      : value;
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
 const exifFieldMapping = {
+  description: {
+    exifField: [
+      "ImageDescription",
+      "Caption-Abstract",
+      "dc:description",
+      "description",
+    ],
+    conversionFn: toDescriptionString,
+  },
   dateTaken: [
     { exifField: "DateTimeOriginal", conversionFn: toExifDate },
     {

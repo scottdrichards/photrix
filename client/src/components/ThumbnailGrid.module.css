@@ -15,6 +15,16 @@
   --thumbnail-size: clamp(150px, 20vw, 260px);
 }
 
+/* On phones, shrink the base tile size so the justified row packs 2-3 tiles
+   across (exact count still flexes with each image's aspect ratio) instead of
+   the previous forced one-per-row layout. */
+@media (max-width: 640px) {
+  .grid {
+    gap: var(--space-xs);
+    --thumbnail-size: clamp(104px, 30vw, 150px);
+  }
+}
+
 .sentinel {
   flex-basis: 100%;
   display: flex;

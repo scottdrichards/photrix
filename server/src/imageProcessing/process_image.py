@@ -166,91 +166,140 @@ def _draft_target(outputs):
     return int(math.ceil(need)) if need else None
 
 
-def process_image(input_path, outputs):
+def _save_atomic(img, output_path):
+    """Encode to a sibling temp file then rename into place, so a kill
+    mid-write (request abort, worker eviction) can never leave a truncated
+    file at the final path — a partial file there would be served as a valid
+    cache hit forever after."""
+    tmp_path = output_path + '.tmp'
+    # Pick the encoder from the output extension. WebP is the default (smaller
+    # than JPEG at matching quality); JPEG is kept as a fallback for any caller
+    # still asking for a .jpg path.
+    out_ext = os.path.splitext(output_path)[1].lower()
+    fmt = ('WEBP', {'quality': 80, 'method': 4}) if out_ext == '.webp' else ('JPEG', {'quality': 85})
     try:
-        if not os.path.exists(input_path):
-            print(f"Error: Input file not found: {input_path}", file=sys.stderr)
-            sys.exit(1)
+        img.save(tmp_path, fmt[0], **fmt[1])
+        os.replace(tmp_path, output_path)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
-        img = open_image(input_path)
-        # Hint the (JPEG) decoder to emit only as many pixels as the outputs
-        # need, before any pixels are loaded. No-op for formats/decoders that
-        # don't support draft mode (RAW/HEIC are already fully decoded here).
-        draft_target = _draft_target(outputs)
-        if draft_target is not None:
-            img.draft('RGB', (draft_target, draft_target))
-        with img:
-            # Apply EXIF rotation (no-op for HEIC files decoded via pyav,
-            # which already have orientation applied).
-            img = ImageOps.exif_transpose(img)
 
-            # Convert to RGB (remove alpha channel if present, needed for JPEG)
-            if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
-                img = img.convert('RGB')
+def process_image(input_path, outputs, quiet=False):
+    """Convert one source image into every requested output. Raises on error;
+    the CLI and worker entry points translate that into their own protocols."""
+    if not os.path.exists(input_path):
+        raise RuntimeError(f"Input file not found: {input_path}")
 
-            original_width, original_height = img.size
+    img = open_image(input_path)
+    # Hint the (JPEG) decoder to emit only as many pixels as the outputs
+    # need, before any pixels are loaded. No-op for formats/decoders that
+    # don't support draft mode (RAW/HEIC are already fully decoded here).
+    draft_target = _draft_target(outputs)
+    if draft_target is not None:
+        img.draft('RGB', (draft_target, draft_target))
+    with img:
+        # Apply EXIF rotation (no-op for HEIC files decoded via pyav,
+        # which already have orientation applied).
+        img = ImageOps.exif_transpose(img)
 
-            for output in outputs:
-                output_path = output['path']
-                max_dimension = output.get('height') # Using 'height' as max dimension for consistency with TS
-                # Optional crop as normalized top-left fractions [x, y, w, h] of the
-                # EXIF-oriented image. Applied before resize so the max_dimension
-                # governs the cropped region, yielding a sharper, smaller output.
-                crop = output.get('crop')
+        # Convert to RGB (remove alpha channel if present, needed for JPEG)
+        if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+            img = img.convert('RGB')
 
-                current_img = img
-                if crop:
-                    cx, cy, cw, ch = crop
-                    left = int(round(cx * original_width))
-                    top = int(round(cy * original_height))
-                    right = int(round((cx + cw) * original_width))
-                    bottom = int(round((cy + ch) * original_height))
-                    # Clamp to image bounds and guarantee at least a 1px box.
-                    left = max(0, min(left, original_width - 1))
-                    top = max(0, min(top, original_height - 1))
-                    right = max(left + 1, min(right, original_width))
-                    bottom = max(top + 1, min(bottom, original_height))
-                    current_img = img.crop((left, top, right, bottom))
+        original_width, original_height = img.size
 
-                crop_width, crop_height = current_img.size
+        for output in outputs:
+            output_path = output['path']
+            max_dimension = output.get('height') # Using 'height' as max dimension for consistency with TS
+            # Optional crop as normalized top-left fractions [x, y, w, h] of the
+            # EXIF-oriented image. Applied before resize so the max_dimension
+            # governs the cropped region, yielding a sharper, smaller output.
+            crop = output.get('crop')
 
-                # Resize if max_dimension is provided and smaller than the (possibly
-                # cropped) source. We only ever downscale, never upscale.
-                if max_dimension:
-                    if crop_width > max_dimension or crop_height > max_dimension:
-                        ratio = min(max_dimension / crop_width, max_dimension / crop_height)
-                        new_size = (int(crop_width * ratio), int(crop_height * ratio))
-                        current_img = current_img.resize(new_size, Image.Resampling.LANCZOS)
+            current_img = img
+            if crop:
+                cx, cy, cw, ch = crop
+                left = int(round(cx * original_width))
+                top = int(round(cy * original_height))
+                right = int(round((cx + cw) * original_width))
+                bottom = int(round((cy + ch) * original_height))
+                # Clamp to image bounds and guarantee at least a 1px box.
+                left = max(0, min(left, original_width - 1))
+                top = max(0, min(top, original_height - 1))
+                right = max(left + 1, min(right, original_width))
+                bottom = max(top + 1, min(bottom, original_height))
+                current_img = img.crop((left, top, right, bottom))
 
-                # Pick the encoder from the output extension. WebP is the
-                # default (smaller than JPEG at matching quality); JPEG is kept
-                # as a fallback for any caller still asking for a .jpg path.
-                out_ext = os.path.splitext(output_path)[1].lower()
-                if out_ext == ".webp":
-                    current_img.save(output_path, "WEBP", quality=80, method=4)
-                else:
-                    current_img.save(output_path, "JPEG", quality=85)
+            crop_width, crop_height = current_img.size
+
+            # Resize if max_dimension is provided and smaller than the (possibly
+            # cropped) source. We only ever downscale, never upscale.
+            if max_dimension:
+                if crop_width > max_dimension or crop_height > max_dimension:
+                    ratio = min(max_dimension / crop_width, max_dimension / crop_height)
+                    new_size = (int(crop_width * ratio), int(crop_height * ratio))
+                    current_img = current_img.resize(new_size, Image.Resampling.LANCZOS)
+
+            _save_atomic(current_img, output_path)
+            if not quiet:
                 print(f"Successfully processed: {output_path}")
 
-    except Exception as e:
-        print(f"Error processing image: {e}", file=sys.stderr)
-        sys.exit(1)
+
+def run_worker():
+    """Persistent worker mode: newline-delimited JSON requests on stdin,
+    responses on stdout. Keeping the process (and its PIL/pillow_heif imports)
+    alive across requests removes the ~0.5-1s interpreter startup that a
+    spawn-per-image design pays for every single preview."""
+    print(json.dumps({'type': 'ready'}), flush=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError as e:
+            print(json.dumps({'id': None, 'error': f'invalid request JSON: {e}'}), flush=True)
+            continue
+        req_id = request.get('id')
+        try:
+            process_image(request['inputPath'], request['outputs'], quiet=True)
+            print(json.dumps({'id': req_id, 'ok': True}), flush=True)
+        except Exception as e:
+            print(json.dumps({'id': req_id, 'error': str(e)}), flush=True)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert and resize images.")
-    parser.add_argument("input_path", help="Path to the input image")
+    parser.add_argument("input_path", nargs='?', help="Path to the input image")
     parser.add_argument("--outputs", help="JSON string of outputs: [{'path': '...', 'height': 320}, ...]")
+    parser.add_argument("--worker", action="store_true",
+                        help="Persistent mode: serve JSON-line requests from stdin until EOF")
     # Keep backward compatibility for single file mode if needed, or just migrate everything
     parser.add_argument("output_path", nargs='?', help="Legacy: Path to save the output image")
     parser.add_argument("--max_dimension", type=int, help="Legacy: Maximum width or height")
 
     args = parser.parse_args()
 
-    if args.outputs:
-        outputs = json.loads(args.outputs)
-        process_image(args.input_path, outputs)
-    elif args.output_path:
-        process_image(args.input_path, [{'path': args.output_path, 'height': args.max_dimension}])
-    else:
-        print("Error: Must provide either --outputs or output_path", file=sys.stderr)
+    if args.worker:
+        run_worker()
+        sys.exit(0)
+
+    if not args.input_path:
+        print("Error: Must provide an input path (or --worker)", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        if args.outputs:
+            process_image(args.input_path, json.loads(args.outputs))
+        elif args.output_path:
+            process_image(args.input_path, [{'path': args.output_path, 'height': args.max_dimension}])
+        else:
+            print("Error: Must provide either --outputs or output_path", file=sys.stderr)
+            sys.exit(1)
+    except Exception as e:
+        print(f"Error processing image: {e}", file=sys.stderr)
         sys.exit(1)

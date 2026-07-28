@@ -2,6 +2,7 @@ import type * as http from "http";
 import path from "path";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "../../indexDatabase/indexDatabase.type.ts";
+import { parseSort } from "../../../../shared/filter-contract/src/index.ts";
 import { getFastMediaDimensions } from "../../fileHandling/fileUtils.ts";
 import { stripLeadingSlash } from "../../common/stripLeadingSlash.ts";
 import { writeJson } from "../../utils.ts";
@@ -69,9 +70,20 @@ export const queryHandler = async (
   const queryOptions = {
     filter,
     metadata: metadata as QueryOptions["metadata"],
-    ...(pageSize && { pageSize: parseInt(pageSize, 10) }),
+    // A count-only request discards `items`, so cap the page to 0 rows: the count
+    // query runs regardless, but this avoids materializing (and serializing) a
+    // full page of records only to throw them away.
+    ...(countOnly
+      ? { pageSize: 0 }
+      : pageSize
+        ? { pageSize: parseInt(pageSize, 10) }
+        : {}),
     ...(page && { page: parseInt(page, 10) }),
     ...(expandToFolder && { expandToFolder: true }),
+    ...(() => {
+      const sort = parseSort(url.searchParams.get("sort"));
+      return sort ? { sort } : {};
+    })(),
   };
 
   if (aggregate === "dateRange") {
@@ -101,8 +113,21 @@ export const queryHandler = async (
   }
 
   if (aggregate === "faceCentroidsPCA") {
-    const result = await database.getFaceClustersPCA(url.searchParams.get("clusterId") ?? undefined);
+    const result = await database.getFaceClustersPCA(
+      url.searchParams.get("clusterId") ?? undefined,
+    );
     writeJson(res, 200, result);
+    return;
+  }
+
+  if (aggregate === "facesForFile") {
+    const filePath = url.searchParams.get("path");
+    if (!filePath) {
+      writeJson(res, 400, { error: "Missing path parameter" });
+      return;
+    }
+    const faces = await database.getPeopleFacesForFile(stripLeadingSlash(filePath));
+    writeJson(res, 200, { faces });
     return;
   }
 
@@ -152,7 +177,10 @@ export const queryHandler = async (
       const reads = Promise.allSettled(
         itemsMissingDims.map(async (item) => {
           const relativePath = item.folder + item.fileName;
-          const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
+          const fullPath = path.join(
+            database.storagePath,
+            stripLeadingSlash(relativePath),
+          );
           const dims = await getFastMediaDimensions(fullPath);
           if (dims.dimensionWidth !== undefined) {
             (item as Record<string, unknown>).dimensionWidth = dims.dimensionWidth;

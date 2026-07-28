@@ -16,6 +16,13 @@
   background-color: rgba(0, 0, 0, 0.85);
 }
 
+.viewerLayout {
+  --viewer-overlay-fg: rgba(255, 255, 255, 0.96);
+  --viewer-overlay-bg: rgba(12, 14, 18, 0.5);
+  --viewer-overlay-bg-hover: rgba(12, 14, 18, 0.72);
+  --viewer-overlay-border: rgba(255, 255, 255, 0.18);
+}
+
 .container {
   display: flex;
   flex: 1;
@@ -25,6 +32,9 @@
   z-index: 1;
   min-width: 0;
   min-height: 0;
+  /* Keep the media clipped to the viewing area so it never spills over the
+     info panel when that panel docks to the bottom on mobile. */
+  overflow: hidden;
 }
 
 .viewerLayout {
@@ -44,7 +54,9 @@
   transform-origin: var(--zoom-origin-x, 50%) var(--zoom-origin-y, 50%);
   transform: scale(var(--zoom-scale, 1));
   cursor: var(--zoom-cursor, zoom-in);
-  transition: transform 180ms ease-out;
+  transition:
+    transform 180ms ease-out,
+    opacity 220ms ease-out;
   will-change: transform;
 }
 
@@ -55,7 +67,7 @@
 .videoWrapper {
   width: min(100%, 90vw, calc(90vh * var(--video-ar, 1.7778)));
   max-width: min(100%, 90vw);
-  max-height: 90vh;
+  max-height: 100%;
   height: auto;
   display: flex;
   align-items: center;
@@ -72,17 +84,43 @@
 .photoFrame {
   position: relative;
   line-height: 0;
-  display: inline-block;
-  width: fit-content;
-  max-width: min(100%, 90vw);
-  max-height: 90vh;
+  /* Fit an aspect-ratio box within the 90vw × 90vh viewport window. Sizing the
+     frame from --photo-ar (metadata, then the loaded image) lets the thumbnail
+     placeholder occupy the exact box the full image will fill. */
+  width: min(90vw, calc(90vh * var(--photo-ar, 1)));
+  aspect-ratio: var(--photo-ar, 1);
+}
+
+.thumbnailClip {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  transition: opacity 220ms ease-out;
+}
+
+.thumbnailUnderlay {
+  position: absolute;
+  inset: 0;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
 }
 
 .photoMedia {
-  max-width: min(100%, 90vw);
-  max-height: 90vh;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   display: block;
+}
+
+.cropOverlayContainer {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
 }
 
 .faceBackdropLayer {
@@ -139,6 +177,45 @@
   stroke: rgba(255, 201, 79, 0.95);
 }
 
+/* Clickable person-name chips anchored just above each detected face. Sits
+   above the frame layer; only the chips themselves capture pointer events so
+   the rest of the photo stays interactive (zoom, swipe). */
+.faceLabelLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.faceLabel {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 4px));
+  max-width: 45%;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 201, 79, 0.9);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  pointer-events: auto;
+  backdrop-filter: blur(2px);
+  transition:
+    background 120ms ease-out,
+    border-color 120ms ease-out;
+}
+
+.faceLabel:hover,
+.faceLabel:focus-visible {
+  background: rgba(20, 20, 20, 0.85);
+  border-color: rgba(255, 201, 79, 1);
+}
+
 .topRightActions {
   position: absolute;
   top: var(--space-m);
@@ -151,20 +228,41 @@
 .closeButton,
 .infoButton,
 .faceButton {
-  color: var(--fg-inv);
-  background: transparent;
-  border: none;
+  color: var(--viewer-overlay-fg);
+  background: var(--viewer-overlay-bg);
+  border: 1px solid var(--viewer-overlay-border);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
   cursor: pointer;
   padding: 8px;
   border-radius: var(--radius-md);
   display: flex;
   align-items: center;
+  justify-content: center;
 }
 
 .closeButton:hover,
 .infoButton:hover,
 .faceButton:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+  background-color: var(--viewer-overlay-bg-hover);
+}
+
+.infoButtonActive {
+  color: var(--viewer-overlay-fg);
+  background: rgba(15, 108, 189, 0.5);
+  border: 1px solid rgba(100, 180, 255, 0.45);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.infoButtonActive:hover {
+  background-color: rgba(15, 108, 189, 0.7);
 }
 
 .faceButton:disabled {
@@ -173,7 +271,7 @@
 }
 
 .qualitySelect {
-  color: var(--fg-inv);
+  color: var(--viewer-overlay-fg);
   background: rgba(0, 0, 0, 0.45);
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: var(--radius-md);
@@ -194,19 +292,92 @@
   position: absolute;
   top: var(--space-m);
   left: var(--space-m);
-  color: var(--fg-inv);
+  color: var(--viewer-overlay-fg);
   z-index: 100;
-  background: transparent;
-  border: none;
+  background: var(--viewer-overlay-bg);
+  border: 1px solid var(--viewer-overlay-border);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
   cursor: pointer;
   padding: 8px;
   border-radius: var(--radius-md);
   display: flex;
   align-items: center;
+  justify-content: center;
 }
 
 .livePhotoButton:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+  background-color: var(--viewer-overlay-bg-hover);
+}
+
+.navButton {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 90;
+  color: var(--viewer-overlay-fg);
+  background: var(--viewer-overlay-bg);
+  border: 1px solid var(--viewer-overlay-border);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 140ms ease-out, background-color 140ms ease-out;
+}
+
+.navButton:hover {
+  opacity: 1;
+  background-color: var(--viewer-overlay-bg-hover);
+}
+
+.navPrev {
+  left: var(--space-m);
+}
+
+.navNext {
+  right: var(--space-m);
+}
+
+.taggingBar {
+  position: absolute;
+  bottom: var(--space-m);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 95;
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+  max-width: min(92vw, 720px);
+  padding: 8px 12px;
+  color: var(--viewer-overlay-fg);
+  background: var(--viewer-overlay-bg);
+  border: 1px solid var(--viewer-overlay-border);
+  border-radius: 999px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+}
+
+.taggingDivider {
+  width: 1px;
+  align-self: stretch;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+@media (max-width: 900px) {
+  .navButton {
+    padding: 2px;
+  }
+
+  .taggingBar {
+    flex-wrap: wrap;
+    justify-content: center;
+    border-radius: var(--radius-md);
+  }
 }
 
 .videoBadge {
@@ -227,7 +398,7 @@
   min-width: 260px;
   max-width: 45vw;
   height: 100%;
-  color: var(--fg-inv);
+  color: var(--viewer-overlay-fg);
   background: linear-gradient(180deg, rgba(18, 20, 24, 0.94), rgba(10, 11, 14, 0.96));
   border-left: 1px solid rgba(255, 255, 255, 0.15);
   padding: calc(var(--space-m) + 40px) var(--space-m) var(--space-m);
@@ -266,6 +437,13 @@
 .infoRow dd {
   margin: 4px 0 0;
   color: rgba(255, 255, 255, 0.95);
+  word-break: break-word;
+}
+
+.infoDescription {
+  margin: var(--space-s) 0 0;
+  color: rgba(255, 255, 255, 0.95);
+  line-height: 1.4;
   word-break: break-word;
 }
 

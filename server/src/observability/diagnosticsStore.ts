@@ -61,20 +61,22 @@ const buildEvent = (
     level: input.level,
     event: input.event,
     ...(input.message ? { message: input.message } : {}),
-    ...(input.requestId ?? requestFields.requestId
+    ...((input.requestId ?? requestFields.requestId)
       ? { requestId: input.requestId ?? requestFields.requestId }
       : {}),
-    ...(input.clientSessionId ?? requestFields.clientSessionId
+    ...((input.clientSessionId ?? requestFields.clientSessionId)
       ? { clientSessionId: input.clientSessionId ?? requestFields.clientSessionId }
       : {}),
-    ...(input.clientOperationId ?? requestFields.clientOperationId
+    ...((input.clientOperationId ?? requestFields.clientOperationId)
       ? { clientOperationId: input.clientOperationId ?? requestFields.clientOperationId }
       : {}),
-    ...(input.clientRequestId ?? requestFields.clientRequestId
+    ...((input.clientRequestId ?? requestFields.clientRequestId)
       ? { clientRequestId: input.clientRequestId ?? requestFields.clientRequestId }
       : {}),
-    ...(input.method ?? requestFields.method ? { method: input.method ?? requestFields.method } : {}),
-    ...(input.url ?? requestFields.url ? { url: input.url ?? requestFields.url } : {}),
+    ...((input.method ?? requestFields.method)
+      ? { method: input.method ?? requestFields.method }
+      : {}),
+    ...((input.url ?? requestFields.url) ? { url: input.url ?? requestFields.url } : {}),
     ...(input.statusCode != null ? { statusCode: input.statusCode } : {}),
     ...(input.data ? { data: input.data } : {}),
   };
@@ -86,11 +88,15 @@ const pushEvent = (event: DiagnosticsEvent) => {
   return event;
 };
 
-export const recordServerDiagnosticEvent = (input: DiagnosticsEventInput): DiagnosticsEvent => {
+export const recordServerDiagnosticEvent = (
+  input: DiagnosticsEventInput,
+): DiagnosticsEvent => {
   return pushEvent(buildEvent("server", input));
 };
 
-export const recordClientDiagnosticEvent = (input: DiagnosticsEventInput): DiagnosticsEvent => {
+export const recordClientDiagnosticEvent = (
+  input: DiagnosticsEventInput,
+): DiagnosticsEvent => {
   const event = pushEvent(buildEvent("client", input));
   return event;
 };

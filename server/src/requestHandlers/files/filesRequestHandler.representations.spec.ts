@@ -88,6 +88,8 @@ describe("filesRequestHandler representation paths", () => {
       convertImage,
       convertImageCrop,
       convertImageToMultipleSizes,
+      contentTypeForImageFormat: (format: string) =>
+        format === "jpeg" ? "image/jpeg" : "image/webp",
       IMAGE_OUTPUT_CONTENT_TYPE: "image/webp",
       IMAGE_OUTPUT_EXTENSION: "webp",
       ImageConversionError: class ImageConversionError extends Error {},
@@ -117,6 +119,60 @@ describe("filesRequestHandler representation paths", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers?.["Content-Type"]).toBe("image/webp");
     expect(Buffer.concat(chunks).toString()).toBe("webp-content");
+  });
+
+  it("serves JPEG for format=jpeg (link-unfurl bots can't decode WebP)", async () => {
+    const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-jpeg-"));
+    const sourceFile = path.join(storageRoot, "photo.heic");
+    const cachedFile = path.join(storageRoot, "cache", "photo.630.jpg");
+
+    mkdirSync(path.dirname(cachedFile), { recursive: true });
+    writeFileSync(sourceFile, "source");
+    writeFileSync(cachedFile, "jpeg-content");
+
+    const convertImage = jest.fn(async () => cachedFile);
+    const convertImageCrop = jest.fn(async () => cachedFile);
+    const convertImageToMultipleSizes = jest.fn(async () => undefined);
+
+    jest.unstable_mockModule("../../imageProcessing/convertImage.ts", () => ({
+      convertImage,
+      convertImageCrop,
+      convertImageToMultipleSizes,
+      contentTypeForImageFormat: (format: string) =>
+        format === "jpeg" ? "image/jpeg" : "image/webp",
+      IMAGE_OUTPUT_CONTENT_TYPE: "image/webp",
+      IMAGE_OUTPUT_EXTENSION: "webp",
+      ImageConversionError: class ImageConversionError extends Error {},
+    }));
+
+    const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const res = createStreamingResponse();
+    const chunks: Buffer[] = [];
+    res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/photo.heic?representation=webSafe&height=630&format=jpeg",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      {
+        database: {} as IndexDatabase,
+        storageRoot,
+        taskOrchestrator: baseOrchestrator,
+      },
+    );
+
+    await once(res, "end");
+
+    expect(convertImage).toHaveBeenCalledWith(
+      expect.any(String),
+      640, // parseToStandardHeight snaps 630 up to the nearest standard height
+      expect.objectContaining({ format: "jpeg" }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["Content-Type"]).toBe("image/jpeg");
+    expect(Buffer.concat(chunks).toString()).toBe("jpeg-content");
   });
 
   it("serves video thumbnail for preview representation", async () => {
@@ -527,5 +583,4 @@ describe("filesRequestHandler representation paths", () => {
     expect(cacheControl).toBe("no-store");
     expect(getBody()).toContain("#EXTM3U");
   });
-
 });

@@ -22,7 +22,13 @@ import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { ViewToggle } from "./ViewToggle";
 import { FaceClusterViz } from "./FaceClusterViz";
+import { isSharedView } from "../hooks/useShareFilter";
 import css from "./PeopleView.module.css";
+
+// Share-link viewers are read-only: they may browse people but never rename,
+// merge, or separate clusters (the server rejects those writes too). Computed
+// from the URL token, which is fixed for the page's lifetime.
+const READ_ONLY = isSharedView();
 
 type SelectedFaceGroup = {
   id: string;
@@ -69,6 +75,17 @@ type InlineNameEditorProps = {
 };
 
 const InlineNameEditor = ({ name, onSave }: InlineNameEditorProps) => {
+  // In a shared view names are display-only; render as static text with no
+  // affordance to edit. Unnamed clusters show nothing rather than "Add name…".
+  // Returns before any hooks so hook order stays stable (READ_ONLY is constant).
+  if (READ_ONLY) {
+    return name ? <span className={css.clusterName}>{name}</span> : null;
+  }
+
+  return <InlineNameEditorControl name={name} onSave={onSave} />;
+};
+
+const InlineNameEditorControl = ({ name, onSave }: InlineNameEditorProps) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -181,7 +198,8 @@ const PersonDetail = ({
         <InlineNameEditor name={cluster.name} onSave={onRename} />
         <span className={css.personDetailCount}>{cluster.count} faces</span>
       </div>
-      {(cluster.centroids.length > 0 || cluster.mergeSuggestions.length > 0) && (
+      {(cluster.centroids.length > 0 ||
+        (!READ_ONLY && cluster.mergeSuggestions.length > 0)) && (
         <div className={css.personDetailSections}>
           {cluster.centroids.length > 0 && (
             <section className={css.detailSection}>
@@ -212,7 +230,7 @@ const PersonDetail = ({
                         >
                           View
                         </button>
-                        {centroid.id !== cluster.id && (
+                        {!READ_ONLY && centroid.id !== cluster.id && (
                           <button
                             type="button"
                             className={css.relatedPersonMergeButton}
@@ -231,7 +249,7 @@ const PersonDetail = ({
             </section>
           )}
 
-          {cluster.mergeSuggestions.length > 0 && (
+          {!READ_ONLY && cluster.mergeSuggestions.length > 0 && (
             <section className={css.detailSection}>
               <div className={css.detailSectionHeader}>
                 <h3>Suggested matches</h3>
@@ -418,6 +436,10 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
   const [visibleCount, setVisibleCount] = useState(PEOPLE_PAGE_SIZE);
   const vizRequestRef = useRef<AbortController | null>(null);
   const selectedFaceGroupRequestRef = useRef<AbortController | null>(null);
+  // Latest open-cluster id, read by the filter-change effect without making it a
+  // dependency (so the effect fires only when the filter itself changes).
+  const openClusterIdRef = useRef<string | null>(null);
+  openClusterIdRef.current = personDetail?.id ?? null;
 
   useEffect(() => {
     const abortOnDisposed = "disposed";
@@ -454,6 +476,41 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
       if (refreshTimer !== undefined) clearTimeout(refreshTimer);
       abortController.abort(abortOnDisposed);
     };
+  }, [filter]);
+
+  // When the filter changes while a person detail is open, the People grid
+  // re-fetches (effect above) but the open detail would keep showing faces and
+  // counts from the previous filter. Re-fetch the detail so everything on screen
+  // reflects the same filter; if the person has no matching faces, fall back to
+  // the grid. Skip the first run: the loader above already fetched with the
+  // current filter, and a freshly opened detail is fetched with it too.
+  const skipFilterReloadRef = useRef(true);
+  useEffect(() => {
+    if (skipFilterReloadRef.current) {
+      skipFilterReloadRef.current = false;
+      return;
+    }
+    const openClusterId = openClusterIdRef.current;
+    if (!openClusterId) return;
+    const abortController = new AbortController();
+    loadClusterDetail(openClusterId, abortController.signal, { showSpinner: false })
+      .then((cluster) => {
+        if (abortController.signal.aborted) return;
+        if (!cluster) {
+          // Person has no faces under the new filter — return to the grid.
+          handleBack();
+          return;
+        }
+        // The selected match group's faces are from the previous filter; reset
+        // to the (filtered) full face list rather than show stale ones.
+        clearSelectedFaceGroup();
+      })
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
+        console.error("Failed to reload cluster detail after filter change:", err);
+      });
+    return () => abortController.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
   useEffect(() => () => {
@@ -874,7 +931,7 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
       <div className={css.summaryRow}>
         <h3>People</h3>
         <div className={css.summaryActions}>
-          {selected.size >= 2 && (
+          {!READ_ONLY && selected.size >= 2 && (
             <button
               type="button"
               className={css.mergeButton}
@@ -926,7 +983,7 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
         <h3>No clustered faces for the current filter.</h3>
       ) : null}
 
-      {selected.size === 0 && (
+      {!READ_ONLY && selected.size === 0 && (
         <p className={css.selectHint}>Long-press or right-click a person to select for merging</p>
       )}
 
@@ -980,6 +1037,9 @@ const ClusterCard = ({
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const handlePointerDown = () => {
+    // Selection exists only to pick people for merging, which read-only share
+    // views can't do — so skip it entirely.
+    if (READ_ONLY) return;
     longPressTimer.current = setTimeout(() => {
       onLongPress();
     }, 500);
@@ -990,6 +1050,7 @@ const ClusterCard = ({
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
+    if (READ_ONLY) return;
     e.preventDefault();
     onToggleSelect();
   };

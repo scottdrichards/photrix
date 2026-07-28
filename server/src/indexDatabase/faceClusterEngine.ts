@@ -21,6 +21,46 @@ export const FACE_CLUSTER_SIMILARITY_THRESHOLD = 0.62;
 export const UNCLUSTERABLE_CLUSTER_ID = 0;
 
 /**
+ * Detections below this InsightFace det_score are treated as "probably not a
+ * face" and kept out of clustering entirely. Left in, they collapse into hub
+ * "garbage" clusters — the low-confidence junk has generic, mutually-similar
+ * embeddings, so it forms one magnet cluster (measured: a hub's median
+ * confidence ~0.57 vs ~0.87 for real people). Gating on the detector's own
+ * is-this-a-face score dissolves those hubs library-wide without touching the
+ * cluster-similarity threshold.
+ */
+export const MIN_FACE_CONFIDENCE_FOR_CLUSTERING = 0.7;
+
+/**
+ * Sentinel clusterId for faces excluded by the confidence gate. Kept distinct
+ * from UNCLUSTERABLE (corrupt embedding) so the exclusion is reversible: lower
+ * the floor, reset these rows to NULL, and the backfill re-clusters them. Like
+ * the other sentinels it's <= 0, so People (`clusterId > 0`) and the backfill
+ * (`clusterId IS NULL`) both skip it.
+ */
+export const LOW_CONFIDENCE_CLUSTER_ID = -1;
+
+/**
+ * A cluster's stored per-face `clusterSimilarity` is written once, against the
+ * centroid as it was when each face joined — the seed is stored as 1.0 and
+ * early joiners keep inflated scores as the running mean drifts. Left alone,
+ * the People tab's `MAX(clusterSimilarity)` representative sticks to the seed
+ * even after thousands of faces have pulled the centroid onto a different face.
+ * The background refresh rescoring members against the current centroid runs
+ * for a cluster once its weight has grown past whichever of these is larger:
+ * an absolute floor (so a small cluster still eventually corrects) or a
+ * fraction of the weight at its last refresh (so big clusters refresh on
+ * proportional churn, not on every handful of new faces).
+ */
+export const SIMILARITY_REFRESH_MIN_DELTA = 8;
+export const SIMILARITY_REFRESH_GROWTH_FRACTION = 0.25;
+
+/** Clusters rescored per refresh pass, and read/write chunk sizes within one. */
+const MAX_CLUSTERS_PER_REFRESH_PASS = 8;
+const REFRESH_READ_CHUNK = 512;
+const REFRESH_WRITE_CHUNK = 512;
+
+/**
  * Incremental greedy face clustering with persisted state.
  *
  * Each cluster keeps a running (unnormalized) mean of its member faces' unit
@@ -53,6 +93,8 @@ export class FaceClusterEngine {
     /** Cached |mean|, so similarity is dot(v, mean) / magnitude. */
     magnitude: number;
     weight: number;
+    /** `weight` when member similarities were last rescored (see refresh). */
+    refreshedWeight: number;
   }> = [];
   private clustersById = new Map<number, FaceClusterEngine["clusters"][number]>();
   private nextClusterId = 1;
@@ -87,7 +129,10 @@ export class FaceClusterEngine {
       centroid: Buffer;
       weight: number;
       threshold: number;
-    }>("SELECT id, centroid, weight, threshold FROM faceClusters");
+      similarityRefreshedWeight: number | null;
+    }>(
+      "SELECT id, centroid, weight, threshold, similarityRefreshedWeight FROM faceClusters",
+    );
 
     const staleThreshold = rows.some(
       (row) => row.threshold !== FACE_CLUSTER_SIMILARITY_THRESHOLD,
@@ -114,6 +159,7 @@ export class FaceClusterEngine {
         mean,
         magnitude: magnitudeOf(mean),
         weight: row.weight,
+        refreshedWeight: row.similarityRefreshedWeight ?? 0,
       };
       this.clusters.push(cluster);
       this.clustersById.set(row.id, cluster);
@@ -129,7 +175,11 @@ export class FaceClusterEngine {
    * excluded from the backfill query by its LENGTH(embedding) > 0 filter).
    */
   assignFaces(
-    faces: Array<{ id: number; embedding: Buffer | Uint8Array }>,
+    faces: Array<{
+      id: number;
+      embedding: Buffer | Uint8Array;
+      confidence: number | null;
+    }>,
   ): Promise<void> {
     if (!faces.length) return Promise.resolve();
     return this.runExclusive(async () => {
@@ -145,6 +195,20 @@ export class FaceClusterEngine {
         // milliseconds; yield so a big batch doesn't monopolize the event loop.
         if ((processed++ & 0x7) === 0) {
           await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+
+        // Keep low-confidence detections (mostly non-faces) out of clustering so
+        // they can't seed or feed a hub cluster; the sentinel excludes them from
+        // both the People tab and the backfill's pending scan.
+        if (
+          face.confidence != null &&
+          face.confidence < MIN_FACE_CONFIDENCE_FOR_CLUSTERING
+        ) {
+          faceUpdates.push({
+            sql: "UPDATE faces SET clusterId = ?, clusterSimilarity = NULL WHERE id = ?",
+            params: [LOW_CONFIDENCE_CLUSTER_ID, face.id],
+          });
+          continue;
         }
 
         const unit = toUnitFloat32(face.embedding);
@@ -185,6 +249,7 @@ export class FaceClusterEngine {
             mean: unit,
             magnitude: 1,
             weight: 1,
+            refreshedWeight: 0,
           };
           similarity = 1;
           this.clusters.push(match);
@@ -277,6 +342,154 @@ export class FaceClusterEngine {
       );
       log.info({ pruned: empty.length }, "Pruned empty face clusters");
     });
+  }
+
+  /**
+   * Rescores the stored `clusterSimilarity` of member faces against the current
+   * centroid for clusters that have drifted since their last refresh, so the
+   * People tab's representative (highest similarity) tracks the real centroid
+   * instead of the stale seed. Rescores at most `maxClusters` of the most-grown
+   * clusters per call and returns how many it touched; the background task
+   * loops until this returns 0. Runs on the mutation chain so the centroid it
+   * scores against can't shift mid-pass.
+   */
+  refreshStaleClusterSimilarities(
+    maxClusters = MAX_CLUSTERS_PER_REFRESH_PASS,
+  ): Promise<number> {
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+
+      const stale = this.clusters
+        .filter((cluster) => {
+          const grown = cluster.weight - cluster.refreshedWeight;
+          return (
+            grown >=
+            Math.max(
+              SIMILARITY_REFRESH_MIN_DELTA,
+              cluster.refreshedWeight * SIMILARITY_REFRESH_GROWTH_FRACTION,
+            )
+          );
+        })
+        // Correct the worst drift first when the backlog exceeds one pass.
+        .sort((a, b) => b.weight - b.refreshedWeight - (a.weight - a.refreshedWeight))
+        .slice(0, maxClusters);
+
+      for (const cluster of stale) {
+        await this.refreshClusterSimilarities(cluster);
+      }
+      if (stale.length) {
+        log.info({ clusters: stale.length }, "Refreshed stale cluster similarities");
+      }
+      return stale.length;
+    });
+  }
+
+  private async refreshClusterSimilarities(
+    cluster: FaceClusterEngine["clusters"][number],
+  ): Promise<void> {
+    // Capture the baseline before touching the DB; nothing mutates the cluster
+    // mid-pass (we hold the chain), so this is the weight the rescore reflects.
+    const refreshedWeight = cluster.weight;
+    const advanceMarker = {
+      sql: "UPDATE faceClusters SET similarityRefreshedWeight = ? WHERE id = ?",
+      params: [refreshedWeight, cluster.id] as unknown[],
+    };
+
+    // A degenerate centroid (member vectors cancelled to ~zero magnitude) would
+    // divide to NaN; just advance the marker so it doesn't refresh every pass.
+    if (cluster.magnitude <= 0) {
+      await this.db.transaction([advanceMarker]);
+      cluster.refreshedWeight = refreshedWeight;
+      return;
+    }
+
+    // Marker rides the final write batch (see rescoreMembers): after every face
+    // is rescored. If a crash interrupts an earlier chunk the marker stays put
+    // and the idempotent rescore simply reruns next pass.
+    await this.rescoreMembers(
+      [cluster.id],
+      cluster.mean,
+      cluster.magnitude,
+      [advanceMarker],
+    );
+    cluster.refreshedWeight = refreshedWeight;
+  }
+
+  /**
+   * Rescores each member face of `subjectClusterIds` against a reference
+   * cluster's centroid — used when a merged person's faces must share one
+   * comparable similarity scale (reference = the person's canonical centroid).
+   *
+   * People-tab ordering ranks a person's faces by `clusterSimilarity DESC`, but
+   * that value is otherwise scored against each face's *own* sub-cluster
+   * centroid, so a small sub-cluster's seed sits at 1.0 forever (below the
+   * refresh delta, and a seed can't fall below its own centroid anyway) and
+   * dominates the person's representative/detail order with an arbitrary, often
+   * tiny background face. Called on merge with the canonical centroid, and on
+   * separate with the detached cluster's own centroid to restore self-scoring.
+   */
+  rescoreFacesAgainstCluster(
+    referenceClusterId: number,
+    subjectClusterIds: number[],
+  ): Promise<void> {
+    if (!subjectClusterIds.length) return Promise.resolve();
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      const reference = this.clustersById.get(referenceClusterId);
+      // Missing or degenerate centroid: leave the stored similarities as-is
+      // rather than dividing to NaN.
+      if (!reference || reference.magnitude <= 0) return;
+      await this.rescoreMembers(subjectClusterIds, reference.mean, reference.magnitude);
+    });
+  }
+
+  /**
+   * Scores each member face of `subjectClusterIds` against the (`mean`,
+   * `magnitude`) centroid and writes `clusterSimilarity`, chunking reads/writes
+   * and yielding between chunks so a large rescore doesn't monopolize the event
+   * loop. `trailing` statements are appended to the final write batch so a
+   * refresh marker commits atomically with the last rescore.
+   */
+  private async rescoreMembers(
+    subjectClusterIds: number[],
+    mean: Float32Array,
+    magnitude: number,
+    trailing: Array<{ sql: string; params: unknown[] }> = [],
+  ): Promise<void> {
+    let updates: Array<{ sql: string; params: unknown[] }> = [];
+    const flush = async () => {
+      if (!updates.length) return;
+      await this.db.transaction(updates);
+      updates = [];
+    };
+
+    for (const clusterId of subjectClusterIds) {
+      const idRows = await this.db.all<{ id: number }>(
+        "SELECT id FROM faces WHERE clusterId = ? AND LENGTH(embedding) > 0",
+        clusterId,
+      );
+      for (let i = 0; i < idRows.length; i += REFRESH_READ_CHUNK) {
+        const ids = idRows.slice(i, i + REFRESH_READ_CHUNK).map((row) => row.id);
+        const faceRows = await this.db.all<{ id: number; embedding: Buffer }>(
+          `SELECT id, embedding FROM faces WHERE id IN (${ids.map(() => "?").join(", ")})`,
+          ...ids,
+        );
+        for (const row of faceRows) {
+          const unit = toUnitFloat32(row.embedding);
+          if (!unit) continue;
+          const similarity = dotProduct(unit, mean) / magnitude;
+          updates.push({
+            sql: "UPDATE faces SET clusterSimilarity = ? WHERE id = ?",
+            params: [similarity, row.id],
+          });
+        }
+        if (updates.length >= REFRESH_WRITE_CHUNK) await flush();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+
+    updates.push(...trailing);
+    await flush();
   }
 
   private async persist(

@@ -481,10 +481,7 @@ describe("api", () => {
       supportsArray: true,
       allowsNullState: true,
     });
-    expect(filterFieldCapabilities.hasAudioTranscript).toEqual({
-      supportsArray: false,
-      allowsNullState: false,
-    });
+    expect(filterFieldCapabilities).not.toHaveProperty("hasAudioTranscript");
 
     const nullableFields = Object.entries(FIELD_METADATA)
       .filter(([, { nullable }]) => nullable)

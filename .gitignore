@@ -61,5 +61,13 @@ tools/
 # Cache
 .cache/
 **/.cache/
+.cache-e2e/
+**/.cache-e2e/
 __pycache__/
 **/__pycache__/
+
+# E2E (Playwright) artifacts
+test-results/
+**/test-results/
+playwright-report/
+**/playwright-report/

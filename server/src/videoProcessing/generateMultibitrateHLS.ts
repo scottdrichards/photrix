@@ -8,8 +8,43 @@ import { getGpuAcceleration, type GpuAcceleration } from "./gpuAcceleration.ts";
 import { HLS_SEGMENT_SECONDS } from "./buildHlsPlaylist.ts";
 import { getLogger } from "../observability/logger.ts";
 import { getVideoRotationDegrees } from "./getVideoMetadata.ts";
+import { queryGpuFreeMB } from "../observability/systemMetrics.ts";
+import { reclaimGpuForUser } from "../taskOrchestrator/computeWorkers.ts";
 
 const log = getLogger("HLS");
+
+// Free VRAM (MB) a GPU transcode needs for NVDEC+NVENC of a 4K stream. Below
+// this, a user playback request evicts the background ML workers' VRAM rather
+// than letting ffmpeg OOM and fall back to realtime-starved libx264.
+const GPU_HEADROOM_MB = 1500;
+const RECLAIM_POLL_MS = 150;
+const RECLAIM_TIMEOUT_MS = 1500;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Ensure enough free VRAM for a GPU encode before spawning ffmpeg. Background ML
+ * workers keep models resident in VRAM even while SIGSTOP-frozen for a user
+ * request, so without this a transcode can't allocate CUDA memory and dies.
+ * reclaimGpuForUser() kills the leaseless background workers; we then poll
+ * briefly for the VRAM to actually come back before spawning. The orchestrator
+ * releases the reclaim (letting them respawn) once the user goes idle.
+ */
+const ensureGpuHeadroom = async (): Promise<void> => {
+  const free = await queryGpuFreeMB();
+  if (free === undefined || free >= GPU_HEADROOM_MB) return;
+  log.info(
+    { freeMB: free, needMB: GPU_HEADROOM_MB },
+    "GPU VRAM low; reclaiming from background workers for user transcode",
+  );
+  reclaimGpuForUser();
+  const deadline = Date.now() + RECLAIM_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await delay(RECLAIM_POLL_MS);
+    const now = await queryGpuFreeMB();
+    if (now === undefined || now >= GPU_HEADROOM_MB) return;
+  }
+};
 
 /** Output frame rate for all variants. */
 const HLS_FPS = 30;
@@ -42,7 +77,13 @@ type Variant = {
 const HLS_VARIANTS: readonly Variant[] = [
   { height: 360, bitrate: 800_000, maxrate: "1M", bufsize: "1.5M", audioBitrate: "96k" },
   { height: 720, bitrate: 2_500_000, maxrate: "4M", bufsize: "4M", audioBitrate: "128k" },
-  { height: 1080, bitrate: 5_000_000, maxrate: "8M", bufsize: "8M", audioBitrate: "128k" },
+  {
+    height: 1080,
+    bitrate: 5_000_000,
+    maxrate: "8M",
+    bufsize: "8M",
+    audioBitrate: "128k",
+  },
 ] as const;
 
 const VARIANT_BY_HEIGHT = new Map(HLS_VARIANTS.map((v) => [v.height, v]));
@@ -153,7 +194,9 @@ const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
  *
  * Idempotent — safe to call multiple times.
  */
-export const prepareMultibitrateHLSStructure = async (filePath: string): Promise<void> => {
+export const prepareMultibitrateHLSStructure = async (
+  filePath: string,
+): Promise<void> => {
   await stat(filePath);
   const hlsDir = getMultibitrateHLSDirectory(filePath);
 
@@ -284,66 +327,81 @@ const encodeVariant = (
       join(variantDir, "playlist.m3u8"),
     ];
 
-    const spawnedAt = Date.now();
-    const process = spawn("ffmpeg", args);
-    onSpawn?.(process);
+    const launch = async () => {
+      // Evict background ML VRAM before a GPU encode so ffmpeg can allocate
+      // NVDEC/NVENC memory instead of OOMing into realtime-starved libx264.
+      if (useCudaPipeline || useNvidia) await ensureGpuHeadroom();
 
-    const encoderLabel = useCudaPipeline
-      ? `${gpu?.label ?? "NVIDIA"} (full CUDA)`
-      : useNvidia
-        ? `${gpu?.label ?? "NVIDIA"} (NVDEC+NVENC)`
-        : "software (libx264)";
+      const spawnedAt = Date.now();
+      const process = spawn("ffmpeg", args);
+      onSpawn?.(process);
 
-    log.info(
-      { hlsDir, variant: `${variant.height}p`, encoder: encoderLabel, rotation },
-      "HLS encode spawned",
-    );
+      const encoderLabel = useCudaPipeline
+        ? `${gpu?.label ?? "NVIDIA"} (full CUDA)`
+        : useNvidia
+          ? `${gpu?.label ?? "NVIDIA"} (NVDEC+NVENC)`
+          : "software (libx264)";
 
-    // Time-to-first-segment: the user-perceived startup latency.
-    const firstSegment = join(variantDir, "segment_000.ts");
-    const firstSegmentPoll = setInterval(() => {
-      if (!existsSync(firstSegment)) return;
-      clearInterval(firstSegmentPoll);
       log.info(
-        { hlsDir, variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
-        "HLS first segment ready",
+        { hlsDir, variant: `${variant.height}p`, encoder: encoderLabel, rotation },
+        "HLS encode spawned",
       );
-    }, 100);
-    firstSegmentPoll.unref?.();
 
-    let stderr = "";
-    pipeChildProcessLogs(process, (chunk) => {
-      stderr = appendWithLimit(stderr, chunk);
-    });
-
-    process.on("close", (code) => {
-      clearInterval(firstSegmentPoll);
-      if (code === 0) {
+      // Time-to-first-segment: the user-perceived startup latency.
+      const firstSegment = join(variantDir, "segment_000.ts");
+      const firstSegmentPoll = setInterval(() => {
+        if (!existsSync(firstSegment)) return;
+        clearInterval(firstSegmentPoll);
         log.info(
           { hlsDir, variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
-          "HLS encode complete",
+          "HLS first segment ready",
         );
-        resolve();
-        return;
-      }
+      }, 100);
+      firstSegmentPoll.unref?.();
 
-      if ((useCudaPipeline || useNvidia) && gpu && gpu.isHardwareFailure(stderr)) {
-        log.warn(
-          { hlsDir, variant: `${variant.height}p` },
-          "GPU encode failed, falling back to software",
+      let stderr = "";
+      pipeChildProcessLogs(process, (chunk) => {
+        stderr = appendWithLimit(stderr, chunk);
+      });
+
+      process.on("close", (code) => {
+        clearInterval(firstSegmentPoll);
+        if (code === 0) {
+          log.info(
+            { hlsDir, variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
+            "HLS encode complete",
+          );
+          resolve();
+          return;
+        }
+
+        if ((useCudaPipeline || useNvidia) && gpu && gpu.isHardwareFailure(stderr)) {
+          log.warn(
+            { hlsDir, variant: `${variant.height}p` },
+            "GPU encode failed, falling back to software",
+          );
+          encodeVariant(filePath, hlsDir, variant, null, rotation, onSpawn)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+        // Surface the ffmpeg stderr tail so a failed encode is diagnosable
+        // rather than an opaque "generation failed" with no cause.
+        const detail = stderr.trim().split("\n").slice(-3).join(" | ");
+        reject(
+          new Error(
+            `HLS ABR generation failed (exit ${code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
+          ),
         );
-        encodeVariant(filePath, hlsDir, variant, null, rotation, onSpawn)
-          .then(resolve)
-          .catch(reject);
-        return;
-      }
-      reject(new Error("HLS ABR generation failed"));
-    });
+      });
 
-    process.on("error", (err) => {
-      clearInterval(firstSegmentPoll);
-      reject(err);
-    });
+      process.on("error", (err) => {
+        clearInterval(firstSegmentPoll);
+        reject(err);
+      });
+    };
+
+    launch().catch(reject);
   });
 };
 
@@ -367,6 +425,9 @@ export const generateVariantHLS = async (
   const hlsDir = getMultibitrateHLSDirectory(filePath);
   await mkdir(join(hlsDir, `${variant.height}p`), { recursive: true });
 
-  const [gpu, rotation] = await Promise.all([getGpuAcceleration(), getVideoRotationDegrees(filePath)]);
+  const [gpu, rotation] = await Promise.all([
+    getGpuAcceleration(),
+    getVideoRotationDegrees(filePath),
+  ]);
   await encodeVariant(filePath, hlsDir, variant, gpu, rotation, opts?.onSpawn);
 };

@@ -21,11 +21,44 @@ const log = getLogger("computeWorkers");
 
 const canSuspend = process.platform !== "win32";
 
+/**
+ * Serialized GPU init queue. ML models can OOM when multiple workers try to
+ * load onto the GPU simultaneously. Workers call acquireGpuInitSlot() before
+ * spawning and release the returned handle once their worker emits "ready" (or
+ * on error). This ensures only one model loads at a time; once resident they
+ * all run concurrently with no further queuing.
+ */
+let gpuInitTail: Promise<void> = Promise.resolve();
+
+export const acquireGpuInitSlot = (): Promise<() => void> => {
+  let release!: () => void;
+  const thisSlotDone = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // Snapshot the current tail — this caller waits behind it.
+  const waitForPrev = gpuInitTail;
+  // Next caller waits behind this one.
+  gpuInitTail = thisSlotDone;
+  // Resolve with the release fn once the previous slot is done.
+  return waitForPrev.then(() => release);
+};
+
 export const COMPUTE_WORKER_IDS = {
   image: "image-analysis",
   clap: "clap-audio",
   whisper: "whisper-audio",
 } as const;
+
+export type ComputeWorkerRole = "image" | "clap" | "whisper";
+
+const ROLE_BY_ID: Record<string, ComputeWorkerRole> = {
+  [COMPUTE_WORKER_IDS.image]: "image",
+  [COMPUTE_WORKER_IDS.clap]: "clap",
+  [COMPUTE_WORKER_IDS.whisper]: "whisper",
+};
+
+export const roleForComputeWorkerId = (id: string): ComputeWorkerRole | undefined =>
+  ROLE_BY_ID[id];
 
 type Entry = {
   getPid: () => number | null | undefined;
@@ -40,12 +73,18 @@ type Entry = {
   // (equivalent to an already-resolved gate).
   idleGate: Promise<void> | null;
   resolveIdle: (() => void) | null;
+  suspended: boolean;
+  suspensionListeners: Set<(suspended: boolean) => void>;
 };
 
 const workers = new Map<string, Entry>();
 let suspended = false;
 
-const signal = (pid: number | null | undefined, sig: "SIGSTOP" | "SIGCONT", id: string) => {
+const signal = (
+  pid: number | null | undefined,
+  sig: "SIGSTOP" | "SIGCONT",
+  id: string,
+) => {
   if (!canSuspend || pid == null) return;
   try {
     process.kill(pid, sig);
@@ -55,19 +94,119 @@ const signal = (pid: number | null | undefined, sig: "SIGSTOP" | "SIGCONT", id: 
   }
 };
 
+const setWorkerSuspended = (id: string, entry: Entry, nextSuspended: boolean): void => {
+  if (entry.suspended === nextSuspended) return;
+  entry.suspended = nextSuspended;
+  log.debug(
+    { id, pid: entry.getPid() },
+    nextSuspended ? "suspending compute worker" : "resuming compute worker",
+  );
+  signal(entry.getPid(), nextSuspended ? "SIGSTOP" : "SIGCONT", id);
+  for (const listener of entry.suspensionListeners) {
+    listener(nextSuspended);
+  }
+};
+
 export const registerComputeWorker = (
   id: string,
   getPid: () => number | null | undefined,
 ): void => {
-  workers.set(id, { getPid, leases: 0, idleGate: null, resolveIdle: null });
+  const entry: Entry = {
+    getPid,
+    leases: 0,
+    idleGate: null,
+    resolveIdle: null,
+    suspended: false,
+    suspensionListeners: new Set(),
+  };
+  workers.set(id, entry);
   // A worker may spawn lazily during an active suspension window (first use of
   // a model mid-request). Freeze it on arrival so it doesn't burn CPU loading a
   // model while we're trying to keep the request fast.
-  if (suspended) signal(getPid(), "SIGSTOP", id);
+  if (suspended) setWorkerSuspended(id, entry, true);
 };
 
 export const unregisterComputeWorker = (id: string): void => {
   workers.delete(id);
+};
+
+export const onComputeWorkerSuspensionChange = (
+  id: string,
+  listener: (suspended: boolean) => void,
+): (() => void) => {
+  const entry = workers.get(id);
+  if (!entry) {
+    listener(false);
+    return () => {};
+  }
+  entry.suspensionListeners.add(listener);
+  listener(entry.suspended);
+  return () => {
+    entry.suspensionListeners.delete(listener);
+  };
+};
+
+export const createSuspensionAwareTimeout = (
+  id: string,
+  timeoutMs: number,
+  onTimeout: () => void,
+): { clear: () => void } => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let timerStartedAt = 0;
+  let remainingMs = timeoutMs;
+  let cleared = false;
+  let unsubscribe = () => {};
+
+  const cleanup = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    unsubscribe();
+  };
+
+  const arm = () => {
+    if (cleared || timer || remainingMs <= 0) return;
+    timerStartedAt = Date.now();
+    timer = setTimeout(() => {
+      if (cleared) return;
+      cleared = true;
+      timer = null;
+      unsubscribe();
+      onTimeout();
+    }, remainingMs);
+    timer.unref?.();
+  };
+
+  const pause = () => {
+    if (!timer) return;
+    clearTimeout(timer);
+    timer = null;
+    remainingMs = Math.max(0, remainingMs - (Date.now() - timerStartedAt));
+  };
+
+  unsubscribe = onComputeWorkerSuspensionChange(id, (isSuspended) => {
+    if (cleared) return;
+    if (isSuspended) {
+      pause();
+      return;
+    }
+    if (remainingMs <= 0) {
+      cleared = true;
+      unsubscribe();
+      onTimeout();
+      return;
+    }
+    arm();
+  });
+
+  return {
+    clear: () => {
+      if (cleared) return;
+      cleared = true;
+      cleanup();
+    },
+  };
 };
 
 /** Freeze every background ML worker that isn't pinned awake by a foreground lease. */
@@ -75,10 +214,7 @@ export const suspendComputeWorkers = (): void => {
   if (suspended) return;
   suspended = true;
   for (const [id, entry] of workers) {
-    if (entry.leases === 0) {
-      log.debug({ id, pid: entry.getPid() }, "suspending compute worker");
-      signal(entry.getPid(), "SIGSTOP", id);
-    }
+    if (entry.leases === 0) setWorkerSuspended(id, entry, true);
   }
 };
 
@@ -87,9 +223,132 @@ export const resumeComputeWorkers = (): void => {
   if (!suspended) return;
   suspended = false;
   for (const [id, entry] of workers) {
-    log.debug({ id, pid: entry.getPid() }, "resuming compute worker");
-    signal(entry.getPid(), "SIGCONT", id);
+    setWorkerSuspended(id, entry, false);
   }
+};
+
+// Pids we SIGKILLed on purpose (GPU reclaim / shutdown), so a worker's exit
+// handler can tell a deliberate eviction apart from a genuine crash. Entries
+// are consumed by the exit handler; worker pids are few, so the set stays tiny.
+const deliberatelyKilledPids = new Set<number>();
+
+const markDeliberateKill = (pid: number): void => {
+  deliberatelyKilledPids.add(pid);
+};
+
+/**
+ * True (once) if `pid` was SIGKILLed by us on purpose. Worker exit handlers use
+ * this to tag the rejection they propagate to in-flight jobs, so job runners
+ * leave the file pending for retry instead of permanently marking it errored —
+ * a reclaim during playback would otherwise poison the DB record of whatever
+ * files happened to be in flight.
+ */
+export const consumeDeliberateKill = (pid: number | null | undefined): boolean =>
+  pid != null && deliberatelyKilledPids.delete(pid);
+
+// Marker property carried by errors caused by a deliberate worker kill.
+const WORKER_EVICTED = Symbol.for("photrix.workerEvicted");
+
+export const markWorkerEvictedError = (error: Error): Error =>
+  Object.assign(error, { [WORKER_EVICTED]: true });
+
+export const isWorkerEvictedError = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  (error as Record<symbol, unknown>)[WORKER_EVICTED] === true;
+
+// True while a user GPU request (e.g. a video transcode) has evicted the
+// background ML workers' VRAM. Reflected in the status payload so the reclaim is
+// observable, and cleared by releaseGpuReclaim() once the user goes idle.
+let gpuReclaimed = false;
+
+export const isGpuReclaimed = (): boolean => gpuReclaimed;
+
+/**
+ * Snapshot of every registered compute worker that currently has a live pid,
+ * for the diagnostics/status view. VRAM is filled in by the metrics layer from
+ * nvidia-smi; here we only know the process identity and its throttle state.
+ */
+export const getComputeWorkerPids = (): Array<{
+  id: string;
+  role: ComputeWorkerRole | undefined;
+  pid: number;
+  suspended: boolean;
+  leases: number;
+}> => {
+  const result = [];
+  for (const [id, entry] of workers) {
+    const pid = entry.getPid();
+    if (pid == null) continue;
+    result.push({
+      id,
+      role: roleForComputeWorkerId(id),
+      pid,
+      suspended: entry.suspended,
+      leases: entry.leases,
+    });
+  }
+  return result;
+};
+
+/**
+ * Free the GPU for an in-flight user request by killing every background ML
+ * worker that isn't pinned awake by a foreground call (leases === 0). SIGSTOP
+ * (suspendComputeWorkers) only freezes CPU — a frozen process keeps every CUDA
+ * allocation — so a user video transcode would still OOM the GPU. Killing is the
+ * only lever that actually returns VRAM (including the ~300–500 MB CUDA context
+ * per worker). SIGKILL is used deliberately: it takes effect even on a worker
+ * that is currently SIGSTOP'd, whereas SIGTERM would queue behind the freeze.
+ *
+ * The workers respawn lazily via their existing ensureReady() path the next time
+ * they're needed — which, because the orchestrator keeps background work fully
+ * stopped while the user is active, is only after the user goes idle (see
+ * releaseGpuReclaim). This makes the reclaim inherently temporary and
+ * demand-driven, unlike the reverted permanent GPU-gating attempt.
+ */
+export const reclaimGpuForUser = (): void => {
+  gpuReclaimed = true;
+  for (const [id, entry] of workers) {
+    if (entry.leases > 0) continue; // a foreground call still needs this worker
+    const pid = entry.getPid();
+    if (pid == null) continue;
+    log.info({ id, pid }, "reclaiming GPU from compute worker for user request");
+    markDeliberateKill(pid);
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (err) {
+      log.debug({ err, id, pid }, "compute worker kill (reclaim) failed");
+    }
+  }
+};
+
+/**
+ * SIGKILL every registered compute worker. Called from the server's graceful
+ * shutdown so a restart doesn't orphan ML workers whose resident models + CUDA
+ * contexts keep holding VRAM. Node does not terminate its attached children on
+ * exit, so without this each restart leaks a full set of GPU-resident workers.
+ * Best-effort — the startup reaper (reapOrphanedComputeWorkers) is the backstop
+ * for the hard-kill case where this handler never runs.
+ */
+export const shutdownComputeWorkers = (): void => {
+  for (const [id, entry] of workers) {
+    const pid = entry.getPid();
+    if (pid == null) continue;
+    markDeliberateKill(pid);
+    try {
+      process.kill(pid, "SIGKILL");
+      log.info({ id, pid }, "killed compute worker on shutdown");
+    } catch (err) {
+      log.debug({ err, id, pid }, "compute worker kill (shutdown) failed");
+    }
+  }
+};
+
+/** Clear the reclaim flag once the user is idle; workers respawn on next use. */
+export const releaseGpuReclaim = (): void => {
+  if (!gpuReclaimed) return;
+  gpuReclaimed = false;
+  log.debug("released GPU reclaim; background workers may respawn on next job");
 };
 
 /**
@@ -112,7 +371,7 @@ export const withForegroundWorker = async <T>(
       entry.resolveIdle = resolve;
     });
   }
-  if (suspended && entry.leases === 1) signal(entry.getPid(), "SIGCONT", id);
+  if (suspended && entry.leases === 1) setWorkerSuspended(id, entry, false);
   try {
     return await fn();
   } finally {
@@ -125,7 +384,7 @@ export const withForegroundWorker = async <T>(
     }
     // Re-freeze only if background suspension is still in effect and no other
     // foreground call is keeping the worker awake.
-    if (suspended && entry.leases === 0) signal(entry.getPid(), "SIGSTOP", id);
+    if (suspended && entry.leases === 0) setWorkerSuspended(id, entry, true);
   }
 };
 
@@ -145,5 +404,8 @@ export const awaitForegroundIdle = async (id: string): Promise<void> => {
   if (!entry?.idleGate) return;
   const start = Date.now();
   await entry.idleGate;
-  log.debug({ id, waitMs: Date.now() - start }, "background dispatch waited for foreground idle");
+  log.debug(
+    { id, waitMs: Date.now() - start },
+    "background dispatch waited for foreground idle",
+  );
 };

@@ -111,7 +111,12 @@ describe("searchRequestHandler resilience", () => {
       },
     });
 
-    const imageHit = { folder: "/photos/", fileName: "castle.jpg", mimeType: "image/jpeg", similarity: 0.2 };
+    const imageHit = {
+      folder: "/photos/",
+      fileName: "castle.jpg",
+      mimeType: "image/jpeg",
+      similarity: 0.2,
+    };
     const transcriptHits = Array.from({ length: 5 }, (_, i) => ({
       folder: "/trip/",
       fileName: `clip${i}.mp4`,
@@ -136,8 +141,18 @@ describe("searchRequestHandler resilience", () => {
   it("boosts a file matched by multiple sources above single-source hits", async () => {
     const handler = await loadHandler({});
 
-    const shared = { folder: "/a/", fileName: "shared.mp4", mimeType: "video/mp4", similarity: 0.2 };
-    const imageOnly = { folder: "/a/", fileName: "image-only.jpg", mimeType: "image/jpeg", similarity: 0.9 };
+    const shared = {
+      folder: "/a/",
+      fileName: "shared.mp4",
+      mimeType: "video/mp4",
+      similarity: 0.2,
+    };
+    const imageOnly = {
+      folder: "/a/",
+      fileName: "image-only.jpg",
+      mimeType: "image/jpeg",
+      similarity: 0.9,
+    };
 
     const database = {
       semanticSearch: jest.fn(async () => [imageOnly, shared]),
@@ -157,8 +172,18 @@ describe("searchRequestHandler resilience", () => {
   it("tags each result with the modalities that matched it", async () => {
     const handler = await loadHandler({});
 
-    const shared = { folder: "/a/", fileName: "shared.mp4", mimeType: "video/mp4", similarity: 0.2 };
-    const imageOnly = { folder: "/a/", fileName: "image-only.jpg", mimeType: "image/jpeg", similarity: 0.9 };
+    const shared = {
+      folder: "/a/",
+      fileName: "shared.mp4",
+      mimeType: "video/mp4",
+      similarity: 0.2,
+    };
+    const imageOnly = {
+      folder: "/a/",
+      fileName: "image-only.jpg",
+      mimeType: "image/jpeg",
+      similarity: 0.9,
+    };
 
     const database = {
       semanticSearch: jest.fn(async () => [imageOnly, shared]),
@@ -171,7 +196,10 @@ describe("searchRequestHandler resilience", () => {
 
     expect(getStatus()).toBe(200);
     const bySource = Object.fromEntries(
-      getJson().items.map((it: { fileName: string; sources: string[] }) => [it.fileName, it.sources]),
+      getJson().items.map((it: { fileName: string; sources: string[] }) => [
+        it.fileName,
+        it.sources,
+      ]),
     );
     expect(bySource["shared.mp4"]).toEqual(["image", "transcript"]);
     expect(bySource["image-only.jpg"]).toEqual(["image"]);
@@ -180,7 +208,12 @@ describe("searchRequestHandler resilience", () => {
   it("runs only the sources named in the `sources` param and skips the rest", async () => {
     const handler = await loadHandler({});
 
-    const transcriptHit = { folder: "/a/", fileName: "spoken.mp4", mimeType: "video/mp4", similarity: 0.6 };
+    const transcriptHit = {
+      folder: "/a/",
+      fileName: "spoken.mp4",
+      mimeType: "video/mp4",
+      similarity: 0.6,
+    };
     const semanticSearch = jest.fn(async () => []);
     const audioSemanticSearch = jest.fn(async () => []);
     const database = {
@@ -202,7 +235,9 @@ describe("searchRequestHandler resilience", () => {
     expect(semanticSearch).not.toHaveBeenCalled();
     expect(audioSemanticSearch).not.toHaveBeenCalled();
     const json = getJson();
-    expect(json.items.map((it: { fileName: string }) => it.fileName)).toEqual(["spoken.mp4"]);
+    expect(json.items.map((it: { fileName: string }) => it.fileName)).toEqual([
+      "spoken.mp4",
+    ]);
     expect(json._diagnostics.clip).toEqual({ status: "skipped" });
     expect(json._diagnostics.clap).toEqual({ status: "skipped" });
   });
@@ -270,8 +305,18 @@ describe("searchRequestHandler resilience", () => {
     // CLAP cosine sits on a higher scale than CLIP and is not relevance-calibrated
     // across queries, so noise can score ~0.4. Only confident audio (>= floor)
     // should reach the results; a sub-floor "match" is dropped before fusion.
-    const noiseVideo = { folder: "/a/", fileName: "noise.mp4", mimeType: "video/mp4", similarity: 0.49 };
-    const confidentVideo = { folder: "/a/", fileName: "music.mp4", mimeType: "video/mp4", similarity: 0.58 };
+    const noiseVideo = {
+      folder: "/a/",
+      fileName: "noise.mp4",
+      mimeType: "video/mp4",
+      similarity: 0.49,
+    };
+    const confidentVideo = {
+      folder: "/a/",
+      fileName: "music.mp4",
+      mimeType: "video/mp4",
+      similarity: 0.58,
+    };
 
     const database = {
       semanticSearch: jest.fn(async () => []),
@@ -309,5 +354,100 @@ describe("searchRequestHandler resilience", () => {
 
     expect(getStatus()).toBe(503);
     expect(getJson().error).toBe("Search workers unavailable");
+  });
+
+  it("reorders the relevance-ranked hits by date when sort=date:desc", async () => {
+    const handler = await loadHandler({
+      embedTextWithClap: async () => {
+        throw new Error("clap down");
+      },
+    });
+
+    // Most relevant first (rank order), but with mixed dates so a date sort must
+    // visibly reshuffle them.
+    const imageHits = [
+      {
+        folder: "/a/",
+        fileName: "old-top.jpg",
+        mimeType: "image/jpeg",
+        similarity: 0.9,
+        dateTaken: new Date("2020-01-01"),
+      },
+      {
+        folder: "/a/",
+        fileName: "new-mid.jpg",
+        mimeType: "image/jpeg",
+        similarity: 0.5,
+        dateTaken: new Date("2024-01-01"),
+      },
+      {
+        folder: "/a/",
+        fileName: "mid.jpg",
+        mimeType: "image/jpeg",
+        similarity: 0.3,
+        dateTaken: new Date("2022-01-01"),
+      },
+    ];
+
+    const database = {
+      semanticSearch: jest.fn(async () => imageHits),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => []),
+    } as unknown as IndexDatabase;
+
+    const req = {
+      url: `/api/search?q=${encodeURIComponent("beach")}&sort=date:desc`,
+      headers: { host: "localhost" },
+    } as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
+
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(req, res, { database });
+
+    expect(getStatus()).toBe(200);
+    expect(getJson().items.map((i: { fileName: string }) => i.fileName)).toEqual([
+      "new-mid.jpg",
+      "mid.jpg",
+      "old-top.jpg",
+    ]);
+  });
+
+  it("keeps relevance (RRF) order when no sort is given", async () => {
+    const handler = await loadHandler({
+      embedTextWithClap: async () => {
+        throw new Error("clap down");
+      },
+    });
+
+    const imageHits = [
+      {
+        folder: "/a/",
+        fileName: "old-top.jpg",
+        mimeType: "image/jpeg",
+        similarity: 0.9,
+        dateTaken: new Date("2020-01-01"),
+      },
+      {
+        folder: "/a/",
+        fileName: "new-mid.jpg",
+        mimeType: "image/jpeg",
+        similarity: 0.5,
+        dateTaken: new Date("2024-01-01"),
+      },
+    ];
+
+    const database = {
+      semanticSearch: jest.fn(async () => imageHits),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => []),
+    } as unknown as IndexDatabase;
+
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(makeReq("beach"), res, { database });
+
+    expect(getStatus()).toBe(200);
+    expect(getJson().items.map((i: { fileName: string }) => i.fileName)).toEqual([
+      "old-top.jpg",
+      "new-mid.jpg",
+    ]);
   });
 });

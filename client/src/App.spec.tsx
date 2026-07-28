@@ -144,9 +144,46 @@ vi.mock("./videoPlaybackProfile", () => ({
 }));
 
 describe("App", () => {
+  let systemDarkMode = false;
+  const mediaQueryListeners = new Set<(event: MediaQueryListEvent) => void>();
+
+  const setSystemDarkMode = (nextValue: boolean) => {
+    systemDarkMode = nextValue;
+    const event = { matches: nextValue } as MediaQueryListEvent;
+    mediaQueryListeners.forEach((listener) => listener(event));
+  };
+
+  beforeAll(() => {
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        get matches() {
+          return systemDarkMode;
+        },
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn((event: string, listener: (event: MediaQueryListEvent) => void) => {
+          if (event === "change") mediaQueryListeners.add(listener);
+        }),
+        removeEventListener: vi.fn(
+          (event: string, listener: (event: MediaQueryListEvent) => void) => {
+            if (event === "change") mediaQueryListeners.delete(listener);
+          },
+        ),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+  });
+
   beforeEach(() => {
+    systemDarkMode = false;
+    mediaQueryListeners.clear();
     useSyncUrlWithFilterMock.mockReset();
     probeVideoPlaybackProfileMock.mockClear();
+    window.localStorage.clear();
+    document.documentElement.removeAttribute("data-theme");
   });
 
   it("calls url sync hook", async () => {
@@ -179,5 +216,76 @@ describe("App", () => {
     expect(screen.getByTestId("thumbnail-grid")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "People" }));
     expect(screen.getByTestId("people-view")).toBeInTheDocument();
+  });
+
+  it("follows the system theme by default", async () => {
+    setSystemDarkMode(true);
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(screen.getByRole("switch", { name: "Theme" })).toHaveAttribute("aria-checked", "true");
+    expect(window.localStorage.getItem("photrix_theme")).toBeNull();
+  });
+
+  it("uses a stored dark theme preference", async () => {
+    window.localStorage.setItem("photrix_theme", "dark");
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(screen.getByRole("switch", { name: "Theme" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("toggles the theme and only persists an override when needed", async () => {
+    await act(async () => {
+      render(<App />);
+    });
+
+    const toggle = screen.getByRole("switch", { name: "Theme" });
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(window.localStorage.getItem("photrix_theme")).toBeNull();
+
+    fireEvent.click(toggle);
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(window.localStorage.getItem("photrix_theme")).toBe("dark");
+
+    fireEvent.click(toggle);
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(window.localStorage.getItem("photrix_theme")).toBeNull();
+  });
+
+  it("keeps following system changes until the user overrides the theme", async () => {
+    await act(async () => {
+      render(<App />);
+    });
+
+    await act(async () => {
+      setSystemDarkMode(true);
+    });
+
+    const toggle = screen.getByRole("switch", { name: "Theme" });
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(toggle);
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    expect(window.localStorage.getItem("photrix_theme")).toBe("light");
+
+    await act(async () => {
+      setSystemDarkMode(true);
+    });
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
   });
 });

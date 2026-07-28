@@ -1,6 +1,7 @@
 import http from "node:http";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { filesEndpointRequestHandler } from "./requestHandlers/files/filesRequestHandler.ts";
+import { updateFileMetadataHandler } from "./requestHandlers/files/updateMetadataHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
 import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts";
 import { statusBackgroundTasksRequestHandler } from "./requestHandlers/statusBackgroundTasksRequestHandler.ts";
@@ -18,6 +19,7 @@ import {
   passkeyRegistrationOptionsHandler,
   passkeyRegistrationVerifyHandler,
 } from "./requestHandlers/authRequestHandler.ts";
+import { accountRequestHandler } from "./requestHandlers/accountRequestHandler.ts";
 import {
   bindCurrentRequestTrace,
   finishRequestTrace,
@@ -38,6 +40,7 @@ import { initPasskeyService } from "./auth/passkeyService.ts";
 import { resolveShareFilter, ShareScopeError } from "./auth/shareScope.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
 import { peopleRequestHandler } from "./requestHandlers/peopleRequestHandler.ts";
+import { sharePreviewHandler } from "./requestHandlers/sharePreviewHandler.ts";
 
 const log = getLogger("httpServer");
 
@@ -136,6 +139,13 @@ export const createServer = (
             return;
           }
 
+          // Share preview page — serves OG meta tags for rich link previews.
+          // Handles its own token validation; must be checked before the auth gate.
+          if (req.method === "GET" && req.url.split("?")[0] === "/share") {
+            await sharePreviewHandler(req, res, database);
+            return;
+          }
+
           // Auth gate — bypass for health check and auth endpoints themselves
           let shareFilter: unknown = null;
           let shareScope: ReturnType<typeof getShareScope> = null;
@@ -179,18 +189,41 @@ export const createServer = (
             }
           };
 
-          // Let the orchestrator back background work off for the *entire* time a
-          // real user request is in flight, freeing disk/CPU for it. A search can
-          // run many seconds on a busy box; bracketing the request (rather than a
-          // one-shot cooldown) keeps background workers suspended until it
-          // actually finishes instead of resuming mid-request and re-starving it.
-          // Exclude polling and health endpoints (especially the long-lived
-          // status stream) so routine checks don't keep the backlog paused.
+          // Background work backs off for user activity, but *how* depends on the
+          // request. Two tiers:
+          //
+          //  - Heavy/interactive data requests (search, folder/file queries,
+          //    suggestions, mutations) get the full bracket: background stays
+          //    stopped for the request's *entire* duration. A cold search can run
+          //    many seconds on a busy box, and a one-shot cooldown lets background
+          //    workers resume mid-request and re-starve it.
+          //
+          //  - Asset serving (thumbnails, image/video bytes, HLS playlists and
+          //    segments) gets only the bounded activity cooldown. These are
+          //    high-frequency and often long-lived (a playing video fetches a
+          //    segment every few seconds for its whole runtime); bracketing each
+          //    one would pin the whole box in a full stop for as long as the user
+          //    watches/scrolls, so background ingestion never progresses while the
+          //    app is merely in use. The cooldown still yields briefly to an
+          //    in-flight heavy request, but self-expires so a single long stream
+          //    can't freeze the backlog for its entire duration.
+          //
+          // Exclude polling and health endpoints (especially the long-lived status
+          // stream) entirely so routine checks don't keep the backlog paused.
+          const pathname = req.url.split("?", 1)[0];
           const tracksActivity =
             !req.url.startsWith("/api/status") &&
             !req.url.startsWith("/api/health") &&
             !req.url.startsWith("/api/network-probe");
-          if (tracksActivity) {
+          // Asset serving is a GET under /api/files/ whose path has no trailing
+          // slash — query mode requires the trailing slash (see filesRequestHandler).
+          const isAssetServe =
+            req.method === "GET" &&
+            pathname.startsWith("/api/files/") &&
+            !pathname.endsWith("/");
+          if (tracksActivity && isAssetServe) {
+            taskOrchestrator.noteUserActivity();
+          } else if (tracksActivity) {
             taskOrchestrator.beginUserRequest();
             let ended = false;
             const endRequest = () => {
@@ -217,23 +250,40 @@ export const createServer = (
             return;
           }
 
-          if (req.url === "/api/auth/passkey/registration-options" && req.method === "POST") {
+          if (
+            req.url === "/api/auth/passkey/registration-options" &&
+            req.method === "POST"
+          ) {
             await passkeyRegistrationOptionsHandler(req, res);
             return;
           }
 
-          if (req.url === "/api/auth/passkey/registration-verify" && req.method === "POST") {
+          if (
+            req.url === "/api/auth/passkey/registration-verify" &&
+            req.method === "POST"
+          ) {
             await passkeyRegistrationVerifyHandler(req, res);
             return;
           }
 
-          if (req.url === "/api/auth/passkey/authentication-options" && req.method === "POST") {
+          if (
+            req.url === "/api/auth/passkey/authentication-options" &&
+            req.method === "POST"
+          ) {
             await passkeyAuthenticationOptionsHandler(req, res);
             return;
           }
 
-          if (req.url === "/api/auth/passkey/authentication-verify" && req.method === "POST") {
+          if (
+            req.url === "/api/auth/passkey/authentication-verify" &&
+            req.method === "POST"
+          ) {
             await passkeyAuthenticationVerifyHandler(req, res);
+            return;
+          }
+
+          if (req.url.startsWith("/api/account")) {
+            await accountRequestHandler(req, res);
             return;
           }
 
@@ -256,7 +306,10 @@ export const createServer = (
           }
 
           if (req.url?.startsWith("/api/status/stream") && req.method === "GET") {
-            if (shareScope) { writeJson(res, 403, { error: "Forbidden" }); return; }
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
             await statusRequestHandler(req, res, {
               stream: true,
               taskOrchestrator,
@@ -265,13 +318,19 @@ export const createServer = (
           }
 
           if (req.url === "/api/status/background-tasks" && req.method === "POST") {
-            if (shareScope) { writeJson(res, 403, { error: "Forbidden" }); return; }
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
             await statusBackgroundTasksRequestHandler(req, res, { taskOrchestrator });
             return;
           }
 
           if (req.url?.startsWith("/api/status") && req.method === "GET") {
-            if (shareScope) { writeJson(res, 403, { error: "Forbidden" }); return; }
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
             await statusRequestHandler(req, res, {
               stream: false,
               taskOrchestrator,
@@ -342,6 +401,12 @@ export const createServer = (
           }
 
           if (req.url?.startsWith("/api/people/") && req.method === "POST") {
+            if (shareScope) {
+              // People management (rename/merge/separate) mutates face clusters;
+              // a read-only share view may never persist changes.
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
             await peopleRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
@@ -353,6 +418,24 @@ export const createServer = (
           // Files endpoint - serves individual files or queries for multiple files
           // Query mode REQUIRES trailing slash: /api/files/ or /api/files/subfolder/
           // File serving has NO trailing slash: /api/files/image.jpg
+          // Tag a single file (star rating / labels). Path has no trailing slash,
+          // same shape as file serving: PATCH /api/files/subfolder/image.jpg
+          if (req.url?.startsWith("/api/files/") && req.method === "PATCH") {
+            const resolvedShareFilter = await getResolvedShareFilter();
+            if (res.writableEnded) return;
+            const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+            const pathMatch = parsedUrl.pathname.match(/^\/api\/files\/(.*)/);
+            const subPath = pathMatch ? decodeURIComponent(pathMatch[1]) : "";
+            await updateFileMetadataHandler(
+              req,
+              subPath,
+              res,
+              database,
+              resolvedShareFilter,
+            );
+            return;
+          }
+
           if (req.url?.startsWith("/api/files/") && req.method === "GET") {
             const resolvedShareFilter = await getResolvedShareFilter();
             if (res.writableEnded) return;

@@ -47,19 +47,28 @@ const extractRotationDegrees = (streams: FFProbeStream[]): number => {
 export const getVideoRotationDegrees = (filePath: string): Promise<number> =>
   new Promise((resolve, reject) => {
     const proc = spawn("ffprobe", [
-      "-v", "error",
-      "-print_format", "json",
+      "-v",
+      "error",
+      "-print_format",
+      "json",
       "-show_streams",
       filePath,
     ]);
     let stdout = "";
-    proc.stdout.on("data", (d) => { stdout += d.toString(); });
+    proc.stdout.on("data", (d) => {
+      stdout += d.toString();
+    });
     proc.on("close", (code) => {
-      if (code !== 0) { reject(new Error(`ffprobe failed for ${filePath}`)); return; }
+      if (code !== 0) {
+        reject(new Error(`ffprobe failed for ${filePath}`));
+        return;
+      }
       try {
         const data = JSON.parse(stdout) as FFProbeOutput;
         resolve(extractRotationDegrees(data.streams ?? []));
-      } catch (e) { reject(e); }
+      } catch (e) {
+        reject(e);
+      }
     });
     proc.on("error", reject);
   });

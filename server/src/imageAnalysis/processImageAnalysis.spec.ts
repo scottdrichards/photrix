@@ -40,7 +40,13 @@ const makeDb = (
     embeddingSaves: Array<{ relativePath: string; embedding: Float32Array }>;
     embeddingErrors: string[];
     decodeErrors: string[];
-  } = { faceSaves: [], regionWrites: [], embeddingSaves: [], embeddingErrors: [], decodeErrors: [] };
+  } = {
+    faceSaves: [],
+    regionWrites: [],
+    embeddingSaves: [],
+    embeddingErrors: [],
+    decodeErrors: [],
+  };
 
   const db = {
     storagePath: path.join(os.tmpdir(), "photrix-analysis-test"),
@@ -58,11 +64,9 @@ const makeDb = (
         calls.regionWrites.push({ relativePath, data });
       },
     ),
-    saveImageEmbedding: jest.fn(
-      async (relativePath: string, embedding: Float32Array) => {
-        calls.embeddingSaves.push({ relativePath, embedding });
-      },
-    ),
+    saveImageEmbedding: jest.fn(async (relativePath: string, embedding: Float32Array) => {
+      calls.embeddingSaves.push({ relativePath, embedding });
+    }),
     saveImageEmbeddingError: jest.fn(async (relativePath: string) => {
       calls.embeddingErrors.push(relativePath);
     }),
@@ -176,7 +180,9 @@ describe("processImageAnalysis", () => {
   });
 
   it("passes the full path joined from storagePath, stripping the leading slash", async () => {
-    const analyze = jest.fn<AnalyzeImage>(async () => ({ embedding: new Float32Array(1) }));
+    const analyze = jest.fn<AnalyzeImage>(async () => ({
+      embedding: new Float32Array(1),
+    }));
     const { db } = makeDb([
       { relativePath: "/sub/photo.jpg", needsFaces: false, needsEmbedding: true },
     ]);

@@ -64,7 +64,8 @@ describe("claimVariantEncode", () => {
 
   it("reaps an idle variant's encode and restarts on re-selection", async () => {
     jest.useFakeTimers();
-    const { claimVariantEncode, registerHlsProcess, touchVariant } = await loadSession(50);
+    const { claimVariantEncode, registerHlsProcess, touchVariant } =
+      await loadSession(50);
     const dir = "/hls/e";
 
     expect(claimVariantEncode(dir, 360)).toBe(true);
@@ -78,5 +79,37 @@ describe("claimVariantEncode", () => {
 
     // Re-selecting it later restarts the encode.
     expect(claimVariantEncode(dir, 360)).toBe(true);
+  });
+});
+
+describe("playback lifecycle hooks", () => {
+  it("brackets a session from first touch to tree reap, once per session", async () => {
+    jest.useFakeTimers();
+    process.env.PHOTRIX_HLS_IDLE_MS = "100";
+    const { touchHlsSession, touchVariant, setPlaybackLifecycleHooks } =
+      await loadSession(50);
+    const onSessionStart = jest.fn();
+    const onSessionEnd = jest.fn();
+    setPlaybackLifecycleHooks({ onSessionStart, onSessionEnd });
+    const dir = "/hls/f";
+
+    // Repeated touches during one playback session start exactly one bracket —
+    // this is what keeps the orchestrator's user-active window (and therefore
+    // the GPU reclaim) held across the player's quiet buffering gaps.
+    touchHlsSession(dir);
+    touchVariant(dir, 360);
+    touchHlsSession(dir);
+    expect(onSessionStart).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).not.toHaveBeenCalled();
+
+    // Only once the whole tree goes idle and is reaped does the bracket close.
+    jest.advanceTimersByTime(150);
+    await jest.runAllTimersAsync();
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+
+    // A fresh playback after the reap opens a new bracket.
+    touchHlsSession(dir);
+    expect(onSessionStart).toHaveBeenCalledTimes(2);
+    delete process.env.PHOTRIX_HLS_IDLE_MS;
   });
 });

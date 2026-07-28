@@ -4,7 +4,6 @@ import type {
   FilterField,
   Range,
 } from "./indexDatabase.type.ts";
-import type { FileRecord } from "./fileRecord.type.ts";
 import { normalizeFolderPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 
@@ -117,16 +116,6 @@ const constraintToSQL = (
     };
   }
 
-  if (fieldName === "hasAudioTranscript") {
-    if (constraint === true) {
-      return { where: "audioTranscribedAt IS NOT NULL", params: [] };
-    }
-    if (constraint === false) {
-      return { where: "audioTranscribedAt IS NULL", params: [] };
-    }
-    return null;
-  }
-
   if (fieldName === "semanticImage") {
     if (
       !constraint ||
@@ -201,13 +190,16 @@ const constraintToSQL = (
         "startsWith" in constraint ||
         "notStartsWith" in constraint)
     ) {
-      return stringSearchToSQL("audioTranscript", constraint as {
-        includes?: string;
-        glob?: string;
-        regex?: string;
-        startsWith?: string;
-        notStartsWith?: string;
-      });
+      return stringSearchToSQL(
+        "audioTranscript",
+        constraint as {
+          includes?: string;
+          glob?: string;
+          regex?: string;
+          startsWith?: string;
+          notStartsWith?: string;
+        },
+      );
     }
 
     return null;
@@ -459,7 +451,5 @@ const stringSearchToSQL = (
 const globToLike = (glob: string): string => {
   // Convert glob pattern to SQL LIKE pattern
   // ? -> _ (single char), * -> % (any chars)
-  return glob
-    .replace(/\*/g, "%")
-    .replace(/\?/g, "_");
+  return glob.replace(/\*/g, "%").replace(/\?/g, "_");
 };

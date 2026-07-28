@@ -5,6 +5,20 @@
   flex-wrap: wrap;
 }
 
+/* On phones the bar lives in a horizontally-scrolling slot, so keep the icons
+   on a single non-wrapping row and don't let them shrink. */
+@media (max-width: 720px) {
+  .iconBar {
+    flex-wrap: nowrap;
+    gap: var(--space-s);
+    width: max-content;
+  }
+
+  .filterIconButton {
+    flex-shrink: 0;
+  }
+}
+
 .filterIconButton {
   min-width: 36px;
   width: 36px;
@@ -49,6 +63,47 @@
   align-items: center;
   gap: var(--space-s);
   flex-wrap: wrap;
+}
+
+.mediaTypeIconStack {
+  position: relative;
+  width: 18px;
+  height: 18px;
+}
+
+.mediaTypeGlyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  inset: 0;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.mediaTypePhotoGlyph {
+  transform: translate(-3px, 3px) rotate(-11deg);
+  z-index: 1;
+}
+
+.mediaTypeVideoGlyph {
+  transform: translate(3px, -2px) rotate(9deg);
+  z-index: 2;
+}
+
+.mediaTypeGlyphActive {
+  opacity: 1;
+}
+
+.mediaTypeGlyphInactive {
+  opacity: 0.35;
+}
+
+.mediaTypePhotoGlyph.mediaTypeGlyphInactive {
+  transform: translate(-3px, 3px) rotate(-11deg) scale(0.92);
+}
+
+.mediaTypeVideoGlyph.mediaTypeGlyphInactive {
+  transform: translate(3px, -2px) rotate(9deg) scale(0.92);
 }
 
 .ratingFilter {

@@ -1,5 +1,8 @@
 import type http from "node:http";
-import { recordClientDiagnosticEvent, listDiagnosticsEvents } from "../observability/diagnosticsStore.ts";
+import {
+  recordClientDiagnosticEvent,
+  listDiagnosticsEvents,
+} from "../observability/diagnosticsStore.ts";
 import { writeJson } from "../utils.ts";
 
 type ClientDiagnosticsPayload = {
@@ -64,7 +67,9 @@ export const diagnosticsEventsRequestHandler = async (
           ...(event.message ? { message: event.message } : {}),
           ...(event.requestId ? { requestId: event.requestId } : {}),
           ...(event.clientSessionId ? { clientSessionId: event.clientSessionId } : {}),
-          ...(event.clientOperationId ? { clientOperationId: event.clientOperationId } : {}),
+          ...(event.clientOperationId
+            ? { clientOperationId: event.clientOperationId }
+            : {}),
           ...(event.clientRequestId ? { clientRequestId: event.clientRequestId } : {}),
           ...(event.method ? { method: event.method } : {}),
           ...(event.url ? { url: event.url } : {}),

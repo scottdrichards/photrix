@@ -44,10 +44,19 @@ export const tables = {
       { name: "audioCodec", type: "TEXT" },
       { name: "rating", type: "INTEGER", indexExpression: true },
       { name: "tags", type: "TEXT" },
+      // Set to a timestamp when the user edits rating/tags in-app (DB-only; the
+      // original files stay read-only). A future writeback task can find these
+      // rows (userMetadataDirtyAt IS NOT NULL) and, if ever desired, persist the
+      // edits into the file's own metadata, then clear this back to NULL.
+      { name: "userMetadataDirtyAt", type: "INTEGER", indexExpression: true },
       { name: "personInImage", type: "TEXT" },
       { name: "regions", type: "TEXT" },
       { name: "orientation", type: "INTEGER" },
       { name: "livePhotoVideoFileName", type: "TEXT" },
+      // Human-authored caption embedded in the file (EXIF ImageDescription / IPTC
+      // Caption-Abstract / XMP dc:description). Distinct from the AI-generated
+      // `aiDescription`.
+      { name: "description", type: "TEXT" },
       { name: "aiDescription", type: "TEXT" },
       { name: "aiTags", type: "TEXT" },
       { name: "fileHash", type: "TEXT" },
@@ -198,6 +207,16 @@ export const tables = {
       // the engine resets them for the backfill to redo.
       { name: "threshold", type: "REAL" },
       { name: "updatedAt", type: "INTEGER" },
+      // The `weight` value at the last time member faces' stored
+      // `clusterSimilarity` was recomputed against this centroid. Assignment
+      // writes each similarity relative to the centroid *as it was when the
+      // face joined*, so the seed (stored as 1.0) and early joiners keep
+      // inflated scores as the running mean drifts. The background refresh
+      // (see faceClusterEngine.refreshStaleClusterSimilarities) rescoring
+      // members against the current centroid advances this so the People tab's
+      // MAX(clusterSimilarity) representative tracks the real centroid. Default
+      // 0 makes every pre-existing cluster eligible on first pass.
+      { name: "similarityRefreshedWeight", type: "INTEGER", default: 0 },
       // User-assigned display name for this cluster.
       { name: "name", type: "TEXT" },
       // When set, this centroid belongs to the named/merged person rooted at
@@ -252,7 +271,33 @@ export const tables = {
       { name: "publicKey", type: "TEXT" },
       { name: "counter", type: "INTEGER" },
       { name: "transports", type: "TEXT" },
+      { name: "name", type: "TEXT" },
       { name: "createdAt", type: "INTEGER" },
+    ],
+    compositeIndexes: [],
+  },
+  // Personal, long-lived API tokens ("MCP keys") a user mints to authenticate
+  // remote agents. Distinct from short-lived interactive auth_sessions.
+  api_tokens: {
+    columns: [
+      { name: "token", type: "TEXT", isPrimaryKey: true },
+      { name: "username", type: "TEXT", indexExpression: true },
+      { name: "name", type: "TEXT" },
+      { name: "createdAt", type: "INTEGER" },
+      { name: "lastUsedAt", type: "INTEGER" },
+    ],
+    compositeIndexes: [],
+  },
+  // Tracks issued stateless share tokens so the owner can list and revoke them.
+  // The full token is stored so the panel can re-copy the link; revokedAt marks
+  // a revoked link (its digest is also loaded into the in-memory revocation set).
+  share_links: {
+    columns: [
+      { name: "token", type: "TEXT", isPrimaryKey: true },
+      { name: "username", type: "TEXT", indexExpression: true },
+      { name: "label", type: "TEXT" },
+      { name: "createdAt", type: "INTEGER" },
+      { name: "revokedAt", type: "INTEGER" },
     ],
     compositeIndexes: [],
   },

@@ -3,7 +3,13 @@ import type { PhotoItem } from "../api";
 import { ThumbnailTile } from "./ThumbnailTile";
 
 const useSelectionContextMock = vi.fn();
-const intersectionObservers: { trigger: (isIntersecting: boolean) => void }[] = [];
+
+// The shared-observer hook (useNearViewport) creates one IntersectionObserver
+// for all tiles rather than one per tile. To keep triggerIntersection() working,
+// the fake stores the singleton callback on construction and then exposes
+// per-element triggers via the observe() mock.
+let fakeCallback: IntersectionObserverCallback | null = null;
+const observedElements: Element[] = [];
 const originalIntersectionObserver = globalThis.IntersectionObserver;
 
 vi.mock("./selection/SelectionContext", () => ({
@@ -12,21 +18,19 @@ vi.mock("./selection/SelectionContext", () => ({
 
 beforeAll(() => {
   class FakeIntersectionObserver {
-    private callback: IntersectionObserverCallback;
-
     constructor(callback: IntersectionObserverCallback) {
-      this.callback = callback;
-      intersectionObservers.push({
-        trigger: (isIntersecting: boolean) => {
-          this.callback(
-            [{ isIntersecting } as IntersectionObserverEntry],
-            this as unknown as IntersectionObserver,
-          );
-        },
-      });
+      fakeCallback = callback;
     }
 
-    observe = vi.fn();
+    observe = vi.fn((el: Element) => {
+      observedElements.push(el);
+    });
+
+    unobserve = vi.fn((el: Element) => {
+      const idx = observedElements.indexOf(el);
+      if (idx !== -1) observedElements.splice(idx, 1);
+    });
+
     disconnect = vi.fn();
   }
 
@@ -40,7 +44,13 @@ afterAll(() => {
 
 const triggerIntersection = (isIntersecting: boolean) => {
   act(() => {
-    intersectionObservers.forEach((observer) => observer.trigger(isIntersecting));
+    if (!fakeCallback) return;
+    const entries = observedElements.map(
+      (target) => ({ target, isIntersecting }) as unknown as IntersectionObserverEntry,
+    );
+    if (entries.length > 0) {
+      fakeCallback(entries, {} as IntersectionObserver);
+    }
   });
 };
 
@@ -58,7 +68,7 @@ const createPhoto = (overrides: Partial<PhotoItem> = {}): PhotoItem => ({
 describe("ThumbnailTile", () => {
   beforeEach(() => {
     useSelectionContextMock.mockReset();
-    intersectionObservers.length = 0;
+    observedElements.length = 0;
     useSelectionContextMock.mockReturnValue({
       items: [],
       selected: null,

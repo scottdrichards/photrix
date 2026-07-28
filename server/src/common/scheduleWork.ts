@@ -8,10 +8,7 @@ const pendingWorkByKey = new Map<string, PendingEntry<unknown>[]>();
 /**
  * Schedules work by key. If work is already scheduled for the same key, it adds to the list of waiters for that work
  */
-export const scheduleWork = <T>(
-  key: string,
-  work: () => Promise<T>,
-): Promise<T> => {
+export const scheduleWork = <T>(key: string, work: () => Promise<T>): Promise<T> => {
   const existing = pendingWorkByKey.get(key);
   if (existing) {
     return new Promise<T>((resolve, reject) => {

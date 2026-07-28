@@ -5,11 +5,16 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { CACHE_DIR } from "../common/cacheUtils.js";
 import { getLogger } from "../observability/logger.ts";
+import { buildPythonProcessEnv, resolvePythonCommand } from "../python/pythonRuntime.ts";
 import {
   COMPUTE_WORKER_IDS,
   registerComputeWorker,
   withForegroundWorker,
   awaitForegroundIdle,
+  acquireGpuInitSlot,
+  createSuspensionAwareTimeout,
+  consumeDeliberateKill,
+  markWorkerEvictedError,
 } from "../taskOrchestrator/computeWorkers.ts";
 import type { DetectedFace } from "../faceDetection/faceDetector.type.ts";
 
@@ -68,16 +73,25 @@ export type ImageAnalysisResult = {
   embeddingError?: string;
 };
 
+export const resolveImageAnalysisWorkerRuntime = (
+  env: NodeJS.ProcessEnv = process.env,
+): { faceProvider: string; clipDevice: string } => {
+  const faceProvider =
+    env.PHOTRIX_INSIGHTFACE_PROVIDER?.trim() ??
+    env.PHOTRIX_CLIP_PROVIDER?.trim() ??
+    "CPUExecutionProvider";
+  const clipDevice = env.PHOTRIX_CLIP_DEVICE?.trim() ?? "cpu";
+  return { faceProvider, clipDevice };
+};
+
 type PendingRequest = {
   resolve: (value: WorkerSuccess) => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timeout: { clear: () => void };
 };
 
 const REQUEST_TIMEOUT_MS = 120_000;
 const WORKER_SCRIPT = path.resolve(process.cwd(), "python", "image_analysis_worker.py");
-
-const isWindows = process.platform === "win32";
 
 const canAccess = async (targetPath: string): Promise<boolean> => {
   try {
@@ -86,22 +100,6 @@ const canAccess = async (targetPath: string): Promise<boolean> => {
   } catch {
     return false;
   }
-};
-
-const resolvePythonCommand = async (): Promise<string> => {
-  const fromEnv =
-    process.env.PHOTRIX_PYTHON?.trim() ?? process.env.PHOTRIX_PYTHON_EXECUTABLE?.trim();
-  if (fromEnv) return fromEnv;
-
-  const cwd = process.cwd();
-  const candidates = [
-    path.join(cwd, ".venv", "Scripts", "python.exe"),
-    path.join(cwd, ".venv", "bin", "python"),
-  ];
-  for (const candidate of candidates) {
-    if (await canAccess(candidate)) return candidate;
-  }
-  return isWindows ? "python" : "python3";
 };
 
 const asDetectedFace = (face: RawFace): DetectedFace => ({
@@ -128,8 +126,8 @@ const createWorkerHandle = (label: string): WorkerHandle => {
   const pending = new Map<number, PendingRequest>();
 
   const rejectAllPending = (error: Error) => {
-    for (const { reject, timer } of pending.values()) {
-      clearTimeout(timer);
+    for (const { reject, timeout } of pending.values()) {
+      timeout.clear();
       reject(error);
     }
     pending.clear();
@@ -154,7 +152,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
     if (!request) return;
 
     pending.delete(message.id);
-    clearTimeout(request.timer);
+    request.timeout.clear();
 
     if ("error" in message) {
       const err = message.permanent
@@ -176,13 +174,21 @@ const createWorkerHandle = (label: string): WorkerHandle => {
       }
 
       const pythonCommand = await resolvePythonCommand();
-      const provider = process.env.PHOTRIX_CLIP_PROVIDER ?? "CPUExecutionProvider";
+      const pythonEnv = await buildPythonProcessEnv(pythonCommand, process.env);
+      const { faceProvider, clipDevice } = resolveImageAnalysisWorkerRuntime();
 
-      log.info({ label, provider }, "Starting image analysis worker — may take a minute on first run");
-      const child = spawn(pythonCommand, [WORKER_SCRIPT, provider], {
+      // Hold the GPU init slot for the duration of model loading so a CLAP
+      // worker that also wants CUDA doesn't race us for GPU memory.
+      const releaseGpuSlot = clipDevice === "cuda" ? await acquireGpuInitSlot() : null;
+
+      log.info(
+        { label, faceProvider, clipDevice },
+        "Starting image analysis worker — may take a minute on first run",
+      );
+      const child = spawn(pythonCommand, [WORKER_SCRIPT, faceProvider, clipDevice], {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
-        env: { ...process.env, HF_HOME: path.join(CACHE_DIR, "huggingface") },
+        env: { ...pythonEnv, HF_HOME: path.join(CACHE_DIR, "huggingface") },
       });
       proc = child;
 
@@ -192,7 +198,10 @@ const createWorkerHandle = (label: string): WorkerHandle => {
       // 'exit' handler rejects any pending requests and resets state so the next
       // call respawns a fresh worker.
       child.stdin.on("error", (error) => {
-        log.warn({ err: error }, "Image analysis worker stdin error (worker likely exited)");
+        log.warn(
+          { err: error },
+          "Image analysis worker stdin error (worker likely exited)",
+        );
       });
 
       const ready = new Promise<void>((resolve, reject) => {
@@ -248,16 +257,28 @@ const createWorkerHandle = (label: string): WorkerHandle => {
           const pendingCount = pending.size;
           proc = null;
           readyPromise = null;
+          // A kill we issued ourselves (GPU reclaim for playback, shutdown) is
+          // not a failure of the in-flight files: tag the rejection so the task
+          // runner leaves them pending for retry instead of marking them errored.
+          const evicted = consumeDeliberateKill(child.pid);
           const err = new Error(
-            `Image analysis worker (${label}) exited${signal ? ` with signal ${signal}` : ` with code ${code ?? "unknown"}`}`,
+            `Image analysis worker (${label}) exited${signal ? ` with signal ${signal}` : ` with code ${code ?? "unknown"}`}${evicted ? " (deliberately evicted for a user request)" : ""}`,
           );
-          log.warn({ label, code, signal, pendingCount }, "Image analysis worker exited");
+          if (evicted) markWorkerEvictedError(err);
+          log.warn(
+            { label, code, signal, pendingCount, evicted },
+            "Image analysis worker exited",
+          );
           rejectAllPending(err);
           if (!settled) rejectReady(err);
         });
       });
 
-      await ready;
+      try {
+        await ready;
+      } finally {
+        releaseGpuSlot?.();
+      }
     })();
 
     try {
@@ -273,25 +294,34 @@ const createWorkerHandle = (label: string): WorkerHandle => {
     const id = nextId++;
 
     return new Promise<WorkerSuccess>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        // A timeout means the worker is wedged on a forward pass (a pathological
-        // image, a stuck model run). The Python side holds _clip_lock during the
-        // pass, so a hung analyzeImage permanently starves the embedText thread
-        // used by search — and the stuck request never returns on its own. Kill
-        // the process; the exit handler rejects any pending requests and resets
-        // state so the next call respawns a fresh worker (matches clapWorker).
-        log.warn({ label, id, timeoutMs: REQUEST_TIMEOUT_MS }, "Image analysis worker timed out — killing process");
-        proc?.kill();
-        reject(new Error(`Image analysis worker (${label}) timed out for request ${id}`));
-      }, REQUEST_TIMEOUT_MS);
+      const timeout = createSuspensionAwareTimeout(
+        COMPUTE_WORKER_IDS.image,
+        REQUEST_TIMEOUT_MS,
+        () => {
+          pending.delete(id);
+          // A timeout means the worker is wedged on a forward pass (a pathological
+          // image, a stuck model run). The Python side holds _clip_lock during the
+          // pass, so a hung analyzeImage permanently starves the embedText thread
+          // used by search — and the stuck request never returns on its own. Kill
+          // the process; the exit handler rejects any pending requests and resets
+          // state so the next call respawns a fresh worker (matches clapWorker).
+          log.warn(
+            { label, id, timeoutMs: REQUEST_TIMEOUT_MS },
+            "Image analysis worker timed out — killing process",
+          );
+          proc?.kill();
+          reject(
+            new Error(`Image analysis worker (${label}) timed out for request ${id}`),
+          );
+        },
+      );
 
-      pending.set(id, { resolve, reject, timer });
+      pending.set(id, { resolve, reject, timeout });
 
       try {
         proc?.stdin.write(JSON.stringify({ id, ...payload }) + "\n");
       } catch (error) {
-        clearTimeout(timer);
+        timeout.clear();
         pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -323,7 +353,8 @@ export const analyzeImage = async (
   // and its model lock, so dispatching background passes first would starve it.
   await awaitForegroundIdle(COMPUTE_WORKER_IDS.image);
   await analysisWorker.ensureReady();
-  if (!analysisWorker.getProcess()) throw new Error("Image analysis worker is not available");
+  if (!analysisWorker.getProcess())
+    throw new Error("Image analysis worker is not available");
 
   const raw = await analysisWorker.send({
     operation: "analyzeImage",

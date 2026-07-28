@@ -1,6 +1,9 @@
 import path from "node:path";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
-import { getExifMetadataFromFile, getFastMediaDimensions } from "../fileHandling/fileUtils.ts";
+import {
+  getExifMetadataFromFile,
+  getFastMediaDimensions,
+} from "../fileHandling/fileUtils.ts";
 import { getLogger } from "../observability/logger.ts";
 import { batch } from "../utils.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
@@ -15,13 +18,21 @@ const parallelism = 4;
 type TaskCtrl = ReturnType<typeof createTaskController>;
 
 const fillMissingDimensions = async (ctrl: TaskCtrl, database: IndexDatabase) => {
+  const attemptedPaths = new Set<string>();
+
   while (true) {
     ctrl.checkCancelled();
     await ctrl.waitUntilResumed();
     ctrl.checkCancelled();
 
-    const items = await database.getImagesMissingDimensions(dbBatchSize);
+    const items = (await database.getImagesMissingDimensions(dbBatchSize)).filter(
+      ({ relativePath }) => !attemptedPaths.has(relativePath),
+    );
     if (!items.length) return;
+
+    for (const { relativePath } of items) {
+      attemptedPaths.add(relativePath);
+    }
 
     for (const chunk of batch(items, parallelism)) {
       ctrl.checkCancelled();
@@ -30,7 +41,10 @@ const fillMissingDimensions = async (ctrl: TaskCtrl, database: IndexDatabase) =>
 
       await Promise.all(
         chunk.map(async ({ relativePath }) => {
-          const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
+          const fullPath = path.join(
+            database.storagePath,
+            stripLeadingSlash(relativePath),
+          );
           try {
             const dims = await getFastMediaDimensions(fullPath);
             if (dims.dimensionWidth !== undefined && dims.dimensionHeight !== undefined) {
@@ -69,6 +83,10 @@ export const processExifMetadata = (database: IndexDatabase): TaskRunner => {
         await Promise.all(
           chunk.map(async (entry) => {
             const { relativePath } = entry;
+            if (entry.sizeInBytes === 0) {
+              await database.removeFile(relativePath);
+              return;
+            }
             const fullPath = path.join(
               database.storagePath,
               stripLeadingSlash(relativePath),
