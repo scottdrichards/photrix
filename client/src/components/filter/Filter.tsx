@@ -404,17 +404,19 @@ export const Filter = () => {
             style={floatingPanelStyle}
           >
             <div className={css.panelSection}>
-              <h3>Folders</h3>
-              <label className="switch-label">
-                <input
-                  type="checkbox"
-                  role="switch"
-                  className="switch-track"
-                  checked={includeSubfolders}
-                  onChange={(e) => setFilter({ includeSubfolders: e.target.checked })}
-                />
-                <span>Include subfolders</span>
-              </label>
+              <div className={css.panelHeaderRow}>
+                <h3>Folders</h3>
+                <label className="switch-label">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    className="switch-track"
+                    checked={includeSubfolders}
+                    onChange={(e) => setFilter({ includeSubfolders: e.target.checked })}
+                  />
+                  <span>Include subfolders</span>
+                </label>
+              </div>
               {currentPath ? (
                 <div className={css.breadcrumbRow}>
                   <button
@@ -459,7 +461,7 @@ export const Filter = () => {
                       </span>
                       <span>
                         {folder.name}
-                        {` (${folderCountFormatter.format(folder.count)})`}
+                        <span className={css.folderCount}>{` (${folderCountFormatter.format(folder.count)})`}</span>
                       </span>
                     </div>
                   ))}

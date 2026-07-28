@@ -36,7 +36,12 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
     setError(null);
 
     fetchPeopleClusters({ signal: abortController.signal, ...filter })
-      .then((result) => setClusters(result.clusters))
+      .then((result) => {
+        const sorted = [...result.clusters].sort(
+          (a, b) => (b.name != null ? 1 : 0) - (a.name != null ? 1 : 0) || b.count - a.count,
+        );
+        setClusters(sorted);
+      })
       .catch((err) => {
         if (err?.name === "AbortError") return;
         setError("Failed to load faces");

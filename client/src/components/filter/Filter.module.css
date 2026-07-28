@@ -145,6 +145,22 @@
   gap: var(--space-s);
 }
 
+.panelHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-s);
+}
+
+.panelHeaderRow h3 {
+  margin: 0;
+}
+
+.folderCount {
+  color: var(--fg3);
+  font-size: 0.85em;
+}
+
 .folderCard {
   padding: var(--space-m);
   border: 1px solid var(--stroke1);

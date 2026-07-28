@@ -21,6 +21,7 @@ export const DEFAULT_METADATA_KEYS = [
   "lens",
   "rating",
   "tags",
+  "editAdj",
   "locationLatitude",
   "locationLongitude",
   "orientation",
@@ -32,11 +33,14 @@ export const DEFAULT_METADATA_KEYS = [
 
 const VIDEO_EXTENSIONS = [".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".wmv"];
 
+const encodePathSegments = (path: string): string =>
+  path.split("/").map(encodeURIComponent).join("/");
+
 export const buildFileUrl = (path: string, params: Record<string, string>): string => {
   // Use /api/files/{path} for individual file access (no trailing slash)
   // Strip leading slash from path since folder paths start with /
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
-  const url = new URL(`/api/files/${normalizedPath}`, window.location.origin);
+  const url = new URL(`/api/files/${encodePathSegments(normalizedPath)}`, window.location.origin);
   Object.entries(params).forEach(([key, value]) => {
     url.searchParams.set(key, value);
   });
@@ -48,12 +52,14 @@ export const buildFileUrl = (path: string, params: Record<string, string>): stri
 };
 
 export const buildFallbackUrl = (path: string): string => {
-  const url = new URL(`/api/uploads/${path}`, window.location.origin);
+  const url = new URL(`/api/uploads/${encodePathSegments(path)}`, window.location.origin);
   return url.toString();
 };
 
 export const buildFilesQueryUrl = (path: string, params: URLSearchParams) =>
-  path ? `/api/files/${path}?${params.toString()}` : `/api/files/?${params.toString()}`;
+  path
+    ? `/api/files/${encodePathSegments(path)}?${params.toString()}`
+    : `/api/files/?${params.toString()}`;
 
 const inferMediaType = (item: ApiPhotoItem): "photo" | "video" => {
   const mime = item.mimeType ?? null;

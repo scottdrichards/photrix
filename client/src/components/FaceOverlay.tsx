@@ -219,7 +219,6 @@ export function FaceOverlay({
   faceTableBoxesRaw,
   aspectRatio,
   namedFaces,
-  onSelectPerson,
   labelsHidden = false,
 }: FaceOverlayProps) {
   const exifFaceRegions = useMemo(() => parseFaceRegions(regionsRaw), [regionsRaw]);
@@ -285,25 +284,19 @@ export function FaceOverlay({
           className={`${css.faceFrameRect} ${css.faceTableFrameRect}`}
         />
       </svg>
-      {onSelectPerson && !labelsHidden && nameLabels.length > 0 && (
+      {!labelsHidden && nameLabels.length > 0 && (
         <div className={css.faceLabelLayer}>
           {nameLabels.map((face, index) => (
-            <button
+            <span
               key={index}
-              type="button"
               className={css.faceLabel}
               style={{
                 left: `${face.box.x * 100}%`,
                 top: `${(face.box.y - face.box.height / 2) * 100}%`,
               }}
-              onClick={(event) => {
-                event.stopPropagation();
-                onSelectPerson(face.personId);
-              }}
-              title={`View ${face.name}`}
             >
               {face.name}
-            </button>
+            </span>
           ))}
         </div>
       )}

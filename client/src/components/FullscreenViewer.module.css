@@ -177,9 +177,6 @@
   stroke: rgba(255, 201, 79, 0.95);
 }
 
-/* Clickable person-name chips anchored just above each detected face. Sits
-   above the frame layer; only the chips themselves capture pointer events so
-   the rest of the photo stays interactive (zoom, swipe). */
 .faceLabelLayer {
   position: absolute;
   inset: 0;
@@ -202,18 +199,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: pointer;
-  pointer-events: auto;
   backdrop-filter: blur(2px);
-  transition:
-    background 120ms ease-out,
-    border-color 120ms ease-out;
-}
-
-.faceLabel:hover,
-.faceLabel:focus-visible {
-  background: rgba(20, 20, 20, 0.85);
-  border-color: rgba(255, 201, 79, 1);
 }
 
 .topRightActions {

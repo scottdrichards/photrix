@@ -318,6 +318,8 @@ export type PhotoMetadataPatch = {
   rating?: number | null;
   /** Freeform labels; replaces the existing set. */
   tags?: string[];
+  /** JSON-serialized EditAdj, or null to clear all edits. */
+  editAdj?: string | null;
 };
 
 /**
@@ -330,9 +332,8 @@ export const updatePhotoMetadata = async (
   patch: PhotoMetadataPatch,
 ): Promise<void> => {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
-  // Build via URL so spaces/unicode in the path are percent-encoded the same way
-  // the file-serving GET URLs are (the server decodeURIComponent's the segment).
-  const url = new URL(`/api/files/${normalizedPath}`, window.location.origin);
+  const encodedPath = normalizedPath.split("/").map(encodeURIComponent).join("/");
+  const url = new URL(`/api/files/${encodedPath}`, window.location.origin);
   await fetchJsonOrThrow<{ ok: true }>(url.toString(), "update photo metadata", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
