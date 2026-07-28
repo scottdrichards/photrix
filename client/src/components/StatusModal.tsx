@@ -147,6 +147,13 @@ const VramBar = ({
   const freeMB = Math.max(0, totalMB - usedMB);
   return (
     <div className={css.vramBar}>
+      {unaccountedMB > 0 && (
+        <div
+          className={`${css.vramSegment} ${css["role-external"]}`}
+          style={{ width: `${(unaccountedMB / totalMB) * 100}%` }}
+          title={`Outside this container (host / other containers): ${formatMB(unaccountedMB)}`}
+        />
+      )}
       {processes.map((p) => (
         <div
           key={p.pid}
@@ -155,13 +162,6 @@ const VramBar = ({
           title={`${roleLabel(p.role)} (pid ${p.pid}): ${formatMB(p.vramMB)}`}
         />
       ))}
-      {unaccountedMB > 0 && (
-        <div
-          className={`${css.vramSegment} ${css["role-external"]}`}
-          style={{ width: `${(unaccountedMB / totalMB) * 100}%` }}
-          title={`Outside this container (host / other containers): ${formatMB(unaccountedMB)}`}
-        />
-      )}
       <div className={css.vramFree} style={{ width: `${(freeMB / totalMB) * 100}%` }} />
     </div>
   );
