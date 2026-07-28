@@ -180,7 +180,12 @@ const ComputeSection = ({
   unaccountedVramMB: number | undefined;
   arbitration: Arbitration | undefined;
 }) => {
-  if (workers.length === 0 && processes.length === 0) return null;
+  // VRAM held outside this container (host / sibling containers) shows up as
+  // unaccounted with no visible worker or process. Still render so that usage —
+  // and the resulting transcode headroom loss — is visible instead of silently
+  // vanishing the whole section.
+  const hasUnaccounted = (unaccountedVramMB ?? 0) > 0;
+  if (workers.length === 0 && processes.length === 0 && !hasUnaccounted) return null;
 
   // GPU processes with no registered worker (e.g. an ffmpeg NVENC transcode).
   const workerPids = new Set(workers.map((w) => w.pid));
@@ -211,7 +216,7 @@ const ComputeSection = ({
         </div>
       )}
 
-      {totalVramMB && processes.length > 0 && (
+      {totalVramMB && (processes.length > 0 || (unaccountedVramMB ?? 0) > 0) && (
         <VramBar
           processes={processes}
           totalMB={totalVramMB}

@@ -250,4 +250,37 @@ describe("StatusModal", () => {
     expect(screen.getByText("GPU reclaimed for playback")).toBeInTheDocument();
     expect(screen.getByText("frozen")).toBeInTheDocument();
   });
+
+  it("still shows the VRAM section when all GPU memory is held outside the container", async () => {
+    let onUpdate: ((status: unknown) => void) | undefined;
+    subscribeStatusStreamMock.mockImplementation((update) => {
+      onUpdate = update as (status: unknown) => void;
+      return () => undefined;
+    });
+
+    render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
+
+    await act(async () => {
+      onUpdate?.(
+        makeStatus({
+          system: {
+            cpu: { usage: 1, cores: 8 },
+            memory: { used: 4_000_000_000, total: 16_000_000_000, usage: 25 },
+            // VRAM is used but no compute process is visible inside the LXC, so
+            // it all lands in unaccountedMB. The section must not disappear.
+            gpu: {
+              usage: 1,
+              memory: { used: 4699, total: 8188 },
+              processes: [],
+              unaccountedMB: 4699,
+            },
+            workers: [],
+          },
+        }),
+      );
+    });
+
+    expect(await screen.findByText("Compute workers / VRAM")).toBeInTheDocument();
+    expect(screen.getByText("Outside this container")).toBeInTheDocument();
+  });
 });
