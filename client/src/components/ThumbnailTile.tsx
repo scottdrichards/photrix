@@ -635,6 +635,17 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
             }}
             onError={gatedSharpUrl.release}
           />
+          {tileEditStyle?.vignetteBackground && (
+            <div
+              className={css.vignetteOverlay}
+              aria-hidden="true"
+              style={{
+                background: tileEditStyle.vignetteBackground,
+                ...(tileEditStyle.transform ? { transform: tileEditStyle.transform } : {}),
+                ...(tileEditStyle.clipPath ? { clipPath: tileEditStyle.clipPath } : {}),
+              }}
+            />
+          )}
         </>
       ) : (
         <div className={css.unknownFile}>

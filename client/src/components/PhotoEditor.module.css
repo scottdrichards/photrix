@@ -89,6 +89,44 @@
   border-radius: 2px;
 }
 
+/* ─── Auto enhance ───────────────────────────────────────────────────────── */
+
+.autoRow {
+  margin-bottom: var(--space-s);
+}
+
+.autoBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  font-weight: var(--fw-semi);
+  color: rgba(180, 210, 255, 0.95);
+  background: rgba(100, 160, 255, 0.16);
+  border: 1px solid rgba(100, 160, 255, 0.4);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 140ms;
+}
+
+.autoBtn:hover:not(:disabled) {
+  background: rgba(100, 160, 255, 0.28);
+}
+
+.autoBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.autoError {
+  margin: var(--space-xs) 0 0;
+  font-size: 0.78rem;
+  color: #ff6b6b;
+}
+
 /* ─── Sections ───────────────────────────────────────────────────────────── */
 
 .section {

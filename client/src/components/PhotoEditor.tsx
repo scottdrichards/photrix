@@ -11,6 +11,7 @@ import {
   ImageArrowCounterclockwise24Regular,
   RotateLeft24Regular,
   RotateRight24Regular,
+  Wand24Regular,
 } from "@fluentui/react-icons";
 import { getAuthHeaders } from "../auth";
 import css from "./PhotoEditor.module.css";
@@ -29,6 +30,9 @@ export interface EditAdj {
   clarity: number;
   dehaze: number;
   sharpness: number;
+  /** Radial edge darkening/lightening. Positive darkens toward the edges,
+   * negative lightens (whitens) toward the edges. 0 disables it entirely. */
+  vignette: number;
   rotation: number;
   rotate90: number;
   flipH: boolean;
@@ -43,12 +47,18 @@ export interface EditStyle {
   filter: string;
   transform: string;
   clipPath: string;
+  /** CSS `background` value for a radial-gradient vignette overlay, or
+   * undefined when no vignette is applied. A vignette can't be expressed as a
+   * single CSS `filter` function (it needs spatial variation), so callers that
+   * render via `filter`/`transform`/`clipPath` must additionally paint an
+   * absolutely-positioned overlay element with this as its background. */
+  vignetteBackground?: string;
 }
 
 export const DEFAULT_ADJ: EditAdj = {
   exposure: 0, contrast: 0, highlights: 0, shadows: 0,
   saturation: 0, vibrance: 0, temperature: 0, tint: 0,
-  clarity: 0, dehaze: 0, sharpness: 0,
+  clarity: 0, dehaze: 0, sharpness: 0, vignette: 0,
   rotation: 0, rotate90: 0, flipH: false, flipV: false,
   cropTop: 0, cropRight: 0, cropBottom: 0, cropLeft: 0,
 };
@@ -81,6 +91,30 @@ function colorMatrixValues(temperature: number, tint: number): string {
   return `${r} 0 0 0 0  0 ${g} 0 0 0  0 0 ${b} 0 0  0 0 0 1 0`;
 }
 
+// Falloff starts this fraction of the way out from center to the farthest
+// corner — everything inside stays untouched, everything beyond ramps in.
+const VIGNETTE_INNER_RADIUS = 0.35;
+// Darkening/lightening amount at the slider's extreme (100), applied at the
+// very corner. Kept under 1 so corners still show some detail even at max.
+const VIGNETTE_MAX_STRENGTH = 0.8;
+
+function vignetteStrength(vignette: number): number {
+  return Math.min(1, Math.abs(vignette) / 100) * VIGNETTE_MAX_STRENGTH;
+}
+
+// CSS radial-gradient background for the vignette overlay used by the
+// CSS-filter-based rendering paths (saved-edit display outside the live
+// canvas preview). `ellipse farthest-corner` (the CSS default) matches the
+// per-pixel corner-normalized falloff used in applyPixelAdj below, so the two
+// rendering paths look the same.
+function vignetteCssBackground(vignette: number): string | undefined {
+  if (vignette === 0) return undefined;
+  const strength = vignetteStrength(vignette);
+  const color = vignette > 0 ? "0, 0, 0" : "255, 255, 255";
+  const innerPct = (VIGNETTE_INNER_RADIUS * 100).toFixed(1);
+  return `radial-gradient(ellipse at center, rgba(${color}, 0) ${innerPct}%, rgba(${color}, ${strength.toFixed(3)}) 100%)`;
+}
+
 export function computeStyle(adj: EditAdj, svgId: string): EditStyle {
   const needsSvg =
     adj.exposure !== 0 || adj.highlights !== 0 || adj.shadows !== 0 ||
@@ -111,7 +145,7 @@ export function computeStyle(adj: EditAdj, svgId: string): EditStyle {
       ? ""
       : `inset(${adj.cropTop}% ${adj.cropRight}% ${adj.cropBottom}% ${adj.cropLeft}%)`;
 
-  return { filter, transform, clipPath };
+  return { filter, transform, clipPath, vignetteBackground: vignetteCssBackground(adj.vignette) };
 }
 
 // ─── Crop math ─────────────────────────────────────────────────────────────
@@ -288,6 +322,31 @@ export function applyPixelAdj(data: Uint8ClampedArray, width: number, height: nu
 
   if (adj.clarity > 0) applyUnsharpMask(data, width, height, 8, adj.clarity / 100 * 0.6);
   if (adj.sharpness > 0) applyUnsharpMask(data, width, height, 1.5, adj.sharpness / 100 * 1.2);
+
+  if (adj.vignette !== 0) {
+    const strength = vignetteStrength(adj.vignette);
+    const vr = adj.vignette > 0 ? 0 : 255;
+    const vg = vr, vb = vr;
+    const cx = width / 2;
+    const cy = height / 2;
+    for (let y = 0; y < height; y++) {
+      const dy = cy > 0 ? (y - cy) / cy : 0;
+      const rowBase = y * width;
+      for (let x = 0; x < width; x++) {
+        const dx = cx > 0 ? (x - cx) / cx : 0;
+        // Normalized so the exact corner is 1 and the center is 0, matching
+        // the CSS `ellipse farthest-corner` gradient used elsewhere.
+        const dist = Math.sqrt(dx * dx + dy * dy) * Math.SQRT1_2;
+        const t = Math.max(0, Math.min(1, (dist - VIGNETTE_INNER_RADIUS) / (1 - VIGNETTE_INNER_RADIUS)));
+        const amount = t * t * strength;
+        if (amount <= 0) continue;
+        const idx = (rowBase + x) * 4;
+        data[idx] += (vr - data[idx]) * amount;
+        data[idx + 1] += (vg - data[idx + 1]) * amount;
+        data[idx + 2] += (vb - data[idx + 2]) * amount;
+      }
+    }
+  }
 }
 
 async function exportEdited(fullUrl: string, photoName: string, adj: EditAdj) {
@@ -338,6 +397,138 @@ async function exportEdited(fullUrl: string, photoName: string, adj: EditAdj) {
   a.href = canvas.toDataURL("image/jpeg", 0.92);
   a.download = `${baseName}_edited.jpg`;
   a.click();
+}
+
+// ─── Auto enhance ──────────────────────────────────────────────────────────
+
+// Auto-levels/white-balance only needs a representative sample of the tone
+// and color distribution, not every pixel — sampling a small downscale keeps
+// this fast even for very large source photos.
+const AUTO_SAMPLE_MAX_EDGE = 200;
+
+function sampleImagePixels(img: HTMLImageElement): { data: Uint8ClampedArray; count: number } {
+  const iw = img.naturalWidth || 1;
+  const ih = img.naturalHeight || 1;
+  const scale = Math.min(1, AUTO_SAMPLE_MAX_EDGE / Math.max(iw, ih));
+  const sw = Math.max(1, Math.round(iw * scale));
+  const sh = Math.max(1, Math.round(ih * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = sw;
+  canvas.height = sh;
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(img, 0, 0, sw, sh);
+  const { data } = ctx.getImageData(0, 0, sw, sh);
+  return { data, count: sw * sh };
+}
+
+/**
+ * Classical auto-levels + gray-world white balance, computed from a sampled
+ * ImageData (see sampleImagePixels for how the sample is produced) and
+ * mapped onto the existing exposure/contrast/temperature/tint/vibrance
+ * sliders — this doesn't add a separate rendering path, the result is just
+ * slider values applied the same way a manual edit would be. Pulled out from
+ * computeAutoAdjustments as a pure function so the math is unit-testable
+ * without mocking fetch/Image/canvas.
+ *
+ * White balance: solves for the temperature/tint values that make the
+ * sampled channel averages neutral gray, by inverting the same linear model
+ * applyPixelAdj/computeStyle use to apply temperature/tint.
+ *
+ * Levels: nudges exposure so mean luminance sits near mid-gray, and contrast
+ * so a percentile-clipped tonal range (ignoring the most extreme 1% of
+ * outlier pixels on each end) covers close to the full 0-255 range.
+ */
+export function deriveAutoAdjFromSample(data: Uint8ClampedArray, count: number): Partial<EditAdj> {
+  if (count === 0) return {};
+
+  let sumR = 0, sumG = 0, sumB = 0, sumSat = 0;
+  const lum = new Float32Array(count);
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    sumR += r; sumG += g; sumB += b;
+    const maxC = Math.max(r, g, b);
+    const minC = Math.min(r, g, b);
+    sumSat += maxC > 0 ? (maxC - minC) / maxC : 0;
+    lum[p] = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+  const avgR = sumR / count;
+  const avgG = sumG / count;
+  const avgB = sumB / count;
+  const avgSat = sumSat / count;
+
+  // Gray-world white balance (see colorMatrixValues / applyPixelAdj for the
+  // forward model this inverts): r' = r*(1+t*0.18), b' = b*(1-t*0.18),
+  // g' = g*(1-|t|*0.03)*(1-n*0.12). Solve t so r'==b', then n so g'==avg(r',b').
+  let temperature = 0;
+  if (avgR + avgB > 0) {
+    temperature = (100 * (avgB - avgR)) / (0.18 * (avgR + avgB));
+  }
+  temperature = Math.max(-100, Math.min(100, temperature));
+  const t = temperature / 100;
+  const avgRB = (avgR * (1 + t * 0.18) + avgB * (1 - t * 0.18)) / 2;
+  const gTempAdjusted = avgG * (1 - Math.abs(t) * 0.03);
+  let tint = 0;
+  if (gTempAdjusted > 0) {
+    tint = (100 * (1 - avgRB / gTempAdjusted)) / 0.12;
+  }
+  tint = Math.max(-100, Math.min(100, tint));
+
+  // Auto-levels from the luminance histogram of the sample.
+  const sorted = lum.slice().sort();
+  const pct = (p: number) =>
+    sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))];
+  const low = pct(0.01);
+  const high = pct(0.99);
+  let meanLum = 0;
+  for (let i = 0; i < sorted.length; i++) meanLum += sorted[i];
+  meanLum /= sorted.length;
+
+  const targetMean = 128;
+  let exposure = 0;
+  if (meanLum > 1) {
+    const expMult = Math.max(0.5, Math.min(2, targetMean / meanLum));
+    exposure = Math.max(-100, Math.min(100, ((expMult - 1) / 0.7) * 100));
+  }
+
+  const spread = Math.max(1, high - low);
+  const targetSpread = 180;
+  const contrastFactor = Math.max(0.6, Math.min(1.8, targetSpread / spread));
+  const contrast = Math.max(-100, Math.min(100, ((contrastFactor - 1) / 0.8) * 100));
+
+  // Gentle vibrance lift for washed-out/low-saturation photos; leave
+  // already-vivid images alone.
+  const vibrance = Math.max(0, Math.min(40, (0.35 - avgSat) * 160));
+
+  return {
+    exposure: Math.round(exposure),
+    contrast: Math.round(contrast),
+    // Reset highlights/shadows: the exposure/contrast solve above assumes a
+    // neutral tone curve (matching the untouched original we sampled), and
+    // stale highlight/shadow tweaks from an earlier manual edit would throw
+    // that off.
+    highlights: 0,
+    shadows: 0,
+    temperature: Math.round(temperature),
+    tint: Math.round(tint),
+    vibrance: Math.round(vibrance),
+  };
+}
+
+async function computeAutoAdjustments(fullUrl: string): Promise<Partial<EditAdj>> {
+  const resp = await fetch(fullUrl, { headers: getAuthHeaders() });
+  if (!resp.ok) throw new Error("Failed to load image");
+  const blob = await resp.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = blobUrl;
+    await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej(new Error("Load failed")); });
+
+    const { data, count } = sampleImagePixels(img);
+    return deriveAutoAdjFromSample(data, count);
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
 }
 
 // ─── SVG filter component ──────────────────────────────────────────────────
@@ -624,6 +815,8 @@ export function PhotoEditor({
   const [exportError, setExportError] = useState<string | null>(null);
   const [hideEdits, setHideEdits] = useState(false);
   const [cropActive, setCropActive] = useState(false);
+  const [autoApplying, setAutoApplying] = useState(false);
+  const [autoError, setAutoError] = useState<string | null>(null);
 
   const update = useCallback(<K extends keyof EditAdj>(key: K, val: EditAdj[K]) => {
     setAdj((prev) => ({ ...prev, [key]: val }));
@@ -655,6 +848,19 @@ export function PhotoEditor({
       setExportError(e instanceof Error ? e.message : "Export failed");
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleAuto = async () => {
+    setAutoApplying(true);
+    setAutoError(null);
+    try {
+      const auto = await computeAutoAdjustments(photoFullUrl);
+      setAdj((prev) => ({ ...prev, ...auto }));
+    } catch (e) {
+      setAutoError(e instanceof Error ? e.message : "Auto enhance failed");
+    } finally {
+      setAutoApplying(false);
     }
   };
 
@@ -730,6 +936,20 @@ export function PhotoEditor({
         </div>
 
         <div className={css.editorBody}>
+          <div className={css.autoRow}>
+            <button
+              type="button"
+              className={css.autoBtn}
+              onClick={handleAuto}
+              disabled={autoApplying}
+              title="Automatically balance color and tone (white balance, exposure, contrast, vibrance)"
+            >
+              <Wand24Regular />
+              {autoApplying ? "Analyzing…" : "Auto"}
+            </button>
+            {autoError && <p className={css.autoError}>{autoError}</p>}
+          </div>
+
           <section className={css.section}>
             <h4 className={css.sectionTitle}>Light</h4>
             <Slider label="Exposure" value={adj.exposure} min={-100} max={100} onChange={(v) => update("exposure", v)} />
@@ -751,6 +971,17 @@ export function PhotoEditor({
             <Slider label="Clarity" value={adj.clarity} min={0} max={100} onChange={(v) => update("clarity", v)} />
             <Slider label="Dehaze" value={adj.dehaze} min={-100} max={100} onChange={(v) => update("dehaze", v)} />
             <Slider label="Sharpness" value={adj.sharpness} min={0} max={100} onChange={(v) => update("sharpness", v)} />
+          </section>
+
+          <section className={css.section}>
+            <h4 className={css.sectionTitle}>Effects</h4>
+            <Slider
+              label="Vignette"
+              value={adj.vignette}
+              min={-100}
+              max={100}
+              onChange={(v) => update("vignette", v)}
+            />
           </section>
 
           <section className={css.section}>
