@@ -127,26 +127,6 @@
   transition: opacity var(--dur-fast, 150ms) ease-out;
 }
 
-.durationBadge {
-  position: absolute;
-  /* Stacked below the round play badge, same corner. */
-  top: calc(var(--space-xxs) + 30px);
-  right: var(--space-xxs);
-  display: flex;
-  align-items: center;
-  padding: 2px 6px;
-  border-radius: var(--radius-full);
-  background-color: rgba(0, 0, 0, 0.55);
-  color: white;
-  font-size: 0.72rem;
-  font-weight: 600;
-  line-height: 1;
-  box-shadow: var(--shadow-sm);
-  z-index: 2;
-  pointer-events: none;
-  transition: opacity 200ms ease-in;
-}
-
 .scrubBar {
   position: absolute;
   left: 0;
