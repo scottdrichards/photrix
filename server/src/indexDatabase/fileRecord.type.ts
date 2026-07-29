@@ -63,6 +63,10 @@ export type ExifMetadata = {
 export type AIMetadata = {
   aiDescription?: string;
   aiTags?: string[];
+  /** Derived whole-photo quality aggregate, 0..1; see photoQuality.ts. Absent
+   * until at least one detected face has been scored for "photo ready"
+   * attributes. */
+  photoQualityScore?: number;
 };
 
 export type AllMetaData = FileInfo & ExifMetadata & AIMetadata;
@@ -100,7 +104,7 @@ export const MetadataGroups = {
     "orientation",
     "livePhotoVideoFileName",
   ],
-  aiMetadata: ["aiDescription", "aiTags"],
+  aiMetadata: ["aiDescription", "aiTags", "photoQualityScore"],
   faces: [],
 } as const satisfies Record<string, AllMetaData[keyof AllMetaData][]>;
 

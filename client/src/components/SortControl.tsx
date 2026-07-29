@@ -2,6 +2,7 @@ import {
   ArrowDown16Regular,
   ArrowUp16Regular,
   Calendar20Regular,
+  Ribbon20Regular,
   Sparkle20Regular,
   Star20Regular,
 } from "@fluentui/react-icons";
@@ -51,6 +52,19 @@ const SORT_FIELDS: SortFieldDef[] = [
     Icon: Star20Regular,
     defaultDirection: "desc",
     directionHint: { asc: "Lowest rated", desc: "Highest rated" },
+  },
+  {
+    field: "quality",
+    label: "Quality",
+    Icon: Ribbon20Regular,
+    defaultDirection: "asc",
+    // Derived from face attributes (smiling/eyes open/in focus/well
+    // exposed); photos with no scored faces have no signal and always sort
+    // last regardless of direction. Defaults to ascending — this sort is
+    // mainly useful for finding the worst shots to prune, so "worst first" is
+    // the more useful default direction (unlike rating/date, where "best/most
+    // recent first" is what you want by default).
+    directionHint: { asc: "Lowest quality first", desc: "Highest quality first" },
   },
 ];
 

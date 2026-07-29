@@ -51,6 +51,9 @@ export interface PhotoItem {
     dimensionHeight?: number;
     locationLatitude?: number;
     locationLongitude?: number;
+    /** Derived whole-photo quality aggregate, 0..1; see server's
+     * photoQuality.ts. Absent until at least one detected face is scored. */
+    photoQualityScore?: number;
     [key: string]: unknown;
   };
 }

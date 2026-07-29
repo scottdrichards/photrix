@@ -684,6 +684,167 @@ describe("IndexDatabase", () => {
       });
     });
 
+    it("computes photoQualityScore from detected faces' attributes, worst face wins", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("quality/group.jpg"));
+
+        await db.saveFaceDetectionResult("quality/group.jpg", [
+          {
+            box: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
+            confidence: 0.9,
+            embedding: new Float64Array(128),
+            attributes: { smile: 1, eyesOpen: 1, focus: 1, exposure: 1 },
+          },
+          {
+            // The one blinking/blurry face in the group should set the
+            // photo's score, not be averaged away by the good face above.
+            box: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 },
+            confidence: 0.9,
+            embedding: new Float64Array(128),
+            attributes: { smile: 0.2, eyesOpen: 0.1, focus: 0.1, exposure: 0.1 },
+          },
+        ]);
+
+        const record = await db.getFileRecord("quality/group.jpg");
+        expect(record?.photoQualityScore).toBeCloseTo(0.125, 5);
+      });
+    });
+
+    it("leaves photoQualityScore null when no face has been scored", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("quality/unscored.jpg"));
+
+        await db.saveFaceDetectionResult("quality/unscored.jpg", [
+          {
+            box: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
+            confidence: 0.9,
+            embedding: new Float64Array(128),
+            // No `attributes` at all — detection ran without the attribute pass.
+          },
+        ]);
+
+        const record = await db.getFileRecord("quality/unscored.jpg");
+        expect(record?.photoQualityScore).toBeUndefined();
+      });
+    });
+
+    it("resets photoQualityScore to null when a re-scan replaces scored faces with unscored ones", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("quality/rescan.jpg"));
+
+        await db.saveFaceDetectionResult("quality/rescan.jpg", [
+          {
+            box: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
+            confidence: 0.9,
+            embedding: new Float64Array(128),
+            attributes: { smile: 0.9, eyesOpen: 0.9, focus: 0.9, exposure: 0.9 },
+          },
+        ]);
+        expect(
+          (await db.getFileRecord("quality/rescan.jpg"))?.photoQualityScore,
+        ).toBeCloseTo(0.9, 5);
+
+        // A re-scan without attributes replaces the old (scored) face with a
+        // fresh unscored one — the stale score must not survive it.
+        await db.saveFaceDetectionResult("quality/rescan.jpg", [
+          {
+            box: { x: 0.2, y: 0.2, width: 0.1, height: 0.1 },
+            confidence: 0.9,
+            embedding: new Float64Array(128),
+          },
+        ]);
+        expect(
+          (await db.getFileRecord("quality/rescan.jpg"))?.photoQualityScore,
+        ).toBeUndefined();
+      });
+    });
+
+    it("recomputes photoQualityScore via the attribute backfill path (saveFaceAttributes)", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("quality/backfill.jpg"));
+
+        // Simulates a face detected before the attribute feature existed:
+        // no attributes yet, so no quality signal.
+        await db.saveFaceDetectionResult("quality/backfill.jpg", [
+          {
+            box: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
+            confidence: 0.9,
+            embedding: new Float64Array(128),
+          },
+        ]);
+        expect(
+          (await db.getFileRecord("quality/backfill.jpg"))?.photoQualityScore,
+        ).toBeUndefined();
+
+        const faces = await db.getFaceBoxesForAttributes("quality/backfill.jpg");
+        expect(faces).toHaveLength(1);
+
+        await db.saveFaceAttributes([
+          {
+            id: faces[0]!.id,
+            attributes: { smile: 0.4, eyesOpen: 0.6, focus: 0.8, exposure: 0.6 },
+          },
+        ]);
+
+        const record = await db.getFileRecord("quality/backfill.jpg");
+        expect(record?.photoQualityScore).toBeCloseTo(0.6, 5);
+      });
+    });
+
+    it("sorts by quality with unscored files always last, in both directions", async () => {
+      await withTempDb(async (db) => {
+        const withScore = async (name: string, score: number) => {
+          await db.addFile(createRecord(name));
+          await db.saveFaceDetectionResult(name, [
+            {
+              box: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
+              confidence: 0.9,
+              embedding: new Float64Array(128),
+              attributes: {
+                smile: score,
+                eyesOpen: score,
+                focus: score,
+                exposure: score,
+              },
+            },
+          ]);
+        };
+
+        await withScore("quality/high.jpg", 0.9);
+        await withScore("quality/mid.jpg", 0.5);
+        await withScore("quality/low.jpg", 0.1);
+        await db.addFile(createRecord("quality/none.jpg"));
+
+        const desc = await db.queryFiles({
+          filter: {},
+          metadata: ["photoQualityScore"],
+          pageSize: 10,
+          page: 1,
+          sort: { field: "quality", direction: "desc" },
+        });
+        expect(desc.items.map((i) => i.fileName)).toEqual([
+          "high.jpg",
+          "mid.jpg",
+          "low.jpg",
+          "none.jpg",
+        ]);
+
+        const asc = await db.queryFiles({
+          filter: {},
+          metadata: ["photoQualityScore"],
+          pageSize: 10,
+          page: 1,
+          sort: { field: "quality", direction: "asc" },
+        });
+        expect(asc.items.map((i) => i.fileName)).toEqual([
+          "low.jpg",
+          "mid.jpg",
+          "high.jpg",
+          "none.jpg",
+        ]);
+      });
+    });
+
     it("reports missingFaceDetection in status counts and clears it after save", async () => {
       await withTempDb(async (db) => {
         await db.addFile(createRecord("a.jpg"));

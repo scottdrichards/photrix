@@ -68,6 +68,18 @@ export const tables = {
       { name: "description", type: "TEXT" },
       { name: "aiDescription", type: "TEXT" },
       { name: "aiTags", type: "TEXT" },
+      // Whole-photo quality aggregate, 0..1, derived from this file's *scored*
+      // faces' smileScore/eyesOpenScore/focusScore/exposureScore (see
+      // faceDetection/photoQuality.ts — worst-face-wins, not an average, so a
+      // group photo with one bad face reads as a bad photo). Recomputed
+      // in-place whenever face attributes for this file are written (initial
+      // detection or the attribute backfill), so it never needs its own
+      // pipeline pass. NULL means "no signal yet" (no faces detected, or none
+      // scored) — never treat NULL as "bad quality". Photos with no faces at
+      // all are intentionally left NULL rather than scored from whole-frame
+      // sharpness/exposure, which no part of this codebase currently derives
+      // (see photoQuality.ts's doc comment for why that was scoped out).
+      { name: "photoQualityScore", type: "REAL", indexExpression: true },
       { name: "fileHash", type: "TEXT" },
       { name: "infoProcessedAt", type: "INTEGER", indexExpression: true },
       { name: "exifProcessedAt", type: "INTEGER", indexExpression: true },

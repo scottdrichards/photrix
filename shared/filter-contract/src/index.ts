@@ -162,14 +162,23 @@ export type ShareScope<TFilter = unknown> = {
  * How results are ordered.
  * - `date`: capture date (dateTaken, falling back to created/modified)
  * - `rating`: user star rating (unrated always sorts last)
+ * - `quality`: derived "photo ready" quality score — the worst-scoring
+ *   detected face's smiling/eyes-open/in-focus/well-exposed attributes
+ *   (see server's photoQuality.ts); photos with no scored faces always sort
+ *   last, in either direction, since there's no signal to place them by
  * - `relevance`: semantic-search match quality; only meaningful while a search
  *   query is active, and ignored (treated as `date`) for plain library browsing
  */
-export type SortField = "date" | "rating" | "relevance";
+export type SortField = "date" | "rating" | "quality" | "relevance";
 export type SortDirection = "asc" | "desc";
 export type SortOption = { field: SortField; direction: SortDirection };
 
-export const SORT_FIELDS: readonly SortField[] = ["date", "rating", "relevance"];
+export const SORT_FIELDS: readonly SortField[] = [
+  "date",
+  "rating",
+  "quality",
+  "relevance",
+];
 
 /** Newest first — the historical default when no sort is specified. */
 export const DEFAULT_SORT: SortOption = { field: "date", direction: "desc" };
