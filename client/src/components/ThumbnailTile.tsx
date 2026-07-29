@@ -70,17 +70,35 @@ const isDisplayableImage = (photo: PhotoItem): boolean => {
   return typeof mimeType === "string" && mimeType.toLowerCase().startsWith("image/");
 };
 
+const formatDuration = (totalSeconds: number): string => {
+  const total = Math.max(0, Math.round(totalSeconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+};
+
 type Props = {
   photo: PhotoItem;
 };
 
 const LONG_PRESS_MS = 500;
+// On touch devices there's no hover, so a video tile starts its low-quality
+// preview after a short deliberate hold instead. Kept shorter than
+// LONG_PRESS_MS so the preview appears before (and independent of) the
+// existing long-press-to-select gesture.
+const PREVIEW_DWELL_MS = 350;
+const COARSE_POINTER_QUERY = "(pointer: coarse)";
 
 export const ThumbnailTile: React.FC<Props> = (props) => {
   const { photo } = props;
   const searchSources = photo.searchSources;
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTriggeredRef = useRef(false);
+  const previewDwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const isScrubbingRef = useRef(false);
   const [isNear, tileRef] = useNearViewport<HTMLButtonElement>();
   const [isHovered, setIsHovered] = useState(false);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
@@ -91,6 +109,13 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   // full-file reads across a large library.
   const [wantSharp, setWantSharp] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
+  // Touch-and-hold substitute for hover, used to start/reveal the video
+  // preview and duration overlay on coarse pointers (no mouseenter/leave).
+  const [isPreviewDwelling, setIsPreviewDwelling] = useState(false);
+  const [previewProgress, setPreviewProgress] = useState(0);
+  const [isCoarsePointer] = useState(
+    () => typeof window !== "undefined" && Boolean(window.matchMedia?.(COARSE_POINTER_QUERY).matches),
+  );
   const { setSelected, selectionMode, checkedPaths, enterSelectionMode, toggleChecked } =
     useSelectionContext();
   const metadataRatio = getAspectRatio(photo);
@@ -100,6 +125,17 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   const showCheckbox = selectionMode || isHovered;
   const ratingRaw = toFiniteNumber(photo.metadata?.rating);
   const ratingValue = ratingRaw && ratingRaw > 0 ? Math.min(5, Math.round(ratingRaw)) : 0;
+  const isVideo = photo.mediaType === "video";
+  const hasVideoPreview = isVideo && Boolean(photo.videoPreviewUrl);
+  // Same hover/dwell signal drives both the inline preview playback and the
+  // duration overlay reveal.
+  const isPreviewTriggered = isCoarsePointer ? isPreviewDwelling : isHovered;
+  // Gate on isNear too: a tile that has scrolled out of view must not keep
+  // decoding/playing video, even if a stale hover/dwell state lingers (e.g.
+  // the page scrolled under a stationary mouse without a mouseleave firing).
+  const previewPlaying = isNear && hasVideoPreview && isPreviewTriggered;
+  const durationSeconds = toFiniteNumber(photo.metadata?.duration);
+  const durationLabel = isVideo && durationSeconds !== null ? formatDuration(durationSeconds) : null;
 
   // Reset per-photo load state when a virtualized tile is reused for a new photo.
   useEffect(() => {
@@ -107,12 +143,30 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     setIsMicroLoaded(false);
     setWantSharp(false);
     setLoadedRatio(null);
+    setIsPreviewDwelling(false);
+    setPreviewProgress(0);
+    if (previewDwellTimerRef.current !== null) {
+      clearTimeout(previewDwellTimerRef.current);
+      previewDwellTimerRef.current = null;
+    }
   }, [photo.thumbnailUrl]);
 
   // Hover immediately upgrades to the sharp tile.
   useEffect(() => {
     if (isHovered) setWantSharp(true);
   }, [isHovered]);
+
+  // Aggressively stop the preview the moment it's no longer visible, even if
+  // the dwell/hover state hasn't otherwise cleared (e.g. scrolled away mid-hold).
+  useEffect(() => {
+    if (!isNear && isPreviewDwelling) setIsPreviewDwelling(false);
+  }, [isNear, isPreviewDwelling]);
+
+  // Reset the scrub position once playback stops so the next play (a fresh
+  // <video> element, starting at time 0) doesn't briefly show a stale fill.
+  useEffect(() => {
+    if (!previewPlaying) setPreviewProgress(0);
+  }, [previewPlaying]);
 
   // Dwell upgrade: once the tile has stayed near the viewport briefly, load the
   // sharp tile so slow browsing fills in quality without a fast scroll doing so.
@@ -136,6 +190,11 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
 
   const handlePointerDown = () => {
     longPressTriggeredRef.current = false;
+    if (isCoarsePointer && hasVideoPreview) {
+      previewDwellTimerRef.current = setTimeout(() => {
+        setIsPreviewDwelling(true);
+      }, PREVIEW_DWELL_MS);
+    }
     longPressTimerRef.current = setTimeout(() => {
       longPressTriggeredRef.current = true;
       if (!selectionMode) {
@@ -152,12 +211,82 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     }
   };
 
+  // Clears a still-pending dwell timer (hasn't started previewing yet).
+  const cancelPendingPreviewDwell = () => {
+    if (previewDwellTimerRef.current !== null) {
+      clearTimeout(previewDwellTimerRef.current);
+      previewDwellTimerRef.current = null;
+    }
+  };
+
+  // Ends an already-active preview outright — used when the touch actually
+  // lifts/cancels, i.e. the mobile equivalent of "mouse leaves".
+  const stopPreviewDwell = () => {
+    cancelPendingPreviewDwell();
+    setIsPreviewDwelling(false);
+  };
+
   const handlePointerUp = () => {
     cancelLongPress();
+    stopPreviewDwell();
   };
 
   const handlePointerMove = () => {
     cancelLongPress();
+    // Only cancel a not-yet-fired dwell timer here — small touch jitter while
+    // an already-playing preview is being watched shouldn't kill it.
+    cancelPendingPreviewDwell();
+  };
+
+  const handlePointerCancel = () => {
+    cancelLongPress();
+    stopPreviewDwell();
+  };
+
+  const handlePreviewTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    if (isScrubbingRef.current) return;
+    const video = e.currentTarget;
+    const dur = video.duration || durationSeconds || 0;
+    if (dur > 0 && Number.isFinite(video.currentTime)) {
+      setPreviewProgress(Math.min(1, Math.max(0, video.currentTime / dur)));
+    }
+  };
+
+  const seekFromClientX = (clientX: number, bar: HTMLElement) => {
+    const video = previewVideoRef.current;
+    if (!video) return;
+    const rect = bar.getBoundingClientRect();
+    const ratio = rect.width > 0 ? Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) : 0;
+    const dur = video.duration || durationSeconds || 0;
+    if (dur > 0) {
+      video.currentTime = ratio * dur;
+    }
+    setPreviewProgress(ratio);
+  };
+
+  const handleScrubPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+    isScrubbingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    seekFromClientX(e.clientX, e.currentTarget);
+  };
+
+  const handleScrubPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    if (!isScrubbingRef.current) return;
+    seekFromClientX(e.clientX, e.currentTarget);
+  };
+
+  const handleScrubPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    isScrubbingRef.current = false;
+  };
+
+  const handleScrubClick = (e: React.MouseEvent) => {
+    // Prevent the tile's own onClick (open fullscreen) from firing when the
+    // user is just seeking the inline preview.
+    e.stopPropagation();
   };
 
   const handleCheckboxClick = (e: React.MouseEvent) => {
@@ -212,7 +341,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
       onPointerMove={handlePointerMove}
-      onPointerCancel={cancelLongPress}
+      onPointerCancel={handlePointerCancel}
       aria-label={photo.name}
       aria-pressed={selectionMode ? isChecked : undefined}
     >
@@ -262,6 +391,15 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           <span className={css.videoBadge} aria-hidden="true">
             <PlayCircle24Regular fontSize={24} />
           </span>
+          {durationLabel ? (
+            <span
+              className={css.durationBadge}
+              style={{ opacity: isPreviewTriggered ? 1 : 0 }}
+              aria-hidden="true"
+            >
+              {durationLabel}
+            </span>
+          ) : null}
           <img
             src={thumbnailUrl}
             alt={photo.name}
@@ -274,16 +412,36 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
             }}
             onLoad={handleImageLoad}
           />
-          {isHovered && (
-            <video
-              src={photo.videoPreviewUrl}
-              className={css.image}
-              style={{ position: "absolute", top: 0, left: 0 }}
-              muted
-              loop
-              playsInline
-              autoPlay
-            />
+          {previewPlaying && (
+            <>
+              <video
+                ref={previewVideoRef}
+                src={photo.videoPreviewUrl}
+                className={css.image}
+                style={{ position: "absolute", top: 0, left: 0 }}
+                muted
+                loop
+                playsInline
+                autoPlay
+                onTimeUpdate={handlePreviewTimeUpdate}
+              />
+              <div
+                className={css.scrubBar}
+                onClick={handleScrubClick}
+                onPointerDown={handleScrubPointerDown}
+                onPointerMove={handleScrubPointerMove}
+                onPointerUp={handleScrubPointerUp}
+                onPointerCancel={handleScrubPointerUp}
+                aria-hidden="true"
+              >
+                <div className={css.scrubTrack}>
+                  <div
+                    className={css.scrubFill}
+                    style={{ width: `${previewProgress * 100}%` }}
+                  />
+                </div>
+              </div>
+            </>
           )}
         </>
       ) : isImage ? (

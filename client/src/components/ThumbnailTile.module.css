@@ -103,6 +103,58 @@
   z-index: 1;
 }
 
+.durationBadge {
+  position: absolute;
+  /* Stacked below the round play badge, same corner. */
+  top: calc(var(--space-xxs) + 30px);
+  right: var(--space-xxs);
+  display: flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background-color: rgba(0, 0, 0, 0.55);
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  z-index: 2;
+  pointer-events: none;
+  transition: opacity 200ms ease-in;
+}
+
+.scrubBar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 16px;
+  z-index: 4;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 var(--space-xxs) 3px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.scrubTrack {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background-color: rgba(255, 255, 255, 0.35);
+  overflow: hidden;
+}
+
+.scrubFill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background-color: var(--brand);
+  border-radius: var(--radius-full);
+}
+
 .selectedBadge {
   position: absolute;
   top: var(--space-xxs);
