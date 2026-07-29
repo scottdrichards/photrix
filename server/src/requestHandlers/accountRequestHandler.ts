@@ -7,12 +7,20 @@ import {
   listApiTokens,
   listSessions,
   listShareLinks,
+  revokeAllShareLinksForUser,
   revokeApiToken,
+  revokeOtherSessions,
   revokeSessionsForUser,
   revokeShareLink,
   revokeToken,
 } from "../auth/authService.ts";
-import { deletePasskey, listPasskeys } from "../auth/passkeyService.ts";
+import {
+  deletePasskey,
+  isPasskeySupported,
+  isPublicOriginConfigured,
+  listPasskeys,
+} from "../auth/passkeyService.ts";
+import { classifyIp } from "../auth/ipLocation.ts";
 import { writeJson } from "../utils.ts";
 
 const readBody = (req: http.IncomingMessage): Promise<string> =>
@@ -71,7 +79,14 @@ export const accountRequestHandler = async (
 
   // GET /api/account — whoami
   if (pathname === "/api/account" && method === "GET") {
-    writeJson(res, 200, { username });
+    writeJson(res, 200, {
+      username,
+      // Passkeys only make sense once the server is configured with a real
+      // public origin (see isPublicOriginConfigured) — on a bare LAN/localhost
+      // deployment there is no meaningful WebAuthn relying party, so the
+      // client keeps the section hidden rather than show dead controls.
+      passkeysAvailable: isPasskeySupported() && isPublicOriginConfigured(),
+    });
     return;
   }
 
@@ -154,15 +169,27 @@ export const accountRequestHandler = async (
     return;
   }
 
+  if (pathname === "/api/account/share-links/revoke-all" && method === "POST") {
+    const count = await revokeAllShareLinksForUser(username);
+    writeJson(res, 200, { ok: true, count });
+    return;
+  }
+
   // --- Sessions ---
   if (pathname === "/api/account/sessions" && method === "GET") {
     const sessions = listSessions(username);
     writeJson(res, 200, {
-      sessions: sessions.map((s) => ({
-        id: idOf(s.token),
-        createdAt: s.createdAt,
-        current: s.token === token,
-      })),
+      sessions: sessions.map((s) => {
+        const { ip, label } = classifyIp(s.ip);
+        return {
+          id: idOf(s.token),
+          createdAt: s.createdAt,
+          lastSeenAt: s.lastSeenAt,
+          current: s.token === token,
+          ip,
+          location: label,
+        };
+      }),
     });
     return;
   }
@@ -185,6 +212,15 @@ export const accountRequestHandler = async (
 
   if (pathname === "/api/account/sessions/revoke-all" && method === "POST") {
     revokeSessionsForUser(username);
+    writeJson(res, 200, { ok: true });
+    return;
+  }
+
+  // Cleans up every other session (old devices, cleared-storage re-logins,
+  // etc.) while keeping the caller signed in — the non-destructive alternative
+  // to "sign out everywhere".
+  if (pathname === "/api/account/sessions/revoke-others" && method === "POST") {
+    revokeOtherSessions(username, token);
     writeJson(res, 200, { ok: true });
     return;
   }

@@ -11,6 +11,15 @@ import { ViewToggle } from "./ViewToggle";
 import css from "./ThumbnailGrid.module.css";
 
 const PAGE_SIZE = 200;
+/**
+ * How far below the last loaded tile the next page is requested. The sentinel
+ * sits at the very end of the grid, so this is the entire warning the fetch
+ * gets: at 200px the user reached the bottom of the content and *then* waited
+ * for a round trip plus a 200-tile mount. Two thousand pixels is roughly a
+ * screenful and a half of runway on a desktop, which is enough to have the next
+ * page merged before the scroll arrives.
+ */
+const LOAD_MORE_MARGIN_PX = 2000;
 const numberFormatter = new Intl.NumberFormat();
 
 type ThumbnailGridProps = {
@@ -31,11 +40,18 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   const [loading, setLoading] = useState(false);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    setPage(1);
-    // Keep stale data visible while the new query is in flight (stale-while-revalidate).
-    // The grid dims via isStale until the fetch resolves.
-  }, [filter]);
+  // Reset paging during render rather than in an effect. As an effect, the fetch
+  // effect below still ran once with the *previous* page against the new filter
+  // — so changing a filter while on page 5 fired a full page-5 query, aborted
+  // it, and only then fetched page 1. Adjusting here means the re-render happens
+  // before any effect runs and that wasted query never leaves the browser.
+  // Stale data stays visible while the new query is in flight; the grid dims via
+  // isStale until it resolves.
+  const lastFilterRef = useRef(filter);
+  if (lastFilterRef.current !== filter) {
+    lastFilterRef.current = filter;
+    if (page !== 1) setPage(1);
+  }
 
   useEffect(() => {
     const abortOnDisposed = "disposed";
@@ -107,11 +123,15 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
+          // Disconnect before advancing: a second callback in the same batch
+          // would bump the page twice and silently skip 200 items, which the
+          // path-based dedupe on merge would then hide rather than repair.
+          observer.disconnect();
           setPage((prev) => prev + 1);
         }
       },
       {
-        rootMargin: "200px",
+        rootMargin: `${LOAD_MORE_MARGIN_PX}px 0px`,
       },
     );
     observer.observe(sentinel);

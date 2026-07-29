@@ -1,6 +1,13 @@
 import type http from "node:http";
 import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
 import { getHLSInfo } from "../../videoProcessing/generateHLS.ts";
+import {
+  getMultibitrateHLSDirectory,
+  getVariantSegmentPath,
+  multibitrateHLSInitialized,
+} from "../../videoProcessing/generateMultibitrateHLS.ts";
+import { HLS_SEGMENT_SECONDS } from "../../videoProcessing/buildHlsPlaylist.ts";
+import { existsSync } from "fs";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../../indexDatabase/indexDatabase.type.ts";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
@@ -21,11 +28,15 @@ type VideoPlaybackRequest = {
   // buffering. Skips the direct branch so we hand back an adaptive HLS stream
   // (or a visible error) instead of the same un-adaptive original.
   forceTranscode?: boolean;
+  // Set for the grid's throwaway hover preview. A preview is a nice-to-have, so
+  // it is never worth a fresh GPU encode on the shared card: only an already
+  // cached low rendition or a cheap raw read qualifies, otherwise we say no.
+  preview?: boolean;
 };
 
 type VideoPlaybackResponse =
-  | { mode: "hls"; url: string; reason: string }
-  | { mode: "direct"; url: string; reason: string }
+  | { mode: "hls"; url: string; reason: string; previewMaxSeconds?: number }
+  | { mode: "direct"; url: string; reason: string; previewMaxSeconds?: number }
   | { mode: "error"; reason: string };
 
 // Reason strings are also used by the handler to tell the on-the-fly GPU encode
@@ -35,6 +46,10 @@ export const REASON_CACHED_HLS = "Cached HLS available";
 export const REASON_GPU_HLS = "Hardware-accelerated HLS encoding available";
 export const REASON_NO_PATH =
   "Connection too slow for the original and no GPU to transcode";
+export const REASON_PREVIEW_CACHED = "Preview from cached low rendition";
+export const REASON_PREVIEW_DIRECT = "Preview from the original — cheap enough to read";
+export const REASON_PREVIEW_TRANSCODE = "Preview via live 360p transcode";
+export const REASON_PREVIEW_UNAVAILABLE = "No preview available — no GPU to transcode";
 
 const H264_CODECS = new Set(["h264", "avc", "avc1"]);
 const HEVC_CODECS = new Set(["hevc", "h265", "hev1", "hvc1"]);
@@ -72,8 +87,33 @@ export const bandwidthCoversRawFile = (
   return bandwidthMbps >= rawBitrateMbps * RAW_BANDWIDTH_SAFETY_FACTOR;
 };
 
+/**
+ * Cheap-read ceiling for previewing the raw original (Mbps of average bitrate).
+ * A hover preview is throwaway, so even on a link that could carry a 4K 50 Mbps
+ * original we refuse to spend those bytes on it — the owner browses over a
+ * metered WAN link. Combined with PREVIEW_MAX_SECONDS this bounds a preview to
+ * roughly 9 MB of transfer.
+ */
+export const PREVIEW_MAX_RAW_MBPS = 12;
+
+/**
+ * Hard cap on how long a grid preview may run. Also the ceiling on how many
+ * cached HLS segments we will advertise: playing past the cached tail would make
+ * the segment handler start an encode, which is exactly what preview mode exists
+ * to avoid.
+ */
+export const PREVIEW_MAX_SECONDS = 6;
+
+/** Lowest advertised HLS variant — the only one a preview is ever allowed to use. */
+export const PREVIEW_VARIANT_HEIGHT = 360;
+
 export type NegotiationDeps = {
   hasCachedHLS: (filePath: string) => Promise<boolean>;
+  /**
+   * Seconds of contiguous, already-encoded low-variant HLS sitting on disk for
+   * this file (0 when there is none). Never triggers an encode — it only looks.
+   */
+  getCachedPreviewSeconds: (filePath: string) => Promise<number>;
   isGpuAvailable: () => Promise<boolean>;
   getFileMetadata: (
     subPath: string,
@@ -107,6 +147,55 @@ export const negotiateVideoPlayback = async (
   const directUrl = `/api/files/${encodedPath}`;
 
   const metadata = await deps.getFileMetadata(subPath);
+
+  // Grid hover preview: cached segments first (already paid for, and 360p is
+  // the kindest thing we can put on the link), then a raw read but only for
+  // genuinely small files, then a live 360p transcode — same GPU-evicting path
+  // as full playback, just pinned to the lowest variant — so hovering an
+  // ordinary high-bitrate camera original still gets a preview instead of a
+  // static thumbnail. No previewMaxSeconds on that last path: unlike the two
+  // cheap paths above, this one is a real ongoing encode, so it keeps playing
+  // for as long as the hover holds the slot instead of looping every few
+  // seconds. Only a missing GPU forces the clean "no".
+  if (request.preview) {
+    const cachedSeconds = await deps.getCachedPreviewSeconds(filePath);
+    if (cachedSeconds > 0) {
+      return {
+        mode: "hls",
+        url: `${hlsUrl}&variant=${PREVIEW_VARIANT_HEIGHT}`,
+        reason: REASON_PREVIEW_CACHED,
+        previewMaxSeconds: Math.min(cachedSeconds, PREVIEW_MAX_SECONDS),
+      };
+    }
+
+    const rawBitrateMbps =
+      metadata?.sizeInBytes && metadata.duration && metadata.duration > 0
+        ? (metadata.sizeInBytes * 8) / metadata.duration / 1_000_000
+        : Number.POSITIVE_INFINITY;
+
+    if (
+      canClientPlayCodec(metadata?.videoCodec, hevcSupported) &&
+      rawBitrateMbps <= PREVIEW_MAX_RAW_MBPS &&
+      bandwidthCoversRawFile(request.bandwidthMbps, metadata)
+    ) {
+      return {
+        mode: "direct",
+        url: directUrl,
+        reason: REASON_PREVIEW_DIRECT,
+        previewMaxSeconds: PREVIEW_MAX_SECONDS,
+      };
+    }
+
+    if (await deps.isGpuAvailable()) {
+      return {
+        mode: "hls",
+        url: `${hlsUrl}&variant=${PREVIEW_VARIANT_HEIGHT}`,
+        reason: REASON_PREVIEW_TRANSCODE,
+      };
+    }
+
+    return { mode: "error", reason: REASON_PREVIEW_UNAVAILABLE };
+  }
 
   // 1. The link can carry the raw original and the client can play its codec: send
   //    it untranscoded. Preferred over the GPU path so a fast connection (LAN or
@@ -144,6 +233,21 @@ const buildDeps = (database: IndexDatabase, storageRoot: string): NegotiationDep
     // cache is a fully-encoded single-bitrate stream, if one was ever produced.
     const singleBitrate = await getHLSInfo(filePath);
     return singleBitrate.exists;
+  },
+  getCachedPreviewSeconds: async (filePath: string) => {
+    // Pure disk inspection: count contiguous already-written 360p segments from
+    // segment_000 up. Stopping at the first gap is what keeps a preview inside
+    // the encoded region, so the segment handler never has to spawn ffmpeg.
+    const hlsDir = getMultibitrateHLSDirectory(filePath);
+    if (!(await multibitrateHLSInitialized(hlsDir))) return 0;
+    const maxSegments = Math.ceil(PREVIEW_MAX_SECONDS / HLS_SEGMENT_SECONDS);
+    let segments = 0;
+    while (segments < maxSegments) {
+      const name = `segment_${String(segments).padStart(3, "0")}.ts`;
+      if (!existsSync(getVariantSegmentPath(hlsDir, PREVIEW_VARIANT_HEIGHT, name))) break;
+      segments += 1;
+    }
+    return segments * HLS_SEGMENT_SECONDS;
   },
   isGpuAvailable: async () => (await getGpuAcceleration()) !== null,
   getFileMetadata: async (subPath: string) => {
@@ -211,6 +315,7 @@ export const videoNegotiationRequestHandler = async (
     bandwidthParam !== null ? Number.parseFloat(bandwidthParam) : null;
   const hevcSupported = url.searchParams.get("hevcSupported") === "true";
   const forceTranscode = url.searchParams.get("forceTranscode") === "true";
+  const preview = url.searchParams.get("preview") === "true";
 
   const request: VideoPlaybackRequest = {
     path: videoPath,
@@ -220,6 +325,7 @@ export const videoNegotiationRequestHandler = async (
         : null,
     hevcSupported,
     forceTranscode,
+    preview,
   };
 
   const deps = buildDeps(database, storageRoot);
@@ -229,7 +335,10 @@ export const videoNegotiationRequestHandler = async (
   // VRAM is freed by the time the player fetches the first segment and ffmpeg
   // spawns, instead of racing the encoder's own reclaim. A cached-HLS hit or a
   // raw/direct decision needs no GPU, so we leave the workers alone there.
-  if (result.mode === "hls" && result.reason === REASON_GPU_HLS) {
+  if (
+    result.mode === "hls" &&
+    (result.reason === REASON_GPU_HLS || result.reason === REASON_PREVIEW_TRANSCODE)
+  ) {
     reclaimGpuForUser();
   }
 
@@ -246,14 +355,18 @@ export const videoNegotiationRequestHandler = async (
     hevcSupported,
   };
 
-  if (result.mode === "error") {
+  // A declined grid preview is a normal outcome (we chose not to spend GPU), so
+  // it must not look like a playback failure in the logs or diagnostics feed.
+  const isFailure = result.mode === "error" && !preview;
+
+  if (isFailure) {
     log.warn(logData, "Video negotiation failed — no compatible stream");
   } else {
     log.info(logData, "Video negotiation succeeded");
   }
 
   recordServerDiagnosticEvent({
-    level: result.mode === "error" ? "warn" : "info",
+    level: isFailure ? "warn" : "info",
     event: "video.negotiation.result",
     message: `Negotiated ${result.mode} playback for ${videoPath}`,
     data: {

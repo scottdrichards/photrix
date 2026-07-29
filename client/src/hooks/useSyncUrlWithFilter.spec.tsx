@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { FilterProvider, useFilter } from "../components/filter/FilterContext";
-import { useSyncUrlWithFilter, type ViewMode } from "./useSyncUrlWithFilter";
+import {
+  useSyncUrlWithFilter,
+  type UrlNavState,
+  type ViewMode,
+} from "./useSyncUrlWithFilter";
 
 const SyncHarness = ({ initialView = "library" as ViewMode } = {}) => {
-  const [view, setView] = useState<ViewMode>(initialView);
-  useSyncUrlWithFilter(view, setView);
+  const [nav, setNav] = useState<UrlNavState>({
+    view: initialView,
+    people: { personId: null, groupId: null },
+  });
+  useSyncUrlWithFilter(nav, setNav);
+  const view = nav.view;
   const { filter, setFilter } = useFilter();
 
   useEffect(() => {

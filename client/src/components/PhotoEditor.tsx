@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDownload24Regular,
@@ -17,7 +17,7 @@ import css from "./PhotoEditor.module.css";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-interface EditAdj {
+export interface EditAdj {
   exposure: number;
   contrast: number;
   highlights: number;
@@ -27,6 +27,7 @@ interface EditAdj {
   temperature: number;
   tint: number;
   clarity: number;
+  dehaze: number;
   sharpness: number;
   rotation: number;
   rotate90: number;
@@ -44,17 +45,15 @@ export interface EditStyle {
   clipPath: string;
 }
 
-const DEFAULT_ADJ: EditAdj = {
+export const DEFAULT_ADJ: EditAdj = {
   exposure: 0, contrast: 0, highlights: 0, shadows: 0,
   saturation: 0, vibrance: 0, temperature: 0, tint: 0,
-  clarity: 0, sharpness: 0,
+  clarity: 0, dehaze: 0, sharpness: 0,
   rotation: 0, rotate90: 0, flipH: false, flipV: false,
   cropTop: 0, cropRight: 0, cropBottom: 0, cropLeft: 0,
 };
 
-const CLEAN_STYLE: EditStyle = { filter: "", transform: "", clipPath: "" };
-
-function isDirty(adj: EditAdj): boolean {
+export function isDirty(adj: EditAdj): boolean {
   return JSON.stringify(adj) !== JSON.stringify(DEFAULT_ADJ);
 }
 
@@ -66,8 +65,8 @@ function toneTableValues(exposure: number, highlights: number, shadows: number):
   const hiStr = (highlights / 100) * 0.25;
   return Array.from({ length: 11 }, (_, i) => {
     const x = i / 10;
-    let v = Math.max(0, Math.min(1, x * expMult));
-    v += shadStr * (1 - v) * (1 - v);
+    let v = Math.max(0, x * expMult);
+    v += shadStr * (1 - Math.min(1, v)) * (1 - Math.min(1, v));
     v += hiStr * v * v;
     return Math.max(0, Math.min(1, v)).toFixed(4);
   }).join(" ");
@@ -82,15 +81,17 @@ function colorMatrixValues(temperature: number, tint: number): string {
   return `${r} 0 0 0 0  0 ${g} 0 0 0  0 0 ${b} 0 0  0 0 0 1 0`;
 }
 
-function computeStyle(adj: EditAdj, svgId: string): EditStyle {
+export function computeStyle(adj: EditAdj, svgId: string): EditStyle {
   const needsSvg =
     adj.exposure !== 0 || adj.highlights !== 0 || adj.shadows !== 0 ||
     adj.temperature !== 0 || adj.tint !== 0 ||
-    adj.sharpness !== 0 || adj.clarity !== 0;
+    adj.sharpness !== 0 || adj.clarity !== 0 ||
+    adj.dehaze !== 0;
   const contrast = Math.max(0, 1 + (adj.contrast / 100) * 0.8).toFixed(3);
   const sat = Math.max(0, 1 + (adj.saturation / 100) * 1.5);
   const vib = Math.max(0, 1 + (adj.vibrance / 100) * 0.7);
-  const totalSat = (sat * vib).toFixed(3);
+  const dehazeSatBoost = Math.max(0, 1 + (adj.dehaze / 100) * 0.4);
+  const totalSat = (sat * vib * dehazeSatBoost).toFixed(3);
 
   const filterParts: string[] = [];
   if (needsSvg) filterParts.push(`url(#${svgId})`);
@@ -202,7 +203,7 @@ function applyUnsharpMask(
   }
 }
 
-function applyPixelAdj(data: Uint8ClampedArray, width: number, height: number, adj: EditAdj) {
+export function applyPixelAdj(data: Uint8ClampedArray, width: number, height: number, adj: EditAdj) {
   const expMult = 1 + (adj.exposure / 100) * 0.7;
   const shadStr = -(adj.shadows / 100) * 0.45;
   const hiStr = (adj.highlights / 100) * 0.25;
@@ -215,10 +216,25 @@ function applyPixelAdj(data: Uint8ClampedArray, width: number, height: number, a
   const toneLUT = new Uint8Array(256);
   for (let i = 0; i < 256; i++) {
     let v = i / 255;
-    v = Math.max(0, Math.min(1, v * expMult));
-    v += shadStr * (1 - v) * (1 - v);
+    v = Math.max(0, v * expMult);
+    v += shadStr * (1 - Math.min(1, v)) * (1 - Math.min(1, v));
     v += hiStr * v * v;
     toneLUT[i] = Math.round(Math.max(0, Math.min(1, v)) * 255);
+  }
+
+  const dehazeAmount = adj.dehaze / 100;
+  const dehazeH = Math.abs(dehazeAmount) * 0.5;
+  const dehazeSatBoost = 1 + dehazeAmount * 0.4;
+  let dehazeLUT: Uint8Array | null = null;
+  if (dehazeAmount !== 0) {
+    dehazeLUT = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) {
+      const v = i / 255;
+      const dv = dehazeAmount > 0
+        ? Math.max(0, Math.min(1, (v - dehazeH) / (1 - dehazeH)))
+        : Math.max(0, Math.min(1, v * (1 - dehazeH) + dehazeH));
+      dehazeLUT[i] = Math.round(dv * 255);
+    }
   }
 
   for (let idx = 0; idx < data.length; idx += 4) {
@@ -253,6 +269,18 @@ function applyPixelAdj(data: Uint8ClampedArray, width: number, height: number, a
       r = Math.max(0, Math.min(255, g2 + (r - g2) * boost));
       g = Math.max(0, Math.min(255, g2 + (g - g2) * boost));
       b = Math.max(0, Math.min(255, g2 + (b - g2) * boost));
+    }
+
+    if (dehazeLUT) {
+      r = dehazeLUT[Math.min(255, Math.max(0, Math.round(r)))];
+      g = dehazeLUT[Math.min(255, Math.max(0, Math.round(g)))];
+      b = dehazeLUT[Math.min(255, Math.max(0, Math.round(b)))];
+      if (dehazeSatBoost !== 1) {
+        const gv = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        r = Math.max(0, Math.min(255, gv + (r - gv) * dehazeSatBoost));
+        g = Math.max(0, Math.min(255, gv + (g - gv) * dehazeSatBoost));
+        b = Math.max(0, Math.min(255, gv + (b - gv) * dehazeSatBoost));
+      }
     }
 
     data[idx] = r; data[idx + 1] = g; data[idx + 2] = b;
@@ -310,6 +338,91 @@ async function exportEdited(fullUrl: string, photoName: string, adj: EditAdj) {
   a.href = canvas.toDataURL("image/jpeg", 0.92);
   a.download = `${baseName}_edited.jpg`;
   a.click();
+}
+
+// ─── SVG filter component ──────────────────────────────────────────────────
+
+export function EditSvgDefs({ adj, filterId }: { adj: EditAdj; filterId: string }) {
+  const toneVals = toneTableValues(adj.exposure, adj.highlights, adj.shadows);
+  const colorMat = colorMatrixValues(adj.temperature, adj.tint);
+  const sharpAmt = (adj.sharpness / 100 * 1.2).toFixed(3);
+  const sharpK2 = (1 + adj.sharpness / 100 * 1.2).toFixed(3);
+  const clarAmt = (adj.clarity / 100 * 0.6).toFixed(3);
+  const clarK2 = (1 + adj.clarity / 100 * 0.6).toFixed(3);
+  const needsSharp = adj.sharpness > 0;
+  const needsClarity = adj.clarity > 0;
+  const needsDehaze = adj.dehaze !== 0;
+  const dehazeH = Math.abs(adj.dehaze / 100) * 0.5;
+  const dehazeSlope = adj.dehaze > 0 ? 1 / (1 - dehazeH) : 1 - dehazeH;
+  const dehazeIntercept = adj.dehaze > 0 ? -dehazeH / (1 - dehazeH) : dehazeH;
+  const postToneResult = needsDehaze ? "dehazed" : "toned";
+
+  return (
+    <svg
+      width="0"
+      height="0"
+      aria-hidden="true"
+      style={{ position: "absolute", overflow: "hidden", pointerEvents: "none" }}
+    >
+      <defs>
+        <filter
+          id={filterId}
+          x="-10%"
+          y="-10%"
+          width="120%"
+          height="120%"
+          colorInterpolationFilters="sRGB"
+        >
+          <feColorMatrix type="matrix" values={colorMat} result="colored" />
+          <feComponentTransfer in="colored" result="toned">
+            <feFuncR type="table" tableValues={toneVals} />
+            <feFuncG type="table" tableValues={toneVals} />
+            <feFuncB type="table" tableValues={toneVals} />
+          </feComponentTransfer>
+          {needsDehaze && (
+            <feComponentTransfer in="toned" result="dehazed">
+              <feFuncR type="linear" slope={dehazeSlope.toFixed(4)} intercept={dehazeIntercept.toFixed(4)} />
+              <feFuncG type="linear" slope={dehazeSlope.toFixed(4)} intercept={dehazeIntercept.toFixed(4)} />
+              <feFuncB type="linear" slope={dehazeSlope.toFixed(4)} intercept={dehazeIntercept.toFixed(4)} />
+            </feComponentTransfer>
+          )}
+          {needsSharp && (
+            <>
+              <feGaussianBlur in={postToneResult} stdDeviation="1.2" result="sharpBlur" />
+              <feComposite
+                in={postToneResult}
+                in2="sharpBlur"
+                operator="arithmetic"
+                k1="0"
+                k2={sharpK2}
+                k3={`-${sharpAmt}`}
+                k4="0"
+                result={needsClarity ? "sharpened" : undefined}
+              />
+            </>
+          )}
+          {needsClarity && (
+            <>
+              <feGaussianBlur
+                in={needsSharp ? "sharpened" : postToneResult}
+                stdDeviation="8"
+                result="clarBlur"
+              />
+              <feComposite
+                in={needsSharp ? "sharpened" : postToneResult}
+                in2="clarBlur"
+                operator="arithmetic"
+                k1="0"
+                k2={clarK2}
+                k3={`-${clarAmt}`}
+                k4="0"
+              />
+            </>
+          )}
+        </filter>
+      </defs>
+    </svg>
+  );
 }
 
 // ─── Slider ────────────────────────────────────────────────────────────────
@@ -492,7 +605,8 @@ interface PhotoEditorProps {
   photoFullUrl: string;
   imageAspectRatio?: number;
   cropContainerEl?: HTMLElement | null;
-  onStyleChange: (style: EditStyle) => void;
+  initialAdj?: EditAdj;
+  onAdjChange: (adj: EditAdj) => void;
   onClose: () => void;
 }
 
@@ -501,17 +615,15 @@ export function PhotoEditor({
   photoFullUrl,
   imageAspectRatio = 1,
   cropContainerEl,
-  onStyleChange,
+  initialAdj,
+  onAdjChange,
   onClose,
 }: PhotoEditorProps) {
-  const rawId = useId();
-  const filterId = `pef-${rawId.replace(/:/g, "")}`;
-  const [adj, setAdj] = useState<EditAdj>(DEFAULT_ADJ);
+  const [adj, setAdj] = useState<EditAdj>(initialAdj ?? DEFAULT_ADJ);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [hideEdits, setHideEdits] = useState(false);
   const [cropActive, setCropActive] = useState(false);
-  const svgRef = useRef<SVGSVGElement>(null);
 
   const update = useCallback(<K extends keyof EditAdj>(key: K, val: EditAdj[K]) => {
     setAdj((prev) => ({ ...prev, [key]: val }));
@@ -531,21 +643,8 @@ export function PhotoEditor({
   }, [adj.rotation, adj.rotate90, imageAspectRatio]);
 
   useEffect(() => {
-    onStyleChange(hideEdits ? CLEAN_STYLE : computeStyle(adj, filterId));
-  }, [adj, filterId, onStyleChange, hideEdits]);
-
-  useEffect(() => {
-    return () => { onStyleChange(CLEAN_STYLE); };
-  }, [onStyleChange]);
-
-  const toneVals = toneTableValues(adj.exposure, adj.highlights, adj.shadows);
-  const colorMat = colorMatrixValues(adj.temperature, adj.tint);
-  const sharpAmt = (adj.sharpness / 100 * 1.2).toFixed(3);
-  const sharpK2 = (1 + adj.sharpness / 100 * 1.2).toFixed(3);
-  const clarAmt = (adj.clarity / 100 * 0.6).toFixed(3);
-  const clarK2 = (1 + adj.clarity / 100 * 0.6).toFixed(3);
-  const needsSharp = adj.sharpness > 0;
-  const needsClarity = adj.clarity > 0;
+    onAdjChange(hideEdits ? DEFAULT_ADJ : adj);
+  }, [adj, onAdjChange, hideEdits]);
 
   const handleExport = async () => {
     setExporting(true);
@@ -579,65 +678,6 @@ export function PhotoEditor({
 
   return (
     <>
-      <svg
-        ref={svgRef}
-        width="0"
-        height="0"
-        aria-hidden="true"
-        style={{ position: "absolute", overflow: "hidden", pointerEvents: "none" }}
-      >
-        <defs>
-          <filter
-            id={filterId}
-            x="-10%"
-            y="-10%"
-            width="120%"
-            height="120%"
-            colorInterpolationFilters="sRGB"
-          >
-            <feColorMatrix type="matrix" values={colorMat} result="colored" />
-            <feComponentTransfer in="colored" result="toned">
-              <feFuncR type="table" tableValues={toneVals} />
-              <feFuncG type="table" tableValues={toneVals} />
-              <feFuncB type="table" tableValues={toneVals} />
-            </feComponentTransfer>
-            {needsSharp && (
-              <>
-                <feGaussianBlur in="toned" stdDeviation="1.2" result="sharpBlur" />
-                <feComposite
-                  in="toned"
-                  in2="sharpBlur"
-                  operator="arithmetic"
-                  k1="0"
-                  k2={sharpK2}
-                  k3={`-${sharpAmt}`}
-                  k4="0"
-                  result={needsClarity ? "sharpened" : undefined}
-                />
-              </>
-            )}
-            {needsClarity && (
-              <>
-                <feGaussianBlur
-                  in={needsSharp ? "sharpened" : "toned"}
-                  stdDeviation="8"
-                  result="clarBlur"
-                />
-                <feComposite
-                  in={needsSharp ? "sharpened" : "toned"}
-                  in2="clarBlur"
-                  operator="arithmetic"
-                  k1="0"
-                  k2={clarK2}
-                  k3={`-${clarAmt}`}
-                  k4="0"
-                />
-              </>
-            )}
-          </filter>
-        </defs>
-      </svg>
-
       {showCropBox && cropContainerEl &&
         createPortal(
           <CropBox
@@ -709,6 +749,7 @@ export function PhotoEditor({
           <section className={css.section}>
             <h4 className={css.sectionTitle}>Detail</h4>
             <Slider label="Clarity" value={adj.clarity} min={0} max={100} onChange={(v) => update("clarity", v)} />
+            <Slider label="Dehaze" value={adj.dehaze} min={-100} max={100} onChange={(v) => update("dehaze", v)} />
             <Slider label="Sharpness" value={adj.sharpness} min={0} max={100} onChange={(v) => update("sharpness", v)} />
           </section>
 

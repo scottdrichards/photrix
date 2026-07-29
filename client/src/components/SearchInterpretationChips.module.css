@@ -1,0 +1,94 @@
+/* Floats under the search bar (which is position: relative) so the header
+   layout above it is untouched. */
+.bar {
+  position: absolute;
+  top: calc(100% + var(--space-xxs, 4px));
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-xs, 6px);
+  padding: var(--space-xs, 6px) var(--space-s, 8px);
+  border: 1px solid var(--stroke2, #ddd);
+  border-radius: 6px;
+  background: var(--fill1, #fff);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 12%);
+  font-size: 0.75rem;
+  min-width: 260px;
+  max-width: min(560px, 92vw);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand, #2563eb) 14%, transparent);
+  color: var(--brand, #2563eb);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.badgeIcon {
+  flex-shrink: 0;
+}
+
+.chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-xxs, 4px);
+  min-width: 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--stroke2, #ddd);
+  border-radius: 999px;
+  background: var(--fill2, #f4f4f4);
+  color: var(--text1, #111);
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chipRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  padding: 2px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--text3, #666);
+}
+
+.chipRemove:hover {
+  color: var(--text1, #111);
+  background: var(--fill3, rgb(0 0 0 / 6%));
+}
+
+.ignored {
+  color: var(--text3, #999);
+  font-style: italic;
+}
+
+.undo {
+  margin-left: auto;
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  color: var(--brand, #2563eb);
+  font-size: 0.75rem;
+  text-decoration: underline;
+}

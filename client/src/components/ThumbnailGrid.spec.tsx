@@ -31,6 +31,10 @@ const observers: MockObserver[] = [];
 beforeAll(() => {
   class FakeIntersectionObserver {
     private callback: IntersectionObserverCallback;
+    // A disconnected observer stops delivering, which the real thing guarantees
+    // and the grid relies on to stop a single sentinel from advancing the page
+    // twice.
+    private live = true;
 
     constructor(callback: IntersectionObserverCallback) {
       this.callback = callback;
@@ -38,6 +42,7 @@ beforeAll(() => {
         observe: vi.fn(),
         disconnect: vi.fn(),
         trigger: (isIntersecting: boolean) => {
+          if (!this.live) return;
           this.callback(
             [
               {
@@ -52,7 +57,9 @@ beforeAll(() => {
     }
 
     observe = vi.fn();
-    disconnect = vi.fn();
+    disconnect = vi.fn(() => {
+      this.live = false;
+    });
   }
 
   // @ts-expect-error test override
@@ -137,6 +144,37 @@ describe("ThumbnailGrid", () => {
       expect(screen.getAllByTestId("tile")).toHaveLength(2);
       expect(screen.getByText("a/2.jpg")).toBeInTheDocument();
     });
+  });
+
+  it("advances only one page when the sentinel reports twice in a batch", async () => {
+    const page = (paths: string[]) => ({
+      items: paths.map((path) => ({
+        path,
+        name: path,
+        mediaType: "photo" as const,
+        originalUrl: path,
+        thumbnailUrl: path,
+        previewUrl: path,
+        fullUrl: path,
+      })),
+      total: 30,
+      page: 0,
+      pageSize: 200,
+    });
+    fetchPhotosMock.mockResolvedValue(page(["a/1.jpg"]));
+
+    renderGrid();
+    await waitFor(() => expect(observers.length).toBeGreaterThan(0));
+
+    await act(async () => {
+      observers.forEach((observer) => observer.trigger(true));
+      observers.forEach((observer) => observer.trigger(true));
+    });
+
+    // Two page bumps would skip 200 items outright, and the path-based dedupe on
+    // merge would hide the hole rather than repair it.
+    await waitFor(() => expect(fetchPhotosMock).toHaveBeenCalledTimes(2));
+    expect(fetchPhotosMock.mock.calls[1][0]).toMatchObject({ page: 2 });
   });
 
   it("shows empty-state text when no items are returned", async () => {

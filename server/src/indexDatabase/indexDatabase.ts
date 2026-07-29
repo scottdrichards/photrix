@@ -37,6 +37,8 @@ import {
 import { tables } from "./tables.ts";
 import { computePCA3D } from "./pca.ts";
 import { getLogger } from "../observability/logger.ts";
+import { FACE_ATTRIBUTE_VERSION } from "../faceDetection/faceAttributes.ts";
+import type { FaceAttributes } from "../faceDetection/faceDetector.type.ts";
 
 const log = getLogger("IndexDatabase");
 
@@ -57,6 +59,13 @@ const MERGED_SIMILARITY_RESCORE_VERSION = 2;
 // already-processed images so processExifMetadata re-reads their headers and
 // fills in `description` (and any other fields added since they were scanned).
 const EXIF_DESCRIPTION_BACKFILL_VERSION = 3;
+
+// PRAGMA user_version marking that stale per-face "photo ready" attributes have
+// been reset for re-derivation at FACE_ATTRIBUTE_VERSION (see
+// resetStaleFaceAttributes). Bump *both* this and FACE_ATTRIBUTE_VERSION when
+// the derivation in python/face_attributes.py changes in a way that should
+// invalidate existing scores.
+const FACE_ATTRIBUTE_RESET_VERSION = 4;
 
 // A cluster losing at least this fraction of its members to the confidence
 // purge is treated as a junk hub: its confident survivors are freed for
@@ -448,6 +457,9 @@ export class IndexDatabase {
       // Queue an EXIF re-scan of already-processed images so the new
       // human-authored `description` column gets backfilled from their headers.
       await this.backfillExifDescriptions();
+      // Return faces scored by a superseded attribute derivation to the
+      // backfill queue. No-op unless FACE_ATTRIBUTE_VERSION moved.
+      await this.resetStaleFaceAttributes();
       // Warm the PCA cache from the post-migration state so the first People-tab
       // request is instant.
       this.pcaCache = await this.computePCACache();
@@ -633,7 +645,7 @@ export class IndexDatabase {
    */
   async updateUserMetadata(
     relativePath: string,
-    patch: { rating?: number | null; tags?: string[] },
+    patch: { rating?: number | null; tags?: string[]; editAdj?: string | null },
   ): Promise<boolean> {
     const { folder, fileName } = splitPath(relativePath);
     const sets: string[] = [];
@@ -657,6 +669,11 @@ export class IndexDatabase {
         : [];
       sets.push("tags = ?");
       params.push(tags.length > 0 ? JSON.stringify(tags) : null);
+    }
+
+    if ("editAdj" in patch) {
+      sets.push("editAdj = ?");
+      params.push(patch.editAdj ?? null);
     }
 
     if (sets.length === 0) return false;
@@ -931,6 +948,7 @@ export class IndexDatabase {
       box: { x: number; y: number; width: number; height: number };
       confidence: number;
       embedding: Float64Array;
+      attributes?: FaceAttributes;
     }>,
     detectedAt: Date = new Date(),
   ): Promise<void> {
@@ -955,10 +973,16 @@ export class IndexDatabase {
         face.embedding.byteLength,
       );
       const centeredBox = toCenterBoxFromTopLeft(face.box);
+      // The detection pass derives attributes from landmarks it already ran and
+      // from the image it already decoded, so they arrive with the detection and
+      // never need the backfill. Stamp the version whenever attributes were
+      // computed at all — even an all-unknown result is a completed attempt.
+      const attributes = face.attributes;
       statements.push({
         sql: `INSERT INTO faces
-                (folder, fileName, boxX, boxY, boxWidth, boxHeight, confidence, embedding, detectedAt)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                (folder, fileName, boxX, boxY, boxWidth, boxHeight, confidence, embedding, detectedAt,
+                 smileScore, eyesOpenScore, focusScore, exposureScore, faceAttrVersion)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         params: [
           folder,
           fileName,
@@ -969,6 +993,11 @@ export class IndexDatabase {
           face.confidence,
           embeddingBuffer,
           detectedAtMs,
+          attributes?.smile ?? null,
+          attributes?.eyesOpen ?? null,
+          attributes?.focus ?? null,
+          attributes?.exposure ?? null,
+          attributes ? FACE_ATTRIBUTE_VERSION : null,
         ],
       });
     }
@@ -1002,6 +1031,104 @@ export class IndexDatabase {
         "Inline face cluster assignment failed; backfill will retry",
       );
     }
+  }
+
+  /**
+   * Next files holding faces that have never been scored for "photo ready"
+   * attributes, oldest-path first.
+   *
+   * Served entirely by the partial `needing_attributes` index, which only
+   * contains outstanding faces — so this stays cheap as the backfill drains and
+   * costs nothing once it is done. `DISTINCT ... LIMIT` over an index ordered by
+   * (folder, fileName) stops after `limit` files instead of grouping the table.
+   */
+  async getFilesNeedingFaceAttributes(limit: number): Promise<string[]> {
+    const rows = await this.db.all<{ folder: string; fileName: string }>(
+      `SELECT DISTINCT folder, fileName FROM faces
+       WHERE faceAttrVersion IS NULL
+       LIMIT ?`,
+      limit,
+    );
+    return rows.map((row) => joinPath(row.folder, row.fileName));
+  }
+
+  /** How many faces are still waiting for attribute derivation. */
+  async countFacesNeedingAttributes(): Promise<number> {
+    const row = await this.db.get<{ total: number }>(
+      "SELECT COUNT(*) AS total FROM faces WHERE faceAttrVersion IS NULL",
+    );
+    return row?.total ?? 0;
+  }
+
+  async countFacesTotal(): Promise<number> {
+    const row = await this.db.get<{ total: number }>(
+      "SELECT COUNT(*) AS total FROM faces",
+    );
+    return row?.total ?? 0;
+  }
+
+  /**
+   * The stored faces of one file, as top-left normalized boxes — the shape the
+   * attribute worker wants. Deliberately does not read `embedding`, so this is
+   * an index-only read.
+   */
+  async getFaceBoxesForAttributes(relativePath: string): Promise<
+    Array<{ id: number; box: { x: number; y: number; width: number; height: number } }>
+  > {
+    const { folder, fileName } = splitPath(relativePath);
+    const rows = await this.db.all<{
+      id: number;
+      boxX: number;
+      boxY: number;
+      boxWidth: number;
+      boxHeight: number;
+    }>(
+      `SELECT id, boxX, boxY, boxWidth, boxHeight FROM faces
+       WHERE folder = ? AND fileName = ? AND faceAttrVersion IS NULL`,
+      folder,
+      fileName,
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      // Stored boxes are centre-based; the worker (like the detector) speaks
+      // top-left.
+      box: {
+        x: row.boxX - row.boxWidth / 2,
+        y: row.boxY - row.boxHeight / 2,
+        width: row.boxWidth,
+        height: row.boxHeight,
+      },
+    }));
+  }
+
+  /**
+   * Writes derived attributes onto existing face rows by id.
+   *
+   * Never touches clusterId/embedding, so backfilling attributes cannot disturb
+   * People clustering. `faceAttrVersion` is stamped for every id passed in —
+   * including faces every attribute came back unknown for — so an unjudgeable
+   * face leaves the queue instead of being retried on every pass.
+   */
+  async saveFaceAttributes(
+    results: Array<{ id: number; attributes: FaceAttributes }>,
+  ): Promise<void> {
+    if (results.length === 0) return;
+    await this.db.transaction(
+      results.map(({ id, attributes }) => ({
+        sql: `UPDATE faces
+              SET smileScore = ?, eyesOpenScore = ?, focusScore = ?, exposureScore = ?,
+                  faceAttrVersion = ?
+              WHERE id = ?`,
+        params: [
+          attributes.smile ?? null,
+          attributes.eyesOpen ?? null,
+          attributes.focus ?? null,
+          attributes.exposure ?? null,
+          FACE_ATTRIBUTE_VERSION,
+          id,
+        ],
+      })),
+    );
   }
 
   /**
@@ -1204,6 +1331,52 @@ export class IndexDatabase {
       personId: faceClusterIdToString(row.personId),
       name: row.name,
     }));
+  }
+
+  /**
+   * Display names for the given face-cluster ids, resolved through merges the
+   * same way `getPeopleFacesForFile` does. Unnamed clusters are omitted.
+   */
+  async getFaceClusterNames(clusterIds: number[]): Promise<Map<number, string>> {
+    if (clusterIds.length === 0) return new Map();
+    const rows = await this.db.all<{ id: number; name: string | null }>(
+      `SELECT cluster.id AS id, person.name AS name
+         FROM faceClusters AS cluster
+         LEFT JOIN faceClusters AS person
+           ON person.id = COALESCE(cluster.personId, cluster.id)
+        WHERE cluster.id IN (${clusterIds.map(() => "?").join(", ")})`,
+      ...clusterIds,
+    );
+    return new Map(
+      rows.flatMap((row) =>
+        row.name ? ([[row.id, row.name]] as [number, string][]) : [],
+      ),
+    );
+  }
+
+  /**
+   * Distinct *named* people per file, keyed by `folder + fileName`. Ranks
+   * share-preview candidates: among equally-rated photos, one with several
+   * recognized people makes a better link thumbnail than a landscape.
+   */
+  async countNamedPeopleForFiles(
+    files: Array<{ folder: string; fileName: string }>,
+  ): Promise<Map<string, number>> {
+    if (files.length === 0) return new Map();
+    const rows = await this.db.all<{ folder: string; fileName: string; count: number }>(
+      `SELECT faces.folder AS folder,
+              faces.fileName AS fileName,
+              COUNT(DISTINCT COALESCE(cluster.personId, faces.clusterId)) AS count
+         FROM faces
+         JOIN faceClusters AS cluster ON cluster.id = faces.clusterId
+         JOIN faceClusters AS person
+           ON person.id = COALESCE(cluster.personId, faces.clusterId)
+        WHERE person.name IS NOT NULL
+          AND (${files.map(() => "(faces.folder = ? AND faces.fileName = ?)").join(" OR ")})
+        GROUP BY faces.folder, faces.fileName`,
+      ...files.flatMap(({ folder, fileName }) => [folder, fileName]),
+    );
+    return new Map(rows.map((row) => [row.folder + row.fileName, row.count]));
   }
 
   async addPaths(paths: string[]): Promise<void> {
@@ -1699,7 +1872,14 @@ export class IndexDatabase {
       count: number;
       samplePath: string | null;
       sampleName: string | null;
+      minDate: number | null;
+      maxDate: number | null;
     }>(
+      // `sortDate` mirrors the library's default ordering (dateTaken, falling
+      // back to created/modified). The typeof(...) = 'integer' guards keep rows
+      // whose date was ingested as a TEXT/ISO string out of MIN/MAX — SQLite
+      // sorts TEXT above every INTEGER, so one stray string poisons the max
+      // (same hazard getDateRange guards against).
       `WITH buckets AS (
          SELECT
            CAST(FLOOR((locationLatitude - ?) / ?) AS INTEGER) AS latBucket,
@@ -1707,7 +1887,12 @@ export class IndexDatabase {
            locationLatitude,
            locationLongitude,
            folder,
-           fileName
+           fileName,
+           CASE
+             WHEN typeof(dateTaken) = 'integer' THEN dateTaken
+             WHEN typeof(created) = 'integer' THEN created
+             WHEN typeof(modified) = 'integer' THEN modified
+           END AS sortDate
          FROM files
          WHERE locationLatitude IS NOT NULL
            AND locationLongitude IS NOT NULL
@@ -1717,7 +1902,9 @@ export class IndexDatabase {
          SELECT
            latBucket,
            lonBucket,
-           COUNT(*) AS count
+           COUNT(*) AS count,
+           MIN(sortDate) AS minDate,
+           MAX(sortDate) AS maxDate
          FROM buckets
          GROUP BY latBucket, lonBucket
        ),
@@ -1736,6 +1923,8 @@ export class IndexDatabase {
          (a.latBucket + 0.5) * ? + ? AS latitude,
          (a.lonBucket + 0.5) * ? + ? AS longitude,
          a.count AS count,
+         a.minDate AS minDate,
+         a.maxDate AS maxDate,
          MIN(CASE WHEN r.rn = 1 THEN r.folder || r.fileName END) AS samplePath,
          MIN(CASE WHEN r.rn = 1 THEN r.fileName END) AS sampleName
        FROM agg a
@@ -2732,6 +2921,40 @@ export class IndexDatabase {
   }
 
   /**
+   * One-time migration (gated by PRAGMA user_version) that returns faces scored
+   * by a *superseded* attribute derivation to the backfill queue.
+   *
+   * Adding the attribute columns themselves needs no migration — prepareTables
+   * ALTERs them in as NULL, which already reads as "never scored" and is picked
+   * up incrementally by the attribute task. This step exists for the other case:
+   * when `FACE_ATTRIBUTE_VERSION` is bumped because the derivation improved,
+   * rows carrying the old version must go back on the queue. Clearing the
+   * version (rather than the scores) leaves the old values readable until the
+   * new ones land, so the filter keeps working during the re-derivation.
+   *
+   * On a fresh install and on the first release of the feature this matches no
+   * rows and is a no-op. Idempotent: a re-run finds nothing below the current
+   * version.
+   */
+  private async resetStaleFaceAttributes(): Promise<void> {
+    const versionRow = await this.db.get<{ user_version: number }>(
+      "PRAGMA user_version",
+    );
+    if ((versionRow?.user_version ?? 0) >= FACE_ATTRIBUTE_RESET_VERSION) return;
+
+    const result = await this.db.run(
+      "UPDATE faces SET faceAttrVersion = NULL WHERE faceAttrVersion < ?",
+      FACE_ATTRIBUTE_VERSION,
+    );
+
+    await this.db.exec(`PRAGMA user_version = ${FACE_ATTRIBUTE_RESET_VERSION}`);
+    log.info(
+      { requeued: result?.changes ?? 0, version: FACE_ATTRIBUTE_VERSION },
+      "Re-queued faces for photo-ready attribute derivation",
+    );
+  }
+
+  /**
    * Rescores stored per-face similarities against current centroids for drifted
    * clusters, so People-tab representatives stop sticking to the seed face.
    * Returns the number of clusters refreshed; 0 means nothing was stale.
@@ -2905,6 +3128,38 @@ export class IndexDatabase {
 
     this.invalidateFaceClusterPCACache();
     return true;
+  }
+
+  /**
+   * Centroids of every cluster that resolves to a *named* person — the lookup
+   * table for matching a face from outside the library (a doorbell frame, an
+   * uploaded snap) against people already identified in the People tab.
+   *
+   * One row per cluster, not per person: merging carries the name on the person
+   * root rather than copying it onto each member, so a person can own several
+   * centroids (a beard year, a childhood). Keeping them separate means a live
+   * face only has to resemble one of a person's looks rather than their average
+   * across all of them; callers collapse by name.
+   */
+  async getNamedFaceCentroids(): Promise<
+    Array<{ clusterId: number; name: string; centroid: Buffer }>
+  > {
+    const rows = await this.db.all<{ id: number; name: string; centroid: Buffer }>(
+      `SELECT
+         faceClusters.id AS id,
+         COALESCE(personRoots.name, faceClusters.name) AS name,
+         faceClusters.centroid AS centroid
+       FROM faceClusters
+       LEFT JOIN faceClusters AS personRoots
+         ON personRoots.id = faceClusters.personId
+       WHERE faceClusters.weight > 0
+         AND COALESCE(personRoots.name, faceClusters.name) IS NOT NULL`,
+    );
+    return rows.map((row) => ({
+      clusterId: row.id,
+      name: row.name,
+      centroid: row.centroid,
+    }));
   }
 
   /** Cheap index-only counts — polled by the backfill task's status hook. */

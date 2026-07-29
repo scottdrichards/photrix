@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef, useState } from "react";
-import { readClusterFromSearch, readGroupFromSearch } from "../filterUrlState";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type { PeopleSelection } from "../filterUrlState";
 import type {
   ClusterFace,
   FaceClusterPCAPoint,
@@ -33,7 +33,6 @@ const READ_ONLY = isSharedView();
 type SelectedFaceGroup = {
   id: string;
   faces: ClusterFace[];
-  label: string;
 };
 
 type FaceImageProps = {
@@ -153,15 +152,23 @@ const InlineNameEditorControl = ({ name, onSave }: InlineNameEditorProps) => {
 type PersonDetailProps = {
   cluster: PersonClusterWithFaces;
   onBack: () => void;
-  onViewRelatedGroup: (cluster: { id: string }, label: string) => void;
+  onViewRelatedGroup: (cluster: { id: string }) => void;
   onClearSelectedFaceGroup: () => void;
   selectedFaceGroup: SelectedFaceGroup | null;
+  /** Derived from the person's own groups, so a deep link needs no stored label. */
+  selectedFaceGroupLabel: string;
   selectedFaceGroupLoading: boolean;
   onMergeSuggestion: (cluster: PersonCluster) => void;
   mergingSuggestionId: string | null;
   onSeparateCentroid: (centroid: PersonCentroid) => void;
   separatingCentroidId: string | null;
   onRename: (name: string | null) => void;
+  /**
+   * The person opened from a card we already had, with their faces still in
+   * flight. The header is fully real (name, count and face all come from the
+   * card); only the face grid below is still filling in.
+   */
+  loadingFaces?: boolean;
 };
 
 const PersonDetail = ({
@@ -170,12 +177,14 @@ const PersonDetail = ({
   onViewRelatedGroup,
   onClearSelectedFaceGroup,
   selectedFaceGroup,
+  selectedFaceGroupLabel,
   selectedFaceGroupLoading,
   onMergeSuggestion,
   mergingSuggestionId,
   onSeparateCentroid,
   separatingCentroidId,
   onRename,
+  loadingFaces = false,
 }: PersonDetailProps) => {
   const { setItems, setSelected } = useSelectionContext();
   const visibleFaces = selectedFaceGroup?.faces ?? cluster.faces;
@@ -195,8 +204,18 @@ const PersonDetail = ({
         <button type="button" className={css.backButton} onClick={onBack}>
           ← Back
         </button>
-        <InlineNameEditor name={cluster.name} onSave={onRename} />
-        <span className={css.personDetailCount}>{cluster.count} faces</span>
+        {/* Shrink-to-fit identity card rather than a full-width bar: the
+            person's own face anchors the name at a readable size. */}
+        <div className={css.personIdentity}>
+          <FaceImage
+            face={cluster.representative}
+            className={css.personIdentityFace}
+          />
+          <div className={css.personIdentityText}>
+            <InlineNameEditor name={cluster.name} onSave={onRename} />
+            <span className={css.personDetailCount}>{cluster.count} faces</span>
+          </div>
+        </div>
       </div>
       {(cluster.centroids.length > 0 ||
         (!READ_ONLY && cluster.mergeSuggestions.length > 0)) && (
@@ -226,7 +245,7 @@ const PersonDetail = ({
                         <button
                           type="button"
                           className={css.relatedPersonActionButton}
-                          onClick={() => onViewRelatedGroup(centroid, `${centroid.count} faces`)}
+                          onClick={() => onViewRelatedGroup(centroid)}
                         >
                           View
                         </button>
@@ -276,12 +295,7 @@ const PersonDetail = ({
                         <button
                           type="button"
                           className={css.relatedPersonActionButton}
-                          onClick={() =>
-                            onViewRelatedGroup(
-                              suggestion,
-                              suggestion.name ?? `${suggestion.count} faces`,
-                            )
-                          }
+                          onClick={() => onViewRelatedGroup(suggestion)}
                         >
                           View
                         </button>
@@ -307,8 +321,8 @@ const PersonDetail = ({
         <div className={css.detailSectionHeader}>
           <div className={css.selectedFacesHeader}>
             <h3>{selectedFaceGroup ? "Selected Match Group Faces" : "All faces"}</h3>
-            {selectedFaceGroup ? (
-              <span className={css.selectedFacesMeta}>{selectedFaceGroup.label}</span>
+            {selectedFaceGroup && selectedFaceGroupLabel ? (
+              <span className={css.selectedFacesMeta}>{selectedFaceGroupLabel}</span>
             ) : null}
           </div>
           {selectedFaceGroup ? (
@@ -321,7 +335,7 @@ const PersonDetail = ({
             </button>
           ) : null}
         </div>
-        {selectedFaceGroupLoading ? (
+        {selectedFaceGroupLoading || loadingFaces ? (
           <div className={css.spinnerWrap}>
             <Spinner size="small" />
           </div>
@@ -342,9 +356,18 @@ const PersonDetail = ({
   );
 };
 
+/**
+ * The open person and match group are owned by the URL (see `filterUrlState`),
+ * not by this component: they arrive as props and every navigation is reported
+ * back through `onNavigate`. That keeps a single writer for the address bar, so
+ * a refresh or a back button lands exactly where the user was.
+ */
 type PeopleViewProps = {
   view: "library" | "people";
   onViewChange: (view: "library" | "people") => void;
+  personId: string | null;
+  groupId: string | null;
+  onNavigate: (next: PeopleSelection, options?: { replace?: boolean }) => void;
 };
 
 const PEOPLE_PAGE_SIZE = 120;
@@ -413,7 +436,13 @@ const applyOptimisticDetailMerge = (
   };
 };
 
-const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
+const PeopleViewComponent = ({
+  view,
+  onViewChange,
+  personId,
+  groupId,
+  onNavigate,
+}: PeopleViewProps) => {
   const { filter } = useFilter();
   const { setItems } = useSelectionContext();
   const [loading, setLoading] = useState(false);
@@ -436,10 +465,12 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
   const [visibleCount, setVisibleCount] = useState(PEOPLE_PAGE_SIZE);
   const vizRequestRef = useRef<AbortController | null>(null);
   const selectedFaceGroupRequestRef = useRef<AbortController | null>(null);
-  // Latest open-cluster id, read by the filter-change effect without making it a
-  // dependency (so the effect fires only when the filter itself changes).
-  const openClusterIdRef = useRef<string | null>(null);
-  openClusterIdRef.current = personDetail?.id ?? null;
+  // Id of the cluster currently loaded into `personDetail`, read by effects that
+  // must not re-run merely because the detail object was replaced.
+  const loadedClusterIdRef = useRef<string | null>(null);
+  loadedClusterIdRef.current = personDetail?.id ?? null;
+  const onNavigateRef = useRef(onNavigate);
+  onNavigateRef.current = onNavigate;
 
   useEffect(() => {
     const abortOnDisposed = "disposed";
@@ -490,20 +521,15 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
       skipFilterReloadRef.current = false;
       return;
     }
-    const openClusterId = openClusterIdRef.current;
+    const openClusterId = loadedClusterIdRef.current;
     if (!openClusterId) return;
     const abortController = new AbortController();
     loadClusterDetail(openClusterId, abortController.signal, { showSpinner: false })
       .then((cluster) => {
-        if (abortController.signal.aborted) return;
-        if (!cluster) {
-          // Person has no faces under the new filter — return to the grid.
-          handleBack();
-          return;
-        }
-        // The selected match group's faces are from the previous filter; reset
-        // to the (filtered) full face list rather than show stale ones.
-        clearSelectedFaceGroup();
+        if (abortController.signal.aborted || cluster) return;
+        // Person has no faces under the new filter — return to the grid. The
+        // user didn't ask for this, so it replaces rather than adds history.
+        onNavigateRef.current({ personId: null, groupId: null }, { replace: true });
       })
       .catch((err) => {
         if (err?.name === "AbortError") return;
@@ -521,95 +547,83 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
     selectedFaceGroupRequestRef.current?.abort();
   }, []);
 
+  // Load the person named by the URL. This is the *only* path that opens a
+  // person, so a fresh page load, a click and a back button all behave the same.
   useEffect(() => {
-    selectedFaceGroupRequestRef.current?.abort();
-    selectedFaceGroupRequestRef.current = null;
-    setSelectedFaceGroup(null);
-    setSelectedFaceGroupLoading(false);
-  }, [personDetail?.id]);
-
-  // Sync personDetail to URL: pushState when entering a cluster, replaceState when leaving
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const currentCluster = params.get("cluster") || null;
-    const nextCluster = personDetail?.id ?? null;
-    if (currentCluster === nextCluster) return;
-
-    if (nextCluster) {
-      params.set("cluster", nextCluster);
-      params.delete("group");
-      window.history.pushState(null, "", `${window.location.pathname}?${params}`);
-    } else {
-      params.delete("cluster");
-      params.delete("group");
-      const qs = params.toString();
-      window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
-    }
-  }, [personDetail?.id]);
-
-  // Sync selectedFaceGroup to URL via replaceState (no new history entry)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const currentGroup = params.get("group") || null;
-    const nextGroup = selectedFaceGroup?.id ?? null;
-    if (currentGroup === nextGroup) return;
-
-    if (nextGroup) {
-      params.set("group", nextGroup);
-    } else {
-      params.delete("group");
-    }
-    window.history.replaceState(null, "", `${window.location.pathname}?${params}`);
-  }, [selectedFaceGroup?.id]);
-
-  // Keep a ref to handlers so the popstate listener doesn't need re-registration
-  const popstateHandlerRef = useRef<(() => void) | undefined>(undefined);
-  popstateHandlerRef.current = () => {
-    const newClusterId = readClusterFromSearch(window.location.search);
-    if (!newClusterId) {
-      selectedFaceGroupRequestRef.current?.abort();
-      selectedFaceGroupRequestRef.current = null;
-      setSelectedFaceGroup(null);
-      setSelectedFaceGroupLoading(false);
+    if (!personId) {
       setPersonDetail(null);
       setDetailLoading(false);
       setItems([]);
-    } else if (newClusterId !== personDetail?.id) {
-      loadClusterDetail(newClusterId).catch((err) => {
-        if (err?.name === "AbortError") return;
-        console.error("Failed to load cluster from navigation:", err);
-      });
-    } else {
-      // Same cluster — sync group (e.g. navigating forward to a group URL)
-      const newGroupId = readGroupFromSearch(window.location.search);
-      if (!newGroupId) clearSelectedFaceGroup();
+      return;
     }
-  };
+    if (loadedClusterIdRef.current === personId) return;
 
-  useEffect(() => {
-    const handler = () => popstateHandlerRef.current?.();
-    window.addEventListener("popstate", handler);
-    return () => window.removeEventListener("popstate", handler);
-  }, []);
-
-  // Deep-link initial load: if URL has ?cluster=, load it on mount
-  useEffect(() => {
-    const clusterId = readClusterFromSearch(window.location.search);
-    if (!clusterId) return;
-    const groupId = readGroupFromSearch(window.location.search);
     const abortController = new AbortController();
-    loadClusterDetail(clusterId, abortController.signal)
-      .then(() => {
-        if (!groupId || abortController.signal.aborted) return;
-        return handleViewRelatedGroup({ id: groupId }, "");
+    loadClusterDetail(personId, abortController.signal)
+      .then((cluster) => {
+        if (abortController.signal.aborted || cluster) return;
+        // Unknown or filtered-out person id — drop back to the grid.
+        onNavigateRef.current({ personId: null, groupId: null }, { replace: true });
       })
       .catch((err) => {
         if (err?.name === "AbortError") return;
-        console.error("Failed to load people deep link:", err);
+        console.error("Failed to load cluster detail:", err);
       });
     return () => abortController.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [personId, setItems]);
+
+  // Load the match group named by the URL. Re-runs on filter changes so the
+  // group's faces never outlive the filter they were fetched under.
+  useEffect(() => {
+    selectedFaceGroupRequestRef.current?.abort();
+    selectedFaceGroupRequestRef.current = null;
+
+    if (!personId || !groupId) {
+      setSelectedFaceGroup(null);
+      setSelectedFaceGroupLoading(false);
+      return;
+    }
+
+    const abortController = new AbortController();
+    selectedFaceGroupRequestRef.current = abortController;
+    setSelectedFaceGroup({ id: groupId, faces: [] });
+    setSelectedFaceGroupLoading(true);
+
+    fetchClusterDetail({ clusterId: groupId, signal: abortController.signal, ...filter })
+      .then((result) => {
+        if (abortController.signal.aborted) return;
+        if (!result.cluster) {
+          onNavigateRef.current({ personId, groupId: null }, { replace: true });
+          return;
+        }
+        setSelectedFaceGroup({ id: groupId, faces: result.cluster.faces });
+      })
+      .catch((err) => {
+        if (err === "disposed" || (err as { name?: string })?.name === "AbortError") return;
+        console.error("Failed to load related group faces:", err);
+        onNavigateRef.current({ personId, groupId: null }, { replace: true });
+      })
+      .finally(() => {
+        if (selectedFaceGroupRequestRef.current === abortController) {
+          selectedFaceGroupRequestRef.current = null;
+          setSelectedFaceGroupLoading(false);
+        }
+      });
+
+    return () => abortController.abort();
+  }, [personId, groupId, filter]);
+
+  // A deep link carries only ids, so the group's caption is derived from the
+  // person rather than remembered from the click that opened it.
+  const selectedFaceGroupLabel = useMemo(() => {
+    if (!groupId || !personDetail) return "";
+    const centroid = personDetail.centroids.find((entry) => entry.id === groupId);
+    if (centroid) return `${centroid.count} faces`;
+    const suggestion = personDetail.mergeSuggestions.find((entry) => entry.id === groupId);
+    if (suggestion) return suggestion.name ?? `${suggestion.count} faces`;
+    return "";
+  }, [groupId, personDetail]);
 
   const refreshPeopleClusters = async (signal?: AbortSignal) => {
     const result = await fetchPeopleClusters({ ...filter, signal });
@@ -641,12 +655,9 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
       return;
     }
 
-    const abortController = new AbortController();
-    loadClusterDetail(cluster.id, abortController.signal)
-      .catch((err) => {
-        if (err.name === "AbortError") return;
-        console.error("Failed to fetch cluster detail:", err);
-      });
+    // Navigate rather than fetch: the URL effect owns loading, so a click, a
+    // deep link and the back button all take the same path.
+    onNavigate({ personId: cluster.id, groupId: null });
   };
 
   const toggleSelect = (id: string) => {
@@ -737,79 +748,31 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
   };
 
   const handleBack = () => {
-    selectedFaceGroupRequestRef.current?.abort();
-    selectedFaceGroupRequestRef.current = null;
-    setSelectedFaceGroup(null);
-    setSelectedFaceGroupLoading(false);
-    setPersonDetail(null);
-    setItems([]);
+    onNavigate({ personId: null, groupId: null });
   };
 
   const openClusterDetail = (id: string) => {
-    selectedFaceGroupRequestRef.current?.abort();
-    selectedFaceGroupRequestRef.current = null;
-    setSelectedFaceGroup(null);
-    setSelectedFaceGroupLoading(false);
     vizRequestRef.current?.abort();
     vizRequestRef.current = null;
     setVizLoading(false);
     setVizPoints(null);
-    // Open cluster detail directly, bypassing selection-mode toggle
-    loadClusterDetail(id)
-      .catch((err) => {
-        if (err.name === "AbortError") return;
-        console.error("Failed to fetch cluster detail:", err);
-      });
+    onNavigate({ personId: id, groupId: null });
   };
 
   const clearSelectedFaceGroup = () => {
-    selectedFaceGroupRequestRef.current?.abort();
-    selectedFaceGroupRequestRef.current = null;
-    setSelectedFaceGroup(null);
-    setSelectedFaceGroupLoading(false);
+    onNavigate({ personId, groupId: null });
   };
 
-  const handleViewRelatedGroup = async (
-    relatedGroup: { id: string },
-    label: string,
-  ) => {
-    if (selectedFaceGroup?.id === relatedGroup.id) {
-      clearSelectedFaceGroup();
-      return;
-    }
-
-    selectedFaceGroupRequestRef.current?.abort();
-    const abortController = new AbortController();
-    selectedFaceGroupRequestRef.current = abortController;
-    setSelectedFaceGroup({ id: relatedGroup.id, faces: [], label });
-    setSelectedFaceGroupLoading(true);
-
-    try {
-      const result = await fetchClusterDetail({
-        clusterId: relatedGroup.id,
-        signal: abortController.signal,
-        ...filter,
-      });
-      if (abortController.signal.aborted) return;
-      if (!result.cluster) {
-        clearSelectedFaceGroup();
-        return;
-      }
-      setSelectedFaceGroup({
-        id: relatedGroup.id,
-        faces: result.cluster.faces,
-        label,
-      });
-    } catch (err) {
-      if (err === "disposed" || (err as { name?: string }).name === "AbortError") return;
-      clearSelectedFaceGroup();
-      console.error("Failed to load related group faces:", err);
-    } finally {
-      if (selectedFaceGroupRequestRef.current === abortController) {
-        selectedFaceGroupRequestRef.current = null;
-        setSelectedFaceGroupLoading(false);
-      }
-    }
+  /**
+   * Viewing a group is a navigation, not a fetch. The group effect owns the
+   * request and aborts the previous one, so clicking through several groups
+   * quickly leaves exactly one in flight — the last one asked for.
+   */
+  const handleViewRelatedGroup = (relatedGroup: { id: string }) => {
+    onNavigate({
+      personId,
+      groupId: selectedFaceGroup?.id === relatedGroup.id ? null : relatedGroup.id,
+    });
   };
 
   const handleMergeSuggestion = async (suggestion: PersonCluster) => {
@@ -895,16 +858,34 @@ const PeopleViewComponent = ({ view, onViewChange }: PeopleViewProps) => {
     setVizPoints(null);
   };
 
-  if (personDetail) {
+  // Opening a person must not wait on the round trip. The card that was just
+  // clicked already carries the name, count and face, so the page can be built
+  // from it and only the face grid is left to fill in. A deep link has no card
+  // to borrow from, so it still waits — there is genuinely nothing to show yet.
+  const seededDetail: PersonClusterWithFaces | null =
+    !personDetail && personId
+      ? (() => {
+          const card = data?.clusters.find((entry) => entry.id === personId);
+          return card
+            ? { ...card, faces: [], centroids: [], mergeSuggestions: [] }
+            : null;
+        })()
+      : null;
+
+  const shownDetail = personDetail ?? seededDetail;
+
+  if (shownDetail) {
     return (
       <section className={css.peopleView}>
         <ViewToggle view={view} onViewChange={onViewChange} />
         <PersonDetail
-          cluster={personDetail}
+          cluster={shownDetail}
+          loadingFaces={!personDetail}
           onBack={handleBack}
           onViewRelatedGroup={handleViewRelatedGroup}
           onClearSelectedFaceGroup={clearSelectedFaceGroup}
           selectedFaceGroup={selectedFaceGroup}
+          selectedFaceGroupLabel={selectedFaceGroupLabel}
           selectedFaceGroupLoading={selectedFaceGroupLoading}
           onMergeSuggestion={handleMergeSuggestion}
           mergingSuggestionId={mergingSuggestionId}

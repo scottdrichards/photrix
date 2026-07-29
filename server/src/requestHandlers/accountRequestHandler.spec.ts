@@ -1,6 +1,33 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import type http from "node:http";
+import Database from "better-sqlite3";
+import type { AsyncSqlite } from "../common/asyncSqlite.ts";
+
+// A minimal stand-in for AsyncSqlite backed by a real in-memory sqlite db, just
+// enough of the surface (all/run/get with the "sql, ...params" calling
+// convention used throughout authService.ts) to exercise real SQL — needed for
+// listShareLinks, whose revoked-link filtering lives in the query itself.
+const makeTestDb = (): AsyncSqlite => {
+  const raw = new Database(":memory:");
+  raw.exec(
+    "CREATE TABLE share_links (token TEXT PRIMARY KEY, username TEXT, label TEXT, createdAt INTEGER, revokedAt INTEGER)",
+  );
+  raw.exec(
+    "CREATE TABLE auth_sessions (token TEXT PRIMARY KEY, username TEXT, createdAt INTEGER, ip TEXT, lastSeenAt INTEGER)",
+  );
+  raw.exec(
+    "CREATE TABLE api_tokens (token TEXT PRIMARY KEY, username TEXT, name TEXT, createdAt INTEGER, lastUsedAt INTEGER)",
+  );
+  return {
+    all: async (sql: string, ...params: unknown[]) => raw.prepare(sql).all(...params),
+    run: async (sql: string, ...params: unknown[]) => raw.prepare(sql).run(...params),
+    get: async (sql: string, ...params: unknown[]) => raw.prepare(sql).get(...params),
+    exec: async (sql: string) => {
+      raw.exec(sql);
+    },
+  } as unknown as AsyncSqlite;
+};
 
 afterEach(() => {
   jest.resetModules();
@@ -161,5 +188,93 @@ describe("accountRequestHandler", () => {
     expect(out.getStatus()).toBe(200);
     expect(authService.validateToken(t1)).toBe(false);
     expect(authService.validateToken(t2)).toBe(false);
+  });
+
+  it("includes a coarse IP/location classification per session", async () => {
+    const { accountRequestHandler, authService } = await load();
+    const local = authService.issueToken("erin", "192.168.1.42");
+    const remote = authService.issueToken("erin", "203.0.113.7");
+
+    const listed = createJsonResponse();
+    await accountRequestHandler(makeReq("/api/account/sessions", "GET", local), listed.res);
+    const { sessions } = listed.getJson<{
+      sessions: Array<{ ip: string | null; location: string }>;
+    }>();
+    expect(sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ip: "192.168.1.42", location: "Local network" }),
+        expect.objectContaining({ ip: "203.0.113.7", location: "Internet" }),
+      ]),
+    );
+
+    authService.revokeToken(local);
+    authService.revokeToken(remote);
+  });
+
+  it("revokes every other session but keeps the caller signed in", async () => {
+    const { accountRequestHandler, authService } = await load();
+    const keep = authService.issueToken("frank");
+    const other1 = authService.issueToken("frank");
+    const other2 = authService.issueToken("frank");
+
+    const res = createJsonResponse();
+    await accountRequestHandler(
+      makeReq("/api/account/sessions/revoke-others", "POST", keep),
+      res.res,
+    );
+
+    expect(res.getStatus()).toBe(200);
+    expect(authService.validateToken(keep)).toBe(true);
+    expect(authService.validateToken(other1)).toBe(false);
+    expect(authService.validateToken(other2)).toBe(false);
+
+    authService.revokeToken(keep);
+  });
+
+  it("hides revoked share links from the list", async () => {
+    const { accountRequestHandler, authService } = await load();
+    await authService.initAuthService(makeTestDb());
+    const token = authService.issueToken("grace");
+    authService.recordShareLink("grace", "photrix-share-v1.one", "Trip A");
+    authService.recordShareLink("grace", "photrix-share-v1.two", "Trip B");
+    // Give the fire-and-forget INSERTs a tick to land before revoking/listing.
+    await new Promise((r) => setTimeout(r, 0));
+    await authService.revokeShareLink("grace", "photrix-share-v1.one");
+
+    const listed = createJsonResponse();
+    await accountRequestHandler(
+      makeReq("/api/account/share-links", "GET", token),
+      listed.res,
+    );
+    const { links } = listed.getJson<{ links: Array<{ label: string }> }>();
+    expect(links.map((l) => l.label)).toEqual(["Trip B"]);
+
+    authService.revokeToken(token);
+  });
+
+  it("only reports passkeysAvailable once a public RP origin is configured", async () => {
+    const previous = process.env.PHOTRIX_RP_ORIGIN;
+    const { accountRequestHandler, authService } = await load();
+    const passkeyService = await import("../auth/passkeyService.ts");
+    // Passkey storage is "ready" (db configured) in both cases — only the RP
+    // origin should gate the flag.
+    passkeyService.initPasskeyService(makeTestDb());
+    const token = authService.issueToken("henry");
+
+    delete process.env.PHOTRIX_RP_ORIGIN;
+    const withoutOrigin = createJsonResponse();
+    await accountRequestHandler(makeReq("/api/account", "GET", token), withoutOrigin.res);
+    expect(withoutOrigin.getJson<{ passkeysAvailable: boolean }>().passkeysAvailable).toBe(
+      false,
+    );
+
+    process.env.PHOTRIX_RP_ORIGIN = "https://photos.example.com";
+    const withOrigin = createJsonResponse();
+    await accountRequestHandler(makeReq("/api/account", "GET", token), withOrigin.res);
+    expect(withOrigin.getJson<{ passkeysAvailable: boolean }>().passkeysAvailable).toBe(true);
+
+    authService.revokeToken(token);
+    if (previous === undefined) delete process.env.PHOTRIX_RP_ORIGIN;
+    else process.env.PHOTRIX_RP_ORIGIN = previous;
   });
 });

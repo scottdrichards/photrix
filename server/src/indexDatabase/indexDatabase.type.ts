@@ -1,5 +1,6 @@
 import { FileRecord } from "./fileRecord.type.ts";
 import type {
+  FaceMatchFilter,
   FileQueryExtraField,
   FilterElement as SharedFilterElement,
   RecordFilterCondition,
@@ -30,6 +31,12 @@ export type FilterCondition = BaseFilterCondition & {
   hasFaces?: boolean | null;
   /** Match files that contain a detected face assigned to any of these cluster ids. */
   faceCluster?: number | number[] | null;
+  /**
+   * Person + per-face attribute match. Supersedes `faceCluster` when the caller
+   * also constrains attributes; `faceCluster` stays for existing share links and
+   * URLs that only name people.
+   */
+  faceMatch?: FaceMatchFilter | null;
   semanticImage?: RuntimeSemanticSimilarityFilter | null;
   semanticAudio?: RuntimeSemanticSimilarityFilter | null;
   transcriptSearch?: StringSearch | null;
@@ -83,6 +90,9 @@ export type GeoCluster = {
   count: number;
   samplePath: string | null;
   sampleName: string | null;
+  /** Epoch ms of the oldest/newest item in the bucket; null when undated. */
+  minDate: number | null;
+  maxDate: number | null;
 };
 
 export type GeoClusterResult = {

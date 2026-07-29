@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   ArrowDownload24Regular,
   ChevronLeft48Regular,
@@ -17,6 +17,8 @@ import {
   probeVideoPlaybackProfile,
   invalidateVideoPlaybackProfile,
 } from "../videoPlaybackProfile";
+import { attachHlsAbrUpswitchGuard } from "../hlsAbrGuard";
+import { consumeLiveOpenIntent } from "./tileMedia/liveOpenIntent";
 import {
   fetchPeopleFacesForFile,
   fetchTranscriptSegments,
@@ -32,7 +34,7 @@ import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes } from "./FaceOverla
 import { useSelectionContext } from "./selection/SelectionContext";
 import { MiniMap } from "./MiniMap";
 import { ShareOptionsModal } from "./ShareOptionsModal";
-import { PhotoEditor, type EditStyle } from "./PhotoEditor";
+import { PhotoEditor, type EditStyle, type EditAdj, DEFAULT_ADJ, computeStyle, isDirty, EditSvgDefs, applyPixelAdj } from "./PhotoEditor";
 import { SwipePhotoViewer } from "./SwipePhotoViewer";
 import { isSharedView } from "../hooks/useShareFilter";
 import css from "./FullscreenViewer.module.css";
@@ -40,8 +42,6 @@ import css from "./FullscreenViewer.module.css";
 // Star ratings and tags persist to the DB via PATCH, which the server rejects
 // for share tokens — so hide the tagging bar entirely in a shared view.
 const READ_ONLY = isSharedView();
-
-const CLEAN_EDIT_STYLE: EditStyle = { filter: "", transform: "", clipPath: "" };
 
 const SWIPE_THRESHOLD_PX = 60;
 const PHOTO_ZOOM_DEFAULT_SCALE = 2.5;
@@ -200,6 +200,64 @@ const readMetadataAspectRatio = (metadata: Record<string, unknown> | undefined):
   return 1;
 };
 
+function computeEditOutputAR(natW: number, natH: number, adj: EditAdj): number {
+  const cw = natW * (1 - (adj.cropLeft + adj.cropRight) / 100);
+  const ch = natH * (1 - (adj.cropTop + adj.cropBottom) / 100);
+  const totalDeg = ((adj.rotation + adj.rotate90 * 90) % 360 + 360) % 360;
+  const rad = (totalDeg * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  const outW = cw * cos + ch * sin;
+  const outH = cw * sin + ch * cos;
+  return outH > 0 ? outW / outH : 1;
+}
+
+const PREVIEW_MAX_EDGE = 1200;
+
+function drawEditPreview(canvas: HTMLCanvasElement, img: HTMLImageElement, adj: EditAdj) {
+  const iw = img.naturalWidth;
+  const ih = img.naturalHeight;
+  if (iw === 0 || ih === 0) return;
+
+  const cropL = Math.round(iw * (adj.cropLeft / 100));
+  const cropR = Math.round(iw * (adj.cropRight / 100));
+  const cropT = Math.round(ih * (adj.cropTop / 100));
+  const cropB = Math.round(ih * (adj.cropBottom / 100));
+  const cw = Math.max(1, iw - cropL - cropR);
+  const ch = Math.max(1, ih - cropT - cropB);
+
+  const totalDeg = ((adj.rotation + adj.rotate90 * 90) % 360 + 360) % 360;
+  const rad = (totalDeg * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  const outW = Math.round(cw * cos + ch * sin);
+  const outH = Math.round(cw * sin + ch * cos);
+
+  const scale = Math.min(1, PREVIEW_MAX_EDGE / Math.max(outW, outH));
+  const pw = Math.max(1, Math.round(outW * scale));
+  const ph = Math.max(1, Math.round(outH * scale));
+
+  canvas.width = pw;
+  canvas.height = ph;
+
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, pw, ph);
+  ctx.save();
+  ctx.translate(pw / 2, ph / 2);
+  if (adj.flipH) ctx.scale(-1, 1);
+  if (adj.flipV) ctx.scale(1, -1);
+  ctx.scale(scale, scale);
+  if (totalDeg !== 0) ctx.rotate(rad);
+  ctx.translate(-cw / 2, -ch / 2);
+  ctx.drawImage(img, cropL, cropT, cw, ch, 0, 0, cw, ch);
+  ctx.restore();
+
+  const imageData = ctx.getImageData(0, 0, pw, ph);
+  applyPixelAdj(imageData.data, pw, ph, adj);
+  ctx.putImageData(imageData, 0, 0);
+}
+
 export function FullscreenViewer() {
   const {
     items = [],
@@ -233,6 +291,7 @@ export function FullscreenViewer() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const abrGuardDetachRef = useRef<(() => void) | null>(null);
   const playbackOperationIdRef = useRef<string | null>(null);
   // Set to a video's path once direct playback stalled on buffering, so the load
   // effect re-negotiates that video as adaptive HLS. Reset implicitly when the
@@ -257,6 +316,11 @@ export function FullscreenViewer() {
   const [photoAspectRatio, setPhotoAspectRatio] = useState(1);
   const [fullImageLoaded, setFullImageLoaded] = useState(false);
   const [showLiveVideo, setShowLiveVideo] = useState(false);
+  // Opening a photo starts on the still, unless the grid says the user clicked
+  // that tile's live badge — then go straight to the motion clip.
+  useEffect(() => {
+    setShowLiveVideo(consumeLiveOpenIntent(photo?.path));
+  }, [photo?.path]);
   const [showFileInfo, setShowFileInfo] = useState(false);
   const [showFaces, setShowFaces] = useState(false);
   const [hasFaceOverlayData, setHasFaceOverlayData] = useState(false);
@@ -264,7 +328,16 @@ export function FullscreenViewer() {
   const [exportMode, setExportMode] = useState<"share" | "download" | null>(null);
   const [showCaptions, setShowCaptions] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [editStyle, setEditStyle] = useState<EditStyle>(CLEAN_EDIT_STYLE);
+  const [canvasAdj, setCanvasAdj] = useState<EditAdj>(DEFAULT_ADJ);
+  const [previewImgLoaded, setPreviewImgLoaded] = useState(false);
+  const [previewNatSize, setPreviewNatSize] = useState({ w: 0, h: 0 });
+  const previewImgRef = useRef<HTMLImageElement | null>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previewRafRef = useRef<number | null>(null);
+  const [savedAdj, setSavedAdj] = useState<EditAdj>(DEFAULT_ADJ);
+  const latestAdjRef = useRef<EditAdj>(DEFAULT_ADJ);
+  const rawSavedSvgId = useId();
+  const savedSvgId = `pev-${rawSavedSvgId.replace(/:/g, "")}`;
   const [cropContainerEl, setCropContainerEl] = useState<HTMLDivElement | null>(null);
   const [transcriptTrackUrl, setTranscriptTrackUrl] = useState<string | null>(null);
   const captionBlobUrlRef = useRef<string | null>(null);
@@ -291,7 +364,16 @@ export function FullscreenViewer() {
     setPeopleFaces([]);
     setExportMode(null);
     setEditMode(false);
-    setEditStyle(CLEAN_EDIT_STYLE);
+    setPreviewImgLoaded(false);
+    setPreviewNatSize({ w: 0, h: 0 });
+    setCanvasAdj(DEFAULT_ADJ);
+    const rawEditAdj = photo?.metadata?.editAdj;
+    const parsedAdj =
+      rawEditAdj && typeof rawEditAdj === "string"
+        ? (() => { try { return JSON.parse(rawEditAdj) as EditAdj; } catch { return DEFAULT_ADJ; } })()
+        : DEFAULT_ADJ;
+    setSavedAdj(parsedAdj);
+    latestAdjRef.current = parsedAdj;
     setPhotoAspectRatio(readMetadataAspectRatio(photo?.metadata));
     setFullImageLoaded(false);
     setPhotoZoom({
@@ -389,6 +471,10 @@ export function FullscreenViewer() {
     playbackOperationIdRef.current = clientOperationId;
 
     const destroyHls = () => {
+      if (abrGuardDetachRef.current) {
+        abrGuardDetachRef.current();
+        abrGuardDetachRef.current = null;
+      }
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -568,6 +654,13 @@ export function FullscreenViewer() {
             levelLoadingTimeOut: 20000,
             manifestLoadingTimeOut: 20000,
             levelLoadingRetryDelay: 1000,
+            // Seed hls.js's own EWMA bandwidth estimator from the measurement we
+            // already took for the direct-vs-HLS negotiation (playbackProfile),
+            // instead of hls.js's hardcoded 500kbps default — reuses the existing
+            // probe rather than starting ABR blind on a link we've already sampled.
+            ...(playbackProfile.bandwidthMbps
+              ? { abrEwmaDefaultEstimate: playbackProfile.bandwidthMbps * 1_000_000 }
+              : {}),
           });
 
           restorePlaybackPosition();
@@ -664,6 +757,11 @@ export function FullscreenViewer() {
             markPlaybackUnavailable();
           });
           hlsRef.current = hls;
+          // Asymmetric ABR: downswitches stay on hls.js's own fast, untouched
+          // path; upswitches are gated behind a dwell period + sustained
+          // bandwidth headroom so a bad link settles instead of hunting (see
+          // hlsAbrGuard.ts for the GPU-cost rationale).
+          abrGuardDetachRef.current = attachHlsAbrUpswitchGuard(hls);
           return;
         }
 
@@ -898,7 +996,7 @@ export function FullscreenViewer() {
     selectPrevious();
   };
 
-  const handlePhotoClick = (e: React.MouseEvent<HTMLImageElement>) => {
+  const handlePhotoClick = (e: React.MouseEvent<HTMLElement>) => {
     if (photoZoom.isZoomed) {
       setPhotoZoom((current) => ({ ...current, isZoomed: false }));
       return;
@@ -920,7 +1018,7 @@ export function FullscreenViewer() {
     });
   };
 
-  const handlePhotoWheel = (e: React.WheelEvent<HTMLImageElement>) => {
+  const handlePhotoWheel = (e: React.WheelEvent<HTMLElement>) => {
     if (!photoZoom.isZoomed) {
       return;
     }
@@ -991,6 +1089,25 @@ export function FullscreenViewer() {
     return () => window.removeEventListener("keydown", handleRatingKey);
   }, [photo, editMode, persistTagging]);
 
+  useEffect(() => {
+    if (!editMode || !previewImgLoaded) return;
+    const canvas = previewCanvasRef.current;
+    const img = previewImgRef.current;
+    if (!canvas || !img) return;
+    const adj = canvasAdj;
+    if (previewRafRef.current !== null) cancelAnimationFrame(previewRafRef.current);
+    previewRafRef.current = requestAnimationFrame(() => {
+      previewRafRef.current = null;
+      drawEditPreview(canvas, img, adj);
+    });
+    return () => {
+      if (previewRafRef.current !== null) {
+        cancelAnimationFrame(previewRafRef.current);
+        previewRafRef.current = null;
+      }
+    };
+  }, [canvasAdj, editMode, previewImgLoaded]);
+
   // Neighbours for the swipe carousel (photos in normal viewing mode).
   const currentIndex = photo ? items.findIndex((item) => item.path === photo.path) : -1;
   const prevPhoto = currentIndex > 0 ? items[currentIndex - 1] : null;
@@ -1004,25 +1121,20 @@ export function FullscreenViewer() {
   const faceToggleDisabled =
     photo?.mediaType === "video" || (!hasFaceOverlayData && peopleFaces.length === 0);
 
-  // Close the viewer and deep-link to the clicked person's page in the People
-  // view. pushState doesn't emit popstate, so dispatch it manually to drive the
-  // app's URL-sync handler (which flips to the People view and loads the cluster).
-  const openPersonPage = (personId: string) => {
-    setSelected(null);
-    const params = new URLSearchParams(window.location.search);
-    params.set("view", "people");
-    params.set("cluster", personId);
-    params.delete("group");
-    window.history.pushState(null, "", `${window.location.pathname}?${params}`);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  };
-
   const zoomStyle = {
     "--zoom-origin-x": `${photoZoom.originXPercent}%`,
     "--zoom-origin-y": `${photoZoom.originYPercent}%`,
     "--zoom-scale": photoZoom.isZoomed ? photoZoom.scale.toString() : "1",
     "--zoom-cursor": photoZoom.isZoomed ? "zoom-out" : "zoom-in",
+    // Counter-scale for face labels: they must stay a fixed screen size while
+    // the photo (and their own anchor position) zooms in, otherwise a crowded
+    // photo becomes *harder* to read the more you zoom in on it.
+    "--label-counter-scale": photoZoom.isZoomed ? (1 / photoZoom.scale).toString() : "1",
   } as React.CSSProperties;
+
+  const previewOutputAR = previewNatSize.w > 0
+    ? computeEditOutputAR(previewNatSize.w, previewNatSize.h, canvasAdj)
+    : photoAspectRatio;
 
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
@@ -1035,6 +1147,8 @@ export function FullscreenViewer() {
     >
       {photo && (
         <>
+          {/* SVG filter for saved edits, active in the non-edit view */}
+          {isDirty(savedAdj) && !editMode && <EditSvgDefs adj={savedAdj} filterId={savedSvgId} />}
           {exportMode && (
             <ShareOptionsModal
               photos={[photo]}
@@ -1258,27 +1372,42 @@ export function FullscreenViewer() {
                   style={
                     {
                       ...zoomStyle,
-                      "--photo-ar": String(photoAspectRatio),
-                      ...(editStyle.transform ? { transform: editStyle.transform } : {}),
+                      "--photo-ar": String(previewOutputAR),
                     } as React.CSSProperties
                   }
                 >
-                  {/* Cached grid thumbnail shown instantly until the full-size
-                      image finishes decoding. */}
+                  {/* Thumbnail shown until canvas is ready */}
                   <div
                     className={css.thumbnailClip}
                     aria-hidden="true"
-                    style={{ opacity: fullImageLoaded ? 0 : 1 }}
+                    style={{ opacity: previewImgLoaded ? 0 : 1 }}
                   >
                     <div
                       className={css.thumbnailUnderlay}
                       style={{ backgroundImage: `url("${photo.thumbnailUrl}")` }}
                     />
                   </div>
-                  {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */}
+                  {/* Hidden source image for canvas drawing */}
+                  {/* eslint-disable-next-line jsx-a11y/alt-text */}
                   <img
+                    ref={previewImgRef}
                     src={photo.fullUrl}
-                    alt={photo.name}
+                    alt=""
+                    style={{ display: "none" }}
+                    onLoad={() => {
+                      const img = previewImgRef.current;
+                      if (!img) return;
+                      setPreviewImgLoaded(true);
+                      setPreviewNatSize({ w: img.naturalWidth, h: img.naturalHeight });
+                      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                        setPhotoAspectRatio(img.naturalWidth / img.naturalHeight);
+                        setFullImageLoaded(true);
+                      }
+                    }}
+                  />
+                  {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */}
+                  <canvas
+                    ref={previewCanvasRef}
                     className={
                       photoZoom.isZoomed
                         ? `${css.photoMedia} ${css.zoomedMedia}`
@@ -1286,18 +1415,9 @@ export function FullscreenViewer() {
                     }
                     onClick={handlePhotoClick}
                     onWheel={handlePhotoWheel}
-                    onLoad={(e) => {
-                      setFullImageLoaded(true);
-                      const { naturalWidth, naturalHeight } = e.currentTarget;
-                      if (naturalWidth > 0 && naturalHeight > 0) {
-                        setPhotoAspectRatio(naturalWidth / naturalHeight);
-                      }
-                    }}
                     style={{
                       ...zoomStyle,
-                      opacity: fullImageLoaded ? 1 : 0,
-                      ...(editStyle.filter ? { filter: editStyle.filter } : {}),
-                      ...(editStyle.clipPath ? { clipPath: editStyle.clipPath } : {}),
+                      opacity: previewImgLoaded ? 1 : 0,
                     }}
                   />
                   {showFaces && (
@@ -1306,8 +1426,6 @@ export function FullscreenViewer() {
                       faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
                       aspectRatio={photoAspectRatio}
                       namedFaces={peopleFaces}
-                      onSelectPerson={openPersonPage}
-                      labelsHidden={photoZoom.isZoomed}
                     />
                   )}
                   <div ref={setCropContainerEl} className={css.cropOverlayContainer} />
@@ -1319,6 +1437,7 @@ export function FullscreenViewer() {
                   nextPhoto={nextPhoto}
                   photoAspectRatio={photoAspectRatio}
                   fullImageLoaded={fullImageLoaded}
+                  editStyle={isDirty(savedAdj) ? computeStyle(savedAdj, savedSvgId) : undefined}
                   onImageLoad={(e) => {
                     setFullImageLoaded(true);
                     const { naturalWidth, naturalHeight } = e.currentTarget;
@@ -1336,8 +1455,6 @@ export function FullscreenViewer() {
                       faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
                       aspectRatio={photoAspectRatio}
                       namedFaces={peopleFaces}
-                      onSelectPerson={openPersonPage}
-                      labelsHidden={photoZoom.isZoomed}
                     />
                   )}
                 </SwipePhotoViewer>
@@ -1367,8 +1484,18 @@ export function FullscreenViewer() {
                 photoFullUrl={photo.fullUrl}
                 imageAspectRatio={photoAspectRatio}
                 cropContainerEl={cropContainerEl}
-                onStyleChange={setEditStyle}
-                onClose={() => setEditMode(false)}
+                initialAdj={savedAdj}
+                onAdjChange={(adj) => { latestAdjRef.current = adj; setCanvasAdj(adj); }}
+                onClose={() => {
+                  const adj = latestAdjRef.current;
+                  setSavedAdj(adj);
+                  setEditMode(false);
+                  if (!READ_ONLY) {
+                    void updatePhotoMetadata(photo.path, {
+                      editAdj: isDirty(adj) ? JSON.stringify(adj) : null,
+                    }).catch(() => {});
+                  }
+                }}
               />
             )}
             {!editMode && showFileInfo && (

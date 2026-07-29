@@ -22,6 +22,10 @@ import {
   verifyPasskeyRegistration,
 } from "../auth/passkeyService.ts";
 import { normalizeShareSearchSources } from "../auth/shareScope.ts";
+import { clientIpFromRequest } from "../auth/ipLocation.ts";
+import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
+import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
+import { generateShareDescription } from "../shareDescription/generateShareDescription.ts";
 import { writeJson } from "../utils.ts";
 
 const readBody = (req: http.IncomingMessage): Promise<string> =>
@@ -49,7 +53,7 @@ export const authLoginHandler = async (
     return;
   }
 
-  const token = validateCredentials(body.username, body.password);
+  const token = validateCredentials(body.username, body.password, clientIpFromRequest(req));
   if (!token) {
     writeJson(res, 401, { error: "Invalid username or password" });
     return;
@@ -64,6 +68,7 @@ export const authLoginHandler = async (
 export const authShareTokenHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
+  database: IndexDatabase,
 ): Promise<void> => {
   const parsedUrl = new URL(req.url ?? "/", "http://localhost");
   const token = extractToken(
@@ -105,11 +110,18 @@ export const authShareTokenHandler = async (
     return;
   }
 
+  // A caller-supplied label wins; otherwise a locally hosted model names the
+  // collection from the filter so link previews read like an album title
+  // instead of "Filtered view".
   const rawLabel = (body as { label?: unknown }).label;
   const label =
     typeof rawLabel === "string" && rawLabel.trim()
       ? rawLabel.trim()
-      : semanticQuery || "Filtered view";
+      : await generateShareDescription({
+          filter: body.filter as FilterElement,
+          ...(semanticQuery ? { semanticQuery } : {}),
+          database,
+        });
 
   const shareToken = issueShareToken({
     filter: body.filter,
@@ -256,7 +268,7 @@ export const passkeyAuthenticationVerifyHandler = async (
     return;
   }
 
-  const token = issueToken(username);
+  const token = issueToken(username, clientIpFromRequest(req));
   writeJson(res, 200, { token });
 };
 

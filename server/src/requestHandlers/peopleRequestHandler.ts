@@ -1,6 +1,7 @@
 import type * as http from "http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { writeJson } from "../utils.ts";
+import { invalidateNamedCentroidCache } from "./faceIdentifyRequestHandler.ts";
 
 const readJsonBody = (req: http.IncomingMessage): Promise<unknown> =>
   new Promise((resolve, reject) => {
@@ -24,6 +25,12 @@ export const peopleRequestHandler = async (
   database: IndexDatabase,
 ): Promise<void> => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+
+  // Every route below renames, merges or separates a cluster, all of which
+  // change which centroids belong to which name. Drop the identify endpoint's
+  // TTL cache up front so a person named here is recognizable at the door on
+  // the next event rather than up to a minute later.
+  invalidateNamedCentroidCache();
 
   // POST /api/people/rename — rename a cluster
   if (url.pathname === "/api/people/rename" && req.method === "POST") {

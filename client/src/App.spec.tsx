@@ -5,6 +5,7 @@ import App from "./App";
 vi.mock("./auth", () => ({
   extractUrlToken: vi.fn(),
   getAuthHeaders: vi.fn(() => ({})),
+  hasAccountSession: vi.fn(() => false),
   initAuth: vi.fn(() => Promise.resolve(true)),
   onUnauthorized: vi.fn(),
 }));
@@ -193,7 +194,10 @@ describe("App", () => {
 
     expect(probeVideoPlaybackProfileMock).toHaveBeenCalledTimes(1);
     expect(useSyncUrlWithFilterMock).toHaveBeenCalledWith(
-      "library",
+      expect.objectContaining({
+        view: "library",
+        people: { personId: null, groupId: null },
+      }),
       expect.any(Function),
     );
   });

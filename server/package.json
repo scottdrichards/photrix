@@ -17,6 +17,7 @@
     "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js --selectProjects integration --runInBand",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --selectProjects unit --watch",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "test:python": "cd python && ${PHOTRIX_PYTHON:-python3} -m unittest discover -p '*_test.py'",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
     "format": "prettier --write \"{src,tests}/**/*.{ts,tsx,js,jsx,json,md}\"",

@@ -13,12 +13,22 @@ Request formats:
   {"id": 1, "operation": "analyzeImage", "imagePath": "/p.jpg", "faces": true, "embed": true}
   # Text embedding for search queries (no image decode).
   {"id": 2, "operation": "embedText", "text": "eating a burrito at night"}
+  # Attributes for faces that were already detected and stored (backfill path):
+  # scores the supplied boxes without re-detecting, so cluster assignments and
+  # face identities are left completely untouched.
+  {"id": 3, "operation": "faceAttributes", "imagePath": "/p.jpg",
+   "faces": [{"id": 42, "box": {"x": 0.1, "y": 0.2, "width": 0.1, "height": 0.1}}]}
 
 Response formats:
-  {"id": 1, "faces": [ {box, confidence, embedding}, ... ], "embedding": [..512..]}
+  {"id": 1, "faces": [ {box, confidence, embedding, attributes}, ... ], "embedding": [..512..]}
   {"id": 1, "faces": [...], "embeddingError": "..."}   # per-part failure
   {"id": 1, "error": "Image not found: ..."}           # decode/whole-request failure
   {"id": 2, "embedding": [..512..]}
+  {"id": 3, "attributes": [ {"id": 42, "smile": 0.9, "eyesOpen": 1.0, ...}, ... ]}
+
+Per-face `attributes` carry `smile` / `eyesOpen` / `focus` / `exposure` in 0..1.
+Any attribute that cannot be judged for a face is simply absent, which the Node
+side stores as NULL ("unknown") rather than as a low score.
 
 Models are loaded lazily on first use so a library with only faces enabled never
 pays to load CLIP (and vice versa). Requests are processed sequentially: running
@@ -38,6 +48,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
+
+from face_attributes import compute_face_attributes
 
 # Local files can be legitimately large (panoramas, high-res cameras); both
 # models downscale internally so the decompression-bomb guard adds no safety.
@@ -218,8 +230,9 @@ def _normalize_box(bbox, width: int, height: int) -> dict:
 def _detect_faces(rgb: Image.Image) -> list[dict]:
     app = _get_face_app()
     width, height = rgb.size
+    rgb_array = np.asarray(rgb)
     # InsightFace expects a BGR numpy array.
-    bgr = np.asarray(rgb)[:, :, ::-1].copy()
+    bgr = rgb_array[:, :, ::-1].copy()
 
     with contextlib.redirect_stdout(sys.stderr):
         faces = app.get(bgr)
@@ -234,9 +247,67 @@ def _detect_faces(rgb: Image.Image) -> list[dict]:
                 "box": _normalize_box(face.bbox, width, height),
                 "confidence": float(face.det_score),
                 "embedding": [float(v) for v in embedding.tolist()],
+                # Free: `app.get` already ran the landmark models on this face,
+                # and the crop statistics run on the image we just decoded.
+                # Never let an attribute failure lose a detection.
+                "attributes": _safe_face_attributes(rgb_array, face),
             }
         )
     return result
+
+
+def _safe_face_attributes(rgb_array: np.ndarray, face) -> dict:
+    try:
+        return compute_face_attributes(rgb_array, face)
+    except Exception as exc:  # noqa: BLE001 - attributes are strictly optional
+        print(f"face attribute derivation failed: {exc}", file=sys.stderr)
+        return {}
+
+
+def _face_attributes_for_boxes(rgb: Image.Image, requested: list) -> list[dict]:
+    """Score already-detected faces without re-running detection.
+
+    The backfill path. Re-detecting would replace the stored face rows and throw
+    away their cluster assignments, so instead we hand the stored box straight to
+    the landmark models — they only read `face.bbox`. Recognition and gender/age
+    are skipped: recognition needs the 5-point keypoints we deliberately don't
+    have here, and neither feeds an attribute.
+    """
+    from insightface.app.common import Face
+
+    app = _get_face_app()
+    width, height = rgb.size
+    rgb_array = np.asarray(rgb)
+    bgr = rgb_array[:, :, ::-1].copy()
+
+    landmark_models = [
+        (name, model)
+        for name, model in app.models.items()
+        if name.startswith("landmark_")
+    ]
+
+    results: list[dict] = []
+    for item in requested:
+        face_id = item.get("id")
+        box = item.get("box") or {}
+        try:
+            x1 = float(box["x"]) * width
+            y1 = float(box["y"]) * height
+            x2 = x1 + float(box["width"]) * width
+            y2 = y1 + float(box["height"]) * height
+        except (KeyError, TypeError, ValueError):
+            results.append({"id": face_id})
+            continue
+
+        face = Face(bbox=np.array([x1, y1, x2, y2], dtype=np.float32), det_score=1.0)
+        try:
+            with contextlib.redirect_stdout(sys.stderr):
+                for _name, model in landmark_models:
+                    model.get(bgr, face)
+        except Exception as exc:  # noqa: BLE001 - fall through to crop-only stats
+            print(f"landmark pass failed: {exc}", file=sys.stderr)
+        results.append({"id": face_id, **_safe_face_attributes(rgb_array, face)})
+    return results
 
 
 def _embed_image(rgb: Image.Image) -> list[float]:
@@ -282,7 +353,31 @@ def _run_text_worker() -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _handle_face_attributes(payload: dict) -> dict:
+    req_id = payload.get("id")
+    image_path = payload.get("imagePath")
+    requested = payload.get("faces")
+
+    if not isinstance(image_path, str) or not image_path:
+        return {"id": req_id, "error": "imagePath must be a non-empty string"}
+    if not isinstance(requested, list) or not requested:
+        return {"id": req_id, "error": "faces must be a non-empty list of boxes"}
+
+    try:
+        rgb = _load_oriented_rgb(image_path)
+    except Exception as exc:  # noqa: BLE001 - decode failures are permanent
+        return {"id": req_id, "error": str(exc), "permanent": True}
+
+    try:
+        return {"id": req_id, "attributes": _face_attributes_for_boxes(rgb, requested)}
+    except Exception as exc:  # noqa: BLE001 - report, keep the worker alive
+        return {"id": req_id, "error": str(exc)}
+
+
 def _handle_analyze_image(payload: dict) -> dict:
+    if payload.get("operation") == "faceAttributes":
+        return _handle_face_attributes(payload)
+
     req_id = payload.get("id")
     image_path = payload.get("imagePath")
     want_faces = bool(payload.get("faces"))
@@ -342,7 +437,9 @@ def _run_stdin_reader() -> None:
                 raise ValueError("Request id must be an integer")
 
             operation = payload.get("operation", "analyzeImage")
-            if operation == "analyzeImage":
+            if operation in ("analyzeImage", "faceAttributes"):
+                # Both decode an image and run models, so they share the single
+                # background lane (and its yield-to-search discipline).
                 _image_queue.put(payload)
             elif operation == "embedText":
                 text = payload.get("text")

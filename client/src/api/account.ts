@@ -20,7 +20,14 @@ export type ShareLink = {
   createdAt: number;
   revokedAt: number | null;
 };
-export type Session = { id: string; createdAt: number; current: boolean };
+export type Session = {
+  id: string;
+  createdAt: number;
+  lastSeenAt: number;
+  current: boolean;
+  ip: string | null;
+  location: string;
+};
 
 const jsonPost = <T>(url: string, label: string, body?: unknown): Promise<T> =>
   fetchJsonOrThrow<T>(url, label, {
@@ -29,7 +36,7 @@ const jsonPost = <T>(url: string, label: string, body?: unknown): Promise<T> =>
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-export const fetchAccount = (): Promise<{ username: string }> =>
+export const fetchAccount = (): Promise<{ username: string; passkeysAvailable: boolean }> =>
   fetchJsonOrThrow("/api/account", "load account");
 
 // --- MCP keys ---
@@ -74,3 +81,6 @@ export const revokeSession = (id: string): Promise<{ ok: true }> =>
 
 export const revokeAllSessions = (): Promise<{ ok: true }> =>
   jsonPost("/api/account/sessions/revoke-all", "sign out everywhere");
+
+export const revokeOtherSessions = (): Promise<{ ok: true }> =>
+  jsonPost("/api/account/sessions/revoke-others", "revoke other sessions");

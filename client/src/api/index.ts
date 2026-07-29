@@ -48,6 +48,7 @@ export {
   fetchFolders,
   fetchPhotos,
   fetchGeotaggedPhotos,
+  buildGeoPointThumbnailUrl,
   fetchDateRange,
   fetchDateHistogram,
   fetchSemanticSearch,
@@ -72,3 +73,5 @@ export {
 export { fetchSuggestions, fetchSuggestionsWithCounts } from "./suggestions";
 
 export { negotiateVideoPlayback, fetchTranscriptSegments } from "./video";
+
+export { interpretSearchQuery } from "./naturalLanguageSearch";

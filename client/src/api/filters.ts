@@ -1,7 +1,12 @@
-import { SEARCH_SOURCES } from "../../../shared/filter-contract/src";
+import {
+  FACE_ATTRIBUTE_KEYS,
+  SEARCH_SOURCES,
+  type FaceAttributeKey,
+} from "../../../shared/filter-contract/src";
 import type {
   ApiFilterOptions,
   DateRangeFilter,
+  FaceAttributeFilter,
   GeoBounds,
   MediaTypeFilter,
   RatingFilter,
@@ -79,6 +84,7 @@ export type BuildFiltersInput = {
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
   faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
+  faceAttributeFilter?: FaceAttributeFilter | null;
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
 };
@@ -108,6 +114,17 @@ export const toClusterIdFilter = (
     ),
   );
   return ids.length > 0 ? ids : null;
+};
+
+// Keeps the canonical attribute order and drops anything unrecognised, so the
+// emitted filter JSON is stable for a given selection (it is a cache key and it
+// gets embedded verbatim in share links).
+export const toFaceAttributeKeys = (
+  value: FaceAttributeFilter | null | undefined,
+): FaceAttributeKey[] => {
+  const selected = value?.attributes;
+  if (!Array.isArray(selected)) return [];
+  return FACE_ATTRIBUTE_KEYS.filter((key) => selected.includes(key));
 };
 
 const toStringArrayFilter = (value: string[] | string | null | undefined) => {
@@ -147,6 +164,7 @@ export const buildFilters = ({
   dateRange,
   peopleInImageFilter,
   faceClusterFilter,
+  faceAttributeFilter,
   cameraModelFilter,
   lensFilter,
 }: BuildFiltersInput) => {
@@ -181,7 +199,25 @@ export const buildFilters = ({
   }
 
   const clusterIds = toClusterIdFilter(faceClusterFilter);
-  if (clusterIds) {
+  const faceAttributes = toFaceAttributeKeys(faceAttributeFilter);
+  if (faceAttributes.length > 0) {
+    // One combined condition, because the attributes must hold for the selected
+    // person's *own* face — emitting them as a sibling filter would instead
+    // match photos containing that person plus anyone who happens to be smiling.
+    filters.push({
+      faceMatch: {
+        ...(clusterIds ? { clusterIds } : {}),
+        attributes: faceAttributes,
+        // Only sent when it differs from the server default, so the common case
+        // keeps producing the smallest possible filter JSON.
+        ...(faceAttributeFilter?.includeUnknown === false
+          ? { includeUnknown: false }
+          : {}),
+      },
+    });
+  } else if (clusterIds) {
+    // No attribute constraints: keep emitting exactly the filter shape this
+    // always produced, so existing share links and cached queries are unchanged.
     filters.push({ faceCluster: clusterIds });
   }
 
@@ -221,7 +257,15 @@ export const filtersToParam = (filters: Record<string, unknown>[]): string | nul
 // folder/path constraint. This is the format stored server-side and enforced
 // on every request made with the resulting share token.
 export const buildFullShareFilter = (
-  filter: ApiFilterOptions & { path?: string; includeSubfolders?: boolean },
+  filter: ApiFilterOptions & {
+    path?: string;
+    includeSubfolders?: boolean;
+    // Not part of ApiFilterOptions (which derives from FIELD_METADATA and only
+    // covers the array/nullable primitive fields), but shares must carry the
+    // attribute constraints or a shared "photo ready" view would silently widen
+    // for the recipient.
+    faceAttributeFilter?: FaceAttributeFilter | null;
+  },
 ): unknown => {
   const conditions: unknown[] = [];
 
@@ -242,6 +286,7 @@ export const buildFullShareFilter = (
       dateRange: filter.dateRange,
       peopleInImageFilter: filter.peopleInImageFilter,
       faceClusterFilter: filter.faceClusterFilter,
+      faceAttributeFilter: filter.faceAttributeFilter,
       cameraModelFilter: filter.cameraModelFilter,
       lensFilter: filter.lensFilter,
     }),
@@ -256,6 +301,7 @@ export const buildShareScope = (
   filter: ApiFilterOptions & {
     path?: string;
     includeSubfolders?: boolean;
+    faceAttributeFilter?: FaceAttributeFilter | null;
     semanticQuery?: string;
     searchSources?: SearchSource[];
     sortBy?: SortOption;

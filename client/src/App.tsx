@@ -1,5 +1,5 @@
 import { Info24Regular, Person24Regular, Share24Regular } from "@fluentui/react-icons";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
 import { buildShareScope } from "./api";
@@ -10,13 +10,23 @@ import { PeopleView } from "./components/PeopleView";
 import { SearchBar } from "./components/SearchBar";
 import { ShareLinkModal } from "./components/ShareLinkModal";
 import { StatusModal } from "./components/StatusModal";
+import { SuggestionModal } from "./components/SuggestionModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { Filter } from "./components/filter/Filter";
 import { FilterProvider, useFilter } from "./components/filter/FilterContext";
 import { SelectionProvider } from "./components/selection/SelectionContext";
-import { useSyncUrlWithFilter, type ViewMode } from "./hooks/useSyncUrlWithFilter";
+import {
+  useSyncUrlWithFilter,
+  type UrlNavState,
+  type ViewMode,
+} from "./hooks/useSyncUrlWithFilter";
+import { usePageTitle } from "./hooks/usePageTitle";
 import { buildShareUrl, isSharedView } from "./hooks/useShareFilter";
-import { readViewModeFromSearch } from "./filterUrlState";
+import {
+  NO_PEOPLE_SELECTION,
+  parseAppUrlState,
+  type PeopleSelection,
+} from "./filterUrlState";
 import {
   applyTheme,
   getStoredThemeOverride,
@@ -34,9 +44,12 @@ extractUrlToken();
 
 const sharedView = isSharedView();
 
-const initialViewFromUrl = (): ViewMode => {
-  if (typeof window === "undefined") return "library";
-  return readViewModeFromSearch(window.location.search);
+const initialNavFromUrl = (): UrlNavState => {
+  if (typeof window === "undefined") {
+    return { view: "library", people: NO_PEOPLE_SELECTION };
+  }
+  const { view, people } = parseAppUrlState(window.location);
+  return { view, people };
 };
 
 const copyToClipboard = async (text: string): Promise<boolean> => {
@@ -160,12 +173,46 @@ type AppContentProps = {
 const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) => {
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
-  const [view, setView] = useState<ViewMode>(initialViewFromUrl);
+  const [isSuggestionOpen, setIsSuggestionOpen] = useState(false);
+  const [nav, setNav] = useState<UrlNavState>(initialNavFromUrl);
+  const { view } = nav;
 
-  useSyncUrlWithFilter(view, setView);
+  useSyncUrlWithFilter(nav, setNav);
+
+  // A person only exists inside the People tab, so leaving it clears the
+  // selection rather than leaving state the URL can no longer express.
+  const handleViewChange = useCallback((nextView: ViewMode) => {
+    setNav((prev) => ({
+      view: nextView,
+      people: nextView === "people" ? prev.people : NO_PEOPLE_SELECTION,
+    }));
+  }, []);
+
+  const handlePeopleNavigate = useCallback(
+    (people: PeopleSelection, options?: { replace?: boolean }) => {
+      setNav((prev) => ({ view: prev.view, people, replace: options?.replace }));
+    },
+    [],
+  );
+
+  const { filter } = useFilter();
+  usePageTitle(filter);
 
   useEffect(() => {
+    if (sharedView) return;
     void probeVideoPlaybackProfile();
+  }, []);
+
+  useEffect(() => {
+    if (sharedView) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "p" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setIsSuggestionOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   return (
@@ -213,13 +260,20 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
             isOpen={isAccountOpen}
             onDismiss={() => setIsAccountOpen(false)}
           />
+          {isSuggestionOpen && <SuggestionModal onClose={() => setIsSuggestionOpen(false)} />}
         </>
       )}
 
       {view === "library" ? (
-        <ThumbnailGrid view={view} onViewChange={setView} />
+        <ThumbnailGrid view={view} onViewChange={handleViewChange} />
       ) : (
-        <PeopleView view={view} onViewChange={setView} />
+        <PeopleView
+          view={view}
+          onViewChange={handleViewChange}
+          personId={nav.people.personId}
+          groupId={nav.people.groupId}
+          onNavigate={handlePeopleNavigate}
+        />
       )}
       <FullscreenViewer />
     </div>

@@ -6,8 +6,15 @@ import {
   MusicNote224Regular,
   Search24Regular,
 } from "@fluentui/react-icons";
-import { SEARCH_SOURCES, type SearchSource } from "../../../shared/filter-contract/src";
-import { useFilter } from "./filter/FilterContext";
+import {
+  SEARCH_SOURCES,
+  type InterpretedFilterChip,
+  type InterpretedSearchFilter,
+  type SearchSource,
+} from "../../../shared/filter-contract/src";
+import { interpretSearchQuery } from "../api/naturalLanguageSearch";
+import { useFilter, type FilterState } from "./filter/FilterContext";
+import { SearchInterpretationChips } from "./SearchInterpretationChips";
 import css from "./SearchBar.module.css";
 
 const SEARCH_EXAMPLES = [
@@ -22,6 +29,31 @@ const SEARCH_EXAMPLES = [
 ];
 
 const WIDE_BREAKPOINT = "(min-width: 700px)";
+
+/**
+ * Filter fields a query interpretation is allowed to touch. Snapshotting exactly
+ * these before applying is what makes "Undo" and per-chip removal exact rather
+ * than a guess at what the previous state was.
+ */
+const snapshotInterpretedFields = (state: FilterState): InterpretedSearchFilter => ({
+  path: state.path,
+  includeSubfolders: state.includeSubfolders,
+  mediaTypeFilter: state.mediaTypeFilter,
+  peopleInImageFilter: state.peopleInImageFilter,
+  faceClusterFilter: state.faceClusterFilter,
+  ratingFilter: state.ratingFilter,
+  dateRange: state.dateRange,
+  semanticQuery: state.semanticQuery,
+});
+
+type ActiveInterpretation = {
+  /** The query the user typed, kept so "Undo" can restore it verbatim. */
+  query: string;
+  chips: InterpretedFilterChip[];
+  ignored: string[];
+  /** Filter values from before the interpretation was applied. */
+  previous: InterpretedSearchFilter;
+};
 
 const SOURCE_TOGGLES: { source: SearchSource; label: string; icon: React.ReactNode }[] = [
   { source: "image", label: "Image vector", icon: <Image24Regular fontSize={18} /> },
@@ -43,6 +75,14 @@ export const SearchBar = () => {
   const [exampleIdx, setExampleIdx] = useState(0);
   const [exampleVisible, setExampleVisible] = useState(true);
   const [isFocused, setIsFocused] = useState(false);
+  const [interpretation, setInterpretation] = useState<ActiveInterpretation | null>(null);
+  // Only the newest submit may apply an interpretation; an older, slower one
+  // must never reach in and re-filter results the user has moved on from.
+  const submitSeq = useRef(0);
+  // The interpretation lands one round-trip after submit, and the snapshot it
+  // reverts to has to be the filter as it is *then*, not as it was at submit.
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -62,7 +102,7 @@ export const SearchBar = () => {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  const hasActiveQuery = !!query;
+  const hasActiveQuery = !!query || !!interpretation;
   const showExpanded = isExpanded || hasActiveQuery || isWide;
 
   const activeSources = filter.searchSources ?? SEARCH_SOURCES;
@@ -79,17 +119,95 @@ export const SearchBar = () => {
     if (!hasActiveQuery && !isWide) setIsExpanded(false);
   };
 
+  /** Put every field an interpretation changed back the way it was. */
+  const revertInterpretation = (
+    active: ActiveInterpretation,
+    overrides: Partial<InterpretedSearchFilter> = {},
+  ) => {
+    setFilter((prev) => ({ ...prev, ...active.previous, ...overrides }));
+    setInterpretation(null);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const value = inputRef.current?.value.trim() ?? "";
-    setFilter({ semanticQuery: value || undefined });
+
+    // The plain search runs immediately and unconditionally — exactly as it did
+    // before this feature. Interpretation is a later, optional refinement.
+    if (interpretation) revertInterpretation(interpretation, { semanticQuery: value });
+    else setFilter({ semanticQuery: value || undefined });
     if (!value && !isWide) setIsExpanded(false);
+
+    const seq = ++submitSeq.current;
+    if (!value) return;
+
+    void interpretSearchQuery(value).then((result) => {
+      // Discard a response the user has already moved past, and never apply one
+      // that failed schema validation server-side (`interpreted: false`).
+      if (seq !== submitSeq.current || !result.interpreted) return;
+      setInterpretation({
+        query: value,
+        chips: result.chips,
+        ignored: result.ignored,
+        previous: snapshotInterpretedFields(filterRef.current),
+      });
+      setFilter((prev) => ({
+        ...prev,
+        ...result.filter,
+        // Absent in the payload means "no free text left over"; spreading alone
+        // would leave the whole sentence as the CLIP query.
+        semanticQuery: result.filter.semanticQuery,
+      }));
+    });
   };
 
   const handleClear = () => {
     if (inputRef.current) inputRef.current.value = "";
-    setFilter({ semanticQuery: undefined });
+    submitSeq.current += 1;
+    if (interpretation)
+      revertInterpretation(interpretation, { semanticQuery: undefined });
+    else setFilter({ semanticQuery: undefined });
     if (!isWide) setIsExpanded(false);
+  };
+
+  /** Drop one derived filter, keeping the rest of the interpretation in place. */
+  const handleRemoveChip = (chip: InterpretedFilterChip) => {
+    const active = interpretation;
+    if (!active) return;
+
+    const remaining = active.chips.filter(
+      (candidate) =>
+        candidate.field !== chip.field ||
+        (chip.value !== undefined && candidate.value !== chip.value),
+    );
+
+    setFilter((prev) => {
+      const next: FilterState = { ...prev };
+      if (chip.value !== undefined) {
+        // Array-valued field: take out just this entry, restore the pre-search
+        // value once the last one goes.
+        const key =
+          chip.field === "faceClusterFilter"
+            ? "faceClusterFilter"
+            : "peopleInImageFilter";
+        const kept = (prev[key] ?? []).filter((entry) => entry !== chip.value);
+        next[key] = kept.length > 0 ? kept : active.previous[key];
+      } else if (chip.field === "path") {
+        next.path = active.previous.path;
+        next.includeSubfolders = active.previous.includeSubfolders;
+      } else {
+        next[chip.field] = active.previous[chip.field] as never;
+      }
+      return next;
+    });
+
+    setInterpretation(remaining.length > 0 ? { ...active, chips: remaining } : null);
+  };
+
+  const handleUndoInterpretation = () => {
+    if (!interpretation) return;
+    if (inputRef.current) inputRef.current.value = interpretation.query;
+    revertInterpretation(interpretation, { semanticQuery: interpretation.query });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -196,6 +314,16 @@ export const SearchBar = () => {
           })}
         </div>
       </form>
+
+      {interpretation && (
+        <SearchInterpretationChips
+          query={interpretation.query}
+          chips={interpretation.chips}
+          ignored={interpretation.ignored}
+          onRemoveChip={handleRemoveChip}
+          onUndo={handleUndoInterpretation}
+        />
+      )}
     </div>
   );
 };

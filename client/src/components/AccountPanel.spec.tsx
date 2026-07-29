@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   revokeShareLink: vi.fn(),
   revokeSession: vi.fn(),
   revokeAllSessions: vi.fn(),
+  revokeOtherSessions: vi.fn(),
 }));
 
 vi.mock("../api/account", () => mocks);
@@ -28,7 +29,7 @@ vi.mock("../hooks/useShareFilter", () => ({
 }));
 
 const resetMocks = () => {
-  mocks.fetchAccount.mockResolvedValue({ username: "alice" });
+  mocks.fetchAccount.mockResolvedValue({ username: "alice", passkeysAvailable: false });
   mocks.fetchMcpKeys.mockResolvedValue([
     { id: "abc123", name: "Claude", createdAt: 1_700_000_000_000, lastUsedAt: null },
   ]);
@@ -42,7 +43,14 @@ const resetMocks = () => {
     },
   ]);
   mocks.fetchSessions.mockResolvedValue([
-    { id: "sess1", createdAt: 1_700_000_000_000, current: true },
+    {
+      id: "sess1",
+      createdAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      current: true,
+      ip: "203.0.113.5",
+      location: "Internet",
+    },
   ]);
   mocks.createMcpKey.mockResolvedValue({
     token: "photrix-mcp-v1.newsecret",
@@ -89,5 +97,31 @@ describe("AccountPanel", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
 
     await waitFor(() => expect(mocks.revokeMcpKey).toHaveBeenCalledWith("abc123"));
+  });
+
+  it("closes when clicking the dialog backdrop, not when clicking inside it", async () => {
+    const onDismiss = vi.fn();
+    render(<AccountPanel isOpen={true} onDismiss={onDismiss} />);
+    await screen.findByText("Signed in as alice");
+
+    // A click on a child of the dialog (its content) must not close it.
+    fireEvent.click(screen.getByText("Signed in as alice"));
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    // A click that lands on the <dialog> element itself (the
+    // backdrop/padding area, since content lives in a nested wrapper) closes
+    // it, same as clicking "Done".
+    fireEvent.click(screen.getByRole("dialog"));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("still closes via the explicit Done button", async () => {
+    const onDismiss = vi.fn();
+    render(<AccountPanel isOpen={true} onDismiss={onDismiss} />);
+    await screen.findByText("Signed in as alice");
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

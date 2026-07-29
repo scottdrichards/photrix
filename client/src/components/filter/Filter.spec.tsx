@@ -71,6 +71,17 @@ const renderFilter = () =>
     </FilterProvider>,
   );
 
+/**
+ * A folder row's label and its "(n)" count live in sibling spans, so the row
+ * text is split across nodes and a plain text query can't see it whole.
+ */
+const findFolderRow = (label: string) =>
+  screen.findByText(
+    (_content, element) =>
+      element?.getAttribute("role") === "button" &&
+      element.textContent?.replace(/\s+/g, " ").trim() === label,
+  );
+
 describe("Filter", () => {
   let getBoundingClientRectSpy: ReturnType<typeof vi.spyOn>;
 
@@ -168,8 +179,8 @@ describe("Filter", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
 
-    expect(await screen.findByText("trip (7)")).toBeInTheDocument();
-    expect(screen.getByText("family (2)")).toBeInTheDocument();
+    expect(await findFolderRow("trip (7)")).toBeInTheDocument();
+    expect(await findFolderRow("family (2)")).toBeInTheDocument();
     expect(fetchFoldersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaTypeFilter: "video",
@@ -295,6 +306,31 @@ describe("Filter", () => {
     });
   });
 
+  it("shows the People face icon as active for a photo-ready attribute filter with no person selected", async () => {
+    render(
+      <FilterProvider>
+        <Filter />
+        <FilterStateInitializer
+          nextFilter={{
+            faceAttributeFilter: { attributes: ["smiling", "eyesOpen"] },
+          }}
+        />
+      </FilterProvider>,
+    );
+
+    const faceFilterButton = await screen.findByRole("button", {
+      name: "People face filter",
+    });
+
+    // "Photo ready"/per-attribute selections are a real, active filter even
+    // with no faceClusterFilter (no person picked) — the icon must reflect
+    // that the same way it does for every other active filter.
+    await waitFor(() => {
+      expect(faceFilterButton).toHaveAttribute("aria-pressed", "true");
+    });
+    expect(faceFilterButton.className).toContain("btn-primary");
+  });
+
   it("shows a named person in the People face panel", async () => {
     fetchPeopleClustersMock.mockResolvedValue({
       clusters: [
@@ -408,7 +444,7 @@ describe("Filter", () => {
     renderFilter();
 
     fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
-    fireEvent.click(await screen.findByText("trip (7)"));
+    fireEvent.click(await findFolderRow("trip (7)"));
 
     await waitFor(() => {
       expect(screen.getByTestId("filter-state").textContent).toContain('"path":"trip/"');

@@ -46,6 +46,7 @@ export const fetchPeopleClusters = async ({
   dateRange,
   peopleInImageFilter,
   faceClusterFilter,
+  faceAttributeFilter,
   cameraModelFilter,
   lensFilter,
   signal,
@@ -61,6 +62,7 @@ export const fetchPeopleClusters = async ({
     dateRange,
     peopleInImageFilter,
     faceClusterFilter,
+    faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
   }));
@@ -102,6 +104,7 @@ export const fetchClusterDetail = async (
     dateRange,
     peopleInImageFilter,
     faceClusterFilter,
+    faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
     signal,
@@ -119,6 +122,7 @@ export const fetchClusterDetail = async (
     dateRange,
     peopleInImageFilter,
     faceClusterFilter,
+    faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
   }));

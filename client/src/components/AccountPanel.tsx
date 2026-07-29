@@ -9,6 +9,7 @@ import {
   removePasskey,
   revokeAllSessions,
   revokeMcpKey,
+  revokeOtherSessions,
   revokeSession,
   revokeShareLink,
   type McpKey,
@@ -75,6 +76,7 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   const [username, setUsername] = useState<string | null>(null);
+  const [passkeysAvailable, setPasskeysAvailable] = useState(false);
   const [mcpKeys, setMcpKeys] = useState<McpKey[]>([]);
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [shareLinks, setShareLinks] = useState<ShareLink[]>([]);
@@ -103,6 +105,7 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
         fetchSessions(),
       ]);
       setUsername(account.username);
+      setPasskeysAvailable(account.passkeysAvailable);
       setMcpKeys(keys);
       setPasskeys(pks);
       setShareLinks(links);
@@ -163,8 +166,24 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
       window.location.reload();
     });
 
+  const handleRevokeOtherSessions = () =>
+    run(async () => {
+      await revokeOtherSessions();
+      await reload();
+    });
+
   return (
-    <dialog ref={dialogRef} onClose={onDismiss} className={css.dialog}>
+    <dialog
+      ref={dialogRef}
+      onClose={onDismiss}
+      onClick={(e) => {
+        // Native <dialog> click-outside-to-close: a click that lands on the
+        // dialog element itself (not a child) hit the backdrop/padding
+        // area, matching the pattern used in SuggestionModal.tsx.
+        if (e.target === e.currentTarget) onDismiss();
+      }}
+      className={css.dialog}
+    >
       <div className={css.body}>
         <header className={css.head}>
           <h2 className={css.title}>Account</h2>
@@ -254,7 +273,13 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
           )}
         </section>
 
-        {/* --- Passkeys --- */}
+        {/* --- Passkeys ---
+            Only shown once the server has a public origin configured
+            (PHOTRIX_RP_ORIGIN) — WebAuthn's relying party is meaningless on a
+            bare LAN/localhost deployment (no stable public identity to bind
+            a passkey to), so we keep this minimal/hidden there rather than
+            show controls with nothing useful to do. */}
+        {passkeysAvailable && (
         <section className={css.section}>
           <h3 className={css.sectionTitle}>Passkeys</h3>
           <p className={css.hint}>Sign in without a password using this device.</p>
@@ -291,6 +316,7 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
             </button>
           )}
         </section>
+        )}
 
         {/* --- Share links --- */}
         <section className={css.section}>
@@ -302,36 +328,32 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
             <p className={css.empty}>No share links yet.</p>
           ) : (
             <ul className={css.list}>
+              {/* Revoked links are never returned by the server (see listShareLinks) —
+                  once revoked there is nothing left to copy or re-revoke, so they are
+                  dropped outright instead of lingering in the list. */}
               {shareLinks.map((link) => (
                 <li key={link.token} className={css.row}>
                   <div className={css.rowMain}>
-                    <span className={css.rowName}>
-                      {link.label}
-                      {link.revokedAt && <span className={css.badge}>Revoked</span>}
-                    </span>
+                    <span className={css.rowName}>{link.label}</span>
                     <span className={css.rowMeta}>Created {formatDate(link.createdAt)}</span>
                   </div>
-                  {!link.revokedAt && (
-                    <div className={css.rowActions}>
-                      <button
-                        className="btn btn-subtle"
-                        onClick={() =>
-                          void handleCopy(buildShareUrl(link.token), `link-${link.token}`)
-                        }
-                      >
-                        {copied === `link-${link.token}` ? "Copied" : "Copy"}
-                      </button>
-                      <button
-                        className="btn btn-subtle"
-                        onClick={() =>
-                          void run(() => revokeShareLink(link.token).then(reload))
-                        }
-                        disabled={busy}
-                      >
-                        Revoke
-                      </button>
-                    </div>
-                  )}
+                  <div className={css.rowActions}>
+                    <button
+                      className="btn btn-subtle"
+                      onClick={() =>
+                        void handleCopy(buildShareUrl(link.token), `link-${link.token}`)
+                      }
+                    >
+                      {copied === `link-${link.token}` ? "Copied" : "Copy"}
+                    </button>
+                    <button
+                      className="btn btn-subtle"
+                      onClick={() => void run(() => revokeShareLink(link.token).then(reload))}
+                      disabled={busy}
+                    >
+                      Revoke
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -353,7 +375,10 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
                       {s.current && <span className={css.badge}>Current</span>}
                     </span>
                     <span className={css.rowMeta}>
-                      Signed in {formatDate(s.createdAt)}
+                      Signed in {formatDate(s.createdAt)} · last active{" "}
+                      {formatDate(s.lastSeenAt)}
+                      {" · "}
+                      {s.ip ? `${s.ip} (${s.location})` : s.location}
                     </span>
                   </div>
                   {!s.current && (
@@ -369,13 +394,24 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
               ))}
             </ul>
           )}
-          <button
-            className={`btn btn-subtle ${css.danger}`}
-            onClick={() => void handleSignOutEverywhere()}
-            disabled={busy}
-          >
-            Sign out everywhere
-          </button>
+          <div className={css.rowActions}>
+            {sessions.length > 1 && (
+              <button
+                className="btn btn-subtle"
+                onClick={() => void handleRevokeOtherSessions()}
+                disabled={busy}
+              >
+                Revoke all other sessions
+              </button>
+            )}
+            <button
+              className={`btn btn-subtle ${css.danger}`}
+              onClick={() => void handleSignOutEverywhere()}
+              disabled={busy}
+            >
+              Sign out everywhere
+            </button>
+          </div>
         </section>
 
         <div className={css.actions}>

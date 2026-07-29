@@ -255,11 +255,54 @@
   gap: var(--space-m);
 }
 
+/* Column, so the identity card below sizes to its own content instead of
+   being stretched across the width by the row. */
 .personDetailHeader {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-s);
+}
+
+.personIdentity {
+  display: inline-flex;
   align-items: center;
   gap: var(--space-m);
-  flex-wrap: wrap;
+  padding: var(--space-s) var(--space-m) var(--space-s) var(--space-s);
+  border: 1px solid var(--stroke2);
+  border-radius: 999px;
+  background: var(--bg2);
+  /* Never let a long name stretch the pill to the full row. */
+  max-width: 100%;
+}
+
+.personIdentityFace {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 2px solid var(--stroke1);
+}
+
+.personIdentityText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* The name is the heading of this page, so it carries heading weight here
+   without changing how names render on the cluster cards. */
+.personIdentityText .clusterName,
+.personIdentityText .nameInput {
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.personIdentityText .clusterNameEmpty {
+  font-size: 1.1rem;
 }
 
 .backButton {
@@ -280,7 +323,6 @@
 .personDetailCount {
   color: var(--fg3);
   font-size: 0.9rem;
-  margin-left: auto;
 }
 
 .detailSection {

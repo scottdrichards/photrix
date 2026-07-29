@@ -24,6 +24,7 @@ export const fetchFolders = async ({
   dateRange,
   peopleInImageFilter,
   faceClusterFilter,
+  faceAttributeFilter,
   cameraModelFilter,
   lensFilter,
 }: FetchPhotosOptions = {}): Promise<FolderSummary[]> => {
@@ -36,6 +37,7 @@ export const fetchFolders = async ({
     dateRange,
     peopleInImageFilter,
     faceClusterFilter,
+    faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
   });
@@ -44,8 +46,11 @@ export const fetchFolders = async ({
   if (filterParam) params.set("filter", filterParam);
 
   const querySuffix = params.size > 0 ? `?${params.toString()}` : "";
+  // Encode per segment: a folder named "#2 Dessert Night" would otherwise be cut
+  // off at the '#' as a URL fragment and never reach the server.
+  const encodedPath = normalizedPath.split("/").map(encodeURIComponent).join("/");
   const data = await fetchJsonOrThrow<{ folders: FolderSummary[] }>(
-    `/api/folders/${normalizedPath}${querySuffix}`,
+    `/api/folders/${encodedPath}${querySuffix}`,
     "fetch folders",
     { signal },
   );
@@ -65,6 +70,7 @@ export const fetchPhotos = async ({
   dateRange,
   peopleInImageFilter,
   faceClusterFilter,
+  faceAttributeFilter,
   cameraModelFilter,
   lensFilter,
   expandToFolder,
@@ -85,6 +91,7 @@ export const fetchPhotos = async ({
     dateRange,
     peopleInImageFilter,
     faceClusterFilter,
+    faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
   }));
@@ -100,6 +107,17 @@ export const fetchPhotos = async ({
   };
 };
 
+/**
+ * Small preview for a map pin's sample file. Kept here rather than in the map
+ * component so `buildFileUrl` stays internal to the api layer, matching how
+ * face crops expose `buildFaceCropUrl`.
+ */
+export const buildGeoPointThumbnailUrl = (point: GeoPoint, size = 160): string =>
+  buildFileUrl(point.path, {
+    representation: "webSafe",
+    height: size.toString(),
+  });
+
 export const fetchGeotaggedPhotos = async ({
   pageSize = 1_000,
   locationBounds,
@@ -111,6 +129,7 @@ export const fetchGeotaggedPhotos = async ({
   dateRange,
   peopleInImageFilter,
   faceClusterFilter,
+  faceAttributeFilter,
   cameraModelFilter,
   lensFilter,
   signal,
@@ -134,6 +153,7 @@ export const fetchGeotaggedPhotos = async ({
     dateRange,
     peopleInImageFilter,
     faceClusterFilter,
+    faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
   }));
@@ -154,6 +174,8 @@ export const fetchGeotaggedPhotos = async ({
       count: number;
       samplePath?: string;
       sampleName?: string;
+      minDate?: number | null;
+      maxDate?: number | null;
     }>;
     total: number;
   }>(url, "fetch geotagged photos", { signal });
@@ -162,12 +184,18 @@ export const fetchGeotaggedPhotos = async ({
     (sum, cluster) => sum + (cluster.count ?? 0),
     0,
   );
+  // Older servers (and rows whose date was ingested as text) omit the bucket
+  // date range; treat anything non-finite as "undated" rather than year 1970.
+  const asEpochMs = (value: number | null | undefined): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
   const points: GeoPoint[] = payload.clusters.map((cluster) => ({
     path: cluster.samplePath ?? "",
     name: cluster.sampleName ?? `${cluster.count} items`,
     latitude: cluster.latitude,
     longitude: cluster.longitude,
     count: cluster.count,
+    minDate: asEpochMs(cluster.minDate),
+    maxDate: asEpochMs(cluster.maxDate),
   }));
 
   return { points, total: payload.total, truncated: payload.total > coveredCount };
@@ -181,6 +209,7 @@ export const fetchDateRange = async ({
   locationBounds,
   peopleInImageFilter,
   faceClusterFilter,
+  faceAttributeFilter,
   cameraModelFilter,
   lensFilter,
   signal,
@@ -199,6 +228,7 @@ export const fetchDateRange = async ({
     dateRange: null,
     peopleInImageFilter,
     faceClusterFilter,
+    faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
   }));
@@ -221,6 +251,7 @@ export const fetchDateHistogram = async ({
   dateRange,
   peopleInImageFilter,
   faceClusterFilter,
+  faceAttributeFilter,
   cameraModelFilter,
   lensFilter,
   buckets,
@@ -240,6 +271,7 @@ export const fetchDateHistogram = async ({
     dateRange,
     peopleInImageFilter,
     faceClusterFilter,
+    faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
   }));
@@ -262,6 +294,7 @@ export const fetchSemanticSearch = async ({
   dateRange,
   peopleInImageFilter,
   faceClusterFilter,
+  faceAttributeFilter,
   cameraModelFilter,
   lensFilter,
   sortBy,
@@ -282,6 +315,7 @@ export const fetchSemanticSearch = async ({
     dateRange,
     peopleInImageFilter,
     faceClusterFilter,
+    faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
   }));

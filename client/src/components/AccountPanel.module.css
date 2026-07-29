@@ -1,6 +1,11 @@
 .dialog {
   width: min(94vw, 620px);
   max-height: 88vh;
+  /* Native <dialog> defaults to overflow: auto, which paired with .body's
+     own max-height/overflow-y below created two nested scroll containers
+     (an outer one with barely any range, and .body doing the real
+     scrolling). .body is the sole scroll container now. */
+  overflow: hidden;
   border: 1px solid var(--stroke1);
   border-radius: var(--radius-lg);
   background: var(--bg1);

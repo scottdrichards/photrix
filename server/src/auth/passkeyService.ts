@@ -34,6 +34,38 @@ const getRpConfig = () => {
   return { origin, rpID };
 };
 
+const isLocalHostname = (hostname: string): boolean => {
+  const lower = hostname.toLowerCase();
+  if (lower === "localhost" || lower === "127.0.0.1" || lower === "::1") return true;
+  if (lower.endsWith(".local")) return true;
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(lower)) return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(lower)) return true;
+  const b16 = /^172\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(lower);
+  if (b16) {
+    const second = Number(b16[1]);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+};
+
+// WebAuthn relying parties are meaningless without a stable public origin — a
+// passkey registered against "localhost" or a LAN IP would only ever work
+// from that one machine/network, and no real RP identity exists to bind it
+// to. So the passkeys section only makes sense once PHOTRIX_RP_ORIGIN has
+// been pointed at the app's actual public domain; short of that we treat
+// passkeys as unavailable rather than show controls that can't do anything
+// useful. This mirrors the account-owner's own read on the feature (it's the
+// public-domain case that matters, not local-network access).
+export const isPublicOriginConfigured = (): boolean => {
+  const raw = process.env.PHOTRIX_RP_ORIGIN;
+  if (!raw) return false;
+  try {
+    return !isLocalHostname(new URL(raw).hostname);
+  } catch {
+    return false;
+  }
+};
+
 // In-memory challenge store (challenges are short-lived, ~2 min TTL).
 const pendingChallenges = new Map<string, ChallengeEntry>();
 

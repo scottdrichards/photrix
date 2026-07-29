@@ -6,6 +6,11 @@ import {
   REASON_CACHED_HLS,
   REASON_GPU_HLS,
   REASON_NO_PATH,
+  REASON_PREVIEW_CACHED,
+  REASON_PREVIEW_DIRECT,
+  REASON_PREVIEW_TRANSCODE,
+  REASON_PREVIEW_UNAVAILABLE,
+  PREVIEW_MAX_SECONDS,
   type NegotiationDeps,
 } from "./videoNegotiation.ts";
 
@@ -13,6 +18,7 @@ import {
 // threshold is 20 Mbps. Bandwidth of 50 clears it; 10 does not.
 const baseDeps = (overrides: Partial<NegotiationDeps> = {}): NegotiationDeps => ({
   hasCachedHLS: async () => false,
+  getCachedPreviewSeconds: async () => 0,
   isGpuAvailable: async () => false,
   getFileMetadata: async () => ({
     sizeInBytes: 100_000_000,
@@ -203,6 +209,126 @@ describe("negotiateVideoPlayback", () => {
     );
 
     expect(result).toEqual({ mode: "error", reason: "Not a video file" });
+  });
+
+  describe("preview mode (grid hover)", () => {
+    // A small file: 6 MB over 60 s ≈ 0.8 Mbps, comfortably under the 12 Mbps
+    // cheap-read ceiling and covered by any of the bandwidths used here.
+    const smallFile = {
+      getFileMetadata: async () => ({
+        sizeInBytes: 6_000_000,
+        duration: 60,
+        videoCodec: "h264",
+      }),
+    };
+
+    it("uses cached low-rendition segments and bounds playback to them", async () => {
+      const result = await negotiateVideoPlayback(
+        { path: "video.mp4", bandwidthMbps: SLOW, hevcSupported: false, preview: true },
+        baseDeps({ getCachedPreviewSeconds: async () => 3 }),
+      );
+
+      expect(result).toEqual({
+        mode: "hls",
+        url: expect.stringContaining("variant=360"),
+        reason: REASON_PREVIEW_CACHED,
+        previewMaxSeconds: 3,
+      });
+    });
+
+    it("clamps the advertised preview length to the hard cap", async () => {
+      const result = await negotiateVideoPlayback(
+        { path: "video.mp4", bandwidthMbps: SLOW, hevcSupported: false, preview: true },
+        baseDeps({ getCachedPreviewSeconds: async () => 120 }),
+      );
+
+      expect(result.mode === "hls" && result.previewMaxSeconds).toBe(PREVIEW_MAX_SECONDS);
+    });
+
+    it("prefers cached segments over reading the raw original", async () => {
+      const result = await negotiateVideoPlayback(
+        { path: "video.mp4", bandwidthMbps: FAST, hevcSupported: false, preview: true },
+        baseDeps({ ...smallFile, getCachedPreviewSeconds: async () => 2 }),
+      );
+
+      expect(result.reason).toBe(REASON_PREVIEW_CACHED);
+    });
+
+    it("reads the raw original for a small, playable file on a fast link", async () => {
+      const result = await negotiateVideoPlayback(
+        { path: "video.mp4", bandwidthMbps: FAST, hevcSupported: false, preview: true },
+        baseDeps(smallFile),
+      );
+
+      expect(result).toEqual({
+        mode: "direct",
+        url: expect.not.stringContaining("representation=hls"),
+        reason: REASON_PREVIEW_DIRECT,
+        previewMaxSeconds: PREVIEW_MAX_SECONDS,
+      });
+    });
+
+    it("falls back to a live 360p transcode when nothing is cached and a GPU is available", async () => {
+      const result = await negotiateVideoPlayback(
+        { path: "video.mp4", bandwidthMbps: SLOW, hevcSupported: false, preview: true },
+        baseDeps({ isGpuAvailable: async () => true }),
+      );
+
+      expect(result).toEqual({
+        mode: "hls",
+        url: expect.stringContaining("variant=360"),
+        reason: REASON_PREVIEW_TRANSCODE,
+      });
+      // No cap: a live encode plays for as long as the hover lasts.
+      expect(result.mode === "hls" && result.previewMaxSeconds).toBeUndefined();
+    });
+
+    it("falls back to a live transcode for a high-bitrate original even when the link could carry it", async () => {
+      // 100 MB / 60 s ≈ 13.3 Mbps — over the cheap-read ceiling, so no raw preview,
+      // but a GPU is available for a real encode.
+      const result = await negotiateVideoPlayback(
+        { path: "video.mp4", bandwidthMbps: 1000, hevcSupported: false, preview: true },
+        baseDeps({ isGpuAvailable: async () => true }),
+      );
+
+      expect(result.reason).toBe(REASON_PREVIEW_TRANSCODE);
+    });
+
+    it("falls back to a live transcode for a codec it can't read raw", async () => {
+      // The source is HEVC (unplayable without HEVC support), but the HLS encode
+      // always outputs h264, so a live transcode still works.
+      const result = await negotiateVideoPlayback(
+        { path: "video.mp4", bandwidthMbps: FAST, hevcSupported: false, preview: true },
+        baseDeps({
+          isGpuAvailable: async () => true,
+          getFileMetadata: async () => ({
+            sizeInBytes: 6_000_000,
+            duration: 60,
+            videoCodec: "hevc",
+          }),
+        }),
+      );
+
+      expect(result.reason).toBe(REASON_PREVIEW_TRANSCODE);
+    });
+
+    it("declines when there's no GPU for a live transcode either", async () => {
+      const result = await negotiateVideoPlayback(
+        { path: "video.mp4", bandwidthMbps: SLOW, hevcSupported: false, preview: true },
+        baseDeps(),
+      );
+
+      expect(result).toEqual({ mode: "error", reason: REASON_PREVIEW_UNAVAILABLE });
+    });
+
+    it("declines when bandwidth was never measured and there's no GPU", async () => {
+      const result = await negotiateVideoPlayback(
+        { path: "video.mp4", bandwidthMbps: null, hevcSupported: false, preview: true },
+        baseDeps(smallFile),
+      );
+
+      expect(result.reason).toBe(REASON_PREVIEW_UNAVAILABLE);
+    });
   });
 
   it("returns error when file does not exist", async () => {

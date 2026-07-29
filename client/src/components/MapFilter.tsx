@@ -6,6 +6,7 @@ import Feature from "ol/Feature";
 import Map from "ol/Map";
 import View from "ol/View";
 import { boundingExtent } from "ol/extent";
+import LineString from "ol/geom/LineString";
 import Point from "ol/geom/Point";
 import TileLayer from "ol/layer/Tile";
 import VectorLayer from "ol/layer/Vector";
@@ -13,15 +14,28 @@ import "ol/ol.css";
 import { fromLonLat, transformExtent } from "ol/proj";
 import OSM from "ol/source/OSM";
 import VectorSource from "ol/source/Vector";
-import { fetchGeotaggedPhotos } from "../api";
+import { buildGeoPointThumbnailUrl, fetchGeotaggedPhotos } from "../api";
 import type { GeoPoint } from "../api";
 import type { GeoBoundsLike as GeoBounds } from "../../../shared/filter-contract/src";
-import { markerStyle } from "./MapFilter.styles";
+import { markerStyleFor, movementPathStyle } from "./MapFilter.styles";
+import {
+  buildAgeLegend,
+  buildAgeScale,
+  colorForDate,
+  formatAgeRangeLabel,
+  pointDate,
+} from "./MapFilter.age";
+import { selectRepresentatives } from "./MapFilter.representatives";
+import { MapPhotoMarkers, type MapRepresentative } from "./MapPhotoMarkers";
 import { useFilter } from "./filter/FilterContext";
 
 type MapFilterProps = {
   compact?: boolean;
 };
+
+/** Pin identity that survives a pan, so an unchanged marker is not remounted. */
+const pointKey = (point: GeoPoint) =>
+  `${point.latitude.toFixed(5)},${point.longitude.toFixed(5)}`;
 
 const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
   if (!a || !b) {
@@ -54,6 +68,7 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
   const [mapElement, setMapElement] = useState<HTMLDivElement | null>(null);
   const [mapInstance, setMapInstance] = useState<Map | null>(null);
   const [vectorSource, setVectorSource] = useState<VectorSource | null>(null);
+  const [pathSource, setPathSource] = useState<VectorSource | null>(null);
   const [pendingLocationBounds, setPendingLocationBounds] = useState<
     GeoBounds | undefined
   >(normalizedLocationBounds);
@@ -63,6 +78,12 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
   const [error, setError] = useState<string | null>(null);
   const [totalPins, setTotalPins] = useState(0);
   const [truncated, setTruncated] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showMovementPath, setShowMovementPath] = useState(false);
+  const [representatives, setRepresentatives] = useState<MapRepresentative[]>([]);
+  // Bumped on moveend so the representative selection re-runs against the new
+  // pixel positions without re-running on unrelated renders.
+  const [viewEpoch, setViewEpoch] = useState(0);
 
   const mapElementRef = useCallback((element: HTMLDivElement | null) => {
     setMapElement(element);
@@ -127,6 +148,9 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
 
   const showOverlay = loading && (vectorSource?.getFeatures().length ?? 0) === 0;
 
+  const ageScale = useMemo(() => buildAgeScale(points), [points]);
+  const ageLegend = useMemo(() => buildAgeLegend(ageScale), [ageScale]);
+
   useEffect(() => {
     if (maybeBoundsEqual(pendingLocationBounds, normalizedLocationBounds)) {
       return;
@@ -145,12 +169,18 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
     }
 
     const source = new VectorSource();
+    const pathSource = new VectorSource();
     const baseLayer = new TileLayer({ source: new OSM() });
-    const pinLayer = new VectorLayer({ source, style: markerStyle });
+    // The path sits under the pins so pins stay clickable and legible over it.
+    const pathLayer = new VectorLayer({ source: pathSource, style: movementPathStyle });
+    const pinLayer = new VectorLayer({
+      source,
+      style: (feature) => markerStyleFor(feature.get("color") as string | undefined),
+    });
 
     const map = new Map({
       target: mapElement,
-      layers: [baseLayer, pinLayer],
+      layers: [baseLayer, pathLayer, pinLayer],
       view: new View({
         center: fromLonLat([0, 30]),
         zoom: 2,
@@ -221,9 +251,15 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
     map.on("pointerdrag", markUserInteraction);
     map.on("dblclick", markUserInteraction);
     map.on("singleclick", markUserInteraction);
+    // Representative photos are positioned in pixel space, so any view change
+    // invalidates the current selection.
+    const bumpViewEpoch = () => setViewEpoch((epoch) => epoch + 1);
+
     map.on("moveend", notifyBounds);
+    map.on("moveend", bumpViewEpoch);
     setMapInstance(map);
     setVectorSource(source);
+    setPathSource(pathSource);
 
     return () => {
       resizeObserver.disconnect();
@@ -232,9 +268,11 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
       map.un("dblclick", markUserInteraction);
       map.un("singleclick", markUserInteraction);
       map.un("moveend", notifyBounds);
+      map.un("moveend", bumpViewEpoch);
       map.setTarget(undefined);
       setMapInstance(null);
       setVectorSource(null);
+      setPathSource(null);
     };
   }, [mapElement]);
 
@@ -255,6 +293,8 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
       const feature = new Feature({
         geometry: new Point(fromLonLat([point.longitude, point.latitude])),
       });
+      // Read back by the layer's style function to pick the age-ramp colour.
+      feature.set("color", colorForDate(ageScale, pointDate(point)));
       return feature;
     });
 
@@ -274,15 +314,123 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
         .fit(extent, { padding: [24, 24, 24, 24], maxZoom: 20, duration: 200 });
       setHasFitted(true);
     }
-  }, [hasFitted, mapInstance, points, vectorSource]);
+  }, [ageScale, hasFitted, mapInstance, points, vectorSource]);
+
+  // Movement path: pins in date order, joined into one line. Only pins that
+  // carry a date can be placed on a timeline, so undated ones sit it out.
+  useEffect(() => {
+    if (!pathSource) {
+      return;
+    }
+    pathSource.clear();
+    if (!showMovementPath) {
+      return;
+    }
+    const dated = points
+      .flatMap((point) => {
+        const date = pointDate(point);
+        return date === undefined ? [] : [{ point, date }];
+      })
+      .sort((a, b) => a.date - b.date);
+    if (dated.length < 2) {
+      return;
+    }
+    pathSource.addFeatures([
+      new Feature({
+        geometry: new LineString(
+          dated.map(({ point }) => fromLonLat([point.longitude, point.latitude])),
+        ),
+      }),
+    ]);
+  }, [pathSource, points, showMovementPath]);
+
+  // Representative photos, chosen in pixel space so the result can neither
+  // crowd the map nor scale with the pin count. Fullscreen only: the compact
+  // map has no room for them.
+  useEffect(() => {
+    if (!isFullscreen || !mapInstance) {
+      setRepresentatives([]);
+      return;
+    }
+    const size = mapInstance.getSize();
+    if (!size) {
+      setRepresentatives([]);
+      return;
+    }
+    const [width, height] = size;
+
+    const candidates = points.flatMap((point) => {
+      const pixel = mapInstance.getPixelFromCoordinate(
+        fromLonLat([point.longitude, point.latitude]),
+      );
+      if (!pixel) return [];
+      return [
+        {
+          key: pointKey(point),
+          x: pixel[0],
+          y: pixel[1],
+          weight: point.count ?? 1,
+          point,
+        },
+      ];
+    });
+
+    setRepresentatives(
+      selectRepresentatives(candidates, { width, height }).map(({ key, point }) => ({
+        key,
+        coordinate: fromLonLat([point.longitude, point.latitude]),
+        thumbnailUrl: point.path ? buildGeoPointThumbnailUrl(point) : undefined,
+        label: point.name || point.path,
+        color: colorForDate(ageScale, pointDate(point)),
+      })),
+    );
+  }, [ageScale, isFullscreen, mapInstance, points, viewEpoch]);
 
   const clearMapFilter = () => {
     setPendingLocationBounds(undefined);
     setHasFitted(false);
   };
 
+  const handleRepresentativeSelect = useCallback(
+    (item: MapRepresentative) => {
+      const view = mapInstance?.getView();
+      if (!view) return;
+      view.setCenter(item.coordinate);
+      view.setZoom(Math.max(view.getZoom() ?? 0, 14));
+      mapInstance?.set("userInteracted", true);
+    },
+    [mapInstance],
+  );
+
+  // Leaving fullscreen drops the representatives immediately rather than
+  // letting a stale set linger over the compact map for a frame.
+  const toggleFullscreen = () => {
+    setIsFullscreen((previous) => {
+      if (previous) setRepresentatives([]);
+      return !previous;
+    });
+  };
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsFullscreen(false);
+        setRepresentatives([]);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isFullscreen]);
+
   return (
-    <div className={cx(css.card, compact ? css.compactCard : undefined)}>
+    <div
+      className={cx(
+        css.card,
+        compact && !isFullscreen ? css.compactCard : undefined,
+        isFullscreen ? css.fullscreenCard : undefined,
+      )}
+    >
       <div className={css.headerRow}>
         <div>
           <small>Map filter</small>
@@ -296,14 +444,49 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
               Clear map filter
             </button>
           ) : null}
+          <button
+            className="btn btn-sm"
+            onClick={toggleFullscreen}
+            aria-pressed={isFullscreen}
+          >
+            {isFullscreen ? "Exit fullscreen" : "Explore fullscreen"}
+          </button>
         </div>
       </div>
 
       <div className={css.mapShell}>
         <div
           ref={mapElementRef}
-          className={cx(css.map, compact ? css.compactMap : undefined)}
+          className={cx(
+            css.map,
+            compact && !isFullscreen ? css.compactMap : undefined,
+            isFullscreen ? css.fullscreenMap : undefined,
+          )}
         />
+        <MapPhotoMarkers
+          map={mapInstance}
+          items={representatives}
+          onSelect={handleRepresentativeSelect}
+        />
+        {ageLegend.length > 0 ? (
+          <div className={css.legend}>
+            <small className={css.legendTitle}>{formatAgeRangeLabel(ageScale)}</small>
+            <div className={css.legendStrip} aria-hidden="true">
+              {ageLegend.map((step) => (
+                <span
+                  key={step.color}
+                  className={css.legendSwatch}
+                  style={{ background: step.color }}
+                  title={step.label}
+                />
+              ))}
+            </div>
+            <div className={css.legendScale}>
+              <small>older</small>
+              <small>newer</small>
+            </div>
+          </div>
+        ) : null}
         {showOverlay ? (
           <div className={css.overlay}>
             <Spinner label="Loading map data" />
@@ -313,6 +496,14 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
 
       <div className={css.statusRow}>
         <small>{pinSummary}</small>
+        <button
+          className={cx("btn", "btn-sm", css.movementToggle)}
+          onClick={() => setShowMovementPath((shown) => !shown)}
+          aria-pressed={showMovementPath}
+          title="Trace these pins in date order"
+        >
+          ✈︎
+        </button>
         {error ? <small className={css.error}>{error}</small> : null}
         {truncated ? (
           <small className={css.description}>

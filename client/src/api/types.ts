@@ -1,6 +1,7 @@
 import type {
   BackgroundTaskStatus,
   DateRangeFilter,
+  FaceAttributeFilter,
   GeoBoundsLike as GeoBounds,
   MediaTypeFilter,
   RatingFilter,
@@ -10,7 +11,7 @@ import type {
   ApiFilterOptions,
   SortOption,
 } from "../../../shared/filter-contract/src";
-export type { BackgroundTaskStatus, DateRangeFilter, GeoBounds, MediaTypeFilter, RatingFilter, ShareScope, SearchSource, ApiFilterOptions, SortOption };
+export type { BackgroundTaskStatus, DateRangeFilter, FaceAttributeFilter, GeoBounds, MediaTypeFilter, RatingFilter, ShareScope, SearchSource, ApiFilterOptions, SortOption };
 
 export interface ApiPhotoItem {
   folder: string;
@@ -60,6 +61,13 @@ export type GeoPoint = {
   latitude: number;
   longitude: number;
   count?: number;
+  /**
+   * Epoch ms of the oldest/newest item at this pin. Drives the map's age color
+   * ramp and the chronological movement path; undefined when nothing in the
+   * bucket carries a usable date.
+   */
+  minDate?: number;
+  maxDate?: number;
 };
 
 export type DateHistogramBucket = {
@@ -152,6 +160,7 @@ export interface FetchPhotosOptions {
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
   faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
+  faceAttributeFilter?: FaceAttributeFilter | null;
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
   expandToFolder?: boolean;
@@ -187,6 +196,7 @@ export type FetchSuggestionsOptions = {
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
   faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
+  faceAttributeFilter?: FaceAttributeFilter | null;
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
   signal?: AbortSignal;
@@ -259,8 +269,14 @@ export type FetchSemanticSearchOptions = {
 } & Omit<FetchPhotosOptions, "page" | "pageSize" | "metadata">;
 
 export type VideoNegotiationResult =
-  | { mode: "hls"; url: string; reason: string }
-  | { mode: "direct"; url: string; reason: string }
+  /**
+   * `previewMaxSeconds` is only present for grid-preview negotiations. It is the
+   * point the preview must loop at — for a cached HLS source it is the end of
+   * the segments that already exist, so playing past it would make the server
+   * start encoding.
+   */
+  | { mode: "hls"; url: string; reason: string; previewMaxSeconds?: number }
+  | { mode: "direct"; url: string; reason: string; previewMaxSeconds?: number }
   | { mode: "error"; reason: string };
 
 export type TranscriptSegment = { start: number; end: number; text: string };

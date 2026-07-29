@@ -12,6 +12,8 @@ import type { ShareScope } from "../../../shared/filter-contract/src/index.ts";
 type TokenData = {
   createdAt: number;
   username: string;
+  ip: string | null;
+  lastSeenAt: number;
 };
 
 type ApiTokenData = {
@@ -62,11 +64,20 @@ let db: AsyncSqlite | null = null;
 
 export const initAuthService = async (database: AsyncSqlite): Promise<void> => {
   db = database;
-  const rows = await db.all<{ token: string; username: string; createdAt: number }>(
-    "SELECT token, username, createdAt FROM auth_sessions",
-  );
+  const rows = await db.all<{
+    token: string;
+    username: string;
+    createdAt: number;
+    ip: string | null;
+    lastSeenAt: number | null;
+  }>("SELECT token, username, createdAt, ip, lastSeenAt FROM auth_sessions");
   for (const row of rows) {
-    tokens.set(row.token, { createdAt: row.createdAt, username: row.username });
+    tokens.set(row.token, {
+      createdAt: row.createdAt,
+      username: row.username,
+      ip: row.ip ?? null,
+      lastSeenAt: row.lastSeenAt ?? row.createdAt,
+    });
   }
 
   const apiRows = await db.all<{
@@ -137,16 +148,15 @@ const decodeShareScopePayload = (token: string): ShareScope<unknown> | null => {
 export const isAuthEnabled = () =>
   !!(process.env.PHOTRIX_ACCOUNTS || process.env.AUTH_PASSWORD);
 
-export const issueToken = (username = "_test_"): string => {
+export const issueToken = (username = "_test_", ip: string | null = null): string => {
   const token = randomBytes(32).toString("hex");
   const createdAt = Date.now();
-  tokens.set(token, { createdAt, username });
+  tokens.set(token, { createdAt, username, ip, lastSeenAt: createdAt });
   // Persist to DB if available (fire-and-forget; in-memory Map is source of truth).
-  db?.run("INSERT INTO auth_sessions (token, username, createdAt) VALUES (?, ?, ?)", [
-    token,
-    username,
-    createdAt,
-  ]).catch(() => {});
+  db?.run(
+    "INSERT INTO auth_sessions (token, username, createdAt, ip, lastSeenAt) VALUES (?, ?, ?, ?, ?)",
+    [token, username, createdAt, ip, createdAt],
+  ).catch(() => {});
   return token;
 };
 
@@ -175,12 +185,13 @@ export const isShareToken = (token: string): boolean => isStatelessShareToken(to
 export const validateCredentials = (
   username: string,
   password: string,
+  ip: string | null = null,
 ): string | null => {
   const storedHash = accounts.get(username.toLowerCase());
   if (!storedHash) return null;
   const inputHash = hashPassword(password);
   if (!timingSafeEqual(storedHash, inputHash)) return null;
-  return issueToken(username);
+  return issueToken(username, ip);
 };
 
 // Throttle lastUsedAt writes so a chatty agent doesn't cause a DB write per call.
@@ -197,8 +208,30 @@ const touchApiToken = (token: string): void => {
   );
 };
 
+// Throttle lastSeenAt writes the same way API-token touches are throttled —
+// this fires on every authenticated request, so a per-call DB write would be
+// far too chatty.
+const SESSION_TOUCH_INTERVAL_MS = 60_000;
+const sessionLastTouched = new Map<string, number>();
+
+const touchSession = (token: string): void => {
+  const data = tokens.get(token);
+  if (!data) return;
+  const now = Date.now();
+  const last = sessionLastTouched.get(token) ?? 0;
+  if (now - last < SESSION_TOUCH_INTERVAL_MS) return;
+  sessionLastTouched.set(token, now);
+  data.lastSeenAt = now;
+  db?.run("UPDATE auth_sessions SET lastSeenAt = ? WHERE token = ?", [now, token]).catch(
+    () => {},
+  );
+};
+
 export const validateToken = (token: string): boolean => {
-  if (tokens.has(token)) return true;
+  if (tokens.has(token)) {
+    touchSession(token);
+    return true;
+  }
   if (apiTokens.has(token)) {
     touchApiToken(token);
     return true;
@@ -278,10 +311,15 @@ export const recordShareLink = (username: string, token: string, label: string):
   ).catch(() => {});
 };
 
+// Revoked links are excluded here (not just hidden client-side): once revoked
+// there is nothing actionable left to show, so the row is dead to the owner.
+// The DB row itself is kept (not hard-deleted) — revokedAt also feeds the
+// in-memory revocation set on startup (see initAuthService) that permanently
+// blocks a stateless share token from decoding again, so the row must survive.
 export const listShareLinks = async (username: string): Promise<ShareLinkInfo[]> => {
   if (!db) return [];
   return db.all<ShareLinkInfo>(
-    "SELECT token, label, createdAt, revokedAt FROM share_links WHERE username = ? ORDER BY createdAt DESC",
+    "SELECT token, label, createdAt, revokedAt FROM share_links WHERE username = ? AND revokedAt IS NULL ORDER BY createdAt DESC",
     [username],
   );
 };
@@ -317,14 +355,41 @@ export const revokeShareLink = async (
   return true;
 };
 
+export const revokeAllShareLinksForUser = async (username: string): Promise<number> => {
+  const now = Date.now();
+  if (!db) return 0;
+  const active = await db.all<{ token: string }>(
+    "SELECT token FROM share_links WHERE username = ? AND revokedAt IS NULL",
+    [username],
+  );
+  for (const row of active) {
+    revokedShareTokens.add(tokenDigest(row.token));
+  }
+  await db.run(
+    "UPDATE share_links SET revokedAt = ? WHERE username = ? AND revokedAt IS NULL",
+    [now, username],
+  );
+  return active.length;
+};
+
 // --- Sessions ---
 
-export type SessionInfo = { token: string; createdAt: number };
+export type SessionInfo = {
+  token: string;
+  createdAt: number;
+  ip: string | null;
+  lastSeenAt: number;
+};
 
 export const listSessions = (username: string): SessionInfo[] =>
   [...tokens.entries()]
     .filter(([, data]) => data.username === username)
-    .map(([token, data]) => ({ token, createdAt: data.createdAt }))
+    .map(([token, data]) => ({
+      token,
+      createdAt: data.createdAt,
+      ip: data.ip,
+      lastSeenAt: data.lastSeenAt,
+    }))
     .sort((a, b) => b.createdAt - a.createdAt);
 
 export const revokeSessionsForUser = (username: string): void => {
@@ -334,8 +399,22 @@ export const revokeSessionsForUser = (username: string): void => {
   db?.run("DELETE FROM auth_sessions WHERE username = ?", [username]).catch(() => {});
 };
 
+// Revokes every session for a user except the one making the request — lets a
+// user with a pile of old logins (different devices, cleared browser storage,
+// etc.) clean up in one action without also signing themselves out.
+export const revokeOtherSessions = (username: string, keepToken: string): void => {
+  for (const [token, data] of tokens) {
+    if (data.username === username && token !== keepToken) tokens.delete(token);
+  }
+  db?.run("DELETE FROM auth_sessions WHERE username = ? AND token != ?", [
+    username,
+    keepToken,
+  ]).catch(() => {});
+};
+
 export const revokeToken = (token: string): void => {
   tokens.delete(token);
+  sessionLastTouched.delete(token);
   db?.run("DELETE FROM auth_sessions WHERE token = ?", [token]).catch(() => {});
   if (isStatelessShareToken(token)) {
     revokedShareTokens.add(tokenDigest(token));

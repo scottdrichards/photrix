@@ -11,7 +11,12 @@
   flex-grow: var(--ratio);
   flex-shrink: 1;
   max-width: 100%;
-  transition-property: transform, box-shadow;
+  /* transform only: box-shadow is not a compositable property, so animating it
+     repaints the tile every frame of the transition. With the pointer parked
+     over the grid during a wheel scroll that used to mean a repaint for every
+     tile that slid under the cursor. The shadow still appears on hover, it just
+     appears at once. */
+  transition-property: transform;
   transition-duration: var(--dur-fast);
   transition-timing-function: var(--ease-accel);
   background-color: var(--bg4);
@@ -36,7 +41,13 @@
 }
 
 .tileSelected {
-  box-shadow: inset 0 0 0 4px var(--brand);
+  /* Two rings (brand color + a bright inner hairline) so the selected border
+     reads clearly at a glance regardless of what color the photo underneath
+     happens to be — a single brand-colored ring alone can disappear against a
+     similarly-colored photo. */
+  box-shadow:
+    inset 0 0 0 4px var(--brand),
+    inset 0 0 0 6px rgba(255, 255, 255, 0.9);
 }
 
 .checkboxOverlay {
@@ -66,10 +77,15 @@
 .checkedOverlay {
   position: absolute;
   inset: 0;
+  /* Selection reads from the border + edge vignette, not a wash over the
+     photo: the center stays fully clear so the image content is never
+     muddied, and the tint only builds up in a band right at the edge. */
   background: radial-gradient(
     ellipse at center,
-    color-mix(in srgb, var(--brand) 8%, transparent) 0%,
-    color-mix(in srgb, var(--brand) 38%, transparent) 100%
+    transparent 0%,
+    transparent 55%,
+    color-mix(in srgb, var(--brand) 30%, transparent) 80%,
+    color-mix(in srgb, var(--brand) 55%, rgba(0, 0, 0, 0.65)) 100%
   );
   z-index: 1;
   pointer-events: none;
@@ -100,7 +116,61 @@
   padding: var(--space-xs);
   box-shadow: var(--shadow-sm);
   opacity: 0.86;
-  z-index: 1;
+  /* Above the motion layer so the play glyph stays visible over a preview. */
+  z-index: 2;
+  transition: opacity var(--dur-fast, 150ms) ease-out;
+}
+
+.durationBadge {
+  position: absolute;
+  /* Stacked below the round play badge, same corner. */
+  top: calc(var(--space-xxs) + 30px);
+  right: var(--space-xxs);
+  display: flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background-color: rgba(0, 0, 0, 0.55);
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  z-index: 2;
+  pointer-events: none;
+  transition: opacity 200ms ease-in;
+}
+
+.scrubBar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 16px;
+  z-index: 4;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 var(--space-xxs) 3px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.scrubTrack {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background-color: rgba(255, 255, 255, 0.35);
+  overflow: hidden;
+}
+
+.scrubFill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background-color: var(--brand);
+  border-radius: var(--radius-full);
 }
 
 .selectedBadge {
@@ -127,8 +197,25 @@
   padding: var(--space-xs);
   box-shadow: var(--shadow-sm);
   opacity: 0.86;
-  z-index: 1;
+  z-index: 2;
+  /* Inert by default: on touch this must not eat the tap that opens the photo.
+     Only a real hover-capable pointer gets to aim at it. */
   pointer-events: none;
+  transition:
+    color var(--dur-fast, 150ms) ease-out,
+    opacity var(--dur-fast, 150ms) ease-out;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .livePhotoBadge {
+    pointer-events: auto;
+    cursor: pointer;
+  }
+}
+
+.livePhotoBadgeActive {
+  color: var(--brand);
+  opacity: 1;
 }
 
 .sourceBadges {
@@ -137,7 +224,7 @@
   left: var(--space-xxs);
   display: flex;
   gap: var(--space-xxs);
-  z-index: 1;
+  z-index: 2;
   pointer-events: none;
 }
 
@@ -154,10 +241,20 @@
   pointer-events: auto;
 }
 
-.ratingBadge {
+/* Bottom-right meta strip: rating (always) plus the dwell-revealed duration.
+   Never interactive — a tap anywhere on the tile must reach the tile itself. */
+.metaRow {
   position: absolute;
   bottom: var(--space-xxs);
   right: var(--space-xxs);
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.ratingBadge {
   display: flex;
   align-items: center;
   gap: 1px;
@@ -169,8 +266,59 @@
   font-weight: 600;
   line-height: 1;
   box-shadow: var(--shadow-sm);
-  z-index: 2;
+}
+
+.durationBadge {
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background-color: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--shadow-sm);
+  opacity: 0;
+  transform: translateY(2px);
+  transition:
+    opacity var(--dur-fast, 150ms) ease-out,
+    transform var(--dur-fast, 150ms) ease-out;
+}
+
+.metaVisible {
+  opacity: 1;
+  transform: none;
+}
+
+/* Live-photo clips and video previews both paint here, above the still and
+   below the badges, fading in only once playback is actually running. */
+.motionLayer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 1;
+  opacity: 0;
   pointer-events: none;
+  transition: opacity 420ms ease-in-out;
+}
+
+.motionLayerVisible {
+  opacity: 1;
+}
+
+/* The play glyph would sit on top of its own preview; step it back while the
+   clip is running rather than removing it (it returns the moment playback stops). */
+.videoBadgeDimmed {
+  opacity: 0.25;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motionLayer,
+  .durationBadge {
+    transition: none;
+  }
 }
 
 .unknownFile {

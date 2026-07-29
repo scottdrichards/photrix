@@ -160,20 +160,25 @@
 }
 
 .faceFrameRect {
-  fill: transparent;
-  stroke-width: calc(2.5px / var(--zoom-scale, 1));
+  /* Interior stays fully clear — only the border is colored, so the mask/dim
+     backdrop layer underneath does all the "this is the face" communication
+     and the box itself never muddies the photo. */
+  fill: none;
+  /* vector-effect keeps this a constant on-screen width no matter how far the
+     photo is zoomed (it cancels out the ancestor's CSS scale transform at
+     paint time) — a flat px value here, not one pre-divided by the zoom
+     scale, since that would double-compensate and shrink as you zoom in. */
+  stroke-width: 2.5px;
   vector-effect: non-scaling-stroke;
   shape-rendering: geometricPrecision;
   filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.5));
 }
 
 .exifFaceFrameRect {
-  fill: rgba(11, 150, 226, 0.1);
   stroke: rgba(140, 226, 255, 0.95);
 }
 
 .faceTableFrameRect {
-  fill: rgba(255, 166, 0, 0.1);
   stroke: rgba(255, 201, 79, 0.95);
 }
 
@@ -182,11 +187,25 @@
   inset: 0;
   z-index: 4;
   pointer-events: none;
+  /* Tracks the zoomed face position the same way .faceFrameLayer does. A
+     no-op where the ancestor already applies the real zoom transform itself
+     (the default swipe viewer) since --zoom-scale is unset there; needed in
+     the edit-mode canvas view where this layer is a sibling, not a scaled
+     descendant, of the zoomed photo. */
+  transform-origin: var(--zoom-origin-x, 50%) var(--zoom-origin-y, 50%);
+  transform: scale(var(--zoom-scale, 1));
 }
 
 .faceLabel {
   position: absolute;
-  transform: translate(-50%, calc(-100% - 4px));
+  /* The trailing scale() counter-scales by the inverse of whatever zoomed the
+     photo (see --label-counter-scale in FullscreenViewer/SwipePhotoViewer),
+     so the label's on-screen size stays constant while its anchor position
+     still tracks the zoomed face underneath it — zooming into a crowded
+     photo makes the tags easier to read, not harder. Not clickable: no
+     cursor/pointer-events override, so clicks fall through to the same zoom
+     click as the rest of the photo (see FaceOverlayProps.namedFaces doc). */
+  transform: translate(-50%, calc(-100% - 4px)) scale(var(--label-counter-scale, 1));
   max-width: 45%;
   padding: 3px 8px;
   border: 1px solid rgba(255, 201, 79, 0.9);

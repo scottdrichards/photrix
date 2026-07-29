@@ -8,10 +8,21 @@ import {
   PlayCircle24Regular,
   Star12Filled,
 } from "@fluentui/react-icons";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { PhotoItem, SearchSource } from "../api";
 import { useNearViewport } from "../hooks/useNearViewport";
+import { isHoverSuppressedByScroll } from "./ThumbnailTile.hoverIntent";
 import { useSelectionContext } from "./selection/SelectionContext";
+import { type EditAdj, computeStyle, isDirty, EditSvgDefs } from "./PhotoEditor";
+import { formatDuration } from "./tileMedia/formatDuration";
+import { requestLiveOpen } from "./tileMedia/liveOpenIntent";
+import { useLivePhotoPreview } from "./tileMedia/useLivePhotoPreview";
+import { useTileVideoPreview } from "./tileMedia/useTileVideoPreview";
+import {
+  useCoarsePointer,
+  useDelayedFlag,
+  useViewportCentred,
+} from "./tileMedia/useTileDwell";
 import css from "./ThumbnailTile.module.css";
 
 const SOURCE_LABELS: Record<SearchSource, string> = {
@@ -76,21 +87,120 @@ type Props = {
 
 const LONG_PRESS_MS = 500;
 
+/** How long a tile must sit in the close band before it earns the sharp 320. */
+const SHARP_DWELL_MS = 250;
+/**
+ * A load that resolves faster than this gets no fade. Cross-fading a thumbnail
+ * that was already in the browser cache doesn't smooth anything — it just puts
+ * 200ms of translucency between the user and a picture that was ready
+ * instantly, which is what "the fade makes it feel slow" is describing.
+ */
+const INSTANT_LOAD_MS = 120;
+const FADE_MS = 200;
+
+const nowMs = (): number =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+
+type ImageFade = {
+  ref: React.RefObject<HTMLImageElement | null>;
+  onLoad: (event: React.SyntheticEvent<HTMLImageElement>) => void;
+  style: React.CSSProperties;
+};
+
+/**
+ * Reveal state for one thumbnail <img>.
+ *
+ * Beyond "has it loaded", this handles two things the plain onLoad flag got
+ * wrong. An image already in the browser cache can finish before React attaches
+ * its onLoad listener, which left the tile stuck at opacity 0 — a permanently
+ * blank tile; the effect below re-checks `complete` whenever the src changes.
+ * And an image that arrives instantly is shown instantly, with the fade
+ * reserved for loads slow enough that a pop-in would be jarring.
+ */
+const useImageFade = (
+  src: string | undefined,
+  onDecoded: (img: HTMLImageElement) => void,
+): ImageFade => {
+  const [status, setStatus] = useState<"pending" | "instant" | "faded">("pending");
+  const ref = useRef<HTMLImageElement | null>(null);
+  const requestedAtRef = useRef<number | null>(null);
+  const onDecodedRef = useRef(onDecoded);
+  onDecodedRef.current = onDecoded;
+
+  useEffect(() => {
+    requestedAtRef.current = src ? nowMs() : null;
+    const img = ref.current;
+    if (src && img?.complete && img.naturalWidth > 0) {
+      // Served from cache before React could hear about it.
+      onDecodedRef.current(img);
+      setStatus("instant");
+      return;
+    }
+    setStatus("pending");
+  }, [src]);
+
+  const onLoad = useCallback((event: React.SyntheticEvent<HTMLImageElement>) => {
+    const startedAt = requestedAtRef.current;
+    onDecodedRef.current(event.currentTarget);
+    setStatus(
+      startedAt === null || nowMs() - startedAt < INSTANT_LOAD_MS ? "instant" : "faded",
+    );
+  }, []);
+
+  return {
+    ref,
+    onLoad,
+    style: {
+      opacity: status === "pending" ? 0 : 1,
+      // `none` rather than a 0ms duration so the instant path never creates a
+      // compositor layer at all. A screenful of tiles revealing at once is the
+      // moment we can least afford one throwaway layer per image.
+      transition: status === "faded" ? `opacity ${FADE_MS}ms ease-in` : "none",
+    },
+  };
+};
+
+// Hover has to be held briefly before anything starts, so sweeping the pointer
+// across a row never opens a stream. A full second (rather than a snappier
+// value) specifically keeps a fast sweep across a row of video tiles from
+// queuing up a negotiation — and, on GPU-available links, a live transcode —
+// per tile it merely passed over. Touch has no hover, so the substitute is a
+// longer dwell in the centre band of the viewport (see useViewportCentred).
+const HOVER_DWELL_MS = 1000;
+const TOUCH_DWELL_MS = 900;
+
 export const ThumbnailTile: React.FC<Props> = (props) => {
   const { photo } = props;
   const searchSources = photo.searchSources;
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTriggeredRef = useRef(false);
-  const [isNear, tileRef] = useNearViewport<HTMLButtonElement>();
+  // Scrub-seeking state for the inline video preview (see the scrub bar below).
+  // A ref rather than state for "is the user dragging": it's read inside the
+  // preview's onTimeUpdate handler purely to suppress a progress-bar fight
+  // between playback and an in-progress drag, and doesn't need a re-render.
+  const isScrubbingRef = useRef(false);
+  const [previewProgress, setPreviewProgress] = useState(0);
+  const [isNear, tileRef, isClose] = useNearViewport<HTMLButtonElement>();
   const [isHovered, setIsHovered] = useState(false);
-  const [isImageLoaded, setIsImageLoaded] = useState(false);
-  const [isMicroLoaded, setIsMicroLoaded] = useState(false);
   // Whether to load the sharp 320 tile. The grid paints the cheap embedded micro
-  // thumbnail instantly and only upgrades to the (full-decode, disk-heavy) 320
-  // once the tile is dwelt on or hovered — so a fast scroll never triggers the
-  // full-file reads across a large library.
+  // thumbnail across the wide prefetch band and only upgrades to the
+  // (full-decode, disk-heavy) 320 once the tile settles in the close band or is
+  // deliberately hovered — so a fast scroll never triggers the full-file reads
+  // across a large library.
   const [wantSharp, setWantSharp] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
+  // Once a tile has been prepared it keeps its <img> src for good. Clearing the
+  // src when a tile left the band — what this used to do — makes the browser
+  // drop the image *and its decoded bitmap*, so every scroll reversal re-fetched
+  // and re-decoded a whole screenful at once. That burst is the reported "the
+  // browser hangs as it loads a bunch of images at once".
+  const hasBeenNearRef = useRef(false);
+  useEffect(() => {
+    if (isNear) hasBeenNearRef.current = true;
+  }, [isNear]);
+  const shouldLoad = isNear || hasBeenNearRef.current;
   const { setSelected, selectionMode, checkedPaths, enterSelectionMode, toggleChecked } =
     useSelectionContext();
   const metadataRatio = getAspectRatio(photo);
@@ -101,26 +211,132 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   const ratingRaw = toFiniteNumber(photo.metadata?.rating);
   const ratingValue = ratingRaw && ratingRaw > 0 ? Math.min(5, Math.round(ratingRaw)) : 0;
 
+  const rawEditAdj = photo.metadata?.editAdj;
+  const editAdj: EditAdj | null = (() => {
+    if (!rawEditAdj || typeof rawEditAdj !== "string") return null;
+    try { const a = JSON.parse(rawEditAdj) as EditAdj; return isDirty(a) ? a : null; }
+    catch { return null; }
+  })();
+  const rawTileId = useId();
+  const tileFilterId = `pth-${rawTileId.replace(/:/g, "")}`;
+  const tileEditStyle = editAdj ? computeStyle(editAdj, tileFilterId) : null;
+
+  const isVideo = photo.mediaType === "video";
+  const isCoarsePointer = useCoarsePointer();
+  const [isLiveBadgeHovered, setIsLiveBadgeHovered] = useState(false);
+
+  // Two ways to say "the user is looking at this tile": a held hover on desktop,
+  // or a settled dwell in the middle of the screen on touch. Both feed the same
+  // downstream behaviour (preview playback + the info overlay).
+  const hoverDwell = useDelayedFlag(isHovered && !isCoarsePointer, HOVER_DWELL_MS);
+  const touchDwell = useViewportCentred(tileRef, {
+    delayMs: TOUCH_DWELL_MS,
+    enabled: isCoarsePointer && isClose,
+  });
+  const isDwelt = isCoarsePointer ? touchDwell : hoverDwell;
+
+  // Motion is gated on the *close* band, not the wide prefetch one: prefetching
+  // reaches over a viewport ahead, and nothing that far off screen should be
+  // holding a video slot or feeding the ambient live-photo rotation.
+  const {
+    videoRef,
+    isPlaying: isPreviewPlaying,
+    isLeaving: isPreviewLeaving,
+  } = useTileVideoPreview({
+    photo,
+    // isClose is part of the condition, not just an optimisation: a tile that
+    // scrolls out of range must stop playing even if the pointer never moved.
+    active: isDwelt && isClose,
+    deliberate: !isCoarsePointer,
+  });
+
+  const livePhoto = useLivePhotoPreview({
+    livePhotoUrl: photo.livePhotoUrl,
+    isNear: isClose,
+    // On touch there is no hover, so the live badge is a plain indicator and the
+    // idle rotation is the only thing that animates it.
+    hovered: isLiveBadgeHovered && !isCoarsePointer,
+  });
+
+  const durationLabel = isVideo ? formatDuration(photo.metadata?.duration) : null;
+  const durationSeconds = toFiniteNumber(photo.metadata?.duration);
+
   // Reset per-photo load state when a virtualized tile is reused for a new photo.
   useEffect(() => {
-    setIsImageLoaded(false);
-    setIsMicroLoaded(false);
     setWantSharp(false);
     setLoadedRatio(null);
   }, [photo.thumbnailUrl]);
 
-  // Hover immediately upgrades to the sharp tile.
+  // Hover immediately upgrades to the sharp tile. Hover is intent-gated (see
+  // handleMouseEnter), so scrolling a wheel over the grid no longer drags a
+  // full-resolution fetch behind the cursor.
   useEffect(() => {
     if (isHovered) setWantSharp(true);
   }, [isHovered]);
 
-  // Dwell upgrade: once the tile has stayed near the viewport briefly, load the
-  // sharp tile so slow browsing fills in quality without a fast scroll doing so.
+  // Dwell upgrade: once the tile has settled in the close band, load the sharp
+  // tile so slow browsing fills in quality. A fling never lingers here long
+  // enough, so flinging past a thousand tiles costs micro thumbnails only.
   useEffect(() => {
-    if (!isNear || wantSharp) return;
-    const timer = setTimeout(() => setWantSharp(true), 300);
+    if (!isClose || wantSharp) return;
+    const timer = setTimeout(() => setWantSharp(true), SHARP_DWELL_MS);
     return () => clearTimeout(timer);
-  }, [isNear, wantSharp]);
+  }, [isClose, wantSharp]);
+
+  // Reset the scrub position once playback stops so the next play (a fresh
+  // <video> element, starting at time 0) doesn't briefly show a stale fill.
+  useEffect(() => {
+    if (!isPreviewPlaying) setPreviewProgress(0);
+  }, [isPreviewPlaying]);
+
+  const handlePreviewTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    if (isScrubbingRef.current) return;
+    const video = e.currentTarget;
+    const dur = video.duration || durationSeconds || 0;
+    if (dur > 0 && Number.isFinite(video.currentTime)) {
+      setPreviewProgress(Math.min(1, Math.max(0, video.currentTime / dur)));
+    }
+  };
+
+  const seekFromClientX = (clientX: number, bar: HTMLElement) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const rect = bar.getBoundingClientRect();
+    const ratio = rect.width > 0 ? Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) : 0;
+    const dur = video.duration || durationSeconds || 0;
+    if (dur > 0) video.currentTime = ratio * dur;
+    setPreviewProgress(ratio);
+  };
+
+  // Every handler stops propagation: the scrub bar sits inside the tile
+  // <button>, and without this a drag would also toggle selection or open the
+  // fullscreen viewer via the tile's own click/pointer handlers.
+  const handleScrubPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+    isScrubbingRef.current = true;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // setPointerCapture is unavailable in some environments (e.g. jsdom)
+    }
+    seekFromClientX(e.clientX, e.currentTarget);
+  };
+
+  const handleScrubPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    if (!isScrubbingRef.current) return;
+    seekFromClientX(e.clientX, e.currentTarget);
+  };
+
+  const handleScrubPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    isScrubbingRef.current = false;
+  };
+
+  const handleScrubClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+  };
 
   const handleClick = () => {
     if (longPressTriggeredRef.current) {
@@ -129,9 +345,15 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     }
     if (selectionMode) {
       toggleChecked(photo);
-    } else {
-      setSelected(photo);
+      return;
     }
+    // Clicking while the badge is showing its clip means "open the motion, not
+    // the still". The badge itself stays a non-interactive indicator so it can
+    // never intercept a tap on touch, where there is no hover to trigger this.
+    if (isLiveBadgeHovered && photo.livePhotoUrl) {
+      requestLiveOpen(photo.path);
+    }
+    setSelected(photo);
   };
 
   const handlePointerDown = () => {
@@ -160,6 +382,15 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     cancelLongPress();
   };
 
+  // Ignore a mouseenter the page scrolling under a parked cursor produced. See
+  // ThumbnailTile.hoverIntent — on Windows a wheel scroll otherwise drags a
+  // re-render, an overlay mount, a hover repaint and a full-resolution fetch
+  // across every tile it passes.
+  const handleMouseEnter = () => {
+    if (isHoverSuppressedByScroll()) return;
+    setIsHovered(true);
+  };
+
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!selectionMode) {
@@ -168,37 +399,36 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     toggleChecked(photo);
   };
 
-  const updateRatioFromImg = (img: HTMLImageElement) => {
-    // Metadata dimensions describe the full image and are authoritative, so keep
-    // the tile locked to them. Only fall back to measuring the decoded image when
-    // metadata is missing, and lock that first measurement so the progressive
-    // micro → sharp swap can't reflow the row a second time.
-    if (knowsRatioFromMetadata || loadedRatio !== null) return;
-    if (img.naturalWidth && img.naturalHeight) {
-      setLoadedRatio(clampRatio(img.naturalWidth / img.naturalHeight));
-    }
-  };
+  const updateRatioFromImg = useCallback(
+    (img: HTMLImageElement) => {
+      // Metadata dimensions describe the full image and are authoritative, so
+      // keep the tile locked to them. Only fall back to measuring the decoded
+      // image when metadata is missing, and lock that first measurement so the
+      // progressive micro → sharp swap can't reflow the row a second time.
+      if (knowsRatioFromMetadata || loadedRatio !== null) return;
+      if (img.naturalWidth && img.naturalHeight) {
+        setLoadedRatio(clampRatio(img.naturalWidth / img.naturalHeight));
+      }
+    },
+    [knowsRatioFromMetadata, loadedRatio],
+  );
 
-  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
-    setIsImageLoaded(true);
-    updateRatioFromImg(e.currentTarget);
-  };
-
-  const handleMicroLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
-    setIsMicroLoaded(true);
-    updateRatioFromImg(e.currentTarget);
-  };
-
-  const loading = isNear ? "eager" : "lazy";
-  const fetchPriority = isNear ? "high" : "low";
-  const thumbnailUrl = isNear ? photo.thumbnailUrl : undefined;
+  const loading = shouldLoad ? "eager" : "lazy";
+  const fetchPriority = isClose ? "high" : "low";
   const isImage = isDisplayableImage(photo);
-  // Progressive photo tiles: paint the embedded micro thumbnail instantly, then
-  // upgrade to the sharp 320 on dwell/hover. Photos without a micro URL (and the
-  // video branch) fall back to loading the 320 directly when near.
-  const microUrl = isNear ? photo.microThumbnailUrl : undefined;
   const hasMicro = Boolean(photo.microThumbnailUrl);
-  const sharpUrl = isNear && (!hasMicro || wantSharp) ? photo.thumbnailUrl : undefined;
+  // Progressive photo tiles: paint the embedded micro thumbnail across the wide
+  // prefetch band, then upgrade to the sharp 320 on dwell/hover. Photos without
+  // a micro URL (and the video branch) load the 320 directly instead. Both URLs
+  // are latched — see hasBeenNearRef — so leaving the band never unloads an
+  // image the user is about to scroll back to.
+  const thumbnailUrl = shouldLoad ? photo.thumbnailUrl : undefined;
+  const microUrl = shouldLoad ? photo.microThumbnailUrl : undefined;
+  const sharpUrl = shouldLoad && (!hasMicro || wantSharp) ? photo.thumbnailUrl : undefined;
+
+  const videoFade = useImageFade(thumbnailUrl, updateRatioFromImg);
+  const microFade = useImageFade(microUrl, updateRatioFromImg);
+  const sharpFade = useImageFade(sharpUrl, updateRatioFromImg);
 
   return (
     <button
@@ -207,7 +437,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       className={`${css.tile}${isChecked ? ` ${css.tileSelected}` : ""}`}
       style={{ "--ratio": ratio.toString() } as React.CSSProperties}
       onClick={handleClick}
-      onMouseEnter={() => setIsHovered(true)}
+      onMouseEnter={handleMouseEnter}
       onMouseLeave={() => setIsHovered(false)}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
@@ -216,6 +446,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       aria-label={photo.name}
       aria-pressed={selectionMode ? isChecked : undefined}
     >
+      {editAdj && <EditSvgDefs adj={editAdj} filterId={tileFilterId} />}
       {showCheckbox && (
         <span
           className={css.checkboxOverlay}
@@ -231,9 +462,28 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       )}
       {isChecked && <span className={css.checkedOverlay} aria-hidden="true" />}
       {photo.livePhotoUrl ? (
-        <span className={css.livePhotoBadge} aria-label="Live photo" title="Live photo">
+        <span
+          className={`${css.livePhotoBadge}${livePhoto.isVisible ? ` ${css.livePhotoBadgeActive}` : ""}`}
+          aria-label="Live photo"
+          title="Live photo"
+          onMouseEnter={() => setIsLiveBadgeHovered(true)}
+          onMouseLeave={() => setIsLiveBadgeHovered(false)}
+        >
           <Filmstrip24Regular fontSize={14} />
         </span>
+      ) : null}
+      {livePhoto.isMounted && photo.livePhotoUrl ? (
+        <video
+          ref={livePhoto.videoRef}
+          src={photo.livePhotoUrl}
+          className={`${css.motionLayer}${livePhoto.isVisible ? ` ${css.motionLayerVisible}` : ""}`}
+          muted
+          playsInline
+          autoPlay
+          preload="none"
+          onEnded={livePhoto.handleEnded}
+          aria-hidden="true"
+        />
       ) : null}
       {searchSources && searchSources.length > 0 ? (
         <span
@@ -247,71 +497,120 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           ))}
         </span>
       ) : null}
-      {ratingValue > 0 ? (
-        <span
-          className={css.ratingBadge}
-          aria-label={`Rated ${ratingValue} of 5`}
-          title={`Rated ${ratingValue} of 5`}
-        >
-          <Star12Filled fontSize={12} />
-          {ratingValue}
+      {/* Bottom-right meta strip. Everything in it is pointer-events: none so a
+          dwell overlay can never swallow the tap that opens the photo. */}
+      {ratingValue > 0 || durationLabel ? (
+        <span className={css.metaRow}>
+          {durationLabel ? (
+            <span
+              className={`${css.durationBadge}${isDwelt ? ` ${css.metaVisible}` : ""}`}
+              aria-label={`Duration ${durationLabel}`}
+            >
+              {durationLabel}
+            </span>
+          ) : null}
+          {ratingValue > 0 ? (
+            <span
+              className={css.ratingBadge}
+              aria-label={`Rated ${ratingValue} of 5`}
+              title={`Rated ${ratingValue} of 5`}
+            >
+              <Star12Filled fontSize={12} />
+              {ratingValue}
+            </span>
+          ) : null}
         </span>
       ) : null}
-      {photo.mediaType === "video" ? (
+      {isVideo ? (
         <>
-          <span className={css.videoBadge} aria-hidden="true">
+          <span
+            className={`${css.videoBadge}${isPreviewPlaying || isPreviewLeaving ? ` ${css.videoBadgeDimmed}` : ""}`}
+            aria-hidden="true"
+          >
             <PlayCircle24Regular fontSize={24} />
           </span>
           <img
+            ref={videoFade.ref}
             src={thumbnailUrl}
             alt={photo.name}
             loading={loading}
             fetchPriority={fetchPriority}
             className={css.image}
-            style={{
-              opacity: isImageLoaded ? 1 : 0,
-              transition: "opacity 200ms ease-in",
-            }}
-            onLoad={handleImageLoad}
+            style={videoFade.style}
+            onLoad={videoFade.onLoad}
           />
-          {isHovered && (
+          {(isDwelt || isPreviewPlaying || isPreviewLeaving) && isNear && (
+            // Mounted for the whole dwell, and for the coast-to-a-stop-then-fade
+            // tail after the hover ends, so the hook always has an element to
+            // attach to and the frozen last frame has something to fade out of.
+            // isPreviewPlaying is what bridges the one render where isDwelt has
+            // already gone false but the hook's cleanup (which flips isLeaving
+            // true) hasn't run yet — without it the element would unmount for a
+            // frame and the coast-down would have nothing left to animate.
+            // It stays transparent until playback actually starts, and the
+            // thumbnail underneath is what shows if it never does.
             <video
-              src={photo.videoPreviewUrl}
-              className={css.image}
-              style={{ position: "absolute", top: 0, left: 0 }}
+              ref={videoRef}
+              className={`${css.motionLayer}${isPreviewPlaying || isPreviewLeaving ? ` ${css.motionLayerVisible}` : ""}`}
               muted
-              loop
+              loop={false}
               playsInline
-              autoPlay
+              preload="none"
+              aria-hidden="true"
+              onTimeUpdate={handlePreviewTimeUpdate}
             />
+          )}
+          {isPreviewPlaying && (
+            <div
+              className={css.scrubBar}
+              onClick={handleScrubClick}
+              onPointerDown={handleScrubPointerDown}
+              onPointerMove={handleScrubPointerMove}
+              onPointerUp={handleScrubPointerUp}
+              onPointerCancel={handleScrubPointerUp}
+              aria-hidden="true"
+            >
+              <div className={css.scrubTrack}>
+                <div className={css.scrubFill} style={{ width: `${previewProgress * 100}%` }} />
+              </div>
+            </div>
           )}
         </>
       ) : isImage ? (
         <>
           {hasMicro && (
             <img
+              ref={microFade.ref}
               src={microUrl}
               alt={photo.name}
               loading={loading}
               fetchPriority={fetchPriority}
               className={css.image}
-              style={{ opacity: isMicroLoaded ? 1 : 0, transition: "opacity 200ms ease-in" }}
-              onLoad={handleMicroLoad}
+              style={{
+                ...microFade.style,
+                ...(tileEditStyle?.filter ? { filter: tileEditStyle.filter } : {}),
+                ...(tileEditStyle?.transform ? { transform: tileEditStyle.transform } : {}),
+                ...(tileEditStyle?.clipPath ? { clipPath: tileEditStyle.clipPath } : {}),
+              }}
+              onLoad={microFade.onLoad}
             />
           )}
           <img
+            ref={sharpFade.ref}
             src={sharpUrl}
             alt={photo.name}
             loading={loading}
             fetchPriority={hasMicro ? "low" : fetchPriority}
             className={css.image}
             style={{
-              opacity: isImageLoaded ? 1 : 0,
-              transition: "opacity 200ms ease-in",
+              ...sharpFade.style,
               // When layered over the micro base, cover it; otherwise flow normally.
               ...(hasMicro ? { position: "absolute", inset: 0 } : {}),
+              ...(tileEditStyle?.filter ? { filter: tileEditStyle.filter } : {}),
+              ...(tileEditStyle?.transform ? { transform: tileEditStyle.transform } : {}),
+              ...(tileEditStyle?.clipPath ? { clipPath: tileEditStyle.clipPath } : {}),
             }}
-            onLoad={handleImageLoad}
+            onLoad={sharpFade.onLoad}
           />
         </>
       ) : (

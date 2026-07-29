@@ -9,6 +9,7 @@ type BackgroundTaskPlan = {
   fileMetadata: Task;
   exifMetadata: Task;
   imageAnalysis: Task;
+  faceAttributes: Task;
   faceClustering: Task;
   audioTranscription: Task;
   audioEmbedding: Task;
@@ -63,7 +64,16 @@ export const registerBackgroundTasks = (
   const faceClustering = reentrant(tasks.faceClustering);
   const audioTranscription = reentrant(tasks.audioTranscription);
   const audioEmbedding = reentrant(tasks.audioEmbedding);
-  const imageAnalysis = reentrant(tasks.imageAnalysis, () => faceClustering.ensure());
+  // Attribute backfill only ever has work for faces detected *before* the
+  // attributes existed — new detections carry them already. Cascading it off
+  // image analysis means it starts once the detection backlog drains (rather
+  // than competing with it for the shared Python worker) and re-checks whenever
+  // that stage runs again.
+  const faceAttributes = reentrant(tasks.faceAttributes);
+  const imageAnalysis = reentrant(tasks.imageAnalysis, () => {
+    faceClustering.ensure();
+    faceAttributes.ensure();
+  });
   const exifMetadata = reentrant(tasks.exifMetadata, () => {
     audioTranscription.ensure();
     audioEmbedding.ensure();

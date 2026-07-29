@@ -1,4 +1,8 @@
 import { useEffect, useState } from "react";
+import {
+  FACE_ATTRIBUTE_KEYS,
+  type FaceAttributeKey,
+} from "../../../../shared/filter-contract/src";
 import type { PersonCluster } from "../../api";
 import { buildFaceCropUrl, fetchPeopleClusters } from "../../api";
 import { Spinner } from "../../Spinner";
@@ -9,17 +13,74 @@ type FaceFilterPanelProps = {
   isActive: boolean;
 };
 
+const ATTRIBUTE_LABELS: Record<FaceAttributeKey, string> = {
+  smiling: "Smiling",
+  eyesOpen: "Eyes open",
+  inFocus: "In focus",
+  wellExposed: "Well exposed",
+};
+
+const ATTRIBUTE_HINTS: Record<FaceAttributeKey, string> = {
+  smiling: "Mouth corners raised and widened",
+  eyesOpen: "Neither eye caught mid-blink",
+  inFocus: "Sharp for the size the face appears at",
+  wellExposed: "Not lost to shadow or blown-out highlights",
+};
+
 /**
  * Lets the user filter the library by a face, picking from the same clustered
- * faces the People tab shows. Selecting one or more clusters constrains results
- * to files containing a face assigned to any selected cluster.
+ * faces the People tab shows, and optionally by how that face looks.
+ *
+ * The two halves compose into one constraint: picking Ana plus "Smiling"
+ * matches photos where *Ana's own face* is smiling, not photos of Ana that
+ * merely also contain somebody smiling.
  */
 export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
   const { filter, setFilter } = useFilter();
   const selected = filter.faceClusterFilter ?? [];
+  const attributeFilter = filter.faceAttributeFilter ?? null;
+  const activeAttributes = attributeFilter?.attributes ?? [];
+  // Absent means the default: unscored faces still match.
+  const includeUnknown = attributeFilter?.includeUnknown !== false;
+  const allAttributesActive = FACE_ATTRIBUTE_KEYS.every((key) =>
+    activeAttributes.includes(key),
+  );
   const [clusters, setClusters] = useState<PersonCluster[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const applyAttributes = (
+    attributes: readonly FaceAttributeKey[],
+    nextIncludeUnknown = includeUnknown,
+  ) => {
+    setFilter({
+      faceAttributeFilter:
+        attributes.length > 0
+          ? {
+              attributes: [...attributes],
+              // Only carry the flag when it is not the default, so the filter
+              // state stays minimal and comparable.
+              ...(nextIncludeUnknown ? {} : { includeUnknown: false }),
+            }
+          : null,
+    });
+  };
+
+  const toggleAttribute = (key: FaceAttributeKey) => {
+    applyAttributes(
+      activeAttributes.includes(key)
+        ? activeAttributes.filter((active) => active !== key)
+        : FACE_ATTRIBUTE_KEYS.filter(
+            (candidate) => candidate === key || activeAttributes.includes(candidate),
+          ),
+    );
+  };
+
+  const togglePhotoReady = () => {
+    applyAttributes(allAttributesActive ? [] : FACE_ATTRIBUTE_KEYS);
+  };
+
+  const hasAnyFilter = selected.length > 0 || activeAttributes.length > 0;
 
   const getClusterLabel = (cluster: PersonCluster) => cluster.name ?? `${cluster.count} faces`;
 
@@ -65,11 +126,13 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
     <div className={css.panelSection}>
       <div className={css.header}>
         <h3>People face</h3>
-        {selected.length > 0 ? (
+        {hasAnyFilter ? (
           <button
             type="button"
             className="btn btn-sm btn-subtle"
-            onClick={() => setFilter({ faceClusterFilter: null })}
+            onClick={() =>
+              setFilter({ faceClusterFilter: null, faceAttributeFilter: null })
+            }
           >
             Clear
           </button>
@@ -114,6 +177,62 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
           })}
         </div>
       ) : null}
+
+      <div className={css.attributeSection}>
+        <div className={css.attributeHeader}>
+          <span className={css.attributeTitle}>
+            {selected.length > 0 ? "Only when they are" : "Only faces that are"}
+          </span>
+          <button
+            type="button"
+            className={`${css.chip} ${css.photoReadyChip} ${
+              allAttributesActive ? css.chipSelected : ""
+            }`}
+            onClick={togglePhotoReady}
+            aria-pressed={allAttributesActive}
+            title="Smiling, eyes open, in focus and well exposed"
+          >
+            Photo ready
+          </button>
+        </div>
+
+        <div className={css.chipRow}>
+          {FACE_ATTRIBUTE_KEYS.map((key) => {
+            const isSelected = activeAttributes.includes(key);
+            return (
+              <button
+                key={key}
+                type="button"
+                className={`${css.chip} ${isSelected ? css.chipSelected : ""}`}
+                onClick={() => toggleAttribute(key)}
+                aria-pressed={isSelected}
+                title={ATTRIBUTE_HINTS[key]}
+              >
+                {ATTRIBUTE_LABELS[key]}
+              </button>
+            );
+          })}
+        </div>
+
+        {activeAttributes.length > 0 ? (
+          <label className={css.unknownRow}>
+            <input
+              type="checkbox"
+              checked={!includeUnknown}
+              onChange={(event) =>
+                applyAttributes(activeAttributes, !event.target.checked)
+              }
+            />
+            <span>
+              Hide faces not yet analysed
+              <small className={css.note}>
+                Older photos are still being scored in the background. Until a face is
+                scored it counts as a match, because unknown is not the same as no.
+              </small>
+            </span>
+          </label>
+        ) : null}
+      </div>
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { mkdir, stat, writeFile, access } from "fs/promises";
+import { mkdir, readdir, rm, stat, writeFile, access } from "fs/promises";
 import { join } from "path";
 import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
@@ -214,6 +214,30 @@ export const prepareMultibitrateHLSStructure = async (
 };
 
 /**
+ * Empties a variant's output (stale segments + playlist) so a restarted encode is
+ * the sole author of that variant's cache, *without* removing the directory
+ * itself.
+ *
+ * Deleting the directory is what crashed the server: a live recursive fs.watch on
+ * the `abr` tree re-scans a directory on every event, so removing `abr/1080p`
+ * out from under it made that re-scan throw ENOENT, which Node surfaces as an
+ * "error" event — fatal on a watcher with no error listener. Keeping the
+ * directory in place removes the race at the source; the watcher hardening in
+ * hlsSegmentWatcher is the backstop.
+ */
+export const clearVariantOutput = async (
+  hlsDir: string,
+  height: number,
+): Promise<void> => {
+  const variantDir = join(hlsDir, `${height}p`);
+  await mkdir(variantDir, { recursive: true });
+  const entries = await readdir(variantDir).catch(() => [] as string[]);
+  await Promise.all(
+    entries.map((name) => rm(join(variantDir, name), { recursive: true, force: true })),
+  );
+};
+
+/**
  * Runs a single-variant HLS encode for one height, always from segment 0.
  * Writes segments + playlist into `{height}p/`. Falls back to software encoding
  * if GPU acceleration fails.
@@ -328,6 +352,12 @@ const encodeVariant = (
     ];
 
     const launch = async () => {
+      // Re-assert the output directory on every spawn, including the software
+      // retry after a GPU failure: the tree is ephemeral and can be reaped or
+      // cleared between attempts, and ffmpeg's HLS muxer fails outright if the
+      // directory behind -hls_segment_filename is missing.
+      await mkdir(variantDir, { recursive: true });
+
       // Evict background ML VRAM before a GPU encode so ffmpeg can allocate
       // NVDEC/NVENC memory instead of OOMing into realtime-starved libx264.
       if (useCudaPipeline || useNvidia) await ensureGpuHeadroom();

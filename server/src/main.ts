@@ -11,8 +11,13 @@ process.on("uncaughtException", (error) => {
   process.exit(1);
 });
 import { createServer } from "./createServer.ts";
-import { analyzeImage, embedText } from "./imageAnalysis/imageAnalysisWorker.ts";
+import {
+  analyzeFaceAttributes,
+  analyzeImage,
+  embedText,
+} from "./imageAnalysis/imageAnalysisWorker.ts";
 import { processImageAnalysis } from "./imageAnalysis/processImageAnalysis.ts";
+import { processFaceAttributes } from "./imageAnalysis/processFaceAttributes.ts";
 import { fileSystemScanFolder } from "./indexDatabase/fileSystemScanFolder.ts";
 import { fileSystemMonitorFolder } from "./indexDatabase/fileSystemMonitorFolder.ts";
 import { processExifMetadata } from "./indexDatabase/processExifMetadata.ts";
@@ -200,6 +205,13 @@ const startServer = async () => {
     imageAnalysis: {
       name: "Image analysis (faces + CLIP)",
       start: () => processImageAnalysis(database, analyzeImage),
+      type: "imageAnalysis",
+    },
+    faceAttributes: {
+      name: "Face attributes (photo ready)",
+      start: () => processFaceAttributes(database, analyzeFaceAttributes),
+      // Same shared Python worker and the same decode-bound profile as image
+      // analysis, so it books the same resources rather than a second budget.
       type: "imageAnalysis",
     },
     faceClustering: {

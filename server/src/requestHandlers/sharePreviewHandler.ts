@@ -20,6 +20,9 @@ const getOrigin = (req: http.IncomingMessage): string => {
 
 const VIDEO_EXTENSIONS = /\.(mp4|mov|m4v|mkv|webm|avi|wmv)$/i;
 
+/** Pool the mosaic's 4 images are picked from — see the ranking in the handler. */
+const PREVIEW_CANDIDATE_COUNT = 24;
+
 export const sharePreviewHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -48,24 +51,36 @@ export const sharePreviewHandler = async (
     shareScope.semanticQuery ??
     "Shared photos";
 
-  // Fetch up to 4 preview images using the base filter (no ML resolution needed for bots).
+  // Fetch preview images using the base filter (no ML resolution needed for bots).
   const baseFilter = (shareScope.filter ?? {}) as FilterElement;
   let previewPaths: string[] = [];
   let totalCount = 0;
   try {
+    // Over-fetch by rating so there is a pool of top-rated candidates to break
+    // ties within; the lead image is what most unfurlers actually show.
     const result = await database.queryFiles({
       filter: baseFilter,
-      metadata: ["mimeType"],
-      pageSize: 8,
+      metadata: ["mimeType", "rating"],
+      pageSize: PREVIEW_CANDIDATE_COUNT,
+      sort: { field: "rating", direction: "desc" },
     });
     totalCount = result.total;
     // Prefer images over videos for the preview mosaic.
-    const items = result.items
-      .filter(
-        (f) =>
-          !f.mimeType?.startsWith("video/") && !VIDEO_EXTENSIONS.test(f.fileName),
-      )
-      .slice(0, 4);
+    const candidates = result.items.filter(
+      (f) => !f.mimeType?.startsWith("video/") && !VIDEO_EXTENSIONS.test(f.fileName),
+    );
+    const namedPeople = await database.countNamedPeopleForFiles(candidates);
+    const items = candidates
+      .map((f) => ({
+        file: f,
+        rating: f.rating ?? 0,
+        people: namedPeople.get(f.folder + f.fileName) ?? 0,
+      }))
+      // Best rating first, then the photo with the most recognized people —
+      // a group shot beats an equally-rated landscape as a link thumbnail.
+      .sort((a, b) => b.rating - a.rating || b.people - a.people)
+      .slice(0, 4)
+      .map(({ file }) => file);
     previewPaths = items.map((f) => {
       // folder starts and ends with /, so folder + fileName = /path/to/file.jpg
       const rel = (f.folder + f.fileName).slice(1); // strip leading /
@@ -77,6 +92,7 @@ export const sharePreviewHandler = async (
 
   const origin = process.env.PHOTRIX_PUBLIC_URL?.replace(/\/$/, "") ?? getOrigin(req);
   const appUrl = `${origin}/?token=${encodeURIComponent(token)}`;
+  const openSharedViewHref = `./?token=${encodeURIComponent(token)}`;
   const countLabel =
     totalCount > 0
       ? `${totalCount.toLocaleString("en-US")} ${totalCount === 1 ? "item" : "items"}`
@@ -192,10 +208,10 @@ ${twitterImageTag}
       <div class="logo">Photrix</div>
       <h1>${escapeHtml(description)}</h1>
       <p class="meta">${escapeHtml(ogDescription)}</p>
-      <a class="open" href="${escapeHtml(appUrl)}">Open shared view</a>
+      <a class="open" href="${escapeHtml(openSharedViewHref)}">Open shared view</a>
     </div>
   </div>
-  <script>window.location.replace(${JSON.stringify(appUrl)});</script>
+  <script>window.location.replace(${JSON.stringify(openSharedViewHref)});</script>
 </body>
 </html>`;
 

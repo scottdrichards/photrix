@@ -67,3 +67,130 @@
 .error {
   color: var(--danger);
 }
+
+/* Fullscreen exploration ---------------------------------------------- */
+
+.fullscreenCard {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  border-radius: 0;
+  border: none;
+  /* The card is the scroll/flex parent, so the map can claim the leftovers. */
+  height: 100dvh;
+}
+
+.fullscreenCard .mapShell {
+  flex: 1;
+  min-height: 0;
+}
+
+.fullscreenMap {
+  height: 100%;
+}
+
+.movementToggle {
+  margin-left: auto;
+  /* Deliberately understated — this is a hidden-in-plain-sight extra. */
+  opacity: 0.45;
+}
+
+.movementToggle:hover,
+.movementToggle:focus-visible,
+.movementToggle[aria-pressed="true"] {
+  opacity: 1;
+}
+
+/* Age ramp legend ------------------------------------------------------ */
+
+.legend {
+  position: absolute;
+  left: var(--space-s);
+  bottom: var(--space-s);
+  padding: var(--space-xs) var(--space-s);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-overlay);
+  backdrop-filter: blur(6px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  max-width: 60%;
+}
+
+.legendTitle {
+  color: var(--fg2);
+  white-space: nowrap;
+}
+
+/* Swatches touch, so each step is judged against its neighbours rather than
+   against the app surface, which differs between light and dark themes. */
+.legendStrip {
+  display: flex;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.legendSwatch {
+  flex: 1;
+  min-width: 14px;
+}
+
+.legendScale {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-s);
+  color: var(--fg3);
+}
+
+/* Representative photo markers ----------------------------------------- */
+
+.photoMarkerHost {
+  /* OpenLayers positions this; the button inside carries the visuals. */
+  pointer-events: auto;
+}
+
+.photoMarker {
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 2px solid var(--stroke1);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background-color: var(--bg2);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 35%);
+  display: block;
+  transition: transform 120ms ease-out;
+}
+
+.photoMarker:hover,
+.photoMarker:focus-visible {
+  transform: scale(1.08);
+}
+
+.photoMarkerImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.photoMarkerPlaceholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--bg2), var(--bg3));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .photoMarker {
+    transition: none;
+  }
+
+  .photoMarker:hover,
+  .photoMarker:focus-visible {
+    transform: none;
+  }
+}

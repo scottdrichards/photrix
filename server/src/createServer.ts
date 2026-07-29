@@ -10,6 +10,7 @@ import { networkProbeRequestHandler } from "./requestHandlers/networkProbeReques
 import { diagnosticsEventsRequestHandler } from "./requestHandlers/diagnosticsRequestHandler.ts";
 import { videoNegotiationRequestHandler } from "./requestHandlers/video/videoNegotiation.ts";
 import { searchRequestHandler } from "./requestHandlers/searchRequestHandler.ts";
+import { searchInterpretHandler } from "./requestHandlers/searchInterpretHandler.ts";
 import {
   authLoginHandler,
   authLogoutHandler,
@@ -41,6 +42,13 @@ import { resolveShareFilter, ShareScopeError } from "./auth/shareScope.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
 import { peopleRequestHandler } from "./requestHandlers/peopleRequestHandler.ts";
 import { sharePreviewHandler } from "./requestHandlers/sharePreviewHandler.ts";
+import { decodeRequestPath } from "./common/decodeRequestPath.ts";
+import { extractShareFolderRoots } from "./auth/shareFolderScope.ts";
+import type { FilterElement } from "./indexDatabase/indexDatabase.type.ts";
+import { pageTitleHandler } from "./requestHandlers/pageTitleHandler.ts";
+import { feedbackHandler } from "./requestHandlers/feedbackHandler.ts";
+import { faceIdentifyRequestHandler } from "./requestHandlers/faceIdentifyRequestHandler.ts";
+import { analyzeImage } from "./imageAnalysis/imageAnalysisWorker.ts";
 
 const log = getLogger("httpServer");
 
@@ -246,7 +254,7 @@ export const createServer = (
           }
 
           if (req.url === "/api/auth/share-token" && req.method === "POST") {
-            await authShareTokenHandler(req, res);
+            await authShareTokenHandler(req, res, database);
             return;
           }
 
@@ -348,17 +356,34 @@ export const createServer = (
 
           // Get folders endpoint - list subfolders at a given path
           if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
-            if (shareScope) {
-              // Folder browsing is not meaningful for a scoped share link; deny
-              // to prevent enumeration of the full folder tree.
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
+            // A share link browses its own subtree: the listing is ANDed with the
+            // share filter (so only folders holding shared items exist at all) and
+            // the requested path is clamped to the shared root. Both checks live
+            // in the handler; an ordinary session passes neither and sees the
+            // whole library as before.
+            const resolvedShareFilter = await getResolvedShareFilter();
+            if (res.writableEnded) return;
             await foldersRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
-              { database },
+              {
+                database,
+                shareFilter: resolvedShareFilter,
+                shareFolderRoots: shareScope
+                  ? extractShareFolderRoots(shareScope.filter as FilterElement)
+                  : null,
+              },
             );
+            return;
+          }
+
+          if (req.url === "/api/page-title" && req.method === "POST") {
+            await pageTitleHandler(req, res, database);
+            return;
+          }
+
+          if (req.url === "/api/feedback" && req.method === "POST") {
+            await feedbackHandler(req, res, database);
             return;
           }
 
@@ -389,6 +414,18 @@ export const createServer = (
             return;
           }
 
+          // Natural-language query -> structured filters. Read-only, but it
+          // enumerates the library's people and folders to ground the model, so
+          // a scoped share link may not call it.
+          if (req.url === "/api/search/interpret" && req.method === "POST") {
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
+            await searchInterpretHandler(req, res, { database });
+            return;
+          }
+
           if (req.url?.startsWith("/api/search") && req.method === "GET") {
             const resolvedShareFilter = await getResolvedShareFilter();
             if (res.writableEnded) return;
@@ -396,6 +433,23 @@ export const createServer = (
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
               { database, shareFilter: resolvedShareFilter, shareScope },
+            );
+            return;
+          }
+
+          // Classify faces in a caller-supplied image against the named people
+          // in the library. Read-only and never indexed, but it runs the shared
+          // analysis worker and enumerates every named person, so a scoped
+          // share link may not call it.
+          if (req.url?.startsWith("/api/faces/")) {
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
+            await faceIdentifyRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              { database, analyzeImage },
             );
             return;
           }
@@ -425,7 +479,7 @@ export const createServer = (
             if (res.writableEnded) return;
             const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
             const pathMatch = parsedUrl.pathname.match(/^\/api\/files\/(.*)/);
-            const subPath = pathMatch ? decodeURIComponent(pathMatch[1]) : "";
+            const subPath = pathMatch ? decodeRequestPath(pathMatch[1]) : "";
             await updateFileMetadataHandler(
               req,
               subPath,

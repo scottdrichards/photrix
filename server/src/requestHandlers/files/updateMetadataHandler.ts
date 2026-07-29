@@ -57,8 +57,8 @@ export const updateFileMetadataHandler = async (
     return;
   }
 
-  const { rating, tags } = body as { rating?: unknown; tags?: unknown };
-  const patch: { rating?: number | null; tags?: string[] } = {};
+  const { rating, tags, editAdj } = body as { rating?: unknown; tags?: unknown; editAdj?: unknown };
+  const patch: { rating?: number | null; tags?: string[]; editAdj?: string | null } = {};
 
   if ("rating" in body) {
     if (rating !== null && typeof rating !== "number") {
@@ -76,8 +76,24 @@ export const updateFileMetadataHandler = async (
     patch.tags = tags;
   }
 
-  if (patch.rating === undefined && patch.tags === undefined) {
-    writeJson(res, 400, { error: "Provide at least one of: rating, tags" });
+  if ("editAdj" in body) {
+    if (editAdj !== null && typeof editAdj !== "string") {
+      writeJson(res, 400, { error: "editAdj must be a JSON string or null" });
+      return;
+    }
+    if (typeof editAdj === "string") {
+      try {
+        JSON.parse(editAdj);
+      } catch {
+        writeJson(res, 400, { error: "editAdj must be valid JSON" });
+        return;
+      }
+    }
+    patch.editAdj = editAdj as string | null;
+  }
+
+  if (patch.rating === undefined && patch.tags === undefined && patch.editAdj === undefined) {
+    writeJson(res, 400, { error: "Provide at least one of: rating, tags, editAdj" });
     return;
   }
 

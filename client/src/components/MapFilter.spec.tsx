@@ -39,11 +39,14 @@ vi.mock("./MapFilter.styles", () => ({
     error: "error",
   }),
   markerStyle: {},
+  markerStyleFor: vi.fn(() => ({})),
+  movementPathStyle: {},
 }));
 
 vi.mock("ol/Feature", () => ({
   default: class Feature {
     private geometry: { getCoordinates: () => number[] };
+    private props = new Map<string, unknown>();
 
     constructor({ geometry }: { geometry: { getCoordinates: () => number[] } }) {
       this.geometry = geometry;
@@ -51,6 +54,44 @@ vi.mock("ol/Feature", () => ({
 
     getGeometry() {
       return this.geometry;
+    }
+
+    set(key: string, value: unknown) {
+      this.props.set(key, value);
+    }
+
+    get(key: string) {
+      return this.props.get(key);
+    }
+  },
+}));
+
+vi.mock("ol/Overlay", () => ({
+  default: class MockOverlay {
+    private element: HTMLElement;
+
+    constructor({ element }: { element: HTMLElement }) {
+      this.element = element;
+    }
+
+    getElement() {
+      return this.element;
+    }
+
+    setPosition = vi.fn();
+  },
+}));
+
+vi.mock("ol/geom/LineString", () => ({
+  default: class LineString {
+    private coordinates: number[][];
+
+    constructor(coordinates: number[][]) {
+      this.coordinates = coordinates;
+    }
+
+    getCoordinates() {
+      return this.coordinates;
     }
   },
 }));
@@ -72,6 +113,19 @@ vi.mock("ol/Map", () => ({
     updateSize = vi.fn();
     getSize = vi.fn(() => [800, 600]);
     getView = vi.fn(() => this.view);
+    // Identity-ish projection: the ol/proj mock passes lon/lat through, so a
+    // pin's "pixel" is just its coordinate. Enough to exercise the pixel-space
+    // thinning without a real map.
+    getPixelFromCoordinate = vi.fn((coordinate: number[]) => coordinate);
+    // The real addOverlay attaches the overlay's element to the map container;
+    // markers are portalled into that element, so it has to be in the document.
+    addOverlay = vi.fn((overlay: { getElement: () => HTMLElement }) => {
+      document.body.appendChild(overlay.getElement());
+    });
+
+    removeOverlay = vi.fn((overlay: { getElement: () => HTMLElement }) => {
+      overlay.getElement().remove();
+    });
     on = vi.fn();
     un = vi.fn();
     setTarget = vi.fn();
@@ -91,6 +145,7 @@ vi.mock("ol/Map", () => ({
 vi.mock("ol/View", () => ({
   default: class MockView {
     calculateExtent = vi.fn(() => [10, 20, 30, 40]);
+    getZoom = vi.fn(() => 4);
     fit = fitSpy;
     setCenter = setCenterSpy;
     setZoom = setZoomSpy;
@@ -291,5 +346,109 @@ describe("MapFilter", () => {
 
     expect(await screen.findByText("map load failed")).toBeInTheDocument();
     errorSpy.mockRestore();
+  });
+
+  describe("fullscreen exploration", () => {
+    // Far enough apart in the identity projection to clear the separation floor.
+    const spreadPoints = [
+      { path: "a/1.jpg", name: "1.jpg", latitude: 100, longitude: 100, count: 9 },
+      { path: "a/2.jpg", name: "2.jpg", latitude: 400, longitude: 400, count: 4 },
+    ];
+
+    it("shows representative photos only once fullscreen is entered", async () => {
+      fetchGeotaggedPhotosMock.mockResolvedValue({
+        points: spreadPoints,
+        total: 2,
+        truncated: false,
+      });
+
+      render(<MapFilter compact />);
+      await screen.findByText("2 of 2 pins");
+
+      expect(screen.queryByRole("button", { name: /^Zoom to/ })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Explore fullscreen" }));
+
+      await waitFor(() => {
+        expect(screen.getAllByRole("button", { name: /^Zoom to/ })).toHaveLength(2);
+      });
+    });
+
+    it("drops the representatives again on exit", async () => {
+      fetchGeotaggedPhotosMock.mockResolvedValue({
+        points: spreadPoints,
+        total: 2,
+        truncated: false,
+      });
+
+      render(<MapFilter compact />);
+      await screen.findByText("2 of 2 pins");
+      fireEvent.click(screen.getByRole("button", { name: "Explore fullscreen" }));
+      await screen.findAllByRole("button", { name: /^Zoom to/ });
+
+      fireEvent.click(screen.getByRole("button", { name: "Exit fullscreen" }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole("button", { name: /^Zoom to/ })).toBeNull();
+      });
+    });
+
+    it("zooms to a pin when its photo is clicked", async () => {
+      fetchGeotaggedPhotosMock.mockResolvedValue({
+        points: spreadPoints,
+        total: 2,
+        truncated: false,
+      });
+
+      render(<MapFilter compact />);
+      await screen.findByText("2 of 2 pins");
+      fireEvent.click(screen.getByRole("button", { name: "Explore fullscreen" }));
+
+      const markers = await screen.findAllByRole("button", { name: /^Zoom to/ });
+      fireEvent.click(markers[0]);
+
+      expect(setCenterSpy).toHaveBeenCalled();
+      // Never zooms out: the view mock reports 4, the floor is 14.
+      expect(setZoomSpy).toHaveBeenCalledWith(14);
+    });
+
+    it("leaves fullscreen on Escape", async () => {
+      fetchGeotaggedPhotosMock.mockResolvedValue({
+        points: spreadPoints,
+        total: 2,
+        truncated: false,
+      });
+
+      render(<MapFilter compact />);
+      await screen.findByText("2 of 2 pins");
+      fireEvent.click(screen.getByRole("button", { name: "Explore fullscreen" }));
+      await screen.findByRole("button", { name: "Exit fullscreen" });
+
+      fireEvent.keyDown(window, { key: "Escape" });
+
+      expect(
+        await screen.findByRole("button", { name: "Explore fullscreen" }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("toggles the chronological movement path", async () => {
+    fetchGeotaggedPhotosMock.mockResolvedValue({
+      points: [
+        { path: "a/1.jpg", name: "1.jpg", latitude: 1, longitude: 2, count: 1 },
+        { path: "a/2.jpg", name: "2.jpg", latitude: 3, longitude: 4, count: 1 },
+      ],
+      total: 2,
+      truncated: false,
+    });
+
+    render(<MapFilter compact />);
+    await screen.findByText("2 of 2 pins");
+
+    const toggle = screen.getByTitle("Trace these pins in date order");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
   });
 });

@@ -16,7 +16,8 @@ import {
   consumeDeliberateKill,
   markWorkerEvictedError,
 } from "../taskOrchestrator/computeWorkers.ts";
-import type { DetectedFace } from "../faceDetection/faceDetector.type.ts";
+import type { DetectedFace, FaceAttributes } from "../faceDetection/faceDetector.type.ts";
+import { parseFaceAttributes } from "../faceDetection/faceAttributes.ts";
 
 const log = getLogger("imageAnalysisWorker");
 
@@ -37,12 +38,14 @@ type RawFace = {
   box: { x: number; y: number; width: number; height: number };
   confidence: number;
   embedding: number[];
+  attributes?: Record<string, unknown>;
 };
 
 type WorkerSuccess = {
   id: number;
   faces?: RawFace[];
   embedding?: number[];
+  attributes?: Array<{ id?: unknown } & Record<string, unknown>>;
   facesError?: string;
   embeddingError?: string;
 };
@@ -111,6 +114,10 @@ const asDetectedFace = (face: RawFace): DetectedFace => ({
   },
   confidence: face.confidence,
   embedding: Float64Array.from(face.embedding),
+  // Present (possibly empty) whenever the worker ran the attribute pass;
+  // absent only for a worker predating it. The distinction matters: absent
+  // leaves the face on the backfill queue, empty records "scored, unjudgeable".
+  ...(face.attributes ? { attributes: parseFaceAttributes(face.attributes) } : {}),
 });
 
 type WorkerHandle = {
@@ -369,6 +376,44 @@ export const analyzeImage = async (
   if (raw.facesError) result.facesError = raw.facesError;
   if (raw.embeddingError) result.embeddingError = raw.embeddingError;
   return result;
+};
+
+export type FaceAttributeRequest = {
+  id: number;
+  box: { x: number; y: number; width: number; height: number };
+};
+
+/**
+ * Score already-stored faces for the "photo ready" attributes.
+ *
+ * The backfill counterpart to `analyzeImage`: it decodes the image and runs the
+ * landmark models over the supplied boxes rather than re-detecting, so existing
+ * face rows — and the cluster assignments hanging off them — are left alone.
+ * Faces the worker did not answer for are omitted from the result; the caller
+ * decides what to do with them.
+ */
+export const analyzeFaceAttributes = async (
+  imagePath: string,
+  faces: FaceAttributeRequest[],
+): Promise<Map<number, FaceAttributes>> => {
+  if (faces.length === 0) return new Map();
+  await awaitForegroundIdle(COMPUTE_WORKER_IDS.image);
+  await analysisWorker.ensureReady();
+  if (!analysisWorker.getProcess())
+    throw new Error("Image analysis worker is not available");
+
+  const raw = await analysisWorker.send({
+    operation: "faceAttributes",
+    imagePath,
+    faces,
+  });
+
+  const byId = new Map<number, FaceAttributes>();
+  for (const entry of raw.attributes ?? []) {
+    if (typeof entry?.id !== "number") continue;
+    byId.set(entry.id, parseFaceAttributes(entry));
+  }
+  return byId;
 };
 
 export const embedText = (text: string): Promise<Float32Array> =>

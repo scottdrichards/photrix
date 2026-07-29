@@ -44,6 +44,12 @@ const makeReq = (token: string, body: unknown) => {
   return req;
 };
 
+// Share titling only reaches the database to resolve face-cluster names, which
+// none of these filters use.
+const fakeDatabase = {
+  getFaceClusterNames: () => Promise.resolve(new Map<number, string>()),
+} as unknown as import("../indexDatabase/indexDatabase.ts").IndexDatabase;
+
 const loadShareHandler = async () => {
   const { authShareTokenHandler } = await import("./authRequestHandler.ts");
   return authShareTokenHandler;
@@ -64,6 +70,7 @@ describe("authShareTokenHandler", () => {
         searchSources: ["image"],
       }),
       res,
+      fakeDatabase,
     );
 
     expect(getStatus()).toBe(200);
@@ -75,7 +82,10 @@ describe("authShareTokenHandler", () => {
       },
       semanticQuery: "sunset beach",
       searchSources: ["image"],
-      description: "sunset beach",
+      // No PHOTRIX_OLLAMA_URL in tests, so the deterministic facet summary
+      // stands in for the generated title.
+      description:
+        'Photos matching the search "sunset beach" · Only favorites, 4 stars or more',
     });
 
     authService.revokeToken(authToken);
@@ -96,6 +106,7 @@ describe("authShareTokenHandler", () => {
         searchSources: ["bogus"],
       }),
       res,
+      fakeDatabase,
     );
 
     expect(getStatus()).toBe(400);
@@ -117,6 +128,7 @@ describe("authShareTokenHandler", () => {
         searchSources: ["image"],
       }),
       res,
+      fakeDatabase,
     );
 
     expect(getStatus()).toBe(200);

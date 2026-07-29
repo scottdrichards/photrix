@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PeopleView } from "./PeopleView";
+import type { PeopleSelection } from "../filterUrlState";
 
 const fetchPeopleClustersMock = vi.fn();
 const fetchClusterDetailMock = vi.fn();
@@ -28,6 +30,27 @@ vi.mock("./filter/FilterContext", () => ({
 vi.mock("./selection/SelectionContext", () => ({
   useSelectionContext: () => useSelectionContextMock(),
 }));
+
+/**
+ * PeopleView is controlled: the person/group selection lives in App so it can
+ * round-trip through the URL. This stands in for that owner, so navigating
+ * inside the view actually moves it the way it does in the running app.
+ */
+const PeopleViewHarness = () => {
+  const [selection, setSelection] = useState<PeopleSelection>({
+    personId: null,
+    groupId: null,
+  });
+  return (
+    <PeopleView
+      view="people"
+      onViewChange={() => {}}
+      personId={selection.personId}
+      groupId={selection.groupId}
+      onNavigate={setSelection}
+    />
+  );
+};
 
 describe("PeopleView", () => {
   beforeEach(() => {
@@ -318,7 +341,7 @@ describe("PeopleView", () => {
       return { cluster: null };
     });
 
-    render(<PeopleView view="people" onViewChange={() => {}} />);
+    render(<PeopleViewHarness />);
 
     // Cluster list is shown initially
     await waitFor(() => {
@@ -403,7 +426,7 @@ describe("PeopleView", () => {
       pendingFaces: 0,
     });
 
-    render(<PeopleView view="people" onViewChange={() => {}} />);
+    render(<PeopleViewHarness />);
 
     await waitFor(() => {
       expect(screen.getByText("Add name…")).toBeInTheDocument();
@@ -511,7 +534,7 @@ describe("PeopleView", () => {
       })
       .mockImplementationOnce(() => backgroundDetail);
 
-    render(<PeopleView view="people" onViewChange={() => {}} />);
+    render(<PeopleViewHarness />);
 
     await waitFor(() => {
       expect(screen.getByText("Alex")).toBeInTheDocument();
@@ -751,7 +774,7 @@ describe("PeopleView", () => {
         },
       });
 
-    render(<PeopleView view="people" onViewChange={() => {}} />);
+    render(<PeopleViewHarness />);
 
     await waitFor(() => {
       expect(screen.getByText("Alex")).toBeInTheDocument();
@@ -768,6 +791,92 @@ describe("PeopleView", () => {
     await waitFor(() => {
       expect(separateClusterMock).toHaveBeenCalledWith("person-2");
       expect(screen.getAllByText("2 faces").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("opens the person page before their faces arrive", async () => {
+    fetchPeopleClustersMock.mockResolvedValue({
+      clusters: [
+        {
+          id: "person-1",
+          count: 2,
+          name: "Alex",
+          representative: {
+            photo: {
+              path: "/a.jpg",
+              name: "a.jpg",
+              mediaType: "photo",
+              originalUrl: "http://localhost/a.jpg",
+              thumbnailUrl: "http://localhost/a.jpg",
+              previewUrl: "http://localhost/a.jpg",
+              fullUrl: "http://localhost/a.jpg",
+            },
+            box: { x: 0.1, y: 0.2, width: 0.3, height: 0.3 },
+          },
+        },
+      ],
+      totalClusters: 1,
+      totalFaces: 2,
+    });
+
+    // Hold the detail request open so the "still loading" window is observable.
+    let resolveDetail: (value: unknown) => void = () => {};
+    fetchClusterDetailMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDetail = resolve;
+        }),
+    );
+
+    render(<PeopleViewHarness />);
+    await screen.findByText("2 faces");
+
+    fireEvent.click(screen.getByText("2 faces").closest("button") as HTMLButtonElement);
+
+    // The page is already the person's, built from the card that was clicked —
+    // name and face included — while the faces are still in flight.
+    expect(await screen.findByText("← Back")).toBeInTheDocument();
+    expect(screen.getByText("Alex")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "a.jpg" })).not.toBeInTheDocument();
+
+    resolveDetail({
+      cluster: {
+        id: "person-1",
+        name: "Alex",
+        count: 2,
+        representative: {
+          photo: {
+            path: "/a.jpg",
+            name: "a.jpg",
+            mediaType: "photo",
+            originalUrl: "http://localhost/a.jpg",
+            thumbnailUrl: "http://localhost/a.jpg",
+            previewUrl: "http://localhost/a.jpg",
+            fullUrl: "http://localhost/a.jpg",
+          },
+          box: { x: 0.1, y: 0.2, width: 0.3, height: 0.3 },
+        },
+        faces: [
+          {
+            photo: {
+              path: "/a.jpg",
+              name: "a.jpg",
+              mediaType: "photo",
+              originalUrl: "http://localhost/a.jpg",
+              thumbnailUrl: "http://localhost/a.jpg",
+              previewUrl: "http://localhost/a.jpg",
+              fullUrl: "http://localhost/a.jpg",
+            },
+            box: { x: 0.1, y: 0.2, width: 0.3, height: 0.3 },
+          },
+        ],
+        centroids: [],
+        mergeSuggestions: [],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "a.jpg" })).toBeInTheDocument();
     });
   });
 });
