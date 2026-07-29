@@ -411,6 +411,18 @@ export function SwipePhotoViewer({
                 ...(editStyle?.clipPath ? { clipPath: editStyle.clipPath } : {}),
               }}
             />
+            {editStyle?.vignetteBackground && (
+              <div
+                className={css.vignetteOverlay}
+                aria-hidden="true"
+                style={{
+                  opacity: fullImageLoaded ? 1 : 0,
+                  background: editStyle.vignetteBackground,
+                  ...(editStyle.transform ? { transform: editStyle.transform } : {}),
+                  ...(editStyle.clipPath ? { clipPath: editStyle.clipPath } : {}),
+                }}
+              />
+            )}
             {children}
           </div>
         </div>
