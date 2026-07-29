@@ -241,6 +241,15 @@ export const fileSystemMonitorFolder = (
     if (fn) void handleChange(_et, fn);
   });
 
+  // A recursive watcher re-scans directories as it walks the tree; when one is
+  // deleted mid-scan (a folder moved or removed in the library) that scan throws
+  // ENOENT and Node raises it as an "error" event. An EventEmitter "error" with
+  // no listener is rethrown and takes the whole process down, so absorb it: the
+  // affected path's change is simply missed, and a rescan picks it up later.
+  watcher.on("error", (err) => {
+    log.warn(`Filesystem watcher error on ${rootPath}: ${String(err)}`);
+  });
+
   return () => {
     watcher.close();
     for (const { timer } of pendingDeletes.values()) clearTimeout(timer);

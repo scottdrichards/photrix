@@ -44,8 +44,11 @@ export const fetchFolders = async ({
   if (filterParam) params.set("filter", filterParam);
 
   const querySuffix = params.size > 0 ? `?${params.toString()}` : "";
+  // Encode per segment: a folder named "#2 Dessert Night" would otherwise be cut
+  // off at the '#' as a URL fragment and never reach the server.
+  const encodedPath = normalizedPath.split("/").map(encodeURIComponent).join("/");
   const data = await fetchJsonOrThrow<{ folders: FolderSummary[] }>(
-    `/api/folders/${normalizedPath}${querySuffix}`,
+    `/api/folders/${encodedPath}${querySuffix}`,
     "fetch folders",
     { signal },
   );

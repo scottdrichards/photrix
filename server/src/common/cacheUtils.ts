@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { mkdir, rm, stat, writeFile } from "fs/promises";
 import { tmpdir, userInfo } from "os";
 import { basename, dirname, extname, join, parse, resolve } from "path";
+import { closeHlsWatchersUnder } from "../videoProcessing/hlsSegmentWatcher.ts";
 
 export const CACHE_DIR = process.env.CACHE_DIR || join(process.cwd(), ".cache");
 export const MEDIA_CACHE_DIR = join(CACHE_DIR, "media");
@@ -121,6 +122,10 @@ export const getMirroredHLSDirectory = (
  * be served stale.
  */
 export const clearMirroredCacheForFile = async (filePath: string): Promise<void> => {
+  // Close any live HLS watcher inside the tree first. A recursive fs.watch whose
+  // directories are deleted underneath it throws ENOENT from its internal
+  // re-scan, which Node raises as a watcher "error" — fatal if unhandled.
+  closeHlsWatchersUnder(getMirroredHLSDirectory(filePath));
   await Promise.all([
     rm(getMirroredCacheBaseDirectory(filePath), { recursive: true, force: true }),
     rm(getMirroredHLSDirectory(filePath), { recursive: true, force: true }),

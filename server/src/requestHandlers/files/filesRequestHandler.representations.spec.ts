@@ -233,6 +233,7 @@ describe("filesRequestHandler representation paths", () => {
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
       clampToSupportedHeight: jest.fn((h: number) => h),
+      clearVariantOutput: jest.fn(async () => undefined),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: false,
         complete: false,
@@ -250,6 +251,7 @@ describe("filesRequestHandler representation paths", () => {
     jest.unstable_mockModule("../../videoProcessing/hlsSegmentWatcher.ts", () => ({
       waitForHlsFile: jest.fn(async () => false),
       closeHlsWatcher: jest.fn(),
+      closeHlsWatchersUnder: jest.fn(),
     }));
 
     const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
@@ -319,6 +321,7 @@ describe("filesRequestHandler representation paths", () => {
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
       clampToSupportedHeight: jest.fn((h: number) => h),
+      clearVariantOutput: jest.fn(async () => undefined),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: false,
@@ -336,6 +339,7 @@ describe("filesRequestHandler representation paths", () => {
     jest.unstable_mockModule("../../videoProcessing/hlsSegmentWatcher.ts", () => ({
       waitForHlsFile,
       closeHlsWatcher: jest.fn(),
+      closeHlsWatchersUnder: jest.fn(),
     }));
 
     const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
@@ -383,6 +387,7 @@ describe("filesRequestHandler representation paths", () => {
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
       clampToSupportedHeight: jest.fn((h: number) => h),
+      clearVariantOutput: jest.fn(async () => undefined),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: true,
@@ -398,6 +403,7 @@ describe("filesRequestHandler representation paths", () => {
     jest.unstable_mockModule("../../videoProcessing/hlsSegmentWatcher.ts", () => ({
       waitForHlsFile: jest.fn(async () => false),
       closeHlsWatcher: jest.fn(),
+      closeHlsWatchersUnder: jest.fn(),
     }));
 
     // No duration in the DB and ffprobe fails → knownDuration stays undefined.
@@ -443,6 +449,7 @@ describe("filesRequestHandler representation paths", () => {
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
       clampToSupportedHeight: jest.fn((h: number) => h),
+      clearVariantOutput: jest.fn(async () => undefined),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: false,
         complete: false,
@@ -491,6 +498,7 @@ describe("filesRequestHandler representation paths", () => {
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
       clampToSupportedHeight: jest.fn((h: number) => h),
+      clearVariantOutput: jest.fn(async () => undefined),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: false,
@@ -546,6 +554,7 @@ describe("filesRequestHandler representation paths", () => {
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
       clampToSupportedHeight: jest.fn((h: number) => h),
+      clearVariantOutput: jest.fn(async () => undefined),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: true,

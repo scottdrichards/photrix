@@ -41,6 +41,9 @@ import { resolveShareFilter, ShareScopeError } from "./auth/shareScope.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
 import { peopleRequestHandler } from "./requestHandlers/peopleRequestHandler.ts";
 import { sharePreviewHandler } from "./requestHandlers/sharePreviewHandler.ts";
+import { decodeRequestPath } from "./common/decodeRequestPath.ts";
+import { extractShareFolderRoots } from "./auth/shareFolderScope.ts";
+import type { FilterElement } from "./indexDatabase/indexDatabase.type.ts";
 
 const log = getLogger("httpServer");
 
@@ -348,16 +351,23 @@ export const createServer = (
 
           // Get folders endpoint - list subfolders at a given path
           if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
-            if (shareScope) {
-              // Folder browsing is not meaningful for a scoped share link; deny
-              // to prevent enumeration of the full folder tree.
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
+            // A share link browses its own subtree: the listing is ANDed with the
+            // share filter (so only folders holding shared items exist at all) and
+            // the requested path is clamped to the shared root. Both checks live
+            // in the handler; an ordinary session passes neither and sees the
+            // whole library as before.
+            const resolvedShareFilter = await getResolvedShareFilter();
+            if (res.writableEnded) return;
             await foldersRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
-              { database },
+              {
+                database,
+                shareFilter: resolvedShareFilter,
+                shareFolderRoots: shareScope
+                  ? extractShareFolderRoots(shareScope.filter as FilterElement)
+                  : null,
+              },
             );
             return;
           }
@@ -425,7 +435,7 @@ export const createServer = (
             if (res.writableEnded) return;
             const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
             const pathMatch = parsedUrl.pathname.match(/^\/api\/files\/(.*)/);
-            const subPath = pathMatch ? decodeURIComponent(pathMatch[1]) : "";
+            const subPath = pathMatch ? decodeRequestPath(pathMatch[1]) : "";
             await updateFileMetadataHandler(
               req,
               subPath,

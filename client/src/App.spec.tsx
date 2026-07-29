@@ -5,6 +5,7 @@ import App from "./App";
 vi.mock("./auth", () => ({
   extractUrlToken: vi.fn(),
   getAuthHeaders: vi.fn(() => ({})),
+  hasAccountSession: vi.fn(() => false),
   initAuth: vi.fn(() => Promise.resolve(true)),
   onUnauthorized: vi.fn(),
 }));

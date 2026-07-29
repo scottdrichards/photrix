@@ -1,7 +1,7 @@
 import * as http from "http";
 import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../../indexDatabase/indexDatabase.type.ts";
-import { stat, readFile, rm, mkdir } from "fs/promises";
+import { stat, readFile } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { createReadStream, existsSync, type Stats } from "fs";
 import path from "path";
@@ -19,6 +19,7 @@ import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
 import { markCacheAccess } from "../../common/cacheEviction.ts";
 import {
   clampToSupportedHeight,
+  clearVariantOutput,
   generateVariantHLS,
   getMultibitrateHLSInfo,
   getVariantPlaylistPath,
@@ -43,6 +44,7 @@ import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.t
 import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../utils.ts";
 import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
+import { decodeRequestPath } from "../../common/decodeRequestPath.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -60,7 +62,7 @@ export const filesEndpointRequestHandler = async (
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathMatch = url.pathname.match(/^\/api\/files\/(.*)/);
     if (!pathMatch) return writeJson(res, 400, { error: "Bad request" });
-    const subPath = decodeURIComponent(pathMatch[1]) || "/";
+    const subPath = decodeRequestPath(pathMatch[1]) || "/";
     if (subPath.endsWith("/"))
       return queryHandler(url, subPath, database, res, shareFilter);
     await fileHandler(
@@ -357,7 +359,6 @@ const tryHLSStream = async (
     const ensureEncoding = (variantHeight: number): void => {
       const needsStart = claimVariantEncode(hlsDir, variantHeight);
       if (!needsStart) return;
-      const variantDir = path.join(hlsDir, `${variantHeight}p`);
       recordServerDiagnosticEvent({
         level: "warn",
         event: "video.hls.encode.queued",
@@ -377,8 +378,10 @@ const tryHLSStream = async (
             const promise = (async () => {
               // Clear stale segments so the new encode is the sole author of this
               // variant's cache — prevents mixed-session segments causing stutter.
-              await rm(variantDir, { recursive: true, force: true });
-              await mkdir(variantDir, { recursive: true });
+              // Empties the directory rather than deleting it: removing a variant
+              // directory that the live recursive fs.watch on this tree is watching
+              // made its internal re-scan throw ENOENT, which killed the process.
+              await clearVariantOutput(hlsDir, variantHeight);
               await generateVariantHLS(normalizedPath, variantHeight, {
                 onSpawn: (child) => registerHlsProcess(hlsDir, variantHeight, child),
               });
