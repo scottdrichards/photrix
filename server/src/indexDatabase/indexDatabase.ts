@@ -39,6 +39,11 @@ import { computePCA3D } from "./pca.ts";
 import { getLogger } from "../observability/logger.ts";
 import { FACE_ATTRIBUTE_VERSION } from "../faceDetection/faceAttributes.ts";
 import type { FaceAttributes } from "../faceDetection/faceDetector.type.ts";
+import {
+  computePhotoQualityScore,
+  faceAttributesToQualityInputs,
+  type FaceQualityInputs,
+} from "../faceDetection/photoQuality.ts";
 
 const log = getLogger("IndexDatabase");
 
@@ -105,6 +110,13 @@ const buildQueryOrderBy = (sort?: SortOption): string => {
     // Unrated files (NULL) always sink to the bottom regardless of direction;
     // among rated files, order by the requested direction, then newest-first.
     return `rating IS NULL, rating ${dir}, ${SORT_DATE_EXPR} DESC, ${tiebreak}`;
+  }
+
+  if (sort?.field === "quality") {
+    // Same NULL-always-last treatment as rating: a photo with no scored faces
+    // has no quality signal at all, which is not the same as "bad quality", so
+    // it must not win an ascending ("worst first") sort either.
+    return `photoQualityScore IS NULL, photoQualityScore ${dir}, ${SORT_DATE_EXPR} DESC, ${tiebreak}`;
   }
 
   if (dir === "ASC") {
@@ -1034,6 +1046,22 @@ export class IndexDatabase {
       params: [detectedAtMs, folder, fileName],
     });
 
+    // Detection replaced this file's whole face set, so its quality aggregate
+    // is recomputed from the same in-memory list rather than re-reading it
+    // back from the rows just written — no need to defer to the backfill or
+    // pay an extra round trip. An empty/no-attribute detection correctly
+    // resolves to NULL (see computePhotoQualityScore).
+    statements.push({
+      sql: "UPDATE files SET photoQualityScore = ? WHERE folder = ? AND fileName = ?",
+      params: [
+        computePhotoQualityScore(
+          faces.map((face) => faceAttributesToQualityInputs(face.attributes)),
+        ),
+        folder,
+        fileName,
+      ],
+    });
+
     await this.db.transaction(statements);
     this.invalidateFaceClusterPCACache();
     this.invalidateStatusCountsCache();
@@ -1156,6 +1184,46 @@ export class IndexDatabase {
         ],
       })),
     );
+
+    // The backfill scores faces in id batches that may span several files
+    // (unlike saveFaceDetectionResult, which already has one file's whole face
+    // set in memory), so the affected files have to be looked up here instead.
+    await this.recomputePhotoQualityScoreForFaces(results.map(({ id }) => id));
+  }
+
+  /**
+   * Recomputes and stores `files.photoQualityScore` for every file that owns
+   * any of the given face ids, from that file's currently-scored faces. Safe
+   * to call after any write to the attribute columns — it always reflects
+   * whatever has been scored so far, converging as the backfill drains rather
+   * than needing to be "done" up front.
+   */
+  private async recomputePhotoQualityScoreForFaces(faceIds: number[]): Promise<void> {
+    if (faceIds.length === 0) return;
+
+    const placeholders = faceIds.map(() => "?").join(", ");
+    const affectedFiles = await this.db.all<{ folder: string; fileName: string }>(
+      `SELECT DISTINCT folder, fileName FROM faces WHERE id IN (${placeholders})`,
+      ...faceIds,
+    );
+
+    for (const { folder, fileName } of affectedFiles) {
+      // Only faces that have actually been scored (faceAttrVersion IS NOT
+      // NULL) contribute — an unscored sibling face contributes no
+      // information yet, same as if it weren't detected at all.
+      const faceRows = await this.db.all<FaceQualityInputs>(
+        `SELECT smileScore, eyesOpenScore, focusScore, exposureScore FROM faces
+         WHERE folder = ? AND fileName = ? AND faceAttrVersion IS NOT NULL`,
+        folder,
+        fileName,
+      );
+      await this.db.run(
+        "UPDATE files SET photoQualityScore = ? WHERE folder = ? AND fileName = ?",
+        computePhotoQualityScore(faceRows),
+        folder,
+        fileName,
+      );
+    }
   }
 
   /**

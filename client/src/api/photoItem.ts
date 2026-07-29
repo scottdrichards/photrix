@@ -25,6 +25,7 @@ export const DEFAULT_METADATA_KEYS = [
   "rating",
   "tags",
   "editAdj",
+  "photoQualityScore",
   "locationLatitude",
   "locationLongitude",
   "orientation",

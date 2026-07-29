@@ -1611,6 +1611,25 @@ export function FullscreenViewer() {
                   </>
                 )}
 
+                {/* Derived photo-ready quality aggregate (see server's
+                    photoQuality.ts): worst-scoring detected face's
+                    smiling/eyes-open/in-focus/well-exposed attributes. Shown
+                    only when at least one face has been scored — absent
+                    entirely (not "0%") otherwise, since null means "no
+                    signal" rather than "bad". Informational only: this never
+                    sets or suggests a star rating. */}
+                {meta?.photoQualityScore != null && (
+                  <>
+                    <h4 className={css.infoSubtitle}>Photo quality</h4>
+                    <dl className={css.infoList}>
+                      <div className={css.infoRow}>
+                        <dt>Quality</dt>
+                        <dd>{Math.round(meta.photoQualityScore * 100)}%</dd>
+                      </div>
+                    </dl>
+                  </>
+                )}
+
                 {/* File details */}
                 <h4 className={css.infoSubtitle}>File</h4>
                 <dl className={css.infoList}>

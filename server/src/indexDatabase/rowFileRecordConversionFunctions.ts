@@ -51,6 +51,7 @@ export const rowToFileRecord = (
     "livePhotoVideoFileName",
     "aiDescription",
     ["aiTags", json],
+    "photoQualityScore",
     "locationLatitude",
     "locationLongitude",
     ["infoProcessedAt", processedAtToIso],
