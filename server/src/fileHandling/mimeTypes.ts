@@ -18,7 +18,7 @@ const MIME_TYPE_BY_EXTENSION = new Map<string, string>([
   ["raw", "image/x-raw"],
   ["dng", "image/x-adobe-dng"],
   // ["cr2", "image/x-canon-cr2"], // can't read these yet
-  // ["cr3", "image/x-canon-cr3"], // can't read these yet
+  ["cr3", "image/x-canon-cr3"],
   ["nef", "image/x-nikon-nef"],
   ["arw", "image/x-sony-arw"],
   ["orf", "image/x-olympus-orf"],

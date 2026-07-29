@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import type { ClientFilterState } from "../../../../shared/filter-contract/src";
+import { createFilterStateFromUrl } from "../../filterUrlState";
 export type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
 
 /**
@@ -32,14 +33,9 @@ export const useFilter = () => {
 };
 
 const createInitialFilterFromURL = (): FilterState => {
-  const pathFromLocation = decodeURIComponent(window.location.pathname.slice(1));
-  const path = pathFromLocation ? pathFromLocation + "/" : "";
-
   return {
-    includeSubfolders:
-      new URLSearchParams(window.location.search).get("includeSubfolders") !== "false",
-    path,
     mediaTypeFilter: "all",
+    ...createFilterStateFromUrl(window.location),
   };
 };
 

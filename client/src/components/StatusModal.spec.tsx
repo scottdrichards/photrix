@@ -113,6 +113,19 @@ describe("StatusModal", () => {
     expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
   });
 
+  it("ignores dialog showModal state races", () => {
+    subscribeStatusStreamMock.mockReturnValue(() => undefined);
+    const showModalSpy = vi
+      .spyOn(HTMLDialogElement.prototype, "showModal")
+      .mockImplementation(() => {
+        throw new DOMException("Already open", "InvalidStateError");
+      });
+
+    expect(() => render(<StatusModal isOpen={true} onDismiss={vi.fn()} />)).not.toThrow();
+
+    showModalSpy.mockRestore();
+  });
+
   it("updates stats on successive status events", async () => {
     const unsubscribe = vi.fn();
     let onUpdate: ((status: unknown) => void) | undefined;
@@ -184,5 +197,90 @@ describe("StatusModal", () => {
     unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
-});
 
+  it("renders per-worker VRAM and the GPU-reclaimed state", async () => {
+    let onUpdate: ((status: unknown) => void) | undefined;
+    subscribeStatusStreamMock.mockImplementation((update) => {
+      onUpdate = update as (status: unknown) => void;
+      return () => undefined;
+    });
+
+    render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
+
+    await act(async () => {
+      onUpdate?.(
+        makeStatus({
+          system: {
+            cpu: { usage: 10, cores: 8 },
+            memory: { used: 4_000_000_000, total: 16_000_000_000, usage: 25 },
+            gpu: {
+              usage: 11,
+              memory: { used: 4000, total: 8000 },
+              processes: [
+                { pid: 111, role: "whisper", vramMB: 3326 },
+                { pid: 222, role: "other", vramMB: 500 },
+              ],
+            },
+            workers: [
+              {
+                id: "whisper-audio",
+                role: "whisper",
+                pid: 111,
+                vramMB: 3326,
+                rssMB: 2048,
+                suspended: true,
+                leases: 0,
+              },
+            ],
+          },
+          arbitration: {
+            userActive: true,
+            workersSuspended: true,
+            gpuReclaimed: true,
+            overloaded: false,
+            runningTasks: [],
+          },
+        }),
+      );
+    });
+
+    expect(await screen.findByText("Compute workers / VRAM")).toBeInTheDocument();
+    expect(screen.getByText("Transcription (Whisper)")).toBeInTheDocument();
+    expect(screen.getByText("Transcode / other")).toBeInTheDocument();
+    expect(screen.getByText("GPU reclaimed for playback")).toBeInTheDocument();
+    expect(screen.getByText("frozen")).toBeInTheDocument();
+  });
+
+  it("still shows the VRAM section when all GPU memory is held outside the container", async () => {
+    let onUpdate: ((status: unknown) => void) | undefined;
+    subscribeStatusStreamMock.mockImplementation((update) => {
+      onUpdate = update as (status: unknown) => void;
+      return () => undefined;
+    });
+
+    render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
+
+    await act(async () => {
+      onUpdate?.(
+        makeStatus({
+          system: {
+            cpu: { usage: 1, cores: 8 },
+            memory: { used: 4_000_000_000, total: 16_000_000_000, usage: 25 },
+            // VRAM is used but no compute process is visible inside the LXC, so
+            // it all lands in unaccountedMB. The section must not disappear.
+            gpu: {
+              usage: 1,
+              memory: { used: 4699, total: 8188 },
+              processes: [],
+              unaccountedMB: 4699,
+            },
+            workers: [],
+          },
+        }),
+      );
+    });
+
+    expect(await screen.findByText("Compute workers / VRAM")).toBeInTheDocument();
+    expect(screen.getByText("Outside this container")).toBeInTheDocument();
+  });
+});

@@ -152,14 +152,10 @@ export const markCacheAccess = (filePath: string): void => {
 export const startCacheEviction = (): (() => void) => {
   const intervalMs = Number(process.env.CACHE_EVICTION_INTERVAL_MS) || 5 * 60_000;
 
-  void enforceCacheLimit().catch((err) =>
-    log.error({ err }, "Cache eviction failed"),
-  );
+  void enforceCacheLimit().catch((err) => log.error({ err }, "Cache eviction failed"));
 
   const timer = setInterval(() => {
-    void enforceCacheLimit().catch((err) =>
-      log.error({ err }, "Cache eviction failed"),
-    );
+    void enforceCacheLimit().catch((err) => log.error({ err }, "Cache eviction failed"));
   }, intervalMs);
   timer.unref();
 

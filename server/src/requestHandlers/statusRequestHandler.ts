@@ -1,9 +1,43 @@
 import http from "node:http";
+import type { BackgroundTaskStatus } from "../../../shared/filter-contract/src/index.ts";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 import { getSystemMetrics } from "../observability/systemMetrics.ts";
+import { isGpuReclaimed } from "../taskOrchestrator/computeWorkers.ts";
 import { getLogger } from "../observability/logger.ts";
 
 const log = getLogger("statusRequestHandler");
+
+const EXIF_TASK_NAME = "EXIF metadata processing";
+const SYNTHETIC_VIDEO_STAGES = [
+  {
+    id: "status:background:audio-transcription",
+    name: "Audio transcription (Whisper)",
+  },
+  {
+    id: "status:background:audio-embedding",
+    name: "Audio embedding (CLAP)",
+  },
+] as const;
+
+const withQueuedVideoStages = (
+  backgroundTasks: BackgroundTaskStatus[],
+): BackgroundTaskStatus[] => {
+  const exifVisible = backgroundTasks.some(({ name }) => name === EXIF_TASK_NAME);
+  if (!exifVisible) return backgroundTasks;
+
+  const visibleNames = new Set(backgroundTasks.map(({ name }) => name));
+  const synthesized = SYNTHETIC_VIDEO_STAGES.filter(
+    ({ name }) => !visibleNames.has(name),
+  ).map(({ id, name }) => ({
+    id,
+    name,
+    queue: "background" as const,
+    state: "queued" as const,
+    description: "Waiting on EXIF",
+  }));
+
+  return synthesized.length > 0 ? [...backgroundTasks, ...synthesized] : backgroundTasks;
+};
 
 type StatusRequestHandlerProps = {
   stream: boolean;
@@ -17,12 +51,21 @@ const computeStatusPayload = async (taskOrchestrator: TaskOrchestrator) => {
     getSystemMetrics(),
   ]);
 
+  const snapshot = taskOrchestrator.getDiagnosticsSnapshot();
+
   return {
-    backgroundTasks,
+    backgroundTasks: withQueuedVideoStages(backgroundTasks),
     maintenance: {
       backgroundTasksEnabled,
     },
     system: systemMetrics,
+    arbitration: {
+      userActive: snapshot.userActive,
+      workersSuspended: snapshot.workersSuspended,
+      gpuReclaimed: isGpuReclaimed(),
+      overloaded: snapshot.overloaded,
+      runningTasks: snapshot.runningTasks,
+    },
   };
 };
 

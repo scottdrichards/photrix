@@ -43,6 +43,14 @@ from pillow_heif import register_heif_opener
 # models downscale internally so the decompression-bomb guard adds no safety.
 Image.MAX_IMAGE_PIXELS = None
 
+# Cap the long edge of the decoded image. Both models shrink their input far
+# below this (InsightFace det_size 640, CLIP 224), so this loses no accuracy —
+# it just bounds peak RAM. Without it a single high-megapixel panorama decodes to
+# a full-resolution RGB buffer (plus a full BGR copy for face detection), which
+# can spike hundreds of MB per image past the task's fixed memory reservation and
+# OOM the box. 2048px keeps ~3x headroom over the largest model input.
+MAX_DECODE_EDGE = int(os.environ.get("PHOTRIX_IMAGE_MAX_DECODE_EDGE") or 2048)
+
 # Suppress pthread_setaffinity_np / onnx warnings logged by ORT's thread pool in
 # container/VM environments where CPU affinity doesn't cover all logical cores.
 import onnxruntime as ort
@@ -50,7 +58,8 @@ ort.set_default_logger_severity(4)
 
 register_heif_opener()
 
-PROVIDER = (sys.argv[1] if len(sys.argv) > 1 else "CPUExecutionProvider").strip()
+FACE_PROVIDER = (sys.argv[1] if len(sys.argv) > 1 else "CPUExecutionProvider").strip()
+CLIP_DEVICE = (sys.argv[2] if len(sys.argv) > 2 else "cpu").strip().lower()
 
 # Lock held during any CLIP forward pass so the text-embedding thread and the
 # image-analysis main thread don't run the model concurrently.
@@ -62,6 +71,17 @@ _send_lock = threading.Lock()
 _text_queue: queue.SimpleQueue[tuple[int, str] | None] = queue.SimpleQueue()
 # analyzeImage payloads are enqueued here and processed by the main thread.
 _image_queue: queue.SimpleQueue[dict | None] = queue.SimpleQueue()
+
+# Foreground (search) embedText requests must preempt the background image
+# backlog. The Node side caps how many analyzeImage requests it dispatches, but
+# several can still be sitting in _image_queue, and the main thread would drain
+# them one CLIP pass at a time before the text thread ever wins _clip_lock — so a
+# search query waits behind the whole queued backlog and times out under load.
+# _text_pending counts queued/in-flight embedText requests; the image loop waits
+# on this condition before starting each (CPU-heavy) image pass, so a search is
+# delayed by at most the single image pass already running, never the backlog.
+_text_pending = 0
+_text_cond = threading.Condition()
 
 
 def send(payload: dict) -> None:
@@ -78,6 +98,18 @@ _face_app = None
 _clip = None  # (model, preprocess, tokenizer, torch, device)
 
 
+def _release_gpu_cache() -> None:
+    """Return cached-but-unused CUDA blocks to the driver. No-op on CPU or before
+    the CLIP model (which carries the torch handle) has loaded."""
+    if _clip is None:
+        return
+    torch, device = _clip[3], _clip[4]
+    if device != "cuda":
+        return
+    with contextlib.suppress(Exception):
+        torch.cuda.empty_cache()
+
+
 def _purge_insightface_cache(model_name: str) -> None:
     model_root = Path.home() / ".insightface" / "models"
     for path in [model_root / f"{model_name}.zip", model_root / model_name]:
@@ -92,7 +124,7 @@ def _purge_insightface_cache(model_name: str) -> None:
 def _create_face_app(allow_redownload: bool = True):
     from insightface.app import FaceAnalysis
 
-    ctx_id = -1 if PROVIDER == "CPUExecutionProvider" else 0
+    ctx_id = -1 if FACE_PROVIDER == "CPUExecutionProvider" else 0
 
     devnull = open(os.devnull, "w")
     old_stderr = sys.stderr
@@ -100,7 +132,7 @@ def _create_face_app(allow_redownload: bool = True):
         sys.stderr = devnull
         with contextlib.redirect_stdout(sys.stderr):
             try:
-                app = FaceAnalysis(name="buffalo_l", providers=[PROVIDER])
+                app = FaceAnalysis(name="buffalo_l", providers=[FACE_PROVIDER])
                 app.prepare(ctx_id=ctx_id)
             except Exception as exc:
                 if allow_redownload and "INVALID_PROTOBUF" in str(exc):
@@ -124,7 +156,7 @@ def _create_clip():
     import open_clip
     import torch
 
-    device = "cuda" if PROVIDER == "CUDAExecutionProvider" else "cpu"
+    device = "cuda" if CLIP_DEVICE == "cuda" else "cpu"
 
     devnull = open(os.devnull, "w")
     old_stderr = sys.stderr
@@ -154,12 +186,23 @@ def _get_clip():
 
 
 def _load_oriented_rgb(image_path: str) -> Image.Image:
-    """Decode the image once, applying EXIF orientation. Shared by both models."""
+    """Decode the image once, applying EXIF orientation. Shared by both models.
+
+    The decode is capped at MAX_DECODE_EDGE on the long edge to bound peak RAM.
+    For JPEGs, draft() asks the decoder to produce a reduced-scale image directly,
+    so an oversized photo never materialises at full resolution; thumbnail() then
+    enforces the cap for formats draft() can't shrink (HEIC, PNG, ...).
+    """
     path = Path(image_path)
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
     with Image.open(path) as image:
-        return ImageOps.exif_transpose(image).convert("RGB")
+        # Must run before the pixels are loaded (exif_transpose loads them).
+        image.draft("RGB", (MAX_DECODE_EDGE, MAX_DECODE_EDGE))
+        rgb = ImageOps.exif_transpose(image).convert("RGB")
+    if max(rgb.size) > MAX_DECODE_EDGE:
+        rgb.thumbnail((MAX_DECODE_EDGE, MAX_DECODE_EDGE), Image.Resampling.LANCZOS)
+    return rgb
 
 
 def _normalize_box(bbox, width: int, height: int) -> dict:
@@ -216,6 +259,7 @@ def _embed_text(text: str) -> list[float]:
 
 def _run_text_worker() -> None:
     """Drain _text_queue, processing embedText requests as they arrive."""
+    global _text_pending
     while True:
         item = _text_queue.get()
         if item is None:
@@ -225,6 +269,12 @@ def _run_text_worker() -> None:
             send({"id": req_id, "embedding": _embed_text(text)})
         except Exception as exc:  # noqa: BLE001
             send({"id": req_id, "error": str(exc)})
+        finally:
+            # Release the image loop once the foreground backlog clears.
+            with _text_cond:
+                _text_pending -= 1
+                if _text_pending == 0:
+                    _text_cond.notify_all()
 
 
 # --------------------------------------------------------------------------- #
@@ -244,7 +294,18 @@ def _handle_analyze_image(payload: dict) -> dict:
         return {"id": req_id, "error": "Nothing requested: set faces and/or embed"}
 
     # A decode failure fails the whole request; both parts share the one decode.
-    rgb = _load_oriented_rgb(image_path)
+    # It must NOT propagate: this runs on the main thread, and an uncaught
+    # exception here kills the worker process — taking down the search
+    # text-embedding thread that shares it. Corrupt/truncated images are common
+    # in a large library (e.g. PIL "image file is truncated"), so report the
+    # decode failure as a per-request error and keep serving.
+    #
+    # Decode failures are permanent (a truncated file won't fix itself), so
+    # "permanent": True tells the Node side to skip this file on future runs.
+    try:
+        rgb = _load_oriented_rgb(image_path)
+    except Exception as exc:  # noqa: BLE001 - report and keep the worker alive
+        return {"id": req_id, "error": str(exc), "permanent": True}
 
     response: dict = {"id": req_id}
     if want_faces:
@@ -267,6 +328,7 @@ def _run_stdin_reader() -> None:
     thread never delays an incoming embedText request from reaching the text
     thread.
     """
+    global _text_pending
     for line in sys.stdin:
         raw = line.strip()
         if not raw:
@@ -286,6 +348,10 @@ def _run_stdin_reader() -> None:
                 text = payload.get("text")
                 if not isinstance(text, str) or not text:
                     raise ValueError("text must be a non-empty string")
+                # Mark a foreground request pending *before* enqueuing so the
+                # image loop sees it and stops starting new background passes.
+                with _text_cond:
+                    _text_pending += 1
                 _text_queue.put((req_id, text))
             else:
                 raise ValueError(f"Unknown operation: {operation!r}")
@@ -310,7 +376,28 @@ def main() -> int:
         item = _image_queue.get()
         if item is None:
             break
-        send(_handle_analyze_image(item))
+        # Let any pending foreground search embedding go first. The text thread
+        # and this loop share _clip_lock and the box's CPU; without yielding here
+        # a queued backlog of image passes would each take the lock ahead of a
+        # waiting search and push it past the Node-side timeout. Waiting here
+        # bounds a search's delay to the single image pass already in flight.
+        with _text_cond:
+            while _text_pending > 0:
+                _text_cond.wait()
+        # Last line of defence: no single image may ever crash the worker, because
+        # that also kills the shared search text-embedding thread and forces a
+        # cold model reload. _handle_analyze_image already converts expected
+        # failures to error responses; this guards anything unforeseen.
+        try:
+            send(_handle_analyze_image(item))
+        except Exception as exc:  # noqa: BLE001 - keep the worker alive no matter what
+            req_id = item.get("id") if isinstance(item, dict) else None
+            send({"id": req_id, "error": str(exc)})
+        # Once the backlog drains, hand freed GPU blocks back to the driver so an
+        # on-demand video transcode can claim them. The model weights stay
+        # resident (cheap re-use); only the transient activation cache is released.
+        if _image_queue.empty():
+            _release_gpu_cache()
 
     text_thread.join()
     return 0

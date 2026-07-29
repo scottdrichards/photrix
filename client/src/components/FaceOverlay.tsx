@@ -11,10 +11,23 @@ type FaceRegion = {
   };
 };
 
+/** A detected face resolved to its People cluster, for name labels. */
+export type NamedFace = {
+  box: { x: number; y: number; width: number; height: number };
+  personId: string;
+  name: string | null;
+};
+
 type FaceOverlayProps = {
   regionsRaw: unknown;
   faceTableBoxesRaw?: unknown;
   aspectRatio: number;
+  /** Detected faces with resolved People names, rendered as clickable labels. */
+  namedFaces?: NamedFace[];
+  /** Invoked with the `person-N` cluster id when a name label is clicked. */
+  onSelectPerson?: (personId: string) => void;
+  /** Hide labels while the photo is zoomed (the frame layer scales, they don't). */
+  labelsHidden?: boolean;
 };
 
 const unwrapJsonString = (value: unknown): unknown => {
@@ -32,14 +45,16 @@ const unwrapJsonString = (value: unknown): unknown => {
 const clampToUnit = (value: number) => Math.min(Math.max(value, 0), 1);
 
 export const parseFaceRegions = (raw: unknown): FaceRegion[] => {
-
   const unwrapped = unwrapJsonString(raw);
   if (!Array.isArray(unwrapped)) {
     return [];
   }
 
   return unwrapped
-    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    .filter(
+      (entry): entry is Record<string, unknown> =>
+        Boolean(entry) && typeof entry === "object",
+    )
     .map((entry) => {
       const area = entry.area;
       if (!area || typeof area !== "object") {
@@ -61,7 +76,12 @@ export const parseFaceRegions = (raw: unknown): FaceRegion[] => {
         return null;
       }
 
-      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(width) ||
+        !Number.isFinite(height)
+      ) {
         return null;
       }
 
@@ -88,7 +108,10 @@ export const parseFaceTableBoxes = (raw: unknown): FaceRegion[] => {
   }
 
   return unwrapped
-    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    .filter(
+      (entry): entry is Record<string, unknown> =>
+        Boolean(entry) && typeof entry === "object",
+    )
     .map((entry) => {
       const x = entry.x;
       const y = entry.y;
@@ -104,7 +127,12 @@ export const parseFaceTableBoxes = (raw: unknown): FaceRegion[] => {
         return null;
       }
 
-      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(width) ||
+        !Number.isFinite(height)
+      ) {
         return null;
       }
 
@@ -124,7 +152,10 @@ export const parseFaceTableBoxes = (raw: unknown): FaceRegion[] => {
     .filter((entry): entry is FaceRegion => entry !== null);
 };
 
-const faceRegionToSVGProps = ({ area }: FaceRegion, aspectRatio = 1): SVGProps<SVGRectElement> => {
+const faceRegionToSVGProps = (
+  { area }: FaceRegion,
+  aspectRatio = 1,
+): SVGProps<SVGRectElement> => {
   const FACE_MASK_PADDING_RATIO = 0.16;
   const width = area.width;
   const height = area.height;
@@ -156,7 +187,10 @@ const FaceRects = ({
   aspectRatio?: number;
 } & SVGProps<SVGRectElement>) =>
   regions.map((region, index) => (
-    <rect {...{ ...faceRegionToSVGProps(region, aspectRatio), ...svgProps }} key={index} />
+    <rect
+      {...{ ...faceRegionToSVGProps(region, aspectRatio), ...svgProps }}
+      key={index}
+    />
   ));
 
 const toFaceMaskImage = (faceRects: React.ReactNode): string | null => {
@@ -184,15 +218,27 @@ export function FaceOverlay({
   regionsRaw,
   faceTableBoxesRaw,
   aspectRatio,
+  namedFaces,
+  labelsHidden = false,
 }: FaceOverlayProps) {
   const exifFaceRegions = useMemo(() => parseFaceRegions(regionsRaw), [regionsRaw]);
-  const tableFaceRegions = useMemo(() => parseFaceTableBoxes(faceTableBoxesRaw), [faceTableBoxesRaw]);
+  const tableFaceRegions = useMemo(
+    () => parseFaceTableBoxes(faceTableBoxesRaw),
+    [faceTableBoxesRaw],
+  );
+  const namedFaceRegions = useMemo<FaceRegion[]>(
+    () => (namedFaces ?? []).map((face) => ({ area: face.box })),
+    [namedFaces],
+  );
   const allRegions = useMemo(
-    () => [...exifFaceRegions, ...tableFaceRegions],
-    [exifFaceRegions, tableFaceRegions],
+    () => [...exifFaceRegions, ...tableFaceRegions, ...namedFaceRegions],
+    [exifFaceRegions, tableFaceRegions, namedFaceRegions],
   );
   const faceMaskImage = useMemo(
-    () => toFaceMaskImage(<FaceRects regions={allRegions} aspectRatio={aspectRatio} fill="black" />),
+    () =>
+      toFaceMaskImage(
+        <FaceRects regions={allRegions} aspectRatio={aspectRatio} fill="black" />,
+      ),
     [allRegions, aspectRatio],
   );
 
@@ -200,14 +246,18 @@ export function FaceOverlay({
     return null;
   }
 
+  const nameLabels = (namedFaces ?? []).filter((face) => face.name);
+
   return (
     <>
       <div
         className={`${css.faceBackdropLayer} ${css.faceOverlayVisible}`}
-        style={{
-          maskImage: faceMaskImage,
-          WebkitMaskImage: faceMaskImage,
-        } as React.CSSProperties}
+        style={
+          {
+            maskImage: faceMaskImage,
+            WebkitMaskImage: faceMaskImage,
+          } as React.CSSProperties
+        }
         aria-hidden="true"
       />
       <svg
@@ -228,7 +278,28 @@ export function FaceOverlay({
           aspectRatio={aspectRatio}
           className={`${css.faceFrameRect} ${css.faceTableFrameRect}`}
         />
+        <FaceRects
+          regions={namedFaceRegions}
+          aspectRatio={aspectRatio}
+          className={`${css.faceFrameRect} ${css.faceTableFrameRect}`}
+        />
       </svg>
+      {!labelsHidden && nameLabels.length > 0 && (
+        <div className={css.faceLabelLayer}>
+          {nameLabels.map((face, index) => (
+            <span
+              key={index}
+              className={css.faceLabel}
+              style={{
+                left: `${face.box.x * 100}%`,
+                top: `${(face.box.y - face.box.height / 2) * 100}%`,
+              }}
+            >
+              {face.name}
+            </span>
+          ))}
+        </div>
+      )}
     </>
   );
 }

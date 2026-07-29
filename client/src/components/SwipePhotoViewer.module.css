@@ -1,0 +1,60 @@
+.viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* We drive all panning/zooming/swiping ourselves via pointer events, so
+     suppress the browser's native touch scrolling and pinch-zoom. */
+  touch-action: none;
+  z-index: 0;
+}
+
+.track {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  will-change: transform;
+}
+
+.pane {
+  position: relative;
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+/* The letterboxed image box. Sized from the pane (never the viewport) so it
+   always fits above the info panel when that is open on mobile. */
+.box {
+  position: relative;
+  line-height: 0;
+  will-change: transform;
+  transform-origin: center center;
+}
+
+.thumb {
+  position: absolute;
+  inset: 0;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  transition: opacity 220ms ease-out;
+  z-index: 0;
+}
+
+.image {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  transition: opacity 220ms ease-out;
+}
+
+.neighborImage {
+  object-fit: contain;
+  display: block;
+}

@@ -3,6 +3,7 @@ import React from "react";
 import type { PhotoItem } from "../api";
 import { FullscreenViewer } from "./FullscreenViewer";
 import css from "./FullscreenViewer.module.css";
+import swipeCss from "./SwipePhotoViewer.module.css";
 
 const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
   bandwidthMbps: 20,
@@ -10,19 +11,29 @@ const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
 });
 
 const negotiateVideoPlaybackMock = vi.fn();
+const logClientEventMock = vi.fn();
+const createClientOperationIdMock = vi.fn(() => "client-op-1");
 
 const {
   hlsIsSupportedMock,
   hlsLoadSourceMock,
   hlsAttachMediaMock,
   hlsOnMock,
+  hlsOffMock,
   hlsDestroyMock,
+  hlsStartLoadMock,
+  hlsRecoverMediaErrorMock,
+  hlsEventHandlers,
 } = vi.hoisted(() => ({
   hlsIsSupportedMock: vi.fn(() => false),
   hlsLoadSourceMock: vi.fn(),
   hlsAttachMediaMock: vi.fn(),
   hlsOnMock: vi.fn(),
+  hlsOffMock: vi.fn(),
   hlsDestroyMock: vi.fn(),
+  hlsStartLoadMock: vi.fn(),
+  hlsRecoverMediaErrorMock: vi.fn(),
+  hlsEventHandlers: new Map<string, (...args: unknown[]) => void>(),
 }));
 
 const useSelectionContextMock = vi.fn();
@@ -37,6 +48,13 @@ vi.mock("../videoPlaybackProfile", () => ({
 
 vi.mock("../api", () => ({
   negotiateVideoPlayback: (...args: unknown[]) => negotiateVideoPlaybackMock(...args),
+  fetchTranscriptSegments: () => Promise.resolve([]),
+  fetchPeopleFacesForFile: () => Promise.resolve([]),
+}));
+
+vi.mock("../diagnostics", () => ({
+  logClientEvent: (...args: unknown[]) => logClientEventMock(...args),
+  createClientOperationId: () => createClientOperationIdMock(),
 }));
 
 vi.mock("hls.js", () => ({
@@ -44,7 +62,14 @@ vi.mock("hls.js", () => ({
     static isSupported = hlsIsSupportedMock;
     static Events = {
       MANIFEST_PARSED: "manifestParsed",
+      LEVEL_LOADED: "levelLoaded",
+      BUFFER_APPENDED: "bufferAppended",
+      LEVEL_SWITCHED: "levelSwitched",
       ERROR: "error",
+    };
+    static ErrorTypes = {
+      NETWORK_ERROR: "networkError",
+      MEDIA_ERROR: "mediaError",
     };
     static DefaultConfig = {
       loader: class MockLoader {
@@ -53,10 +78,18 @@ vi.mock("hls.js", () => ({
     };
 
     media = null;
+    levels = [{ height: 720 }];
+    currentLevel = -1;
     loadSource = hlsLoadSourceMock;
     attachMedia = hlsAttachMediaMock;
-    on = hlsOnMock;
+    on = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      hlsOnMock(event, handler);
+      hlsEventHandlers.set(event, handler);
+    });
+    off = hlsOffMock;
     destroy = hlsDestroyMock;
+    startLoad = hlsStartLoadMock;
+    recoverMediaError = hlsRecoverMediaErrorMock;
   },
 }));
 
@@ -77,7 +110,9 @@ const createPhoto = (overrides: Partial<PhotoItem> = {}): PhotoItem => ({
 
 describe("FullscreenViewer", () => {
   beforeAll(() => {
-    HTMLDialogElement.prototype.showModal = vi.fn(function showModal(this: HTMLDialogElement) {
+    HTMLDialogElement.prototype.showModal = vi.fn(function showModal(
+      this: HTMLDialogElement,
+    ) {
       this.setAttribute("open", "");
     });
     HTMLDialogElement.prototype.close = vi.fn(function close(this: HTMLDialogElement) {
@@ -94,17 +129,23 @@ describe("FullscreenViewer", () => {
       hevcSupported: true,
     });
     negotiateVideoPlaybackMock.mockReset();
+    logClientEventMock.mockReset();
+    createClientOperationIdMock.mockReset();
+    createClientOperationIdMock.mockReturnValue("client-op-1");
     negotiateVideoPlaybackMock.mockResolvedValue({
-      mode: "direct",
-      url: "/api/files/video.mp4",
-      reason: "Direct playback",
+      mode: "error",
+      reason: "Connection too slow for the original and no GPU to transcode",
     });
     hlsIsSupportedMock.mockReset();
     hlsIsSupportedMock.mockReturnValue(false);
     hlsLoadSourceMock.mockReset();
     hlsAttachMediaMock.mockReset();
     hlsOnMock.mockReset();
+    hlsOffMock.mockReset();
     hlsDestroyMock.mockReset();
+    hlsStartLoadMock.mockReset();
+    hlsRecoverMediaErrorMock.mockReset();
+    hlsEventHandlers.clear();
   });
 
   it("renders selected image and closes via close button", () => {
@@ -122,6 +163,59 @@ describe("FullscreenViewer", () => {
     expect(screen.getByRole("img", { name: "1.jpg" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(setSelected).toHaveBeenCalledWith(null);
+  });
+
+  it("fades the thumbnail placeholder out after the full image loads", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto(),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+
+    const placeholder = container.querySelector(`.${swipeCss.thumb}`);
+    const image = screen.getByRole("img", { name: "1.jpg" });
+
+    expect(placeholder).not.toBeNull();
+    expect(placeholder).toHaveStyle({ opacity: "1" });
+    expect(image).toHaveStyle({ opacity: "0" });
+
+    fireEvent.load(image);
+
+    expect(placeholder).toHaveStyle({ opacity: "0" });
+    expect(image).toHaveStyle({ opacity: "1" });
+  });
+
+  it("opens share and download quality options from preview actions", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto(),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    render(<FullscreenViewer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Share item" }));
+
+    expect(screen.getByRole("heading", { name: "Share 1 item" })).toBeInTheDocument();
+    expect(screen.getByText("Original")).toBeInTheDocument();
+    expect(screen.getByText("Web-safe, original size")).toBeInTheDocument();
+    expect(screen.getByText("Smaller size")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(
+      screen.queryByRole("heading", { name: "Share 1 item" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Download item" }));
+
+    expect(screen.getByRole("heading", { name: "Download 1 item" })).toBeInTheDocument();
   });
 
   it("shows file info and keeps the info panel open across close/open", () => {
@@ -154,7 +248,7 @@ describe("FullscreenViewer", () => {
     expect(screen.getByText("folder-a/1.jpg")).toBeInTheDocument();
     expect(screen.getByText("Filename")).toBeInTheDocument();
     expect(screen.getByText("1.jpg")).toBeInTheDocument();
-    expect(screen.getByText("mimeType")).toBeInTheDocument();
+    expect(screen.getByText("Type")).toBeInTheDocument();
     expect(screen.getByText("image/jpeg")).toBeInTheDocument();
 
     selectedRef.current = null;
@@ -172,7 +266,7 @@ describe("FullscreenViewer", () => {
     expect(screen.getByRole("button", { name: "Hide file info" })).toBeInTheDocument();
     expect(screen.getByText("folder-b/2.jpg")).toBeInTheDocument();
     expect(screen.getByText("2.jpg")).toBeInTheDocument();
-    expect(screen.getByText("cameraModel")).toBeInTheDocument();
+    expect(screen.getAllByText("Camera").length).toBeGreaterThan(0);
     expect(screen.getByText("A7R V")).toBeInTheDocument();
   });
 
@@ -217,9 +311,7 @@ describe("FullscreenViewer", () => {
     const layers = container.querySelectorAll(`.${css.faceBackdropLayer}`);
     expect(layers).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Hide faces" })).toBeInTheDocument();
-    expect(
-      (layers[0] as HTMLElement).style.maskImage,
-    ).toContain("data:image/svg+xml");
+    expect((layers[0] as HTMLElement).style.maskImage).toContain("data:image/svg+xml");
   });
 
   it("renders face rectangles from stringified regions metadata", () => {
@@ -312,7 +404,7 @@ describe("FullscreenViewer", () => {
     expect(screen.getByRole("button", { name: "Show faces" })).toBeDisabled();
   });
 
-  it("zooms the photo around clicked coordinates", () => {
+  it("toggles zoom on tap and centres the transform", () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto(),
       selectionMode: false,
@@ -321,32 +413,21 @@ describe("FullscreenViewer", () => {
       selectPrevious: vi.fn(),
     });
 
-    render(<FullscreenViewer />);
+    const { container } = render(<FullscreenViewer />);
 
     const image = screen.getByRole("img", { name: "1.jpg" });
-    vi.spyOn(image, "getBoundingClientRect").mockReturnValue({
-      x: 10,
-      y: 20,
-      left: 10,
-      top: 20,
-      right: 210,
-      bottom: 220,
-      width: 200,
-      height: 200,
-      toJSON: () => ({}),
-    } as DOMRect);
+    const box = container.querySelector(`.${swipeCss.box}`) as HTMLElement;
+    expect(box).not.toBeNull();
 
-    fireEvent.click(image, { clientX: 60, clientY: 80 });
+    // A mouse tap (pointer down + up without movement) zooms in.
+    fireEvent.pointerDown(image, { pointerId: 1, pointerType: "mouse", button: 0 });
+    fireEvent.pointerUp(image, { pointerId: 1, pointerType: "mouse" });
+    expect(box.style.transform).toContain("scale(2.5)");
 
-    expect(image).toHaveClass(css.zoomedMedia);
-    expect(image.style.getPropertyValue("--zoom-origin-x")).toBe("25%");
-    expect(image.style.getPropertyValue("--zoom-origin-y")).toBe("30%");
-
-    fireEvent.click(image, { clientX: 80, clientY: 90 });
-
-    expect(image).not.toHaveClass(css.zoomedMedia);
-    expect(image.style.getPropertyValue("--zoom-origin-x")).toBe("25%");
-    expect(image.style.getPropertyValue("--zoom-origin-y")).toBe("30%");
+    // Tapping again zooms back out.
+    fireEvent.pointerDown(image, { pointerId: 1, pointerType: "mouse", button: 0 });
+    fireEvent.pointerUp(image, { pointerId: 1, pointerType: "mouse" });
+    expect(box.style.transform).toContain("scale(1)");
   });
 
   it("supports scroll zoom while already zoomed", () => {
@@ -358,31 +439,20 @@ describe("FullscreenViewer", () => {
       selectPrevious: vi.fn(),
     });
 
-    render(<FullscreenViewer />);
+    const { container } = render(<FullscreenViewer />);
 
     const image = screen.getByRole("img", { name: "1.jpg" });
-    vi.spyOn(image, "getBoundingClientRect").mockReturnValue({
-      x: 0,
-      y: 0,
-      left: 0,
-      top: 0,
-      right: 200,
-      bottom: 200,
-      width: 200,
-      height: 200,
-      toJSON: () => ({}),
-    } as DOMRect);
+    const box = container.querySelector(`.${swipeCss.box}`) as HTMLElement;
 
-    fireEvent.click(image, { clientX: 100, clientY: 100 });
-    expect(image).toHaveClass(css.zoomedMedia);
-    expect(image.style.getPropertyValue("--zoom-scale")).toBe("2.5");
+    fireEvent.pointerDown(image, { pointerId: 1, pointerType: "mouse", button: 0 });
+    fireEvent.pointerUp(image, { pointerId: 1, pointerType: "mouse" });
+    expect(box.style.transform).toContain("scale(2.5)");
 
     fireEvent.wheel(image, { deltaY: -1 });
-    expect(image).toHaveClass(css.zoomedMedia);
-    expect(image.style.getPropertyValue("--zoom-scale")).toBe("2.75");
+    expect(box.style.transform).toContain("scale(2.75)");
 
     fireEvent.wheel(image, { deltaY: 1 });
-    expect(image.style.getPropertyValue("--zoom-scale")).toBe("2.5");
+    expect(box.style.transform).toContain("scale(2.5)");
   });
 
   it("handles keyboard navigation and escape", () => {
@@ -413,8 +483,16 @@ describe("FullscreenViewer", () => {
     const selectNext = vi.fn();
     const selectPrevious = vi.fn();
 
+    // The carousel only navigates towards a neighbour, so provide a middle item.
+    const items = [
+      createPhoto({ path: "a/0.jpg", name: "0.jpg" }),
+      createPhoto({ path: "a/1.jpg", name: "1.jpg" }),
+      createPhoto({ path: "a/2.jpg", name: "2.jpg" }),
+    ];
+
     useSelectionContextMock.mockReturnValue({
-      selected: createPhoto(),
+      items,
+      selected: items[1],
       selectionMode: false,
       setSelected: vi.fn(),
       selectNext,
@@ -422,22 +500,22 @@ describe("FullscreenViewer", () => {
     });
 
     const { container } = render(<FullscreenViewer />);
-    const swipeContainer = container.querySelector(`.${css.container}`);
-    expect(swipeContainer).not.toBeNull();
+    const viewport = container.querySelector(`.${swipeCss.viewport}`) as HTMLElement;
+    const track = container.querySelector(`.${swipeCss.track}`) as HTMLElement;
+    expect(viewport).not.toBeNull();
+    expect(track).not.toBeNull();
 
-    fireEvent.touchStart(swipeContainer!, {
-      changedTouches: [{ clientX: 200, clientY: 100 }],
-    });
-    fireEvent.touchEnd(swipeContainer!, {
-      changedTouches: [{ clientX: 100, clientY: 100 }],
-    });
+    // Swipe left → next. Navigation commits once the slide transition ends.
+    fireEvent.pointerDown(viewport, { pointerId: 1, pointerType: "touch", clientX: 200, clientY: 100 });
+    fireEvent.pointerMove(viewport, { pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(viewport, { pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100 });
+    fireEvent.transitionEnd(track, { propertyName: "transform" });
 
-    fireEvent.touchStart(swipeContainer!, {
-      changedTouches: [{ clientX: 100, clientY: 100 }],
-    });
-    fireEvent.touchEnd(swipeContainer!, {
-      changedTouches: [{ clientX: 200, clientY: 100 }],
-    });
+    // Swipe right → previous.
+    fireEvent.pointerDown(viewport, { pointerId: 2, pointerType: "touch", clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(viewport, { pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100 });
+    fireEvent.pointerUp(viewport, { pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100 });
+    fireEvent.transitionEnd(track, { propertyName: "transform" });
 
     expect(selectNext).toHaveBeenCalledTimes(1);
     expect(selectPrevious).toHaveBeenCalledTimes(1);
@@ -519,24 +597,59 @@ describe("FullscreenViewer", () => {
     expect(video).not.toBeNull();
   });
 
-  it("uses direct video source when server negotiates direct mode", async () => {
+  it("logs media element waiting and stalled events for videos", async () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/clip.mp4",
+        name: "clip.mp4",
+        mediaType: "video",
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    const video = container.querySelector("video");
+
+    expect(video).not.toBeNull();
+    fireEvent(video!, new Event("waiting"));
+    fireEvent(video!, new Event("stalled"));
+
+    await waitFor(() => {
+      expect(logClientEventMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "video.element.waiting",
+          clientOperationId: "client-op-1",
+        }),
+      );
+      expect(logClientEventMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "video.element.stalled",
+          clientOperationId: "client-op-1",
+        }),
+      );
+    });
+  });
+
+  it("plays the raw original when server negotiates direct mode", async () => {
     negotiateVideoPlaybackMock.mockResolvedValue({
       mode: "direct",
-      url: "http://localhost/a/hevc.mov",
-      reason: "Direct playback",
+      url: "http://localhost/a/fast.mp4",
+      reason: "Direct playback — connection can carry the original",
     });
 
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto({
-        path: "a/hevc.mov",
-        name: "hevc.mov",
+        path: "a/fast.mp4",
+        name: "fast.mp4",
         mediaType: "video",
-        originalUrl: "http://localhost/a/hevc.mov",
-        hlsUrl: "http://localhost/a/hevc.m3u8",
+        originalUrl: "http://localhost/a/fast.mp4?token=abc",
         metadata: {
-          sizeInBytes: 1_000_000,
+          sizeInBytes: 2_000_000,
           duration: 2,
-          videoCodec: "hevc",
+          videoCodec: "h264",
         },
       }),
       selectionMode: false,
@@ -550,12 +663,9 @@ describe("FullscreenViewer", () => {
 
     expect(video).not.toBeNull();
     await waitFor(() => {
-      expect(negotiateVideoPlaybackMock).toHaveBeenCalledWith({
-        path: "a/hevc.mov",
-        bandwidthMbps: 20,
-        hevcSupported: true,
-      });
-      expect(video?.getAttribute("src")).toBe("http://localhost/a/hevc.mov");
+      // Plays the token-bearing client URL directly; no HLS involved.
+      expect(video?.getAttribute("src")).toBe("http://localhost/a/fast.mp4?token=abc");
+      expect(hlsLoadSourceMock).not.toHaveBeenCalled();
       expect(screen.getByTestId("video-status")).toHaveTextContent("Raw Video");
     });
   });
@@ -599,10 +709,74 @@ describe("FullscreenViewer", () => {
     });
   });
 
-  it("falls back to fullUrl when server negotiates error mode", async () => {
+  it("marks playback unavailable — never raw — after repeated HLS network failures", async () => {
+    hlsIsSupportedMock.mockReturnValue(true);
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "hls",
+      url: "http://localhost/a/standard.m3u8",
+      reason: "Cached HLS available",
+    });
+
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/standard.mp4",
+        name: "standard.mp4",
+        mediaType: "video",
+        fullUrl: "http://localhost/a/standard.mp4",
+        originalUrl: "http://localhost/a/standard.mp4",
+        metadata: {
+          sizeInBytes: 2_000_000,
+          duration: 2,
+          videoCodec: "h264",
+        },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+    const video = container.querySelector("video");
+
+    expect(video).not.toBeNull();
+    await waitFor(() => {
+      expect(hlsLoadSourceMock).toHaveBeenCalledWith("http://localhost/a/standard.m3u8");
+    });
+
+    const errorHandler = hlsEventHandlers.get("error");
+    expect(errorHandler).toBeDefined();
+
+    errorHandler?.("error", {
+      fatal: true,
+      type: "networkError",
+      details: "manifestLoadError",
+    });
+    errorHandler?.("error", {
+      fatal: true,
+      type: "networkError",
+      details: "manifestLoadError",
+    });
+    errorHandler?.("error", {
+      fatal: true,
+      type: "networkError",
+      details: "manifestLoadError",
+    });
+
+    expect(hlsStartLoadMock).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      // No raw fallback: an unrecoverable HLS error fails visibly.
+      expect(video?.getAttribute("src")).toBeNull();
+      expect(screen.getByTestId("video-status")).toHaveTextContent(
+        "Playback Unavailable",
+      );
+    });
+  });
+
+  it("marks playback unavailable — never raw — when server negotiates error mode", async () => {
     negotiateVideoPlaybackMock.mockResolvedValue({
       mode: "error",
-      reason: "No compatible format",
+      reason: "Connection too slow for the original and no GPU to transcode",
     });
 
     useSelectionContextMock.mockReturnValue({
@@ -629,8 +803,11 @@ describe("FullscreenViewer", () => {
 
     expect(video).not.toBeNull();
     await waitFor(() => {
-      expect(video?.getAttribute("src")).toBe("http://localhost/a/weird-websafe.mp4");
-      expect(screen.getByTestId("video-status")).toHaveTextContent("No Compatible Stream");
+      // The raw original is never loaded, even for a codec the browser might play.
+      expect(video?.getAttribute("src")).toBeNull();
+      expect(screen.getByTestId("video-status")).toHaveTextContent(
+        "Playback Unavailable",
+      );
     });
   });
 
@@ -660,7 +837,9 @@ describe("FullscreenViewer", () => {
 
       render(<FullscreenViewer />);
 
-      expect(screen.queryByRole("button", { name: "Play live photo" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Play live photo" }),
+      ).not.toBeInTheDocument();
     });
 
     it("does not show live photo button for video media items", () => {
@@ -677,7 +856,9 @@ describe("FullscreenViewer", () => {
 
       const { container } = render(<FullscreenViewer />);
 
-      expect(screen.queryByRole("button", { name: "Play live photo" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Play live photo" }),
+      ).not.toBeInTheDocument();
       expect(container.querySelector("video")).not.toBeNull();
     });
 
@@ -698,7 +879,9 @@ describe("FullscreenViewer", () => {
       fireEvent.click(screen.getByRole("button", { name: "Play live photo" }));
 
       expect(screen.queryByRole("img", { name: "1.jpg" })).not.toBeInTheDocument();
-      expect(container.querySelector("video[src='http://localhost/a/1.MOV']")).not.toBeNull();
+      expect(
+        container.querySelector("video[src='http://localhost/a/1.MOV']"),
+      ).not.toBeNull();
       expect(screen.getByRole("button", { name: "Show photo" })).toBeInTheDocument();
     });
 

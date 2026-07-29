@@ -14,6 +14,13 @@ npm --prefix client install
 npm --prefix server run face:python:install
 ```
 
+Optional GPU acceleration:
+
+```bash
+npm --prefix server run face:python:install:gpu
+npm --prefix server run clip:python:install:gpu
+```
+
 ## 3) Configure environment
 
 Copy the template and edit values for your deployment:

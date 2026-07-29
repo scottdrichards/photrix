@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "tsx src/main.ts",
+    "mcp": "tsx src/mcp/main.ts",
     "face:python:install": "python -m pip install -r python/requirements.txt",
+    "face:python:install:gpu": "python -m pip install -r python/requirements.txt && python -m pip uninstall -y onnxruntime && python -m pip install onnxruntime-gpu==1.27.0",
     "clip:python:install": "python -m pip install open_clip_torch",
     "clip:python:install:gpu": "python -m pip install open_clip_torch && python -m pip install torch --index-url https://download.pytorch.org/whl/cu121",
     "typecheck": "tsc --noEmit",
@@ -27,9 +29,11 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",
     "@opentelemetry/sdk-node": "^0.213.0",
+    "@simplewebauthn/server": "^13.3.2",
     "better-sqlite3": "^12.5.0",
     "chokidar": "^3.6.0",
     "dotenv": "^16.4.5",
@@ -37,7 +41,8 @@
     "heic-convert": "^2.1.0",
     "minimatch": "^9.0.4",
     "pino": "^10.3.1",
-    "sharp": "^0.33.4"
+    "sharp": "^0.33.4",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",

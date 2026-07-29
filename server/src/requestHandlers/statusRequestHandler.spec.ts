@@ -61,6 +61,19 @@ const alwaysEnabledOrchestrator: TaskOrchestrator = {
   addTask: () => {},
   onQueueExhausted: () => {},
   noteUserActivity: () => {},
+  beginUserRequest: () => {},
+  endUserRequest: () => {},
+  getDiagnosticsSnapshot: () => ({
+    processBackgroundTasks: true,
+    activeRequests: 0,
+    userActive: false,
+    overloaded: false,
+    dutyOff: false,
+    workersSuspended: false,
+    queueLengths: { blocking: 0, implied: 0, background: 0 },
+    runningTasks: [],
+    resourcesInUse: { gpu: 0, cpu: 0, disk: 0, network: 0, memoryMB: 0 },
+  }),
 };
 
 describe("statusRequestHandler", () => {
@@ -123,6 +136,96 @@ describe("statusRequestHandler", () => {
     expect(JSON.parse(getBody()).maintenance).toEqual({
       backgroundTasksEnabled: false,
     });
+  });
+
+  it("shows downstream video stages as queued while EXIF is still visible", async () => {
+    const { res, getBody } = createMockResponse();
+
+    const taskOrchestrator: TaskOrchestrator = {
+      ...alwaysEnabledOrchestrator,
+      getBackgroundTaskStatus: async () => [
+        {
+          id: "background:exif",
+          name: "EXIF metadata processing",
+          queue: "background",
+          state: "running",
+          itemsProcessed: 12,
+          total: 100,
+          portionComplete: 0.12,
+        },
+        {
+          id: "background:image-analysis",
+          name: "Image analysis (faces + CLIP)",
+          queue: "background",
+          state: "running",
+          itemsProcessed: 40,
+          total: 100,
+          portionComplete: 0.4,
+        },
+      ],
+    };
+
+    await statusRequestHandler({} as http.IncomingMessage, res, {
+      stream: false,
+      taskOrchestrator,
+    });
+
+    const payload = JSON.parse(getBody());
+    expect(payload.backgroundTasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Audio transcription (Whisper)",
+          queue: "background",
+          state: "queued",
+          description: "Waiting on EXIF",
+        }),
+        expect.objectContaining({
+          name: "Audio embedding (CLAP)",
+          queue: "background",
+          state: "queued",
+          description: "Waiting on EXIF",
+        }),
+      ]),
+    );
+  });
+
+  it("does not duplicate real video-stage tasks in status", async () => {
+    const { res, getBody } = createMockResponse();
+
+    const taskOrchestrator: TaskOrchestrator = {
+      ...alwaysEnabledOrchestrator,
+      getBackgroundTaskStatus: async () => [
+        {
+          id: "background:exif",
+          name: "EXIF metadata processing",
+          queue: "background",
+          state: "running",
+        },
+        {
+          id: "background:audio-transcription",
+          name: "Audio transcription (Whisper)",
+          queue: "background",
+          state: "queued",
+        },
+      ],
+    };
+
+    await statusRequestHandler({} as http.IncomingMessage, res, {
+      stream: false,
+      taskOrchestrator,
+    });
+
+    const payload = JSON.parse(getBody()) as {
+      backgroundTasks: Array<{ name: string }>;
+    };
+    expect(
+      payload.backgroundTasks.filter(
+        ({ name }) => name === "Audio transcription (Whisper)",
+      ),
+    ).toHaveLength(1);
+    expect(
+      payload.backgroundTasks.filter(({ name }) => name === "Audio embedding (CLAP)"),
+    ).toHaveLength(1);
   });
 
   it("streams SSE updates and closes on request close", async () => {

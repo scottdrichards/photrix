@@ -41,6 +41,34 @@ describe("gpuAcceleration", () => {
     expect(gpu!.label).toContain("NVIDIA");
   });
 
+  it("returns NVIDIA config when CUDA probe fails on exhausted VRAM (OOM)", async () => {
+    const spawnMock = jest.fn((_cmd: string, args: string[]) => {
+      const proc = makeSpawnProcess();
+      queueMicrotask(() => {
+        if (args.includes("-init_hw_device")) {
+          proc.stderr.emit(
+            "data",
+            Buffer.from("cuCtxCreate failed -> CUDA_ERROR_OUT_OF_MEMORY: out of memory"),
+          );
+          proc.emit("close", 1);
+          return;
+        }
+        proc.emit("close", 1);
+      });
+      return proc;
+    });
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+
+    const { getGpuAcceleration } = await import("./gpuAcceleration.ts");
+    const gpu = await getGpuAcceleration();
+
+    // A full card is present-but-busy, not absent: still NVIDIA so HLS is offered
+    // and the encoder reclaims VRAM. AMF is never probed.
+    expect(gpu).not.toBeNull();
+    expect(gpu!.vendor).toBe("nvidia");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("returns AMD config when CUDA fails but AMF probe succeeds", async () => {
     const spawnMock = jest.fn((_cmd: string, args: string[]) => {
       const proc = makeSpawnProcess();

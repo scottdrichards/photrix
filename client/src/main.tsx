@@ -2,6 +2,9 @@ import * as React from "react";
 import * as ReactDOM from "react-dom/client";
 import "./styles.css";
 import App from "./App";
+import { applyTheme, getInitialTheme } from "./theme";
+
+applyTheme(getInitialTheme());
 
 const rootElement = document.getElementById("root");
 

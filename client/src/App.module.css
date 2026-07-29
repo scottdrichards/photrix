@@ -18,7 +18,7 @@
   padding-block: var(--space-m);
   padding-inline: var(--space-m);
   margin-inline: calc(var(--space-m) * -1);
-  background-color: rgba(255, 255, 255, 0.4);
+  background-color: var(--surface-glass);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--stroke2);
   .title {
@@ -45,9 +45,273 @@
   justify-content: flex-end;
 }
 
+/* Transparent wrapper so the Filter icon bar stays a direct flex child of
+   .headerActions on desktop; on mobile it becomes its own scrollable row. */
+.filterSlot {
+  display: contents;
+}
 
+/* ── Mobile: keep the header to two compact rows ──
+   Row 1: title + search/theme/share/status.  Row 2: the filter icon bar,
+   which scrolls horizontally instead of wrapping into several lines. */
+@media (max-width: 720px) {
+  .header {
+    padding-block: var(--space-s);
+    gap: var(--space-s);
+  }
+
+  .title h2 {
+    font-size: 1.35rem;
+  }
+
+  .title small {
+    display: none;
+  }
+
+  .headerActions {
+    flex: 1;
+    min-width: 0;
+    gap: var(--space-s);
+  }
+
+  .btnLabel {
+    display: none;
+  }
+
+  .filterSlot {
+    display: flex;
+    order: 2;
+    flex-basis: 100%;
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .filterSlot::-webkit-scrollbar {
+    display: none;
+  }
+}
 
 .headerAuthMenu {
   margin-inline-start: auto;
   position: relative;
+}
+
+.themeToggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 38px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.themeToggle:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
+}
+
+.themeToggleTrack {
+  position: relative;
+  width: 64px;
+  height: 38px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--stroke2) 80%, transparent);
+  background: linear-gradient(180deg, #8ed0ff 0%, #d9f3ff 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 10px 24px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease;
+}
+
+.themeToggle:hover .themeToggleTrack {
+  transform: translateY(-1px);
+}
+
+.themeToggle[data-theme="dark"] .themeToggleTrack {
+  background: linear-gradient(180deg, #0f1728 0%, #27324d 100%);
+}
+
+.themeToggleGlow {
+  position: absolute;
+  inset: -6px auto auto -6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 222, 122, 0.55);
+  filter: blur(8px);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.themeToggle[data-theme="dark"] .themeToggleGlow {
+  opacity: 0.45;
+  transform: translate(26px, 2px);
+}
+
+.themeToggleStars {
+  position: absolute;
+  inset: 0;
+  opacity: 0.18;
+  transition: opacity 180ms ease;
+}
+
+.themeToggleStars::before,
+.themeToggleStars::after {
+  content: "";
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    10px 7px 0 rgba(255, 255, 255, 0.8),
+    18px 15px 0 rgba(255, 255, 255, 0.65),
+    30px 4px 0 rgba(255, 255, 255, 0.82),
+    34px 19px 0 rgba(255, 255, 255, 0.72);
+}
+
+.themeToggleStars::before {
+  top: 8px;
+  right: 20px;
+}
+
+.themeToggleStars::after {
+  top: 17px;
+  right: 8px;
+}
+
+.themeToggle[data-theme="dark"] .themeToggleStars {
+  opacity: 0.88;
+}
+
+.themeToggleSun,
+.themeToggleMoon,
+.themeToggleThumb,
+.themeToggleModeDot {
+  position: absolute;
+}
+
+.themeToggleSun {
+  left: 10px;
+  top: 9px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffd35f;
+  box-shadow:
+    0 0 0 4px rgba(255, 211, 95, 0.28),
+    0 0 14px rgba(255, 211, 95, 0.5);
+  transition: opacity 180ms ease;
+}
+
+.themeToggle[data-theme="dark"] .themeToggleSun {
+  opacity: 0.15;
+}
+
+.themeToggleMoon {
+  top: 9px;
+  right: 12px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #f4f7ff;
+  opacity: 0.45;
+  transition: opacity 180ms ease;
+}
+
+.themeToggleMoon::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  transform: translateX(5px);
+  background: #2c3650;
+}
+
+.themeToggle[data-theme="dark"] .themeToggleMoon {
+  opacity: 1;
+}
+
+.themeToggleThumb {
+  top: 4px;
+  left: 4px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #fff6d6 0%, #ffd86d 100%);
+  box-shadow:
+    inset 0 -2px 4px rgba(0, 0, 0, 0.12),
+    0 4px 10px rgba(0, 0, 0, 0.18);
+  transition:
+    transform 180ms ease,
+    background 180ms ease;
+}
+
+.themeToggle[data-theme="dark"] .themeToggleThumb {
+  transform: translateX(26px);
+  background: linear-gradient(180deg, #edf2ff 0%, #c5d0eb 100%);
+}
+
+.themeToggleThumb::before,
+.themeToggleThumb::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(151, 166, 198, 0.42);
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.themeToggleThumb::before {
+  top: 8px;
+  left: 8px;
+  width: 6px;
+  height: 6px;
+}
+
+.themeToggleThumb::after {
+  top: 14px;
+  left: 15px;
+  width: 4px;
+  height: 4px;
+}
+
+.themeToggle[data-theme="dark"] .themeToggleThumb::before,
+.themeToggle[data-theme="dark"] .themeToggleThumb::after {
+  opacity: 1;
+}
+
+.themeToggleModeDot {
+  right: 5px;
+  bottom: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  background: #57d38c;
+}
+
+.themeToggleFloating {
+  position: fixed;
+  top: var(--space-m);
+  right: var(--space-m);
+  z-index: 1001;
+  padding: var(--space-xs) var(--space-m);
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-full);
+  background: var(--surface-glass);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-sm);
 }

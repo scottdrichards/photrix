@@ -1,0 +1,74 @@
+.dialog {
+  border: none;
+  padding: 0;
+  background: transparent;
+  width: min(480px, calc(100vw - var(--space-m) * 2));
+  border-radius: var(--radius-lg);
+  animation: scaleIn 0.15s ease;
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.content {
+  background: var(--bg0);
+  border-radius: var(--radius-lg);
+  padding: var(--space-m);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s);
+}
+
+.title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--fg1);
+}
+
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-s) var(--space-m);
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  background: var(--bg1);
+  color: var(--fg1);
+  font-size: 0.9rem;
+  font-family: inherit;
+  resize: vertical;
+  outline-offset: 2px;
+}
+
+.textarea:focus {
+  outline: 2px solid var(--brand);
+  border-color: var(--brand);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-s);
+  margin-block-start: var(--space-xs);
+}
+
+.sent {
+  font-size: 0.95rem;
+  color: var(--success, #2e7d32);
+  text-align: center;
+  padding: var(--space-m) 0;
+  margin: 0;
+}

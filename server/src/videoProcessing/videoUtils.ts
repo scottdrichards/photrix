@@ -2,8 +2,11 @@ import { spawn } from "child_process";
 import { access, mkdir, stat } from "fs/promises";
 import { dirname } from "path";
 import { StandardHeight } from "../common/standardHeights.ts";
+import { bindChildProcessAbort } from "../common/abortableChildProcess.ts";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
+import { scheduleMediaConversion } from "../common/mediaConversionScheduler.ts";
+import { createAbortError, getRequestAbortSignal } from "../common/requestAbort.ts";
 import { getGpuAcceleration } from "./gpuAcceleration.ts";
 
 const MAX_CAPTURED_LOG_CHARS = 64_000;
@@ -52,52 +55,82 @@ export const generateVideoPreview = async (
   ) {
     return cachedPath;
   }
-  await mkdir(dirname(cachedPath), { recursive: true });
-  const gpu = await getGpuAcceleration();
-  await new Promise<void>((resolve, reject) => {
-    const args = [
-      "-y",
-      ...(gpu ? gpu.hwaccelArgs : []),
-      "-ss",
-      "00:00:00",
-      "-i",
-      filePath,
-      "-t",
-      `${durationMS / 1000}`,
-      "-vf",
-      `scale=-2:${height === "original" ? -1 : height}`,
-      "-c:v",
-      gpu ? gpu.h264Codec : "libx264",
-      ...(gpu ? gpu.cqArgs(23) : ["-preset", "fast", "-crf", "23"]),
-      "-pix_fmt",
-      "yuv420p",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "96k",
-      "-movflags",
-      "+faststart",
-      cachedPath,
-    ];
-
-    const process = spawn("ffmpeg", args);
-
-    let stderr = "";
-
-    pipeChildProcessLogs(process, (chunk) => {
-      stderr = appendWithLimit(stderr, chunk);
-    });
-
-    process.on("close", (code) => {
-      if (code === 0) {
-        resolve();
+  await scheduleMediaConversion(
+    `video-preview:${cachedPath}`,
+    async (signal) => {
+      if (
+        await access(cachedPath).then(
+          () => true,
+          () => false,
+        )
+      ) {
         return;
       }
-      reject(new Error(`Video preview generation failed: ${stderr}`));
-    });
 
-    process.on("error", reject);
-  });
+      await mkdir(dirname(cachedPath), { recursive: true });
+      const gpu = await getGpuAcceleration();
+      await new Promise<void>((resolve, reject) => {
+        const args = [
+          "-y",
+          ...(gpu ? gpu.hwaccelArgs : []),
+          "-ss",
+          "00:00:00",
+          "-i",
+          filePath,
+          "-t",
+          `${durationMS / 1000}`,
+          "-vf",
+          `scale=-2:${height === "original" ? -1 : height}`,
+          "-c:v",
+          gpu ? gpu.h264Codec : "libx264",
+          ...(gpu ? gpu.cqArgs(23) : ["-preset", "fast", "-crf", "23"]),
+          "-pix_fmt",
+          "yuv420p",
+          "-c:a",
+          "aac",
+          "-b:a",
+          "96k",
+          "-movflags",
+          "+faststart",
+          cachedPath,
+        ];
+
+        const process = spawn("ffmpeg", args);
+        const abortBinding = bindChildProcessAbort(process, signal);
+
+        let stderr = "";
+
+        pipeChildProcessLogs(process, (chunk) => {
+          stderr = appendWithLimit(stderr, chunk);
+        });
+
+        process.on("close", (code) => {
+          abortBinding.cleanup();
+          if (abortBinding.wasAborted()) {
+            reject(createAbortError());
+            return;
+          }
+          if (code === 0) {
+            resolve();
+            return;
+          }
+          reject(new Error(`Video preview generation failed: ${stderr}`));
+        });
+
+        process.on("error", (error) => {
+          abortBinding.cleanup();
+          if (abortBinding.wasAborted()) {
+            reject(createAbortError());
+            return;
+          }
+          reject(error);
+        });
+      });
+    },
+    {
+      signal: getRequestAbortSignal(),
+    },
+  );
   return cachedPath;
 };
 
@@ -119,52 +152,81 @@ export const generateVideoThumbnail = async (
     return cachedPath;
   }
 
-  const gpu = await getGpuAcceleration();
+  await scheduleMediaConversion(
+    `video-thumbnail:${cachedPath}`,
+    async (signal) => {
+      if (
+        await access(cachedPath).then(
+          () => true,
+          () => false,
+        )
+      ) {
+        return;
+      }
 
-  const generateWithMode = async (useHardware: boolean): Promise<void> => {
-    const encoderType = useHardware && gpu ? gpu.label : "software";
-    await mkdir(dirname(cachedPath), { recursive: true });
-    await new Promise<void>((resolve, reject) => {
-      const args = [
-        "-y",
-        ...(useHardware && gpu ? gpu.hwaccelArgs : []),
-        "-ss",
-        "00:00:00",
-        "-i",
-        filePath,
-        "-vframes",
-        "1",
-        "-vf",
-        `scale=-2:${height === "original" ? -1 : height}`,
-        cachedPath,
-      ];
+      const gpu = await getGpuAcceleration();
 
-      const process = spawn("ffmpeg", args);
+      const generateWithMode = async (useHardware: boolean): Promise<void> => {
+        await mkdir(dirname(cachedPath), { recursive: true });
+        await new Promise<void>((resolve, reject) => {
+          const args = [
+            "-y",
+            ...(useHardware && gpu ? gpu.hwaccelArgs : []),
+            "-ss",
+            "00:00:00",
+            "-i",
+            filePath,
+            "-vframes",
+            "1",
+            "-vf",
+            `scale=-2:${height === "original" ? -1 : height}`,
+            cachedPath,
+          ];
 
-      let stderr = "";
+          const process = spawn("ffmpeg", args);
+          const abortBinding = bindChildProcessAbort(process, signal);
 
-      pipeChildProcessLogs(process, (chunk) => {
-        stderr = appendWithLimit(stderr, chunk);
-      });
+          let stderr = "";
 
-      process.on("close", (code) => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
+          pipeChildProcessLogs(process, (chunk) => {
+            stderr = appendWithLimit(stderr, chunk);
+          });
 
-        if (useHardware && gpu?.isHardwareFailure(stderr)) {
-          generateWithMode(false).then(resolve).catch(reject);
-          return;
-        }
+          process.on("close", (code) => {
+            abortBinding.cleanup();
+            if (abortBinding.wasAborted()) {
+              reject(createAbortError());
+              return;
+            }
+            if (code === 0) {
+              resolve();
+              return;
+            }
 
-        reject(new Error(`Video thumbnail generation failed: ${stderr}`));
-      });
+            if (useHardware && gpu?.isHardwareFailure(stderr)) {
+              generateWithMode(false).then(resolve).catch(reject);
+              return;
+            }
 
-      process.on("error", reject);
-    });
-  };
+            reject(new Error(`Video thumbnail generation failed: ${stderr}`));
+          });
 
-  await generateWithMode(gpu !== null);
+          process.on("error", (error) => {
+            abortBinding.cleanup();
+            if (abortBinding.wasAborted()) {
+              reject(createAbortError());
+              return;
+            }
+            reject(error);
+          });
+        });
+      };
+
+      await generateWithMode(gpu !== null);
+    },
+    {
+      signal: getRequestAbortSignal(),
+    },
+  );
   return cachedPath;
 };

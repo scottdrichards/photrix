@@ -47,9 +47,9 @@ describe("requestTrace", () => {
       },
       async () => {
         const value = await (async () => {
-            nestedRequestId = getCurrentRequestId();
-            return 42;
-          })();
+          nestedRequestId = getCurrentRequestId();
+          return 42;
+        })();
 
         expect(value).toBe(42);
         finishRequestTrace(200);
@@ -125,5 +125,4 @@ describe("requestTrace", () => {
     const requestCall = calls.find(({ name }) => name === "GET /api/files/");
     expect(requestCall).toBeDefined();
   });
-
 });

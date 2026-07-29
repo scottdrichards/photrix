@@ -7,8 +7,44 @@ import { existsSync } from "fs";
 import { getGpuAcceleration, type GpuAcceleration } from "./gpuAcceleration.ts";
 import { HLS_SEGMENT_SECONDS } from "./buildHlsPlaylist.ts";
 import { getLogger } from "../observability/logger.ts";
+import { getVideoRotationDegrees } from "./getVideoMetadata.ts";
+import { queryGpuFreeMB } from "../observability/systemMetrics.ts";
+import { reclaimGpuForUser } from "../taskOrchestrator/computeWorkers.ts";
 
 const log = getLogger("HLS");
+
+// Free VRAM (MB) a GPU transcode needs for NVDEC+NVENC of a 4K stream. Below
+// this, a user playback request evicts the background ML workers' VRAM rather
+// than letting ffmpeg OOM and fall back to realtime-starved libx264.
+const GPU_HEADROOM_MB = 1500;
+const RECLAIM_POLL_MS = 150;
+const RECLAIM_TIMEOUT_MS = 1500;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Ensure enough free VRAM for a GPU encode before spawning ffmpeg. Background ML
+ * workers keep models resident in VRAM even while SIGSTOP-frozen for a user
+ * request, so without this a transcode can't allocate CUDA memory and dies.
+ * reclaimGpuForUser() kills the leaseless background workers; we then poll
+ * briefly for the VRAM to actually come back before spawning. The orchestrator
+ * releases the reclaim (letting them respawn) once the user goes idle.
+ */
+const ensureGpuHeadroom = async (): Promise<void> => {
+  const free = await queryGpuFreeMB();
+  if (free === undefined || free >= GPU_HEADROOM_MB) return;
+  log.info(
+    { freeMB: free, needMB: GPU_HEADROOM_MB },
+    "GPU VRAM low; reclaiming from background workers for user transcode",
+  );
+  reclaimGpuForUser();
+  const deadline = Date.now() + RECLAIM_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await delay(RECLAIM_POLL_MS);
+    const now = await queryGpuFreeMB();
+    if (now === undefined || now >= GPU_HEADROOM_MB) return;
+  }
+};
 
 /** Output frame rate for all variants. */
 const HLS_FPS = 30;
@@ -19,8 +55,26 @@ const HLS_FPS = 30;
  */
 const HLS_GOP = HLS_FPS * HLS_SEGMENT_SECONDS;
 
-/** HLS quality variants: 360p fast-start, 720p standard, 1080p quality, 2160p 4K — all at 30fps */
-const HLS_VARIANTS = [
+type Variant = {
+  height: number;
+  bitrate: number;
+  maxrate: string;
+  bufsize: string;
+  audioBitrate: string;
+};
+
+/**
+ * HLS quality variants: 360p fast-start, 720p standard, 1080p quality — all at 30fps.
+ *
+ * All three are advertised in the master playlist and the player adapts between them
+ * mid-stream (real ABR) from its own measured throughput. Each is encoded lazily and
+ * only while actually being fetched: a single ffmpeg encode of one variant runs well
+ * above real time, and an idle variant's encode is reaped within seconds of an ABR
+ * switch, so at most ~1 (briefly 2, across a switch) run concurrently rather than all
+ * three. 2160p (4K) is intentionally not offered: it is the heaviest to encode, rarely
+ * beneficial in a browser viewer, and the biggest throughput risk.
+ */
+const HLS_VARIANTS: readonly Variant[] = [
   { height: 360, bitrate: 800_000, maxrate: "1M", bufsize: "1.5M", audioBitrate: "96k" },
   { height: 720, bitrate: 2_500_000, maxrate: "4M", bufsize: "4M", audioBitrate: "128k" },
   {
@@ -30,26 +84,28 @@ const HLS_VARIANTS = [
     bufsize: "8M",
     audioBitrate: "128k",
   },
-  {
-    height: 2160,
-    bitrate: 12_000_000,
-    maxrate: "15M",
-    bufsize: "18M",
-    audioBitrate: "192k",
-  },
 ] as const;
 
-/** Path to the completion marker written after all FFmpeg variants finish. */
-const getCompleteMarkerPath = (hlsDir: string): string => join(hlsDir, ".complete");
+const VARIANT_BY_HEIGHT = new Map(HLS_VARIANTS.map((v) => [v.height, v]));
+
+/** Heights the on-the-fly encoder can produce, ascending. */
+export const SUPPORTED_HLS_HEIGHTS = HLS_VARIANTS.map((v) => v.height);
+
+/** Fallback height for a request that names an unsupported one. */
+const DEFAULT_HLS_HEIGHT = 720;
+
+/** Clamps an arbitrary requested height to a supported variant, defaulting when unknown. */
+export const clampToSupportedHeight = (height: number): number =>
+  VARIANT_BY_HEIGHT.has(height) ? height : DEFAULT_HLS_HEIGHT;
 
 /**
- * Returns the base directory for multi-bitrate HLS output.
+ * Returns the base directory for HLS output.
  */
 export const getMultibitrateHLSDirectory = (filePath: string): string =>
   getMirroredHLSDirectory(filePath, "abr");
 
 /**
- * Returns the path to the master playlist for multi-bitrate HLS.
+ * Returns the path to the master playlist.
  */
 export const getMasterPlaylistPath = (hlsDir: string): string =>
   join(hlsDir, "master.m3u8");
@@ -79,15 +135,6 @@ export const multibitrateHLSInitialized = async (hlsDir: string): Promise<boolea
   );
 
 /**
- * True once all variants have finished encoding (the .complete marker exists).
- */
-export const multibitrateHLSComplete = async (hlsDir: string): Promise<boolean> =>
-  access(getCompleteMarkerPath(hlsDir)).then(
-    () => true,
-    () => false,
-  );
-
-/**
  * Get HLS info for a video file.
  */
 export const getMultibitrateHLSInfo = async (
@@ -97,153 +144,12 @@ export const getMultibitrateHLSInfo = async (
   masterPlaylistPath: string;
   /** Structure is initialized (master.m3u8 exists); encoding may still be in progress. */
   initialized: boolean;
-  /** All variants have finished encoding (.complete marker exists). */
-  complete: boolean;
 }> => {
   await stat(filePath);
   const hlsDir = getMultibitrateHLSDirectory(filePath);
   const masterPlaylistPath = getMasterPlaylistPath(hlsDir);
-  const [initialized, complete] = await Promise.all([
-    multibitrateHLSInitialized(hlsDir),
-    multibitrateHLSComplete(hlsDir),
-  ]);
-  return { hlsDir, masterPlaylistPath, initialized, complete };
-};
-
-/**
- * Generates all variant streams in a single FFmpeg process using filter_complex split.
- * Decodes the source once and encodes 360p/720p/1080p/2160p in parallel.
- * Falls back to software encoding if GPU acceleration fails.
- */
-const generateAllVariants = (
-  filePath: string,
-  hlsDir: string,
-  gpu: GpuAcceleration | null,
-  onSpawn?: (child: ReturnType<typeof spawn>) => void,
-): Promise<void> => {
-  return new Promise((resolve, reject) => {
-    const n = HLS_VARIANTS.length;
-    // Keep the whole pipeline on the GPU for NVIDIA: decode to CUDA frames,
-    // scale with scale_cuda, and feed NVENC directly — no per-frame GPU↔CPU
-    // copies. AMD/software stay on the CPU scaler. Output frame rate is forced
-    // per-output with `-r` (below) rather than an `fps` filter, since the CPU
-    // `fps` filter can't run on GPU-resident CUDA frames.
-    const useCuda = gpu?.vendor === "nvidia";
-    const scaleFilter = useCuda ? "scale_cuda" : "scale";
-    const splitOutputs = HLS_VARIANTS.map((_, i) => `[vin${i}]`).join("");
-    const filterComplex = [
-      `[0:v]split=${n}${splitOutputs}`,
-      ...HLS_VARIANTS.map((v, i) => `[vin${i}]${scaleFilter}=-2:${v.height}[vout${i}]`),
-    ].join(";");
-
-    const args: string[] = [
-      "-y",
-      ...(gpu ? gpu.hwaccelArgs : []),
-      ...(useCuda ? ["-hwaccel_output_format", "cuda"] : []),
-      "-i",
-      filePath,
-      "-filter_complex",
-      filterComplex,
-    ];
-
-    for (let i = 0; i < HLS_VARIANTS.length; i++) {
-      const variant = HLS_VARIANTS[i];
-      const variantDir = join(hlsDir, `${variant.height}p`);
-      args.push(
-        "-map",
-        `[vout${i}]`,
-        "-map",
-        "0:a?",
-        "-r",
-        String(HLS_FPS),
-        "-c:v",
-        gpu ? gpu.h264Codec : "libx264",
-        ...(gpu ? gpu.vbrArgs(28) : ["-preset", "veryfast", "-crf", "28"]),
-        "-b:v",
-        String(variant.bitrate),
-        "-maxrate",
-        variant.maxrate,
-        "-bufsize",
-        variant.bufsize,
-        "-g",
-        String(HLS_GOP),
-        "-c:a",
-        "aac",
-        "-b:a",
-        variant.audioBitrate,
-        "-f",
-        "hls",
-        "-hls_time",
-        String(HLS_SEGMENT_SECONDS),
-        "-hls_list_size",
-        "0",
-        "-hls_segment_type",
-        "mpegts",
-        "-hls_flags",
-        "independent_segments",
-        "-hls_segment_filename",
-        join(variantDir, "segment_%03d.ts"),
-        "-hls_playlist_type",
-        "event",
-        join(variantDir, "playlist.m3u8"),
-      );
-    }
-
-    const spawnedAt = Date.now();
-    const process = spawn("ffmpeg", args);
-    onSpawn?.(process);
-
-    log.info(
-      { hlsDir, encoder: gpu ? gpu.label : "software (libx264)", gpuResident: useCuda },
-      "HLS encode spawned",
-    );
-
-    // Time-to-first-segment: the user-perceived startup latency. Playback can't
-    // begin until the first segment of the smallest variant is flushed. This
-    // includes ffmpeg launch + (for GPU) NVENC/CUDA context init + encoding the
-    // first segment, so it isolates fixed startup cost from total encode time.
-    // Polled (not fs.watch) so it owns no event-loop handles to leak; unref'd and
-    // cleared on close so it never keeps the process alive.
-    const firstVariant = HLS_VARIANTS[0];
-    const firstSegment = getVariantSegmentPath(hlsDir, firstVariant.height, "segment_000.ts");
-    const firstSegmentPoll = setInterval(() => {
-      if (!existsSync(firstSegment)) return;
-      clearInterval(firstSegmentPoll);
-      log.info(
-        { hlsDir, variant: `${firstVariant.height}p`, ms: Date.now() - spawnedAt },
-        "HLS first segment ready",
-      );
-    }, 100);
-    firstSegmentPoll.unref?.();
-
-    let stderr = "";
-    pipeChildProcessLogs(process, (chunk) => {
-      stderr = appendWithLimit(stderr, chunk);
-    });
-
-    process.on("close", (code) => {
-      clearInterval(firstSegmentPoll);
-      if (code === 0) {
-        log.info(
-          { hlsDir, ms: Date.now() - spawnedAt },
-          "HLS encode complete (all variants)",
-        );
-        resolve();
-        return;
-      }
-
-      if (gpu && gpu.isHardwareFailure(stderr)) {
-        generateAllVariants(filePath, hlsDir, null, onSpawn).then(resolve).catch(reject);
-        return;
-      }
-      reject(new Error("HLS ABR generation failed"));
-    });
-
-    process.on("error", (err) => {
-      clearInterval(firstSegmentPoll);
-      reject(err);
-    });
-  });
+  const initialized = await multibitrateHLSInitialized(hlsDir);
+  return { hlsDir, masterPlaylistPath, initialized };
 };
 
 /** Approximate 16:9 resolutions for each supported variant height. */
@@ -251,35 +157,40 @@ const VARIANT_RESOLUTIONS: Record<number, string> = {
   360: "640x360",
   720: "1280x720",
   1080: "1920x1080",
-  2160: "3840x2160",
 };
 
+const resolutionFor = (variant: Variant): string =>
+  VARIANT_RESOLUTIONS[variant.height] ??
+  `${Math.round((variant.height * 16) / 9)}x${variant.height}`;
+
 /**
- * Creates the master playlist that references all variants.
- * This is written immediately before FFmpeg starts so clients can begin
- * requesting variant playlists and segments right away.
+ * Creates the master playlist advertising every variant, ordered lowest→highest
+ * bitrate. Written immediately (before ffmpeg starts) so the player can begin
+ * requesting a variant playlist and segments right away.
+ *
+ * All variants are advertised so the client's HLS player can adapt between them
+ * mid-stream (real ABR): it starts on the lowest and climbs as its *measured*
+ * throughput allows, then drops again if the link degrades. Each variant is only
+ * actually encoded once the player fetches its segments (lazy, see the request
+ * handler), and an idle variant's encode is reaped, so advertising all three does
+ * not mean encoding all three at once.
  */
 const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
-  const lines = ["#EXTM3U", "#EXT-X-VERSION:3", ""];
-
+  const lines = ["#EXTM3U", "#EXT-X-VERSION:3"];
   for (const variant of HLS_VARIANTS) {
-    const bandwidth = variant.bitrate;
-    const resolution =
-      VARIANT_RESOLUTIONS[variant.height] ??
-      `${Math.round((variant.height * 16) / 9)}x${variant.height}`;
-
-    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution}`);
-    lines.push(`${variant.height}p/playlist.m3u8`);
+    lines.push(
+      "",
+      `#EXT-X-STREAM-INF:BANDWIDTH=${variant.bitrate},RESOLUTION=${resolutionFor(variant)}`,
+      `${variant.height}p/playlist.m3u8`,
+    );
   }
-
-  const masterPath = join(hlsDir, "master.m3u8");
-  await writeFile(masterPath, lines.join("\n"), "utf-8");
+  await writeFile(getMasterPlaylistPath(hlsDir), lines.join("\n"), "utf-8");
 };
 
 /**
- * Creates the HLS directory structure and master playlist for a video without running FFmpeg.
- * Call this first to return a playlist to the client immediately; then call
- * generateMultibitrateHLS (which will skip the structure creation since it already exists).
+ * Creates the HLS directory structure and multi-variant master playlist without
+ * running FFmpeg. Call this first to return the master to the client immediately;
+ * then encoding for whichever variant the player requests is started lazily.
  *
  * Idempotent — safe to call multiple times.
  */
@@ -289,14 +200,11 @@ export const prepareMultibitrateHLSStructure = async (
   await stat(filePath);
   const hlsDir = getMultibitrateHLSDirectory(filePath);
 
-  // Create all variant directories
   await Promise.all(
     HLS_VARIANTS.map((v) => mkdir(join(hlsDir, `${v.height}p`), { recursive: true })),
   );
 
-  // Write master playlist only if it doesn't already exist
-  const masterPath = getMasterPlaylistPath(hlsDir);
-  const masterExists = await access(masterPath).then(
+  const masterExists = await access(getMasterPlaylistPath(hlsDir)).then(
     () => true,
     () => false,
   );
@@ -306,46 +214,220 @@ export const prepareMultibitrateHLSStructure = async (
 };
 
 /**
- * Generates multi-bitrate HLS (360p + 720p + 1080p + 2160p @ 30fps) using a single FFmpeg process.
- * All variants are encoded in parallel via filter_complex split.
- *
- * The master playlist is written before FFmpeg starts (via prepareMultibitrateHLSStructure)
- * so clients can begin requesting segments immediately while encoding is in progress.
- *
- * Returns the path to the master playlist.
+ * Runs a single-variant HLS encode for one height, always from segment 0.
+ * Writes segments + playlist into `{height}p/`. Falls back to software encoding
+ * if GPU acceleration fails.
  */
-export const generateMultibitrateHLS = async (
+const encodeVariant = (
   filePath: string,
-  opts?: { onSpawn?: (child: ReturnType<typeof spawn>) => void },
-): Promise<string> => {
-  await stat(filePath);
-  const hlsDir = getMultibitrateHLSDirectory(filePath);
-  const masterPath = getMasterPlaylistPath(hlsDir);
+  hlsDir: string,
+  variant: Variant,
+  gpu: GpuAcceleration | null,
+  rotation: number,
+  onSpawn?: (child: ReturnType<typeof spawn>) => void,
+): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    // Three encode pipelines, in order of preference:
+    //
+    // 1. FULL CUDA (NVIDIA, landscape): decode→CUDA frames→scale_cuda→h264_nvenc.
+    //    No CPU roundtrip at all. ~7× realtime for 4K. Requires rotation=0 because
+    //    ffmpeg's auto-rotate (transpose) can't run on GPU-resident frames when
+    //    -hwaccel_output_format cuda keeps them there.
+    //
+    // 2. NVDEC+NVENC (NVIDIA, rotated/portrait): -hwaccel cuda WITHOUT
+    //    -hwaccel_output_format cuda. NVDEC decodes on GPU then transfers frames to
+    //    CPU memory. ffmpeg's auto-rotate runs on those CPU frames. h264_nvenc
+    //    re-uploads and encodes on GPU. ~4-6× realtime vs ~0.3× for pure CPU on
+    //    4K HEVC — critical for phone portrait videos to avoid buffer starvation.
+    //
+    // 3. CPU (no GPU or GPU-only-decode failed): libx264, all filters on CPU.
+    //
+    // All paths force 8-bit 4:2:0 output. Sources are frequently 10-bit HEVC
+    // (HDR/HLG — default for iPhone and much GoPro footage). h264_nvenc rejects
+    // 10-bit outright, and browsers can't play 10-bit H.264 anyway. The GPU paths
+    // convert on-chip; the CPU path uses format=yuv420p.
+    const useNvidia = gpu?.vendor === "nvidia";
+    const useCudaPipeline = useNvidia && rotation === 0;
 
-  // Already fully encoded — nothing to do
-  const isComplete = await multibitrateHLSComplete(hlsDir);
-  if (isComplete) {
-    return masterPath;
-  }
+    let hwaccelArgs: string[];
+    let vf: string;
+    let videoCodec: string;
+    let encoderArgs: readonly string[];
 
-  // Ensure directory structure and master playlist exist before FFmpeg starts
-  await prepareMultibitrateHLSStructure(filePath);
+    if (useCudaPipeline) {
+      // Full CUDA: frames never leave the GPU.
+      hwaccelArgs = [...(gpu?.hwaccelArgs ?? []), "-hwaccel_output_format", "cuda"];
+      vf = `scale_cuda=-2:${variant.height}:format=yuv420p`;
+      videoCodec = gpu?.h264Codec ?? "libx264";
+      encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
+    } else if (useNvidia) {
+      // NVDEC + CPU filters + NVENC: GPU decode, CPU auto-rotate, GPU encode.
+      hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -hwaccel cuda, no output format
+      vf = `fps=${HLS_FPS},scale=-2:${variant.height},format=yuv420p`;
+      videoCodec = gpu?.h264Codec ?? "libx264";
+      encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
+    } else {
+      // Pure CPU.
+      hwaccelArgs = [];
+      vf = `fps=${HLS_FPS},scale=-2:${variant.height},format=yuv420p`;
+      videoCodec = "libx264";
+      encoderArgs = ["-preset", "veryfast", "-crf", "28"];
+    }
 
-  const gpu = await getGpuAcceleration();
+    const variantDir = join(hlsDir, `${variant.height}p`);
 
-  // Encode all variants in one FFmpeg process
-  await generateAllVariants(filePath, hlsDir, gpu, opts?.onSpawn);
+    const args: string[] = [
+      "-y",
+      ...hwaccelArgs,
+      "-i",
+      filePath,
+      "-vf",
+      vf,
+      // `-r` is only needed for the full CUDA pipeline: frames stay on the GPU so the
+      // CPU `fps` filter can't run. All other paths have `fps=` in the vf chain above.
+      ...(useCudaPipeline ? ["-r", String(HLS_FPS)] : []),
+      "-c:v",
+      videoCodec,
+      ...encoderArgs,
+      "-b:v",
+      String(variant.bitrate),
+      "-maxrate",
+      variant.maxrate,
+      "-bufsize",
+      variant.bufsize,
+      // Force keyframes at exact integer-second boundaries so HLS segment cuts land
+      // on clean 1s boundaries. Plain `-g N` counts GOP frames from the first output
+      // PTS, which is non-zero for sources with B-frames before the first I-frame
+      // (e.g. Canon cameras, iPhones), producing irregular segment durations that
+      // mismatch the synthetic VOD playlist's fixed 1s EXTINFs.
+      "-force_key_frames",
+      `expr:gte(t,n_forced*${HLS_SEGMENT_SECONDS})`,
+      "-g",
+      String(HLS_GOP),
+      "-c:a",
+      "aac",
+      "-b:a",
+      variant.audioBitrate,
+      "-f",
+      "hls",
+      "-hls_time",
+      String(HLS_SEGMENT_SECONDS),
+      "-hls_list_size",
+      "0",
+      "-start_number",
+      "0",
+      "-hls_segment_type",
+      "mpegts",
+      "-hls_flags",
+      "independent_segments+temp_file",
+      "-hls_segment_filename",
+      join(variantDir, "segment_%03d.ts"),
+      "-hls_playlist_type",
+      "event",
+      join(variantDir, "playlist.m3u8"),
+    ];
 
-  // Write the completion marker so future requests can skip encoding
-  await writeFile(getCompleteMarkerPath(hlsDir), "", "utf-8");
+    const launch = async () => {
+      // Evict background ML VRAM before a GPU encode so ffmpeg can allocate
+      // NVDEC/NVENC memory instead of OOMing into realtime-starved libx264.
+      if (useCudaPipeline || useNvidia) await ensureGpuHeadroom();
 
-  return masterPath;
+      const spawnedAt = Date.now();
+      const process = spawn("ffmpeg", args);
+      onSpawn?.(process);
+
+      const encoderLabel = useCudaPipeline
+        ? `${gpu?.label ?? "NVIDIA"} (full CUDA)`
+        : useNvidia
+          ? `${gpu?.label ?? "NVIDIA"} (NVDEC+NVENC)`
+          : "software (libx264)";
+
+      log.info(
+        { hlsDir, variant: `${variant.height}p`, encoder: encoderLabel, rotation },
+        "HLS encode spawned",
+      );
+
+      // Time-to-first-segment: the user-perceived startup latency.
+      const firstSegment = join(variantDir, "segment_000.ts");
+      const firstSegmentPoll = setInterval(() => {
+        if (!existsSync(firstSegment)) return;
+        clearInterval(firstSegmentPoll);
+        log.info(
+          { hlsDir, variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
+          "HLS first segment ready",
+        );
+      }, 100);
+      firstSegmentPoll.unref?.();
+
+      let stderr = "";
+      pipeChildProcessLogs(process, (chunk) => {
+        stderr = appendWithLimit(stderr, chunk);
+      });
+
+      process.on("close", (code) => {
+        clearInterval(firstSegmentPoll);
+        if (code === 0) {
+          log.info(
+            { hlsDir, variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
+            "HLS encode complete",
+          );
+          resolve();
+          return;
+        }
+
+        if ((useCudaPipeline || useNvidia) && gpu && gpu.isHardwareFailure(stderr)) {
+          log.warn(
+            { hlsDir, variant: `${variant.height}p` },
+            "GPU encode failed, falling back to software",
+          );
+          encodeVariant(filePath, hlsDir, variant, null, rotation, onSpawn)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+        // Surface the ffmpeg stderr tail so a failed encode is diagnosable
+        // rather than an opaque "generation failed" with no cause.
+        const detail = stderr.trim().split("\n").slice(-3).join(" | ");
+        reject(
+          new Error(
+            `HLS ABR generation failed (exit ${code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
+          ),
+        );
+      });
+
+      process.on("error", (err) => {
+        clearInterval(firstSegmentPoll);
+        reject(err);
+      });
+    };
+
+    launch().catch(reject);
+  });
 };
 
 /**
- * Check if a video needs HLS encoding (hasn't been fully encoded yet).
+ * Generates a single HLS variant (one of SUPPORTED_HLS_HEIGHTS @ 30fps) on the fly,
+ * always encoding from the beginning of the file. Segments not yet written are
+ * long-polled by the segment handler (see waitForHlsFile) until ffmpeg produces them.
+ * The output is ephemeral and is reaped once playback goes idle.
  */
-export const videoNeedsHLSEncoding = async (filePath: string): Promise<boolean> => {
-  const info = await getMultibitrateHLSInfo(filePath);
-  return !info.complete;
+export const generateVariantHLS = async (
+  filePath: string,
+  height: number,
+  opts?: {
+    onSpawn?: (child: ReturnType<typeof spawn>) => void;
+  },
+): Promise<void> => {
+  await stat(filePath);
+  const variant = VARIANT_BY_HEIGHT.get(clampToSupportedHeight(height));
+  if (!variant) throw new Error(`Unsupported HLS height: ${height}`);
+
+  const hlsDir = getMultibitrateHLSDirectory(filePath);
+  await mkdir(join(hlsDir, `${variant.height}p`), { recursive: true });
+
+  const [gpu, rotation] = await Promise.all([
+    getGpuAcceleration(),
+    getVideoRotationDegrees(filePath),
+  ]);
+  await encodeVariant(filePath, hlsDir, variant, gpu, rotation, opts?.onSpawn);
 };

@@ -87,10 +87,7 @@ describe("suggestionsRequestHandler", () => {
       search: "can",
       filter: {
         operation: "and",
-        conditions: [
-          { folder: { folder: "albums/2025", recursive: true } },
-          filter,
-        ],
+        conditions: [{ folder: { folder: "albums/2025", recursive: true } }, filter],
       },
       limit: 5,
     });

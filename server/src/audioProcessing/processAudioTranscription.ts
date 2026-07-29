@@ -5,6 +5,7 @@ import { batch } from "../utils.ts";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
+import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
 
 const log = getLogger("processAudioTranscription");
 
@@ -13,7 +14,9 @@ const PARALLELISM = 2;
 
 export const processAudioTranscription = (
   database: IndexDatabase,
-  transcribe: (videoPath: string) => Promise<Array<{ start: number; end: number; text: string }>>,
+  transcribe: (
+    videoPath: string,
+  ) => Promise<Array<{ start: number; end: number; text: string }>>,
 ): TaskRunner => {
   const ctrl = createTaskController("Audio transcription cancelled");
 
@@ -42,6 +45,16 @@ export const processAudioTranscription = (
               const segments = await transcribe(fullPath);
               await database.saveAudioTranscription(relativePath, segments);
             } catch (error) {
+              if (isWorkerEvictedError(error)) {
+                // The worker was killed by us (GPU reclaimed for playback /
+                // shutdown), not because this file is bad. Leave it pending so
+                // the next pass retries it instead of poisoning its record.
+                log.info(
+                  { path: relativePath },
+                  "Audio transcription interrupted by worker eviction; will retry",
+                );
+                return;
+              }
               log.warn({ err: error, path: relativePath }, "Audio transcription failed");
               await database.saveAudioTranscriptionError(relativePath);
             }

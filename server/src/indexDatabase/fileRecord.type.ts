@@ -27,6 +27,9 @@ export type ExifMetadata = {
     rotation?: number;
   }>;
   personInImage?: string[];
+  /** Human-authored caption from the file (EXIF/IPTC/XMP). See `aiDescription`
+   * on {@link AIMetadata} for the machine-generated counterpart. */
+  description?: string;
   dateTaken?: Date;
   dimensionWidth?: number;
   dimensionHeight?: number;
@@ -64,6 +67,7 @@ export const MetadataGroups = {
   exif: [
     "regions",
     "personInImage",
+    "description",
     "dateTaken",
     "dimensionWidth",
     "dimensionHeight",

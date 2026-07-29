@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, writeFileSync, accessSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, accessSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -24,120 +24,63 @@ afterEach(() => {
   delete process.env.HLS_ENCODE_VERBOSE;
 });
 
-describe("generateMultibitrateHLS", () => {
-  it("returns existing master playlist without re-encoding when .complete marker exists", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-existing-"));
+describe("prepareMultibitrateHLSStructure", () => {
+  it("writes a master playlist advertising every variant for ABR, and creates their dirs", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-prepare-"));
     process.env.CACHE_DIR = root;
     process.env.HLS_CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const { getMirroredHLSDirectory } = await import("../common/cacheUtils.ts");
-    const hlsDir = getMirroredHLSDirectory(source, "abr");
-    const masterPath = path.join(hlsDir, "master.m3u8");
-    mkdirSync(path.dirname(masterPath), { recursive: true });
-    writeFileSync(masterPath, "#EXTM3U");
-    // Write the .complete marker to signal fully encoded
-    writeFileSync(path.join(hlsDir, ".complete"), "");
+    const {
+      prepareMultibitrateHLSStructure,
+      getMasterPlaylistPath,
+      getMultibitrateHLSDirectory,
+    } = await import("./generateMultibitrateHLS.ts");
 
-    const { generateMultibitrateHLS } = await import("./generateMultibitrateHLS.ts");
-    const out = await generateMultibitrateHLS(source, { waitForCompletion: true });
+    await prepareMultibitrateHLSStructure(source);
 
-    expect(out).toBe(masterPath);
+    const hlsDir = getMultibitrateHLSDirectory(source);
+    const master = readFileSync(getMasterPlaylistPath(hlsDir), "utf-8");
+    expect(master).toContain("#EXT-X-STREAM-INF");
+    // All variants are advertised so the player can adapt between them mid-stream.
+    expect(master).toContain("360p/playlist.m3u8");
+    expect(master).toContain("720p/playlist.m3u8");
+    expect(master).toContain("1080p/playlist.m3u8");
+    // Lowest bitrate listed first so the player starts conservatively.
+    expect(master.indexOf("360p")).toBeLessThan(master.indexOf("1080p"));
+    // Every variant directory exists.
+    for (const h of ["360p", "720p", "1080p"]) {
+      expect(() => accessSync(path.join(hlsDir, h))).not.toThrow();
+    }
   });
+});
 
-  it("generates all 4 variants in a single FFmpeg process and writes .complete marker", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-success-"));
+describe("generateVariantHLS", () => {
+  it("uses full CUDA pipeline for landscape NVIDIA encode", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-variant-"));
     process.env.CACHE_DIR = root;
     process.env.HLS_CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const { getMirroredHLSDirectory } = await import("../common/cacheUtils.ts");
-    const hlsDir = getMirroredHLSDirectory(source, "abr");
-
-    const spawnMock = jest.fn((_command: string, args: string[]) => {
+    const spawnMock = jest.fn((command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
-        // GPU detection call
-        if (args.includes("-init_hw_device") || args.includes("h264_amf")) {
+        // Rotation probe — return no rotation so full CUDA pipeline is used.
+        if (command === "ffprobe") {
+          proc.stdout.emit("data", JSON.stringify({ streams: [] }));
           proc.emit("close", 0);
           return;
         }
-        // Combined encode call — last arg is the final output playlist path
-        const playlistPath = args.at(-1);
-        if (playlistPath) {
-          mkdirSync(path.dirname(playlistPath), { recursive: true });
-          writeFileSync(playlistPath, "#EXTM3U");
-        }
-        proc.emit("close", 0);
-      });
-      return proc;
-    });
-
-    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
-
-    const { generateMultibitrateHLS, getMasterPlaylistPath } = await import(
-      "./generateMultibitrateHLS.ts"
-    );
-
-    const masterPath = await generateMultibitrateHLS(source, {
-      waitForCompletion: true,
-      priority: "background",
-      contentDurationSeconds: 14,
-    });
-
-    expect(masterPath).toBe(getMasterPlaylistPath(hlsDir));
-    // 1 GPU detection call + 1 combined encode call (all 4 variants in one process)
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-
-    const encodeArgs = spawnMock.mock.calls[1]?.[1] as string[];
-    // GPU detection resolves to NVIDIA here, so the pipeline stays GPU-resident:
-    // CUDA decode output + scale_cuda for all 4 variants in one filter_complex.
-    expect(encodeArgs).toContain("-hwaccel_output_format");
-    const filterComplex = encodeArgs[encodeArgs.indexOf("-filter_complex") + 1] ?? "";
-    expect(filterComplex).toContain("scale_cuda=-2:360");
-    expect(filterComplex).toContain("scale_cuda=-2:720");
-    expect(filterComplex).toContain("scale_cuda=-2:1080");
-    expect(filterComplex).toContain("scale_cuda=-2:2160");
-    // Frame rate is forced per-output with -r (no CPU fps filter on CUDA frames).
-    expect(filterComplex).not.toContain("fps=30");
-    expect(encodeArgs).toContain("-r");
-
-    // .complete marker should exist
-    const completePath = path.join(hlsDir, ".complete");
-    expect(() => accessSync(completePath)).not.toThrow();
-  });
-
-  it("falls back to software encoding when hardware encode fails", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-fallback-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
-    const source = path.join(root, "video.mp4");
-    writeFileSync(source, "video");
-
-    const spawnMock = jest.fn((_command: string, args: string[]) => {
-      const proc = makeSpawnProcess();
-      queueMicrotask(() => {
+        // GPU detection probe resolves to NVIDIA.
         if (args.includes("-init_hw_device")) {
           proc.emit("close", 0);
           return;
         }
-
-        // Hardware encode attempt fails
-        if (args.includes("h264_amf") || args.includes("h264_nvenc")) {
-          proc.stderr.emit("data", Buffer.from("h264_nvenc failed: Could not load CUDA"));
-          proc.emit("close", 1);
-          return;
-        }
-
-        // Software fallback — write output playlists
-        // (last arg is the 2160p output, but dirs for lower variants should exist)
+        // Encode call — last arg is the variant playlist path.
         const playlistPath = args.at(-1);
-        if (playlistPath) {
-          mkdirSync(path.dirname(playlistPath), { recursive: true });
-          writeFileSync(playlistPath, "#EXTM3U");
-        }
+        if (playlistPath) writeFileSync(playlistPath, "#EXTM3U");
         proc.emit("close", 0);
       });
       return proc;
@@ -145,26 +88,141 @@ describe("generateMultibitrateHLS", () => {
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
 
-    const { generateMultibitrateHLS } = await import("./generateMultibitrateHLS.ts");
+    const { generateVariantHLS } = await import("./generateMultibitrateHLS.ts");
 
-    await generateMultibitrateHLS(source, { waitForCompletion: true });
+    await generateVariantHLS(source, 720);
 
-    // 1 GPU detection + 1 hardware attempt (fails) + 1 software retry
+    // 1 rotation probe (ffprobe) + 1 GPU detection + 1 encode call.
     expect(spawnMock).toHaveBeenCalledTimes(3);
-    const retryArgs = spawnMock.mock.calls[2]?.[1] as string[];
-    expect(retryArgs).toContain("libx264");
+
+    const encodeArgs = spawnMock.mock.calls[2]?.[1] as string[];
+    // Full CUDA pipeline: frames stay on GPU via hwaccel_output_format cuda.
+    expect(encodeArgs).toContain("-hwaccel_output_format");
+    expect(encodeArgs).toContain("cuda");
+    // Scales on GPU and forces 8-bit so h264_nvenc accepts 10-bit HEVC sources.
+    expect(encodeArgs).toContain("scale_cuda=-2:720:format=yuv420p");
+    // Frame rate forced with -r (no CPU fps filter on CUDA frames).
+    expect(encodeArgs).toContain("-r");
+    // Always encodes from segment 0: no input seek, segments numbered from 0.
+    expect(encodeArgs).not.toContain("-ss");
+    expect(encodeArgs).not.toContain("-copyts");
+    expect(encodeArgs[encodeArgs.indexOf("-start_number") + 1]).toBe("0");
   });
 
-  it("rejects when ffmpeg fails without hardware fallback signal", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-fail-"));
+  it("uses NVDEC+NVENC (CPU auto-rotate) for rotated/portrait videos on NVIDIA", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-portrait-"));
+    process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
+    const source = path.join(root, "portrait.mp4");
+    writeFileSync(source, "video");
+
+    const spawnMock = jest.fn((command: string, args: string[]) => {
+      const proc = makeSpawnProcess();
+      queueMicrotask(() => {
+        if (command === "ffprobe") {
+          // Report 90° rotation (portrait phone video). codec_type required for detection.
+          proc.stdout.emit(
+            "data",
+            JSON.stringify({
+              streams: [{ codec_type: "video", tags: { rotate: "90" } }],
+            }),
+          );
+          proc.emit("close", 0);
+          return;
+        }
+        if (args.includes("-init_hw_device")) {
+          proc.emit("close", 0);
+          return;
+        }
+        const playlistPath = args.at(-1);
+        if (playlistPath) writeFileSync(playlistPath, "#EXTM3U");
+        proc.emit("close", 0);
+      });
+      return proc;
+    });
+
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+
+    const { generateVariantHLS } = await import("./generateMultibitrateHLS.ts");
+
+    await generateVariantHLS(source, 720);
+
+    const encodeArgs = spawnMock.mock.calls[2]?.[1] as string[];
+    // NVDEC: use -hwaccel cuda for GPU decode, but WITHOUT -hwaccel_output_format cuda
+    // so decoded frames land on CPU where ffmpeg's auto-rotate (transpose) can run.
+    expect(encodeArgs).toContain("-hwaccel");
+    expect(encodeArgs).toContain("cuda");
+    expect(encodeArgs).not.toContain("-hwaccel_output_format");
+    // GPU encode: h264_nvenc re-uploads CPU frames to GPU.
+    expect(encodeArgs).toContain("h264_nvenc");
+    // CPU filter chain: fps= in vf, no -r flag needed.
+    const vfArg = encodeArgs[encodeArgs.indexOf("-vf") + 1] as string;
+    expect(vfArg).toContain("fps=");
+    expect(encodeArgs).not.toContain("-r");
+    // No seek: always from start.
+    expect(encodeArgs).not.toContain("-ss");
+  });
+
+  it("falls back to software encoding when hardware encode fails", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-variant-fallback-"));
     process.env.CACHE_DIR = root;
     process.env.HLS_CACHE_DIR = root;
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const spawnMock = jest.fn((_command: string, _args: string[]) => {
+    const spawnMock = jest.fn((command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
+        if (command === "ffprobe") {
+          proc.stdout.emit("data", JSON.stringify({ streams: [] }));
+          proc.emit("close", 0);
+          return;
+        }
+        if (args.includes("-init_hw_device")) {
+          proc.emit("close", 0);
+          return;
+        }
+        // Hardware encode attempt fails with a CUDA error.
+        if (args.includes("h264_nvenc")) {
+          proc.stderr.emit("data", Buffer.from("h264_nvenc failed: Could not load CUDA"));
+          proc.emit("close", 1);
+          return;
+        }
+        // Software fallback — write the playlist.
+        const playlistPath = args.at(-1);
+        if (playlistPath) writeFileSync(playlistPath, "#EXTM3U");
+        proc.emit("close", 0);
+      });
+      return proc;
+    });
+
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+
+    const { generateVariantHLS } = await import("./generateMultibitrateHLS.ts");
+
+    await generateVariantHLS(source, 720);
+
+    // 1 rotation probe (ffprobe) + 1 GPU detection + 1 hardware attempt (fails) + 1 software retry.
+    expect(spawnMock).toHaveBeenCalledTimes(4);
+    const retryArgs = spawnMock.mock.calls[3]?.[1] as string[];
+    expect(retryArgs).toContain("libx264");
+  });
+
+  it("rejects when ffmpeg fails without a hardware fallback signal", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-variant-fail-"));
+    process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
+    const source = path.join(root, "video.mp4");
+    writeFileSync(source, "video");
+
+    const spawnMock = jest.fn((command: string, _args: string[]) => {
+      const proc = makeSpawnProcess();
+      queueMicrotask(() => {
+        if (command === "ffprobe") {
+          proc.stdout.emit("data", JSON.stringify({ streams: [] }));
+          proc.emit("close", 0);
+          return;
+        }
         proc.stderr.emit("data", Buffer.from("unrecoverable ffmpeg failure"));
         proc.emit("close", 1);
       });
@@ -173,10 +231,8 @@ describe("generateMultibitrateHLS", () => {
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
 
-    const { generateMultibitrateHLS } = await import("./generateMultibitrateHLS.ts");
+    const { generateVariantHLS } = await import("./generateMultibitrateHLS.ts");
 
-    await expect(
-      generateMultibitrateHLS(source, { waitForCompletion: true }),
-    ).rejects.toThrow(/ABR generation failed/i);
+    await expect(generateVariantHLS(source, 720)).rejects.toThrow(/generation failed/i);
   });
 });

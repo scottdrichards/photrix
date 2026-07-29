@@ -7,6 +7,8 @@ import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
 import type { DetectedFace } from "../faceDetection/faceDetector.type.ts";
 import type { AnalyzeImageOptions, ImageAnalysisResult } from "./imageAnalysisWorker.ts";
+import { PermanentImageError } from "./imageAnalysisWorker.ts";
+import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
 
 const log = getLogger("processImageAnalysis");
 
@@ -15,6 +17,10 @@ const DB_BATCH_SIZE = 50;
 // it is the real throttle. A small Node-side fan-out just keeps its input pipe
 // from starving without flooding the box.
 const PARALLELISM = 3;
+// When the analysis queue is empty but upstream tasks (EXIF, file-info) are
+// still running, poll at this interval so newly-eligible images are picked up
+// once prerequisites are met.
+const PREREQ_POLL_INTERVAL_MS = 10_000;
 
 export type AnalyzeImage = (
   imagePath: string,
@@ -50,10 +56,7 @@ export const processImageAnalysis = (
 
   const saveFaceResult = async (relativePath: string, result: ImageAnalysisResult) => {
     if (result.facesError) {
-      log.warn(
-        { err: result.facesError, path: relativePath },
-        "Face detection failed",
-      );
+      log.warn({ err: result.facesError, path: relativePath }, "Face detection failed");
       await database.addOrUpdateFileData(relativePath, {
         facesLastErrorAt: new Date().toISOString(),
       });
@@ -92,8 +95,22 @@ export const processImageAnalysis = (
 
       const items = await database.getImagesNeedingAnalysis(DB_BATCH_SIZE);
       if (!items.length) {
-        ctrl.markComplete();
-        return;
+        // If upstream tasks (EXIF, file-info) haven't finished yet, images may
+        // still be waiting for their prerequisites. Pause/wait rather than
+        // declaring complete so newly-eligible images are picked up once those
+        // tasks stamp their ProcessedAt fields.
+        const prereqsPending = await database.hasImagesPendingAnalysisPrerequisites();
+        if (!prereqsPending) {
+          ctrl.markComplete();
+          return;
+        }
+        await ctrl.waitUntilResumed();
+        ctrl.checkCancelled();
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, PREREQ_POLL_INTERVAL_MS),
+        );
+        ctrl.checkCancelled();
+        continue;
       }
 
       for (const chunk of batch(items, PARALLELISM)) {
@@ -115,16 +132,35 @@ export const processImageAnalysis = (
               if (needsFaces) await saveFaceResult(relativePath, result);
               if (needsEmbedding) await saveEmbeddingResult(relativePath, result);
             } catch (error) {
-              // A decode/transport failure fails every requested stage; mark
-              // each so the file is retried after the rest of the backlog.
-              log.warn({ err: error, path: relativePath }, "Image analysis failed");
-              if (needsFaces) {
-                await database.addOrUpdateFileData(relativePath, {
-                  facesLastErrorAt: new Date().toISOString(),
-                });
-              }
-              if (needsEmbedding) {
-                await database.saveImageEmbeddingError(relativePath);
+              if (isWorkerEvictedError(error)) {
+                // The worker was killed by us (GPU reclaimed for playback /
+                // shutdown), not because this file is bad. Leave it pending so
+                // the next pass retries it promptly instead of stamping error
+                // markers that demote it behind the rest of the backlog.
+                log.info(
+                  { path: relativePath },
+                  "Image analysis interrupted by worker eviction; will retry",
+                );
+              } else if (error instanceof PermanentImageError) {
+                // The image itself is unreadable (truncated, corrupt, missing).
+                // Record a permanent skip so it is never re-queued on restart.
+                log.warn(
+                  { err: error, path: relativePath },
+                  "Image analysis failed permanently (corrupt/unreadable file)",
+                );
+                await database.saveImageAnalysisDecodeError(relativePath);
+              } else {
+                // Transient failure (worker timeout, crash). Mark per-stage so
+                // the file is retried after the rest of the backlog.
+                log.warn({ err: error, path: relativePath }, "Image analysis failed");
+                if (needsFaces) {
+                  await database.addOrUpdateFileData(relativePath, {
+                    facesLastErrorAt: new Date().toISOString(),
+                  });
+                }
+                if (needsEmbedding) {
+                  await database.saveImageEmbeddingError(relativePath);
+                }
               }
             }
           }),
@@ -156,9 +192,7 @@ export const processImageAnalysis = (
         itemsProcessed: done,
         total,
         portionComplete: total > 0 ? done / total : undefined,
-        ...(stages.length
-          ? { description: `Processing ${stages.join(" + ")}` }
-          : {}),
+        ...(stages.length ? { description: `Processing ${stages.join(" + ")}` } : {}),
       };
     },
     onComplete: () => completion,

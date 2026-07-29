@@ -81,9 +81,7 @@ export const MiniMap = ({ latitude, longitude }: MiniMapProps) => {
 
     mapInstance
       .getView()
-      .animate(
-        { center: fromLonLat([longitude, latitude]), zoom: 15, duration: 300 },
-      );
+      .animate({ center: fromLonLat([longitude, latitude]), zoom: 15, duration: 300 });
   }, [mapInstance, vectorSource, hasLocation, latitude, longitude]);
 
   if (!hasLocation) {

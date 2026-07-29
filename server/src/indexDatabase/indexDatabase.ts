@@ -2,18 +2,24 @@ import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { CACHE_DIR } from "../common/cacheUtils.ts";
 import { AsyncSqlite } from "../common/asyncSqlite.ts";
+import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { MetadataGroups, type FileRecord } from "./fileRecord.type.ts";
 import { filterToSQL } from "./filterToSQL.ts";
 import {
   type DateHistogramResult,
+  type DateHistogramGrouping,
+  type FaceClusterCentroid,
   type FaceClusterDetailResult,
   type FaceClusterFace,
+  type FaceClusterSummary,
+  type FaceClusterPCAResult,
   type FaceClusterResult,
   type FilterElement,
   type GeoClusterResult,
   type QueryOptions,
   type QueryResult,
+  type SortOption,
 } from "./indexDatabase.type.ts";
 import {
   fileRecordToColumnNamesAndValues,
@@ -22,9 +28,86 @@ import {
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 import { prepareTables } from "./prepareTables.ts";
+import {
+  FaceClusterEngine,
+  LOW_CONFIDENCE_CLUSTER_ID,
+  MIN_FACE_CONFIDENCE_FOR_CLUSTERING,
+  toAlignedFloat32,
+} from "./faceClusterEngine.ts";
+import { tables } from "./tables.ts";
+import { computePCA3D } from "./pca.ts";
 import { getLogger } from "../observability/logger.ts";
 
 const log = getLogger("IndexDatabase");
+
+// PRAGMA user_version marking that the one-time low-confidence face-cluster
+// purge has run (see purgeLowConfidenceFaceClusters). Bump to re-run after a
+// future change to the confidence floor.
+const LOW_CONFIDENCE_PURGE_VERSION = 1;
+
+// PRAGMA user_version marking that the one-time rescore of already-merged
+// sub-clusters against their canonical centroid has run (see
+// rescoreMergedClusterSimilarities). Runs after the purge, so it must sit above
+// LOW_CONFIDENCE_PURGE_VERSION in this monotonically-increasing scheme.
+const MERGED_SIMILARITY_RESCORE_VERSION = 2;
+
+// PRAGMA user_version marking that the one-time EXIF re-extraction pass for the
+// new human-authored `description` column has been queued. Bumps the monotonic
+// scheme above MERGED_SIMILARITY_RESCORE_VERSION. Clears exifProcessedAt on
+// already-processed images so processExifMetadata re-reads their headers and
+// fills in `description` (and any other fields added since they were scanned).
+const EXIF_DESCRIPTION_BACKFILL_VERSION = 3;
+
+// A cluster losing at least this fraction of its members to the confidence
+// purge is treated as a junk hub: its confident survivors are freed for
+// re-clustering rather than left behind under a junk-derived centroid.
+const HUB_RECLUSTER_PURGE_FRACTION = 0.3;
+
+// Columns to read for file queries: everything except the embedding BLOBs. Each
+// row carries a ~2 KB imageEmbedding (and audioEmbedding) that no read path
+// consumes, so `SELECT *` would drag megabytes of vector data off disk per page.
+// rowToFileRecord never looks at these columns, so omitting them is transparent.
+const FILE_QUERY_COLUMNS = tables.files.columns
+  .filter((column) => column.type !== "BLOB")
+  .map((column) => column.name)
+  .join(", ");
+
+// Effective capture date used for date sorting: prefer the EXIF date, fall back
+// to filesystem timestamps. Shared by the ORDER BY builder below.
+const SORT_DATE_EXPR = "COALESCE(dateTaken, created, modified)";
+
+/**
+ * Build the ORDER BY clause for `queryFiles`.
+ *
+ * The default (date, descending) is intentionally byte-for-byte identical to the
+ * previous hard-coded ordering so it stays covered end-to-end by
+ * idx_files_sort_date — SQLite walks the index for the top N instead of scanning
+ * and temp-sorting the whole table. Other orderings fall back to a temp-sort,
+ * which is acceptable for the less common cases.
+ *
+ * `relevance` is a semantic-search concept with no meaning for a plain library
+ * query, so it degrades to the date ordering here.
+ */
+const buildQueryOrderBy = (sort?: SortOption): string => {
+  const dir = sort?.direction === "asc" ? "ASC" : "DESC";
+  const tiebreak = "folder ASC, fileName ASC";
+
+  if (sort?.field === "rating") {
+    // Unrated files (NULL) always sink to the bottom regardless of direction;
+    // among rated files, order by the requested direction, then newest-first.
+    return `rating IS NULL, rating ${dir}, ${SORT_DATE_EXPR} DESC, ${tiebreak}`;
+  }
+
+  if (dir === "ASC") {
+    // Ascending needs an explicit NULL guard: a plain ASC sorts NULL dates first,
+    // but files with no known date belong at the end in either direction.
+    return `${SORT_DATE_EXPR} IS NULL, ${SORT_DATE_EXPR} ASC, ${tiebreak}`;
+  }
+
+  // Newest first. A DESC ordering already sorts NULL effective-dates last, so no
+  // separate IS NULL term is needed — and this exact shape is index-covered.
+  return `${SORT_DATE_EXPR} DESC, ${tiebreak}`;
+};
 
 const filesNeedingMetadataUpdateFilter = (
   metadataGroupName: keyof typeof MetadataGroups,
@@ -55,6 +138,65 @@ const personIdFromName = (name: string) => {
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
+const normalizeTranscriptSearchText = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const tokenizeTranscriptSearchText = (value: string): string[] => [
+  ...new Set(normalizeTranscriptSearchText(value).split(" ").filter(Boolean)),
+];
+
+const countWholeWordOccurrences = (text: string, term: string): number => {
+  if (!text || !term) return 0;
+
+  let matches = 0;
+  let fromIndex = 0;
+  while (true) {
+    const index = text.indexOf(term, fromIndex);
+    if (index === -1) return matches;
+
+    const beforeOk = index === 0 || text[index - 1] === " ";
+    const afterIndex = index + term.length;
+    const afterOk = afterIndex === text.length || text[afterIndex] === " ";
+    if (beforeOk && afterOk) {
+      matches += 1;
+    }
+    fromIndex = index + term.length;
+  }
+};
+
+const scoreTranscriptMatch = (query: string, transcript: string): number => {
+  const normalizedQuery = normalizeTranscriptSearchText(query);
+  const normalizedTranscript = normalizeTranscriptSearchText(transcript);
+  const terms = tokenizeTranscriptSearchText(normalizedQuery);
+  if (!normalizedQuery || !normalizedTranscript || terms.length === 0) return 0;
+
+  const termOccurrences = terms.map((term) =>
+    countWholeWordOccurrences(normalizedTranscript, term),
+  );
+  const matchedTerms = termOccurrences.filter((count) => count > 0).length;
+  if (matchedTerms === 0) return 0;
+  if (terms.length > 1 && matchedTerms < terms.length) return 0;
+
+  const phraseOccurrences = countWholeWordOccurrences(
+    normalizedTranscript,
+    normalizedQuery,
+  );
+  const extraOccurrences = Math.max(
+    0,
+    termOccurrences.reduce((sum, count) => sum + count, 0) - matchedTerms,
+  );
+
+  return clamp01(
+    0.55 +
+      (0.25 * matchedTerms) / terms.length +
+      Math.min(0.12, phraseOccurrences * 0.12) +
+      Math.min(0.08, extraOccurrences * 0.04),
+  );
+};
+
 const toCenterBoxFromTopLeft = (box: {
   x: number;
   y: number;
@@ -81,47 +223,154 @@ const normalizeCenterArea = (area: {
   return { x, y, width, height };
 };
 
-const DEFAULT_FACE_CLUSTER_SIMILARITY = 0.62;
+// At a real library's scale (~316k faces) the greedy clustering produces a
+// huge tail of tiny clusters — measured ~113k total, ~90k of them singletons
+// (mostly low-confidence junk detections). Hiding single-face clusters keeps
+// the People response meaningful and small; the faces still exist and show up
+// the moment a second face of that person is found.
+const MIN_FACE_CLUSTER_SIZE = 2;
+const MIN_FACE_CLUSTER_PCA_SIZE = 100;
+const FACE_CLUSTER_PCA_NEIGHBORS = 10;
 
-const alignEmbeddingBuffer = (buffer: Buffer) => {
-  const aligned = new Uint8Array(buffer.byteLength);
-  aligned.set(buffer);
-  return new Float64Array(aligned.buffer);
+// Caps the summary's cluster list (ordered by size, so this is "the 1000
+// biggest people") and the detail's face list. Totals in the response still
+// reflect the uncapped numbers. Without caps the summary JSON carried tens of
+// thousands of clusters (megabytes) and a big person's detail tens of
+// thousands of face entries.
+const MAX_FACE_CLUSTERS_LISTED = 1000;
+const MAX_FACES_IN_CLUSTER_DETAIL = 2000;
+const MAX_MERGE_SUGGESTIONS = 6;
+
+// Face rows are stored per file; cluster ids are exposed to the client as
+// opaque strings. Keep the "person-" prefix stable — it's part of the API.
+const faceClusterIdToString = (clusterId: number) => `person-${clusterId}`;
+const faceClusterIdFromString = (clusterId: string): number | null => {
+  const match = /^person-(\d+)$/.exec(clusterId);
+  if (!match) return null;
+  return Number(match[1]);
 };
 
-const toUnitVector = (vector: Float64Array): Float64Array | null => {
-  let magnitudeSquared = 0;
-  for (let i = 0; i < vector.length; i += 1) {
-    const value = vector[i] ?? 0;
-    magnitudeSquared += value * value;
-  }
+type FaceClusterPCASeed = {
+  id: string;
+  clusterId: number;
+  personId: number | null;
+  count: number;
+  name: string | null;
+  representative: FaceClusterFace;
+  vector: Float32Array<ArrayBuffer>;
+};
 
-  if (magnitudeSquared <= 0) {
+const normalizeFaceClusterCentroid = (
+  vector: Float32Array<ArrayBuffer>,
+): Float32Array<ArrayBuffer> => {
+  let magnitude = 0;
+  for (let i = 0; i < vector.length; i++) magnitude += vector[i] * vector[i];
+  magnitude = Math.sqrt(magnitude);
+  if (magnitude < 1e-10) return vector;
+  const out = new Float32Array(vector.length) as Float32Array<ArrayBuffer>;
+  for (let i = 0; i < vector.length; i++) out[i] = vector[i] / magnitude;
+  return out;
+};
+
+const dotFaceClusterVectors = (
+  a: Float32Array<ArrayBuffer>,
+  b: Float32Array<ArrayBuffer>,
+): number => {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += a[i] * b[i];
+  return sum;
+};
+
+const faceRowToClusterFace = (row: {
+  folder: string;
+  fileName: string;
+  boxX: number;
+  boxY: number;
+  boxWidth: number;
+  boxHeight: number;
+  mimeType: string | null;
+  dimensionWidth: number | null;
+  dimensionHeight: number | null;
+  regions: string | null;
+}): FaceClusterFace => ({
+  path: joinPath(row.folder, row.fileName),
+  fileName: row.fileName,
+  box: {
+    x: row.boxX,
+    y: row.boxY,
+    width: row.boxWidth,
+    height: row.boxHeight,
+  },
+  mimeType: row.mimeType,
+  dimensionWidth: row.dimensionWidth,
+  dimensionHeight: row.dimensionHeight,
+  regions: row.regions,
+});
+
+const formatYearRangeLabel = (
+  minDate: number | null,
+  maxDate: number | null,
+): string | null => {
+  if (
+    minDate === null ||
+    maxDate === null ||
+    !Number.isFinite(minDate) ||
+    !Number.isFinite(maxDate)
+  ) {
     return null;
   }
 
-  const magnitude = Math.sqrt(magnitudeSquared);
-  const normalized = new Float64Array(vector.length);
-  for (let i = 0; i < vector.length; i += 1) {
-    normalized[i] = (vector[i] ?? 0) / magnitude;
-  }
-  return normalized;
+  const startYear = new Date(minDate).getUTCFullYear();
+  const endYear = new Date(maxDate).getUTCFullYear();
+  return startYear === endYear ? String(startYear) : `${startYear}-${endYear}`;
 };
 
-const cosineSimilarity = (left: Float64Array, right: Float64Array) => {
-  const length = Math.min(left.length, right.length);
-  let dot = 0;
-  for (let i = 0; i < length; i += 1) {
-    dot += (left[i] ?? 0) * (right[i] ?? 0);
-  }
-  return dot;
+type StatusCounts = {
+  allEntries: number;
+  imageEntries: number;
+  videoEntries: number;
+  missingFileMetadata: number;
+  missingMediaMetadata: number;
+  missingThumbnails: number;
+  missingFaceDetection: number;
 };
 
 export class IndexDatabase {
   public readonly storagePath: string;
   private db!: AsyncSqlite;
+  get asyncSqlite(): AsyncSqlite {
+    return this.db;
+  }
   private dbFilePath!: string;
   private walCheckpointTimer?: ReturnType<typeof setInterval>;
+  // The post-checkpoint semantic warm-scan reads every image embedding (hundreds
+  // of MB) to keep the page cache hot. During active ingestion a checkpoint
+  // writes back frames roughly every interval, so left unthrottled this heavy
+  // scan runs on a read worker every ~60s, competing with user queries and
+  // holding a WAL snapshot that blocks the next TRUNCATE. Rate-limit it.
+  private lastSemanticWarmAt = 0;
+  // The status counts come from a full-table-scan aggregate. Every active
+  // background task asks for them on each status poll, and the status SSE stream
+  // polls a few times a second, so without coordination the same heavy scan runs
+  // repeatedly while the DB is already busy indexing. De-duplicate concurrent
+  // callers onto a single scan, and briefly cache the result. All callers are
+  // progress-display getStatus() methods where sub-second staleness is invisible,
+  // so a short TTL bounds the load without any user-visible effect.
+  private statusCountsInflight?: Promise<StatusCounts>;
+  private statusCountsCache?: { value: StatusCounts; at: number };
+  private static readonly STATUS_COUNTS_TTL_MS = 1_000;
+  private pcaCache: FaceClusterPCAResult | null = null;
+  private pcaCacheInflight: Promise<FaceClusterPCAResult> | null = null;
+  // Off-critical-path startup work kicked off by init() (one-time face-cluster
+  // migrations + PCA warm). init() resolves without awaiting it so the HTTP
+  // server binds immediately; tests can await this to observe the settled state.
+  startupMaintenance: Promise<void> = Promise.resolve();
+  private seedsCache: FaceClusterPCASeed[] | null = null;
+  private seedsCacheInflight: Promise<FaceClusterPCASeed[]> | null = null;
+  // Incremental face clustering: assignments are persisted on the faces rows
+  // and centroids in the faceClusters table, so People queries are plain
+  // indexed reads. See faceClusterEngine.ts.
+  private faceClusters!: FaceClusterEngine;
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;
@@ -169,12 +418,42 @@ export class IndexDatabase {
 
     await prepareTables(this.db);
 
+    this.faceClusters = new FaceClusterEngine(this.db);
+
     await this.db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
 
     // Clean up any leftover zombie WAL from the previous run before starting
     // the periodic maintenance timer.
     await this.checkpointWal();
     this.startWalMaintenance();
+
+    // Everything below is startup *maintenance*, not a precondition for serving
+    // requests, so it runs off the critical path: init() resolves as soon as the
+    // schema is ready and the HTTP server binds immediately, instead of blocking
+    // minutes behind it. None of it affects whether photos load — only People-tab
+    // representative ordering, which any request lazily recomputes
+    // (getFaceClustersPCA) until the warm lands.
+    this.startupMaintenance = (async () => {
+      // One-time cleanup of low-confidence "garbage" face clusters that formed
+      // before the confidence gate existed. Gated by PRAGMA user_version, so it
+      // only runs once; on first run it loads the full centroid set and is the
+      // bulk of the old ~2 min startup stall. Runs before the engine loads its
+      // centroids, so the fresh lazy-load reflects the post-purge state.
+      await this.purgeLowConfidenceFaceClusters();
+      // Backfill: bring already-merged persons onto the canonical-centroid scale
+      // that merges now maintain. Ordering is significant — runs after the purge
+      // (which frees hub survivors) and lazily loads the engine's post-purge
+      // centroids on first use.
+      await this.rescoreMergedClusterSimilarities();
+      // Queue an EXIF re-scan of already-processed images so the new
+      // human-authored `description` column gets backfilled from their headers.
+      await this.backfillExifDescriptions();
+      // Warm the PCA cache from the post-migration state so the first People-tab
+      // request is instant.
+      this.pcaCache = await this.computePCACache();
+    })().catch((err) => {
+      log.warn({ err }, "Background startup maintenance failed (non-fatal)");
+    });
   }
 
   // Passive autocheckpoints (wal_autocheckpoint) abort whenever a reader holds a
@@ -184,8 +463,7 @@ export class IndexDatabase {
   // write connection writes committed frames back into the main DB and resets
   // the WAL file during the gaps between readers.
   private startWalMaintenance(): void {
-    const intervalMs =
-      Number(process.env.PHOTRIX_WAL_CHECKPOINT_INTERVAL_MS) || 60_000;
+    const intervalMs = Number(process.env.PHOTRIX_WAL_CHECKPOINT_INTERVAL_MS) || 60_000;
     if (intervalMs <= 0) return;
     this.walCheckpointTimer = setInterval(() => {
       void this.checkpointWal();
@@ -214,7 +492,23 @@ export class IndexDatabase {
           log: number;
           checkpointed: number;
         }>("PRAGMA wal_checkpoint(TRUNCATE)");
-        if (result && result.busy === 0) return;
+        if (result && result.busy === 0) {
+          // Checkpoint wrote new DB pages that may include freshly indexed
+          // embeddings. Re-warm the scan cache so those new pages stay hot and
+          // the next search doesn't hit a cold page-cache miss — but rate-limited,
+          // since during a long ingestion nearly every checkpoint writes frames
+          // and the warm scan itself is a full-table embedding read.
+          if (result.checkpointed > 0) {
+            const warmIntervalMs =
+              Number(process.env.PHOTRIX_SEMANTIC_WARM_INTERVAL_MS) || 600_000;
+            const nowMs = Date.now();
+            if (nowMs - this.lastSemanticWarmAt >= warmIntervalMs) {
+              this.lastSemanticWarmAt = nowMs;
+              void this.warmSemanticSearch().catch(() => {});
+            }
+          }
+          return;
+        }
       } catch (err) {
         log.warn({ err }, "WAL checkpoint failed");
         return;
@@ -254,6 +548,7 @@ export class IndexDatabase {
       sql = `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`;
     }
     await this.db.run(sql, ...columns.values);
+    this.invalidateStatusCountsCache();
   }
 
   private async countEntries(whereClause?: string): Promise<number> {
@@ -272,42 +567,28 @@ export class IndexDatabase {
     });
   }
 
-  async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
+  /** Moves a file record (and all related rows) to a new path. Returns false if the source is not in the database. */
+  async moveFile(oldRelativePath: string, newRelativePath: string): Promise<boolean> {
     const { folder: oldFolder, fileName: oldFile } = splitPath(oldRelativePath);
-    const row = await this.db.get<FileRecord>(
-      "SELECT * FROM files WHERE folder = ? AND fileName = ?",
-      oldFolder,
-      oldFile,
-    );
-    if (!row) {
-      throw new Error(
-        `moveFile: File at path "${oldRelativePath}" does not exist in the database.`,
-      );
-    }
-
     const { folder: newFolder, fileName: newFile } = splitPath(newRelativePath);
-    const updated: FileRecord = {
-      ...row,
-      folder: newFolder,
-      fileName: newFile,
-    };
 
-    const columns = fileRecordToColumnNamesAndValues(updated);
-    const placeholders = columns.values.map(() => "?").join(", ");
+    const result = await this.db.run(
+      "UPDATE files SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
+      [newFolder, newFile, oldFolder, oldFile],
+    );
+    if (result.changes === 0) return false;
+
     await this.db.transaction([
-      {
-        sql: "DELETE FROM files WHERE folder = ? AND fileName = ?",
-        params: [oldFolder, oldFile],
-      },
-      {
-        sql: `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`,
-        params: columns.values,
-      },
       {
         sql: "UPDATE faces SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
         params: [newFolder, newFile, oldFolder, oldFile],
       },
+      {
+        sql: "UPDATE audioSegments SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
+        params: [newFolder, newFile, oldFolder, oldFile],
+      },
     ]);
+    return true;
   }
 
   async addOrUpdateFileData(
@@ -343,6 +624,114 @@ export class IndexDatabase {
     await this.runWithRetry(execute);
   }
 
+  /**
+   * Updates only the user-editable tagging columns (`rating`, `tags`) on an
+   * existing file row. Written as a targeted UPDATE of just the provided
+   * columns — not through fileRecordToColumnNamesAndValues — so it never touches
+   * (and therefore never clobbers) the EXIF/AI/face columns, and doesn't depend
+   * on exifProcessedAt being set. Returns false if no matching row exists.
+   */
+  async updateUserMetadata(
+    relativePath: string,
+    patch: { rating?: number | null; tags?: string[] },
+  ): Promise<boolean> {
+    const { folder, fileName } = splitPath(relativePath);
+    const sets: string[] = [];
+    const params: (string | number | null)[] = [];
+
+    if ("rating" in patch) {
+      const r = patch.rating;
+      // Ratings are 1–5; 0/null/negative all mean "unrated" and store as NULL so
+      // the rating filter and MIN/MAX aggregates treat them consistently.
+      const normalized =
+        typeof r === "number" && Number.isFinite(r) && r > 0
+          ? Math.min(5, Math.round(r))
+          : null;
+      sets.push("rating = ?");
+      params.push(normalized);
+    }
+
+    if ("tags" in patch) {
+      const tags = Array.isArray(patch.tags)
+        ? [...new Set(patch.tags.map((t) => String(t).trim()).filter(Boolean))]
+        : [];
+      sets.push("tags = ?");
+      params.push(tags.length > 0 ? JSON.stringify(tags) : null);
+    }
+
+    if (sets.length === 0) return false;
+
+    // Mark the row as carrying in-app edits so a future writeback task can find
+    // it. The files themselves stay read-only; this is purely a DB-side marker.
+    sets.push("userMetadataDirtyAt = ?");
+    params.push(Date.now());
+
+    const result = await this.runWithRetry(() =>
+      this.db.run(
+        `UPDATE files SET ${sets.join(", ")} WHERE folder = ? AND fileName = ?`,
+        [...params, folder, fileName],
+      ),
+    );
+    return result.changes > 0;
+  }
+
+  /**
+   * Lists rows carrying in-app rating/tag edits not yet written back to their
+   * files (userMetadataDirtyAt IS NOT NULL). Intended for a future writeback
+   * task; the files are never modified today.
+   */
+  async getFilesPendingMetadataWriteback(
+    limit = 500,
+  ): Promise<
+    Array<{ path: string; rating: number | null; tags: string[]; dirtyAt: number }>
+  > {
+    const rows = await this.db.all<{
+      folder: string;
+      fileName: string;
+      rating: number | null;
+      tags: string | null;
+      userMetadataDirtyAt: number;
+    }>(
+      `SELECT folder, fileName, rating, tags, userMetadataDirtyAt
+       FROM files
+       WHERE userMetadataDirtyAt IS NOT NULL
+       ORDER BY userMetadataDirtyAt ASC
+       LIMIT ?`,
+      limit,
+    );
+    return rows.map((row) => {
+      let tags: string[] = [];
+      if (row.tags) {
+        try {
+          const parsed: unknown = JSON.parse(row.tags);
+          if (Array.isArray(parsed)) {
+            tags = parsed.filter((t): t is string => typeof t === "string");
+          }
+        } catch {
+          // Corrupt/legacy value — treat as no tags.
+        }
+      }
+      return {
+        path: `${row.folder}${row.fileName}`,
+        rating: row.rating,
+        tags,
+        dirtyAt: row.userMetadataDirtyAt,
+      };
+    });
+  }
+
+  /** Clears the writeback marker after a file's metadata has been persisted. */
+  async clearMetadataWriteback(relativePath: string): Promise<boolean> {
+    const { folder, fileName } = splitPath(relativePath);
+    const result = await this.runWithRetry(() =>
+      this.db.run(
+        "UPDATE files SET userMetadataDirtyAt = NULL WHERE folder = ? AND fileName = ?",
+        [folder, fileName],
+      ),
+    );
+    return result.changes > 0;
+  }
+
   async getFileRecord(
     relativePath: string,
     _fields?: string[],
@@ -358,6 +747,20 @@ export class IndexDatabase {
     }
 
     return rowToFileRecord(row);
+  }
+
+  async fileMatchesFilter(subPath: string, filter: FilterElement): Promise<boolean> {
+    const { folder, fileName } = splitPath(subPath);
+    const combined: FilterElement = {
+      operation: "and",
+      conditions: [filter, { folder, fileName } as FilterElement],
+    };
+    const { where, params } = filterToSQL(combined);
+    const result = await this.db.get<{ count: number }>(
+      `SELECT COUNT(*) as count FROM files${where ? ` WHERE ${where}` : ""}`,
+      ...params,
+    );
+    return (result?.count ?? 0) > 0;
   }
 
   async countMissingInfo(): Promise<number> {
@@ -384,15 +787,42 @@ export class IndexDatabase {
     return this.countEntries();
   }
 
-  async getStatusCounts(): Promise<{
-    allEntries: number;
-    imageEntries: number;
-    videoEntries: number;
-    missingFileMetadata: number;
-    missingMediaMetadata: number;
-    missingThumbnails: number;
-    missingFaceDetection: number;
-  }> {
+  async getStatusCounts(): Promise<StatusCounts> {
+    const cached = this.statusCountsCache;
+    if (cached && Date.now() - cached.at < IndexDatabase.STATUS_COUNTS_TTL_MS) {
+      return cached.value;
+    }
+    if (this.statusCountsInflight) {
+      return this.statusCountsInflight;
+    }
+
+    // Shared across concurrent callers: don't let the first caller's request
+    // abort reject the promise everyone else is awaiting.
+    this.statusCountsInflight = runWithoutRequestAbortSignal(() =>
+      this.computeStatusCounts(),
+    )
+      .then((value) => {
+        this.statusCountsCache = { value, at: Date.now() };
+        return value;
+      })
+      .finally(() => {
+        this.statusCountsInflight = undefined;
+      });
+
+    return this.statusCountsInflight;
+  }
+
+  /**
+   * Drops the memoized status counts so the next read recomputes. Called from
+   * writes that change a counted column (file add/remove, exif/variants/face
+   * processing stamps); without it a save made inside the 1s TTL window returns
+   * a stale count.
+   */
+  private invalidateStatusCountsCache(): void {
+    this.statusCountsCache = undefined;
+  }
+
+  private async computeStatusCounts(): Promise<StatusCounts> {
     const row = await this.db.get<{
       allEntries: number | null;
       imageEntries: number | null;
@@ -507,6 +937,10 @@ export class IndexDatabase {
     const { folder, fileName } = splitPath(relativePath);
     const detectedAtMs = detectedAt.getTime();
 
+    // Re-detection replaces this file's face rows; subtract the outgoing faces
+    // from their clusters' running means so the replacements don't count twice.
+    await this.withdrawFaceClusterAssignments(folder, fileName);
+
     const statements: Array<{ sql: string; params: unknown[] }> = [
       {
         sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
@@ -545,6 +979,54 @@ export class IndexDatabase {
     });
 
     await this.db.transaction(statements);
+    this.invalidateFaceClusterPCACache();
+    this.invalidateStatusCountsCache();
+
+    // Assign the fresh faces to clusters right away so the People tab reflects
+    // new detections without waiting for the backfill task. Best-effort: on
+    // failure the rows stay clusterId NULL and the backfill picks them up.
+    try {
+      const inserted = await this.db.all<{
+        id: number;
+        embedding: Buffer;
+        confidence: number | null;
+      }>(
+        "SELECT id, embedding, confidence FROM faces WHERE folder = ? AND fileName = ? AND LENGTH(embedding) > 0",
+        folder,
+        fileName,
+      );
+      await this.faceClusters.assignFaces(inserted);
+    } catch (error) {
+      log.warn(
+        { err: error, path: relativePath },
+        "Inline face cluster assignment failed; backfill will retry",
+      );
+    }
+  }
+
+  /**
+   * Subtracts a file's clustered faces from their clusters ahead of deleting
+   * the face rows. Best-effort: a missed withdrawal only leaves ghost weight in
+   * a centroid (displayed counts always come from live rows).
+   */
+  private async withdrawFaceClusterAssignments(
+    folder: string,
+    fileName: string,
+  ): Promise<void> {
+    try {
+      const assigned = await this.db.all<{ clusterId: number; embedding: Buffer }>(
+        `SELECT clusterId, embedding FROM faces
+         WHERE folder = ? AND fileName = ? AND clusterId IS NOT NULL AND LENGTH(embedding) > 0`,
+        folder,
+        fileName,
+      );
+      await this.faceClusters.removeFaces(assigned);
+    } catch (error) {
+      log.warn(
+        { err: error, folder, fileName },
+        "Face cluster withdrawal failed; centroids keep ghost weight",
+      );
+    }
   }
 
   async saveFacesFromMetadataRegions(
@@ -582,6 +1064,9 @@ export class IndexDatabase {
 
     const { folder, fileName } = splitPath(relativePath);
     const detectedAtMs = detectedAt.getTime();
+
+    await this.withdrawFaceClusterAssignments(folder, fileName);
+
     const statements: Array<{ sql: string; params: unknown[] }> = [
       {
         sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
@@ -611,6 +1096,8 @@ export class IndexDatabase {
     ];
 
     await this.db.transaction(statements);
+    this.invalidateFaceClusterPCACache();
+    this.invalidateStatusCountsCache();
   }
 
   /** Returns face rows for a file in insertion order. Empty array means scanned-no-faces. */
@@ -666,6 +1153,59 @@ export class IndexDatabase {
     });
   }
 
+  /**
+   * Returns the detected faces for a file joined to their People cluster, for
+   * the fullscreen face-name overlay. Only faces assigned to a real cluster
+   * (`clusterId > 0`) are returned; each carries the effective person id (after
+   * merges, via `COALESCE(faceClusters.personId, faces.clusterId)`) and that
+   * person's name when the user has named them. Boxes are normalized centre
+   * coordinates, matching `faceTableBoxes` on the client.
+   */
+  async getPeopleFacesForFile(relativePath: string): Promise<
+    Array<{
+      box: { x: number; y: number; width: number; height: number };
+      personId: string;
+      name: string | null;
+    }>
+  > {
+    const { folder, fileName } = splitPath(relativePath);
+    const rows = await this.db.all<{
+      boxX: number;
+      boxY: number;
+      boxWidth: number;
+      boxHeight: number;
+      personId: number;
+      name: string | null;
+    }>(
+      `SELECT
+         faces.boxX,
+         faces.boxY,
+         faces.boxWidth,
+         faces.boxHeight,
+         COALESCE(cluster.personId, faces.clusterId) AS personId,
+         person.name AS name
+       FROM faces
+       LEFT JOIN faceClusters AS cluster ON cluster.id = faces.clusterId
+       LEFT JOIN faceClusters AS person
+         ON person.id = COALESCE(cluster.personId, faces.clusterId)
+       WHERE faces.folder = ? AND faces.fileName = ? AND faces.clusterId > 0
+       ORDER BY faces.id`,
+      folder,
+      fileName,
+    );
+
+    return rows.map((row) => ({
+      box: {
+        x: row.boxX,
+        y: row.boxY,
+        width: row.boxWidth,
+        height: row.boxHeight,
+      },
+      personId: faceClusterIdToString(row.personId),
+      name: row.name,
+    }));
+  }
+
   async addPaths(paths: string[]): Promise<void> {
     if (!paths.length) return;
     const pathStatements = paths.map((relativePath) => {
@@ -677,6 +1217,7 @@ export class IndexDatabase {
       };
     });
     await this.db.transaction(pathStatements);
+    this.invalidateStatusCountsCache();
   }
 
   /** Removes a file and returns success status. */
@@ -690,7 +1231,61 @@ export class IndexDatabase {
       folder,
       fileName,
     ]);
+    await this.db.run("DELETE FROM audioSegments WHERE folder = ? AND fileName = ?", [
+      folder,
+      fileName,
+    ]);
+    this.invalidateStatusCountsCache();
     return result.changes === 1;
+  }
+
+  /**
+   * Marks an already-indexed file as needing a full re-sync after its content
+   * changed on disk. Clears every "processed at" marker and derived artifact so
+   * the background pipeline re-derives all metadata, embeddings, and faces from
+   * scratch. Value columns (dateTaken, dimensions, etc.) are left in place so the
+   * UI keeps showing the previous data until the reprocessing overwrites it.
+   *
+   * Returns whether a matching file row existed.
+   */
+  async markFileForResync(relativePath: string): Promise<boolean> {
+    const { folder, fileName } = splitPath(relativePath);
+    const result = await this.db.run(
+      `UPDATE files SET
+         infoProcessedAt = NULL,
+         exifProcessedAt = NULL,
+         imageVariantsGeneratedAt = NULL,
+         hlsGeneratedAt = NULL,
+         facesProcessedAt = NULL,
+         facesLastErrorAt = NULL,
+         imageEmbedding = NULL,
+         embeddingProcessedAt = NULL,
+         embeddingErrorAt = NULL,
+         analysisDecodeErrorAt = NULL,
+         audioTranscript = NULL,
+         audioTranscribedAt = NULL,
+         audioTranscribeErrorAt = NULL,
+         audioEmbedding = NULL,
+         audioEmbeddingProcessedAt = NULL,
+         audioEmbeddingErrorAt = NULL
+       WHERE folder = ? AND fileName = ?`,
+      [folder, fileName],
+    );
+    if (result.changes === 0) return false;
+
+    // Face/audio detections are keyed by path and describe the old content, so
+    // drop them; the analysis pass regenerates them from the new bytes.
+    await this.db.run("DELETE FROM faces WHERE folder = ? AND fileName = ?", [
+      folder,
+      fileName,
+    ]);
+    await this.db.run("DELETE FROM audioSegments WHERE folder = ? AND fileName = ?", [
+      folder,
+      fileName,
+    ]);
+    this.invalidateFaceClusterPCACache();
+    this.invalidateStatusCountsCache();
+    return true;
   }
 
   async removePaths(paths: string[]): Promise<void> {
@@ -707,10 +1302,15 @@ export class IndexDatabase {
           sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
           params: [folder, fileName] as unknown[],
         },
+        {
+          sql: "DELETE FROM audioSegments WHERE folder = ? AND fileName = ?",
+          params: [folder, fileName] as unknown[],
+        },
       ];
     });
 
     await this.db.transaction(statements);
+    this.invalidateStatusCountsCache();
   }
 
   async removeFolder(relativePath: string): Promise<void> {
@@ -725,8 +1325,13 @@ export class IndexDatabase {
         sql: "DELETE FROM faces WHERE folder LIKE ? ESCAPE '\\'",
         params: [likePattern],
       },
+      {
+        sql: "DELETE FROM audioSegments WHERE folder LIKE ? ESCAPE '\\'",
+        params: [likePattern],
+      },
     ];
     await this.db.transaction(statements);
+    this.invalidateStatusCountsCache();
   }
 
   async countFilesNeedingMetadataUpdate(
@@ -787,53 +1392,105 @@ export class IndexDatabase {
     });
   }
 
+  async getImagesMissingDimensions(
+    limit = 200,
+  ): Promise<Array<{ relativePath: string }>> {
+    const rows = await this.db.all<{ folder: string; fileName: string }>(
+      `SELECT folder, fileName FROM files
+       WHERE mimeType LIKE 'image/%'
+         AND exifProcessedAt IS NOT NULL
+         AND dimensionsWidth IS NULL
+       LIMIT ?`,
+      limit,
+    );
+    return rows.map((row) => ({
+      relativePath: joinPath(row.folder, row.fileName),
+    }));
+  }
+
   async allFiles(): Promise<FileRecord[]> {
     const rows =
       await this.db.all<Record<string, string | number>>("SELECT * FROM files");
     return rows.map((row) => rowToFileRecord(row));
   }
 
-  async getFolders(relativePath: string): Promise<Array<string>> {
+  /**
+   * Returns the canonical relativePaths of every indexed file, optionally
+   * scoped to a subfolder. Used to reconcile the index against the filesystem
+   * so entries for moved/deleted files can be pruned.
+   */
+  async getIndexedPaths(subFolder?: string): Promise<string[]> {
+    const base = normalizeFolderPath(subFolder ?? "/");
+    const rows =
+      base === "/"
+        ? await this.db.all<{ folder: string; fileName: string }>(
+            "SELECT folder, fileName FROM files",
+          )
+        : await this.db.all<{ folder: string; fileName: string }>(
+            "SELECT folder, fileName FROM files WHERE folder LIKE ? ESCAPE '\\'",
+            `${escapeLikeLiteral(base)}%`,
+          );
+    return rows.map((row) => joinPath(row.folder, row.fileName));
+  }
+
+  async getFolders(
+    relativePath: string,
+    filter: FilterElement = {},
+  ): Promise<Array<{ name: string; count: number }>> {
     const base = normalizeFolderPath(relativePath);
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    const whereFragment = whereClause ? `AND (${whereClause})` : "";
 
     if (base === "/") {
-      const rows = await this.db.all<{ folderName: string | null }>(
-        `SELECT DISTINCT 
-         CASE 
-         WHEN instr(substr(folder, 2), '/') > 0 
-         THEN substr(folder, 2, instr(substr(folder, 2), '/') - 1)
-         ELSE substr(folder, 2)
-         END AS folderName
-       FROM files
-       WHERE folder LIKE '/%' AND length(folder) > 1
-       ORDER BY folderName`,
+      const rows = await this.db.all<{ folderName: string | null; count: number }>(
+        `SELECT
+          CASE 
+          WHEN instr(substr(folder, 2), '/') > 0 
+          THEN substr(folder, 2, instr(substr(folder, 2), '/') - 1)
+          ELSE substr(folder, 2)
+          END AS folderName,
+          COUNT(*) AS count
+        FROM files
+        WHERE folder LIKE '/%' AND length(folder) > 1
+          ${whereFragment}
+        GROUP BY folderName
+        ORDER BY folderName COLLATE NOCASE ASC`,
+        ...whereParams,
       );
       return rows
-        .map((row) => row.folderName)
-        .filter((v): v is string => Boolean(v))
-        .sort((a, b) => a.localeCompare(b));
+        .filter(
+          (row): row is { folderName: string; count: number } =>
+            Boolean(row.folderName) && Number.isFinite(row.count),
+        )
+        .map((row) => ({ name: row.folderName, count: row.count }));
     }
 
     const escapedPrefix = escapeLikeLiteral(base);
     const prefixLen = base.length;
-    const rows = await this.db.all<{ folderName: string | null }>(
-      `SELECT DISTINCT 
-         substr(folder, ?, instr(substr(folder, ?), '/') - 1) AS folderName
+    const rows = await this.db.all<{ folderName: string | null; count: number }>(
+      `SELECT
+         substr(folder, ?, instr(substr(folder, ?), '/') - 1) AS folderName,
+         COUNT(*) AS count
        FROM files
        WHERE folder LIKE ? ESCAPE '\\'
-         AND length(folder) > ?
-         AND instr(substr(folder, ?), '/') > 0
-       ORDER BY folderName`,
+          AND length(folder) > ?
+          AND instr(substr(folder, ?), '/') > 0
+          ${whereFragment}
+       GROUP BY folderName
+       ORDER BY folderName COLLATE NOCASE ASC`,
       prefixLen + 1,
       prefixLen + 1,
       `${escapedPrefix}%`,
       prefixLen,
       prefixLen + 1,
+      ...whereParams,
     );
     return rows
-      .map((row) => row.folderName)
-      .filter((v): v is string => Boolean(v))
-      .sort((a, b) => a.localeCompare(b));
+      .filter(
+        (row): row is { folderName: string; count: number } =>
+          Boolean(row.folderName) && Number.isFinite(row.count),
+      )
+      .map((row) => ({ name: row.folderName, count: row.count }));
   }
 
   async queryFieldSuggestions(options: {
@@ -1106,72 +1763,265 @@ export class IndexDatabase {
 
   async queryFaceClusters(options: {
     filter: QueryOptions["filter"];
-    similarityThreshold?: number;
   }): Promise<FaceClusterResult> {
-    const { filter, similarityThreshold = DEFAULT_FACE_CLUSTER_SIMILARITY } = options;
+    const { filter } = options;
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
 
-    const clusterData = await this.computeFaceClusters(filter, similarityThreshold);
+    // Step 1: per-cluster count + representative face id. SQLite bare-column
+    // semantics: with a MAX() aggregate, non-aggregated columns take their
+    // values from the row that produced the max — so `id` here is the face
+    // with the highest centroid similarity per cluster (its representative).
+    //
+    // With no filter (the People tab's default) this is a pure scan of the
+    // by_cluster covering index — ~0.15s over 358k faces. The old formulation
+    // joined 111k faceClusters rows for COALESCE(personId, clusterId) and
+    // sorted 25k groups taking ~4s. With only ~13 merged centroids, JS-side
+    // merge is negligible.
+    //
+    // The filtered variant forces the join order: MATERIALIZED pins the
+    // filtered file set, and CROSS JOIN makes it the driving table so faces
+    // are probed through the by_file_v3 covering index. Left to itself the
+    // planner drove the join from all ~300k clustered faces instead, fetching
+    // each face row (and its embedding BLOB pages) to get folder/fileName —
+    // ~14s vs ~0.2s under a face filter.
+    let aggregateRows: { personId: number; count: number; id: number }[];
+    if (whereClause) {
+      aggregateRows = await this.db.all<{ personId: number; count: number; id: number }>(
+        `WITH filtered_files AS MATERIALIZED (
+           SELECT folder, fileName FROM files WHERE ${whereClause}
+         )
+         SELECT
+           COALESCE(faceClusters.personId, faces.clusterId) AS personId,
+           COUNT(*) AS count,
+           MAX(faces.clusterSimilarity) AS representativeSimilarity,
+           faces.id AS id
+         FROM filtered_files
+         CROSS JOIN faces
+            ON faces.folder = filtered_files.folder
+           AND faces.fileName = filtered_files.fileName
+         JOIN faceClusters
+           ON faceClusters.id = faces.clusterId
+         WHERE faces.clusterId > 0
+         GROUP BY COALESCE(faceClusters.personId, faces.clusterId)
+         HAVING COUNT(*) >= ${MIN_FACE_CLUSTER_SIZE}
+         ORDER BY COUNT(*) DESC, personId`,
+        ...whereParams,
+      );
+    } else {
+      // Index-only aggregation: GROUP BY raw clusterId uses the by_cluster
+      // covering index without touching face rows or joining faceClusters.
+      const clusterRows = await this.db.all<{
+        clusterId: number;
+        count: number;
+        representativeSimilarity: number;
+        id: number;
+      }>(
+        `SELECT clusterId, COUNT(*) AS count,
+                MAX(clusterSimilarity) AS representativeSimilarity, id
+         FROM faces
+         WHERE clusterId > 0
+         GROUP BY clusterId
+         HAVING COUNT(*) >= ${MIN_FACE_CLUSTER_SIZE}
+         ORDER BY COUNT(*) DESC, clusterId`,
+      );
+      // Merge per-centroid rows into per-person groups in JS.
+      // The mergeMap covers only the ~13 faceClusters rows with personId set.
+      const mergeRows = await this.db.all<{ id: number; personId: number }>(
+        "SELECT id, personId FROM faceClusters WHERE personId IS NOT NULL",
+      );
+      const mergeMap = new Map(mergeRows.map((r) => [r.id, r.personId]));
+      const personMap = new Map<
+        number,
+        { count: number; repSimilarity: number; id: number }
+      >();
+      for (const row of clusterRows) {
+        const personId = mergeMap.get(row.clusterId) ?? row.clusterId;
+        const existing = personMap.get(personId);
+        if (!existing) {
+          personMap.set(personId, {
+            count: row.count,
+            repSimilarity: row.representativeSimilarity,
+            id: row.id,
+          });
+        } else {
+          existing.count += row.count;
+          if (row.representativeSimilarity > existing.repSimilarity) {
+            existing.repSimilarity = row.representativeSimilarity;
+            existing.id = row.id;
+          }
+        }
+      }
+      aggregateRows = [...personMap.entries()]
+        .map(([personId, data]) => ({ personId, count: data.count, id: data.id }))
+        .sort((a, b) => b.count - a.count || a.personId - b.personId);
+    }
 
-    // Return only summaries (without faces array) for performance
-    const clusters = clusterData.sortedClusters.map((cluster) => ({
-      id: cluster.id,
-      count: cluster.count,
-      representative: cluster.representative,
-    }));
+    // Same join-order forcing as above. Only faces that pass the clusterId IS
+    // NULL index constraint get a row fetch (for the LENGTH check), so the
+    // BLOB drag is limited to the actual pending backlog. Without a filter the
+    // needing_cluster partial index answers the count directly.
+    const pendingRow = whereClause
+      ? await this.db.get<{ count: number }>(
+          `WITH filtered_files AS MATERIALIZED (
+             SELECT folder, fileName FROM files WHERE ${whereClause}
+           )
+           SELECT COUNT(*) AS count
+           FROM filtered_files
+           CROSS JOIN faces
+             ON faces.folder = filtered_files.folder
+            AND faces.fileName = filtered_files.fileName
+           WHERE faces.clusterId IS NULL AND LENGTH(faces.embedding) > 0`,
+          ...whereParams,
+        )
+      : await this.db.get<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM faces
+           WHERE clusterId IS NULL AND LENGTH(embedding) > 0`,
+        );
 
-    const totalFaces = clusterData.sortedClusters.reduce(
-      (sum, cluster) => sum + cluster.count,
-      0,
-    );
+    // Step 2: hydrate the representative faces — only for the clusters the
+    // response actually lists.
+    const listed = aggregateRows.slice(0, MAX_FACE_CLUSTERS_LISTED);
+    const representatives = new Map<number, FaceClusterFace>();
+    const clusterNames = new Map<number, string | null>();
+    if (listed.length) {
+      const representativeRows = await this.db.all<{
+        id: number;
+        folder: string;
+        fileName: string;
+        boxX: number;
+        boxY: number;
+        boxWidth: number;
+        boxHeight: number;
+        mimeType: string | null;
+        dimensionWidth: number | null;
+        dimensionHeight: number | null;
+        regions: string | null;
+      }>(
+        `SELECT
+           faces.id AS id,
+           faces.folder,
+           faces.fileName,
+           faces.boxX,
+           faces.boxY,
+           faces.boxWidth,
+           faces.boxHeight,
+           files.mimeType,
+           files.dimensionsWidth AS dimensionWidth,
+           files.dimensionsHeight AS dimensionHeight,
+           files.regions
+         FROM faces
+         JOIN files
+           ON files.folder = faces.folder
+          AND files.fileName = faces.fileName
+         WHERE faces.id IN (${listed.map(() => "?").join(", ")})`,
+        ...listed.map((row) => row.id),
+      );
+      for (const row of representativeRows) {
+        representatives.set(row.id, faceRowToClusterFace(row));
+      }
+
+      const nameRows = await this.db.all<{ id: number; name: string | null }>(
+        `SELECT id, name FROM faceClusters WHERE id IN (${listed.map(() => "?").join(", ")})`,
+        ...listed.map((row) => row.personId),
+      );
+      for (const row of nameRows) {
+        clusterNames.set(row.id, row.name);
+      }
+    }
+
+    const clusters = listed.flatMap((row) => {
+      const representative = representatives.get(row.id);
+      if (!representative) return [];
+      return [
+        {
+          id: faceClusterIdToString(row.personId),
+          count: row.count,
+          representative,
+          name: clusterNames.get(row.personId) ?? null,
+        },
+      ];
+    });
 
     return {
       clusters,
-      totalFaces,
-      totalClusters: clusters.length,
+      totalFaces: aggregateRows.reduce((sum, row) => sum + row.count, 0),
+      totalClusters: aggregateRows.length,
+      pendingFaces: pendingRow?.count ?? 0,
     };
   }
 
   async getFaceClusterDetail(options: {
     filter: QueryOptions["filter"];
     clusterId: string;
-    similarityThreshold?: number;
   }): Promise<FaceClusterDetailResult> {
-    const {
-      filter,
-      clusterId,
-      similarityThreshold = DEFAULT_FACE_CLUSTER_SIMILARITY,
-    } = options;
-
-    const clusterData = await this.computeFaceClusters(filter, similarityThreshold);
-    const cluster = clusterData.sortedClusters.find((c) => c.id === clusterId);
-
-    if (!cluster) {
+    const { filter, clusterId } = options;
+    const numericClusterId = faceClusterIdFromString(clusterId);
+    if (numericClusterId === null || numericClusterId <= 0) {
       return { cluster: null };
     }
 
-    return {
-      cluster: {
-        id: cluster.id,
-        count: cluster.count,
-        representative: cluster.representative,
-        faces: cluster.faces,
-      },
-    };
-  }
+    const clusterRow = await this.db.get<{ id: number; personId: number | null }>(
+      "SELECT id, personId FROM faceClusters WHERE id = ?",
+      numericClusterId,
+    );
+    if (!clusterRow) {
+      return { cluster: null };
+    }
 
-  private async computeFaceClusters(
-    filter: QueryOptions["filter"],
-    similarityThreshold: number,
-  ): Promise<{
-    sortedClusters: Array<{
-      id: string;
-      count: number;
-      representative: FaceClusterFace;
-      faces: FaceClusterFace[];
-    }>;
-  }> {
+    const effectivePersonId = clusterRow.personId ?? clusterRow.id;
+    // unmerged persons (99.9% of cases) can bypass the COALESCE join that
+    // forced a full scan of all 111k faceClusters rows (~470ms per query);
+    // the direct clusterId = ? lookup uses the by_cluster covering index (1ms).
+    const isUnmerged = clusterRow.personId === null;
+
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
-    const normalizedThreshold = Math.min(Math.max(similarityThreshold, -1), 1);
+
+    // The `limited` CTE selects the top-N face ids entirely inside covering
+    // indexes (by_cluster unfiltered; filtered_files probing by_file_v3 under
+    // a filter — MATERIALIZED + CROSS JOIN force that join order, see
+    // queryFaceClusters). Only the N surviving rows are then fetched from
+    // faces/files for box and dimension columns, keeping the embedding-BLOB
+    // page drag proportional to the response, not the cluster size. The
+    // redundant clusterId > 0 term lets the planner prove the by_cluster
+    // partial index applies even though the cluster id is a bound parameter.
+    const limitedCTE = whereClause
+      ? `WITH filtered_files AS MATERIALIZED (
+           SELECT folder, fileName FROM files WHERE ${whereClause}
+          ),
+          limited AS (
+            SELECT faces.id AS id
+            FROM filtered_files
+            CROSS JOIN faces
+              ON faces.folder = filtered_files.folder
+             AND faces.fileName = filtered_files.fileName
+            ${
+              isUnmerged
+                ? `WHERE faces.clusterId > 0 AND faces.clusterId = ?`
+                : `JOIN faceClusters
+                     ON faceClusters.id = faces.clusterId
+                   WHERE faces.clusterId > 0
+                     AND COALESCE(faceClusters.personId, faces.clusterId) = ?`
+            }
+            ORDER BY faces.clusterSimilarity DESC, faces.id
+            LIMIT ${MAX_FACES_IN_CLUSTER_DETAIL}
+          )`
+      : isUnmerged
+        ? `WITH limited AS (
+             SELECT id FROM faces
+             WHERE clusterId > 0 AND clusterId = ?
+             ORDER BY clusterSimilarity DESC, id
+             LIMIT ${MAX_FACES_IN_CLUSTER_DETAIL}
+           )`
+        : `WITH limited AS (
+             SELECT faces.id AS id
+             FROM faces
+             JOIN faceClusters
+               ON faceClusters.id = faces.clusterId
+             WHERE faces.clusterId > 0
+               AND COALESCE(faceClusters.personId, faces.clusterId) = ?
+             ORDER BY faces.clusterSimilarity DESC, faces.id
+             LIMIT ${MAX_FACES_IN_CLUSTER_DETAIL}
+           )`;
 
     const rows = await this.db.all<{
       folder: string;
@@ -1180,17 +2030,12 @@ export class IndexDatabase {
       boxY: number;
       boxWidth: number;
       boxHeight: number;
-      embedding: Buffer;
       mimeType: string | null;
       dimensionWidth: number | null;
       dimensionHeight: number | null;
       regions: string | null;
     }>(
-      `WITH filtered_files AS (
-         SELECT folder, fileName
-         FROM files
-         ${whereClause ? `WHERE ${whereClause}` : ""}
-       )
+      `${limitedCTE}
        SELECT
          faces.folder,
          faces.fileName,
@@ -1198,134 +2043,881 @@ export class IndexDatabase {
          faces.boxY,
          faces.boxWidth,
          faces.boxHeight,
-         faces.embedding,
          files.mimeType,
          files.dimensionsWidth AS dimensionWidth,
          files.dimensionsHeight AS dimensionHeight,
          files.regions
-       FROM faces
-       JOIN filtered_files
-         ON filtered_files.folder = faces.folder
-        AND filtered_files.fileName = faces.fileName
+       FROM limited
+       JOIN faces
+         ON faces.id = limited.id
        JOIN files
          ON files.folder = faces.folder
         AND files.fileName = faces.fileName
-       WHERE LENGTH(faces.embedding) > 0
-       ORDER BY faces.folder, faces.fileName, faces.id`,
+       ORDER BY faces.clusterSimilarity DESC, faces.id`,
       ...whereParams,
+      effectivePersonId,
     );
 
-    type FaceRow = {
-      path: string;
+    if (!rows.length) {
+      return { cluster: null };
+    }
+
+    // `count` reflects the whole cluster within the filter even when the faces
+    // list is capped; the unfiltered unmerged path is pure index-only (1ms);
+    // the COALESCE variant is kept only for merged persons and filtered queries.
+    const countRow = whereClause
+      ? await this.db.get<{ count: number }>(
+          `WITH filtered_files AS MATERIALIZED (
+             SELECT folder, fileName FROM files WHERE ${whereClause}
+           )
+           SELECT COUNT(*) AS count
+           FROM filtered_files
+           CROSS JOIN faces
+             ON faces.folder = filtered_files.folder
+            AND faces.fileName = filtered_files.fileName
+           JOIN faceClusters
+             ON faceClusters.id = faces.clusterId
+           WHERE COALESCE(faceClusters.personId, faces.clusterId) = ?
+             AND faces.clusterId > 0`,
+          ...whereParams,
+          effectivePersonId,
+        )
+      : isUnmerged
+        ? await this.db.get<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM faces
+             WHERE clusterId > 0 AND clusterId = ?`,
+            effectivePersonId,
+          )
+        : await this.db.get<{ count: number }>(
+            `SELECT COUNT(*) AS count
+             FROM faces
+             JOIN faceClusters
+               ON faceClusters.id = faces.clusterId
+             WHERE faces.clusterId > 0
+               AND COALESCE(faceClusters.personId, faces.clusterId) = ?`,
+            effectivePersonId,
+          );
+
+    const faces = rows.map(faceRowToClusterFace);
+    const nameRow = await this.db.get<{ name: string | null }>(
+      "SELECT name FROM faceClusters WHERE id = ?",
+      effectivePersonId,
+    );
+
+    const centroidAggregateRows = whereClause
+      ? await this.db.all<{ clusterId: number; count: number; id: number }>(
+          `WITH filtered_files AS MATERIALIZED (
+             SELECT folder, fileName FROM files WHERE ${whereClause}
+           )
+           SELECT
+             faces.clusterId AS clusterId,
+             COUNT(*) AS count,
+             MAX(faces.clusterSimilarity) AS representativeSimilarity,
+             faces.id AS id
+           FROM filtered_files
+           CROSS JOIN faces
+             ON faces.folder = filtered_files.folder
+            AND faces.fileName = filtered_files.fileName
+           JOIN faceClusters
+             ON faceClusters.id = faces.clusterId
+           WHERE faces.clusterId > 0
+             AND COALESCE(faceClusters.personId, faces.clusterId) = ?
+           GROUP BY faces.clusterId
+           ORDER BY COUNT(*) DESC, faces.clusterId`,
+          ...whereParams,
+          effectivePersonId,
+        )
+      : isUnmerged
+        ? await this.db.all<{ clusterId: number; count: number; id: number }>(
+            `SELECT clusterId, COUNT(*) AS count,
+                    MAX(clusterSimilarity) AS representativeSimilarity, id
+             FROM faces
+             WHERE clusterId > 0 AND clusterId = ?
+             GROUP BY clusterId`,
+            effectivePersonId,
+          )
+        : await this.db.all<{ clusterId: number; count: number; id: number }>(
+            `SELECT
+               faces.clusterId AS clusterId,
+               COUNT(*) AS count,
+               MAX(faces.clusterSimilarity) AS representativeSimilarity,
+               faces.id AS id
+             FROM faces
+             JOIN faceClusters
+               ON faceClusters.id = faces.clusterId
+             WHERE faces.clusterId > 0
+               AND COALESCE(faceClusters.personId, faces.clusterId) = ?
+             GROUP BY faces.clusterId
+             ORDER BY COUNT(*) DESC, faces.clusterId`,
+            effectivePersonId,
+          );
+
+    const centroidRepresentatives = new Map<number, FaceClusterFace>();
+    if (centroidAggregateRows.length > 0) {
+      const representativeRows = await this.db.all<{
+        id: number;
+        folder: string;
+        fileName: string;
+        boxX: number;
+        boxY: number;
+        boxWidth: number;
+        boxHeight: number;
+        mimeType: string | null;
+        dimensionWidth: number | null;
+        dimensionHeight: number | null;
+        regions: string | null;
+      }>(
+        `SELECT
+           faces.id AS id,
+           faces.folder,
+           faces.fileName,
+           faces.boxX,
+           faces.boxY,
+           faces.boxWidth,
+           faces.boxHeight,
+           files.mimeType,
+           files.dimensionsWidth AS dimensionWidth,
+           files.dimensionsHeight AS dimensionHeight,
+           files.regions
+         FROM faces
+         JOIN files
+           ON files.folder = faces.folder
+          AND files.fileName = faces.fileName
+         WHERE faces.id IN (${centroidAggregateRows.map(() => "?").join(", ")})`,
+        ...centroidAggregateRows.map((row) => row.id),
+      );
+      for (const row of representativeRows) {
+        centroidRepresentatives.set(row.id, faceRowToClusterFace(row));
+      }
+    }
+
+    const centroids: FaceClusterCentroid[] = centroidAggregateRows.flatMap((row) => {
+      const representative = centroidRepresentatives.get(row.id);
+      if (!representative) return [];
+      return [
+        {
+          id: faceClusterIdToString(row.clusterId),
+          count: row.count,
+          representative,
+        },
+      ];
+    });
+
+    const mergeSuggestions = await this.getMergeSuggestions(effectivePersonId, filter);
+
+    return {
+      cluster: {
+        id: faceClusterIdToString(effectivePersonId),
+        count: countRow?.count ?? faces.length,
+        representative: faces[0],
+        faces,
+        name: nameRow?.name ?? null,
+        centroids,
+        mergeSuggestions,
+      },
+    };
+  }
+
+  /**
+   * Returns face cluster centroids projected to 3D via PCA. Result is cached
+   * in memory after the first computation and invalidated whenever the
+   * clustering task assigns new faces, so repeated calls are instant.
+   */
+  async getFaceClustersPCA(clusterId?: string): Promise<FaceClusterPCAResult> {
+    if (clusterId) {
+      return this.computeFocusedFaceClustersPCA(clusterId);
+    }
+
+    if (this.pcaCache) return this.pcaCache;
+
+    // Coalesce concurrent requests onto a single in-flight computation
+    if (this.pcaCacheInflight) return this.pcaCacheInflight;
+
+    this.pcaCacheInflight = this.computePCACache().then((result) => {
+      this.pcaCache = result;
+      this.pcaCacheInflight = null;
+      return result;
+    });
+    return this.pcaCacheInflight;
+  }
+
+  private invalidateFaceClusterPCACache() {
+    this.pcaCache = null;
+    this.pcaCacheInflight = null;
+    this.seedsCache = null;
+    this.seedsCacheInflight = null;
+  }
+
+  private buildFaceClustersPCAResult(
+    seeds: FaceClusterPCASeed[],
+    focusedClusterId: string | null = null,
+  ): FaceClusterPCAResult {
+    if (seeds.length === 0) return { points: [] };
+
+    const coords = computePCA3D(seeds.map((seed) => seed.vector));
+    const focusedIndex = focusedClusterId
+      ? seeds.findIndex((seed) => seed.id === focusedClusterId)
+      : -1;
+    const focusOrigin = focusedIndex >= 0 ? coords[focusedIndex] : null;
+
+    return {
+      points: seeds.map((seed, index) => ({
+        id: seed.id,
+        count: seed.count,
+        name: seed.name,
+        representative: seed.representative,
+        x: coords[index]![0] - (focusOrigin?.[0] ?? 0),
+        y: coords[index]![1] - (focusOrigin?.[1] ?? 0),
+        z: coords[index]![2] - (focusOrigin?.[2] ?? 0),
+        focused: seed.id === focusedClusterId,
+      })),
+    };
+  }
+
+  private async computeFocusedFaceClustersPCA(
+    clusterId: string,
+  ): Promise<FaceClusterPCAResult> {
+    const seeds = await this.listFaceClusterPCASeeds(MIN_FACE_CLUSTER_PCA_SIZE);
+    const focusedSeed = seeds.find((seed) => seed.id === clusterId);
+    if (!focusedSeed) return { points: [] };
+
+    const focusedAndNeighbors = [
+      focusedSeed,
+      ...seeds
+        .filter((seed) => seed.id !== clusterId)
+        .map((seed) => ({
+          seed,
+          similarity: dotFaceClusterVectors(seed.vector, focusedSeed.vector),
+        }))
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, FACE_CLUSTER_PCA_NEIGHBORS)
+        .map(({ seed }) => seed),
+    ];
+
+    return this.buildFaceClustersPCAResult(focusedAndNeighbors, clusterId);
+  }
+
+  private async getMergeSuggestions(
+    personId: number,
+    filter: QueryOptions["filter"],
+  ): Promise<FaceClusterSummary[]> {
+    const seeds = await this.listFaceClusterPCASeeds(MIN_FACE_CLUSTER_SIZE);
+    const personClusterRows = await this.db.all<{ id: number }>(
+      `SELECT id FROM faceClusters
+       WHERE id = ? OR personId = ?`,
+      personId,
+      personId,
+    );
+    const personClusterIds = new Set(personClusterRows.map((row) => row.id));
+    const focusedSeeds = seeds.filter((seed) => personClusterIds.has(seed.clusterId));
+    if (focusedSeeds.length === 0) return [];
+
+    const suggestedSeeds = seeds
+      .filter((seed) => seed.personId === null && !personClusterIds.has(seed.clusterId))
+      .map((seed) => ({
+        seed,
+        similarity: Math.max(
+          ...focusedSeeds.map((focusedSeed) =>
+            dotFaceClusterVectors(seed.vector, focusedSeed.vector),
+          ),
+        ),
+      }))
+      .sort((a, b) => b.similarity - a.similarity || b.seed.count - a.seed.count)
+      .slice(0, MAX_MERGE_SUGGESTIONS);
+
+    // The rest of the detail (faces, count, Match Groups) is scoped to the
+    // active filter, so scope the suggested counts to it too — otherwise a
+    // suggestion shows its whole-library face count next to filtered numbers.
+    // Candidates are all unmerged single clusters (personId === null above), so
+    // one grouped count per clusterId is exact. Drop candidates with no faces
+    // under the filter: there is nothing filter-relevant to merge.
+    const filteredCounts = await this.getFilteredClusterFaceCounts(
+      suggestedSeeds.map(({ seed }) => seed.clusterId),
+      filter,
+    );
+
+    const visibleSuggestions = filteredCounts
+      ? suggestedSeeds.flatMap(({ seed }) => {
+          const count = filteredCounts.get(seed.clusterId) ?? 0;
+          return count > 0 ? [{ seed, count }] : [];
+        })
+      : suggestedSeeds.map(({ seed }) => ({ seed, count: seed.count }));
+
+    const yearRangeLabels = await this.getFaceClusterYearRangeLabels(
+      visibleSuggestions.map(({ seed }) => seed.clusterId),
+    );
+
+    return visibleSuggestions.map(({ seed, count }) => ({
+      id: seed.id,
+      count,
+      name: seed.name,
+      representative: seed.representative,
+      yearRangeLabel: yearRangeLabels.get(seed.clusterId) ?? null,
+    }));
+  }
+
+  /**
+   * Per-cluster face counts restricted to the files that pass `filter`. Returns
+   * `null` when there is no filter (callers keep their unfiltered counts) so the
+   * default People path pays for no extra query. Uses the same MATERIALIZED +
+   * CROSS JOIN join-order forcing as queryFaceClusters to stay index-only.
+   */
+  private async getFilteredClusterFaceCounts(
+    clusterIds: number[],
+    filter: QueryOptions["filter"],
+  ): Promise<Map<number, number> | null> {
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    if (!whereClause) return null;
+    const uniqueClusterIds = [...new Set(clusterIds.filter((id) => id > 0))];
+    if (uniqueClusterIds.length === 0) return new Map();
+
+    const rows = await this.db.all<{ clusterId: number; count: number }>(
+      `WITH filtered_files AS MATERIALIZED (
+         SELECT folder, fileName FROM files WHERE ${whereClause}
+       )
+       SELECT faces.clusterId AS clusterId, COUNT(*) AS count
+       FROM filtered_files
+       CROSS JOIN faces
+         ON faces.folder = filtered_files.folder
+        AND faces.fileName = filtered_files.fileName
+       WHERE faces.clusterId IN (${uniqueClusterIds.map(() => "?").join(", ")})
+       GROUP BY faces.clusterId`,
+      ...whereParams,
+      ...uniqueClusterIds,
+    );
+
+    return new Map(rows.map((row) => [row.clusterId, row.count]));
+  }
+
+  private async getFaceClusterYearRangeLabels(
+    clusterIds: number[],
+  ): Promise<Map<number, string>> {
+    const uniqueClusterIds = [
+      ...new Set(clusterIds.filter((clusterId) => clusterId > 0)),
+    ];
+    if (uniqueClusterIds.length === 0) return new Map();
+
+    const rows = await this.db.all<{
+      clusterId: number;
+      minDate: number | null;
+      maxDate: number | null;
+    }>(
+      `SELECT
+         faces.clusterId AS clusterId,
+         MIN(COALESCE(files.dateTaken, files.created, files.modified)) AS minDate,
+         MAX(COALESCE(files.dateTaken, files.created, files.modified)) AS maxDate
+       FROM faces
+       JOIN files
+         ON files.folder = faces.folder
+        AND files.fileName = faces.fileName
+       WHERE faces.clusterId IN (${uniqueClusterIds.map(() => "?").join(", ")})
+       GROUP BY faces.clusterId`,
+      ...uniqueClusterIds,
+    );
+
+    return new Map(
+      rows.flatMap((row) => {
+        const label = formatYearRangeLabel(row.minDate, row.maxDate);
+        return label ? [[row.clusterId, label] as const] : [];
+      }),
+    );
+  }
+
+  private async listFaceClusterPCASeeds(minCount: number): Promise<FaceClusterPCASeed[]> {
+    // Build the cache at MIN_FACE_CLUSTER_SIZE on first call; filter in memory
+    // for higher minCount values. Avoids re-reading 218 MB of centroid BLOBs
+    // (+ hydrating 25k representative faces, ~1.7s) on every getMergeSuggestions
+    // and computeFocusedFaceClustersPCA call.
+    if (!this.seedsCache) {
+      if (!this.seedsCacheInflight) {
+        this.seedsCacheInflight = this.computeSeedsCache().then((seeds) => {
+          this.seedsCache = seeds;
+          this.seedsCacheInflight = null;
+          return seeds;
+        });
+      }
+      const seeds = await this.seedsCacheInflight!;
+      return minCount <= MIN_FACE_CLUSTER_SIZE
+        ? seeds
+        : seeds.filter((s) => s.count >= minCount);
+    }
+    return minCount <= MIN_FACE_CLUSTER_SIZE
+      ? this.seedsCache
+      : this.seedsCache.filter((s) => s.count >= minCount);
+  }
+
+  private async computeSeedsCache(): Promise<FaceClusterPCASeed[]> {
+    const centroidRows = await runWithoutRequestAbortSignal(() =>
+      this.db.all<{
+        id: number;
+        personId: number | null;
+        centroid: Buffer;
+        weight: number;
+        name: string | null;
+      }>(
+        `SELECT
+           faceClusters.id,
+           faceClusters.personId,
+           faceClusters.centroid,
+           faceClusters.weight,
+           COALESCE(personRoots.name, faceClusters.name) AS name
+         FROM faceClusters
+         LEFT JOIN faceClusters AS personRoots
+           ON personRoots.id = faceClusters.personId
+         WHERE faceClusters.weight > 0`,
+      ),
+    );
+
+    if (centroidRows.length === 0) return [];
+
+    const countRows = await runWithoutRequestAbortSignal(() =>
+      this.db.all<{ clusterId: number; count: number; id: number }>(
+        `SELECT clusterId, COUNT(*) AS count, MAX(clusterSimilarity) AS _, id
+         FROM faces
+         WHERE clusterId > 0
+         GROUP BY clusterId
+         HAVING COUNT(*) >= ${MIN_FACE_CLUSTER_SIZE}`,
+      ),
+    );
+
+    if (countRows.length === 0) return [];
+
+    const countMap = new Map<number, { count: number; faceId: number }>();
+    for (const row of countRows) {
+      countMap.set(row.clusterId, { count: row.count, faceId: row.id });
+    }
+
+    type RepRow = {
+      id: number;
+      folder: string;
       fileName: string;
-      box: { x: number; y: number; width: number; height: number };
+      boxX: number;
+      boxY: number;
+      boxWidth: number;
+      boxHeight: number;
       mimeType: string | null;
       dimensionWidth: number | null;
       dimensionHeight: number | null;
       regions: string | null;
-      vector: Float64Array;
     };
-
-    type MutableCluster = {
-      faces: FaceRow[];
-      centroid: Float64Array;
-    };
-
-    const clusters: MutableCluster[] = [];
-
-    for (const row of rows) {
-      const alignedEmbedding = alignEmbeddingBuffer(row.embedding);
-      const unitVector = toUnitVector(alignedEmbedding);
-      if (!unitVector) {
-        continue;
-      }
-
-      const nextFace: FaceRow = {
-        path: joinPath(row.folder, row.fileName),
-        fileName: row.fileName,
-        box: {
-          x: row.boxX,
-          y: row.boxY,
-          width: row.boxWidth,
-          height: row.boxHeight,
-        },
-        mimeType: row.mimeType,
-        dimensionWidth: row.dimensionWidth,
-        dimensionHeight: row.dimensionHeight,
-        regions: row.regions,
-        vector: unitVector,
-      };
-
-      let bestClusterIndex = -1;
-      let bestSimilarity = -2;
-
-      for (let i = 0; i < clusters.length; i += 1) {
-        const similarity = cosineSimilarity(unitVector, clusters[i].centroid);
-        if (similarity > bestSimilarity) {
-          bestSimilarity = similarity;
-          bestClusterIndex = i;
-        }
-      }
-
-      if (bestClusterIndex < 0 || bestSimilarity < normalizedThreshold) {
-        clusters.push({ faces: [nextFace], centroid: unitVector });
-        continue;
-      }
-
-      const cluster = clusters[bestClusterIndex];
-      const previousCount = cluster.faces.length;
-      cluster.faces.push(nextFace);
-
-      const updatedCentroid = new Float64Array(cluster.centroid.length);
-      for (let i = 0; i < cluster.centroid.length; i += 1) {
-        updatedCentroid[i] =
-          ((cluster.centroid[i] ?? 0) * previousCount + (unitVector[i] ?? 0)) /
-          (previousCount + 1);
-      }
-
-      cluster.centroid = toUnitVector(updatedCentroid) ?? updatedCentroid;
+    const repRows: RepRow[] = [];
+    const faceIds = [...countMap.values()].map((value) => value.faceId);
+    const CHUNK = 500;
+    for (let i = 0; i < faceIds.length; i += CHUNK) {
+      const chunk = faceIds.slice(i, i + CHUNK);
+      const rows = await runWithoutRequestAbortSignal(() =>
+        this.db.all<RepRow>(
+          `SELECT
+             faces.id AS id,
+             faces.folder, faces.fileName,
+             faces.boxX, faces.boxY, faces.boxWidth, faces.boxHeight,
+             files.mimeType,
+             files.dimensionsWidth AS dimensionWidth,
+             files.dimensionsHeight AS dimensionHeight,
+             files.regions
+           FROM faces
+           JOIN files ON files.folder = faces.folder AND files.fileName = faces.fileName
+           WHERE faces.id IN (${chunk.map(() => "?").join(", ")})`,
+          ...chunk,
+        ),
+      );
+      repRows.push(...rows);
     }
 
-    const sortedClusters = clusters
-      .map((cluster, index) => {
-        const withScores = cluster.faces.map((face) => ({
-          face,
-          similarity: cosineSimilarity(face.vector, cluster.centroid),
-        }));
-        withScores.sort((left, right) => right.similarity - left.similarity);
+    const repMap = new Map<number, FaceClusterFace>();
+    for (const row of repRows) repMap.set(row.id, faceRowToClusterFace(row));
 
-        const representativeFace = withScores[0]?.face;
-        if (!representativeFace) {
-          return null;
-        }
-
-        return {
-          id: `person-${index + 1}`,
-          count: cluster.faces.length,
-          representative: {
-            path: representativeFace.path,
-            fileName: representativeFace.fileName,
-            box: representativeFace.box,
-            mimeType: representativeFace.mimeType,
-            dimensionWidth: representativeFace.dimensionWidth,
-            dimensionHeight: representativeFace.dimensionHeight,
-            regions: representativeFace.regions,
+    return centroidRows
+      .flatMap((row) => {
+        const countEntry = countMap.get(row.id);
+        if (!countEntry) return [];
+        const representative = repMap.get(countEntry.faceId);
+        if (!representative) return [];
+        return [
+          {
+            id: faceClusterIdToString(row.id),
+            clusterId: row.id,
+            personId: row.personId,
+            count: countEntry.count,
+            name: row.name ?? null,
+            representative,
+            vector: normalizeFaceClusterCentroid(
+              toAlignedFloat32(row.centroid) as Float32Array<ArrayBuffer>,
+            ),
           },
-          faces: withScores.map(({ face }) => ({
-            path: face.path,
-            fileName: face.fileName,
-            box: face.box,
-            mimeType: face.mimeType,
-            dimensionWidth: face.dimensionWidth,
-            dimensionHeight: face.dimensionHeight,
-            regions: face.regions,
-          })),
-        };
+        ];
       })
-      .filter((cluster): cluster is NonNullable<typeof cluster> => Boolean(cluster))
-      .sort((left, right) => right.count - left.count || left.id.localeCompare(right.id));
+      .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
+  }
 
-    return { sortedClusters };
+  private async computePCACache(): Promise<FaceClusterPCAResult> {
+    const seeds = await this.listFaceClusterPCASeeds(MIN_FACE_CLUSTER_PCA_SIZE);
+    return this.buildFaceClustersPCAResult(seeds);
+  }
+
+  /**
+   * Assigns one batch of not-yet-clustered faces (best detections first, so
+   * early centroids are built from confident faces) to persistent clusters.
+   * Returns the number of faces handled; 0 means the backlog is drained.
+   *
+   * The id list and the embedding fetch are separate queries on purpose:
+   * sorting must not drag 4 KB embedding BLOBs through the sorter (that was
+   * the dominant cost of the old per-request clustering).
+   */
+  async clusterPendingFaces(batchSize = 256): Promise<number> {
+    const idRows = await this.db.all<{ id: number }>(
+      `SELECT id FROM faces
+       WHERE clusterId IS NULL AND LENGTH(embedding) > 0
+       ORDER BY confidence DESC
+       LIMIT ?`,
+      batchSize,
+    );
+    if (!idRows.length) return 0;
+
+    const faces = await this.db.all<{
+      id: number;
+      embedding: Buffer;
+      confidence: number | null;
+    }>(
+      `SELECT id, embedding, confidence FROM faces WHERE id IN (${idRows.map(() => "?").join(", ")})`,
+      ...idRows.map((row) => row.id),
+    );
+    await this.faceClusters.assignFaces(faces);
+    // Cluster membership changed — drop the PCA cache so the next request recomputes
+    this.invalidateFaceClusterPCACache();
+    return idRows.length;
+  }
+
+  async pruneEmptyFaceClusters(): Promise<void> {
+    await this.faceClusters.pruneEmptyClusters();
+    this.invalidateFaceClusterPCACache();
+  }
+
+  /**
+   * One-time migration (gated by PRAGMA user_version) that retires the hub
+   * "garbage" clusters that formed before the confidence gate: low-confidence
+   * detections that collapsed into a few magnet clusters mixing non-faces with
+   * a thin tail of real faces.
+   *
+   * Runs before the engine loads its centroids, so its lazy load reflects the
+   * post-purge DB. Idempotent regardless of the version guard (a re-run finds no
+   * sub-floor clustered faces and no contaminated clusters), so setting the
+   * version after the mutations is safe even if the process dies in between.
+   */
+  private async purgeLowConfidenceFaceClusters(): Promise<void> {
+    const versionRow = await this.db.get<{ user_version: number }>(
+      "PRAGMA user_version",
+    );
+    if ((versionRow?.user_version ?? 0) >= LOW_CONFIDENCE_PURGE_VERSION) return;
+
+    // Hubs are defined by their junk: when the sub-floor faces are a large share
+    // of a cluster, its confident survivors aren't necessarily one person, so
+    // free them (clusterId NULL) for the backfill to re-cluster cleanly. A
+    // healthy cluster that merely sheds a straggler keeps its assignment — the
+    // leftover ghost weight in its centroid is negligible and self-corrects.
+    const contaminated = await this.db.all<{ clusterId: number }>(
+      `SELECT clusterId FROM faces
+       WHERE clusterId > 0
+       GROUP BY clusterId
+       HAVING SUM(CASE WHEN confidence < ? THEN 1 ELSE 0 END) * 1.0 / COUNT(*) >= ?
+          AND SUM(CASE WHEN confidence >= ? THEN 1 ELSE 0 END) > 0`,
+      MIN_FACE_CONFIDENCE_FOR_CLUSTERING,
+      HUB_RECLUSTER_PURGE_FRACTION,
+      MIN_FACE_CONFIDENCE_FOR_CLUSTERING,
+    );
+    const contaminatedIds = contaminated.map((row) => row.clusterId);
+
+    const statements: Array<{ sql: string; params: unknown[] }> = [
+      // Evict every sub-floor detection to the low-confidence sentinel.
+      {
+        sql: "UPDATE faces SET clusterId = ?, clusterSimilarity = NULL WHERE clusterId > 0 AND confidence < ?",
+        params: [LOW_CONFIDENCE_CLUSTER_ID, MIN_FACE_CONFIDENCE_FOR_CLUSTERING],
+      },
+    ];
+    // Free the confident survivors of hub clusters for re-clustering.
+    for (let i = 0; i < contaminatedIds.length; i += 500) {
+      const chunk = contaminatedIds.slice(i, i + 500);
+      statements.push({
+        sql: `UPDATE faces SET clusterId = NULL, clusterSimilarity = NULL
+              WHERE clusterId IN (${chunk.map(() => "?").join(", ")})`,
+        params: chunk,
+      });
+    }
+    // Drop centroid rows left with no confident members: the fully-emptied hubs
+    // and the contaminated clusters whose survivors we just reset to NULL.
+    statements.push({
+      sql: "DELETE FROM faceClusters WHERE id NOT IN (SELECT DISTINCT clusterId FROM faces WHERE clusterId > 0)",
+      params: [],
+    });
+
+    await this.db.transaction(statements);
+    // PRAGMA can't run inside the batch transaction and can't be parameterized;
+    // the version is a trusted integer literal.
+    await this.db.exec(`PRAGMA user_version = ${LOW_CONFIDENCE_PURGE_VERSION}`);
+    this.invalidateFaceClusterPCACache();
+    log.info(
+      { reclusteredHubs: contaminatedIds.length },
+      "Purged low-confidence face detections from clustering",
+    );
+  }
+
+  /**
+   * One-time migration (gated by PRAGMA user_version) that rescores the stored
+   * clusterSimilarity of already-merged sub-clusters against their person's
+   * canonical centroid. Before rescore-on-merge existed, merging only regrouped
+   * personId and left each sub-cluster's seed pinned at 1.0, so a merged
+   * person's representative/detail order surfaced arbitrary sub-cluster seeds
+   * (often tiny background faces) ahead of the real centroid faces. Idempotent:
+   * a re-run recomputes the same similarities.
+   */
+  private async rescoreMergedClusterSimilarities(): Promise<void> {
+    const versionRow = await this.db.get<{ user_version: number }>(
+      "PRAGMA user_version",
+    );
+    if ((versionRow?.user_version ?? 0) >= MERGED_SIMILARITY_RESCORE_VERSION) return;
+
+    // Sub-clusters are the rows whose personId points at a *different* canonical
+    // cluster; the canonical cluster's own faces are already scored against its
+    // centroid. Group the sub-clusters by their canonical id and rescore each
+    // group's faces against that canonical centroid.
+    const subClusters = await this.db.all<{ id: number; personId: number }>(
+      "SELECT id, personId FROM faceClusters WHERE personId IS NOT NULL AND personId != id",
+    );
+    const byCanonical = new Map<number, number[]>();
+    for (const row of subClusters) {
+      const list = byCanonical.get(row.personId) ?? [];
+      list.push(row.id);
+      byCanonical.set(row.personId, list);
+    }
+    for (const [canonicalId, subjectIds] of byCanonical) {
+      await this.faceClusters.rescoreFacesAgainstCluster(canonicalId, subjectIds);
+    }
+
+    await this.db.exec(`PRAGMA user_version = ${MERGED_SIMILARITY_RESCORE_VERSION}`);
+    this.invalidateFaceClusterPCACache();
+    log.info(
+      { persons: byCanonical.size, subClusters: subClusters.length },
+      "Rescored merged sub-cluster similarities against canonical centroids",
+    );
+  }
+
+  /**
+   * One-time migration (gated by PRAGMA user_version) that re-queues images for
+   * EXIF extraction so the newly-added human-authored `description` column is
+   * backfilled from their file headers. Images scanned before the column existed
+   * carry a non-null exifProcessedAt, so processExifMetadata would otherwise skip
+   * them forever. Clearing exifProcessedAt (only for already-processed images)
+   * puts them back on the "needs EXIF" queue; the re-read is header-only and the
+   * extraction is idempotent for every other field. New files are unaffected.
+   */
+  private async backfillExifDescriptions(): Promise<void> {
+    const versionRow = await this.db.get<{ user_version: number }>(
+      "PRAGMA user_version",
+    );
+    if ((versionRow?.user_version ?? 0) >= EXIF_DESCRIPTION_BACKFILL_VERSION) return;
+
+    const result = await this.db.run(
+      `UPDATE files SET exifProcessedAt = NULL
+       WHERE exifProcessedAt IS NOT NULL
+         AND mimeType LIKE 'image/%'
+         AND description IS NULL`,
+    );
+
+    await this.db.exec(`PRAGMA user_version = ${EXIF_DESCRIPTION_BACKFILL_VERSION}`);
+    this.invalidateStatusCountsCache();
+    log.info(
+      { requeued: result?.changes ?? 0 },
+      "Re-queued images for EXIF re-scan to backfill human descriptions",
+    );
+  }
+
+  /**
+   * Rescores stored per-face similarities against current centroids for drifted
+   * clusters, so People-tab representatives stop sticking to the seed face.
+   * Returns the number of clusters refreshed; 0 means nothing was stale.
+   */
+  refreshStaleClusterSimilarities(): Promise<number> {
+    return this.faceClusters.refreshStaleClusterSimilarities();
+  }
+
+  async renameCluster(clusterId: string, name: string | null): Promise<boolean> {
+    const numericId = faceClusterIdFromString(clusterId);
+    if (numericId === null || numericId <= 0) return false;
+
+    const clusterRow = await this.db.get<{ id: number; personId: number | null }>(
+      "SELECT id, personId FROM faceClusters WHERE id = ?",
+      numericId,
+    );
+    if (!clusterRow) return false;
+
+    const normalizedName = typeof name === "string" ? name.trim() || null : null;
+    const effectivePersonId = clusterRow.personId ?? clusterRow.id;
+
+    if (normalizedName === null) {
+      if (clusterRow.personId === null) {
+        await this.db.run(
+          "UPDATE faceClusters SET name = NULL WHERE id = ?",
+          clusterRow.id,
+        );
+      } else {
+        await this.db.transaction([
+          {
+            sql: "UPDATE faceClusters SET name = NULL WHERE id = ? OR personId = ?",
+            params: [effectivePersonId, effectivePersonId],
+          },
+          {
+            sql: "UPDATE faceClusters SET personId = NULL WHERE personId = ?",
+            params: [effectivePersonId],
+          },
+        ]);
+      }
+      this.invalidateFaceClusterPCACache();
+      return true;
+    }
+
+    await this.db.transaction([
+      {
+        sql: "UPDATE faceClusters SET personId = ? WHERE id = ?",
+        params: [effectivePersonId, effectivePersonId],
+      },
+      {
+        sql: "UPDATE faceClusters SET name = ? WHERE id = ?",
+        params: [normalizedName, effectivePersonId],
+      },
+      {
+        sql: "UPDATE faceClusters SET name = NULL WHERE personId = ? AND id != ?",
+        params: [effectivePersonId, effectivePersonId],
+      },
+    ]);
+
+    this.invalidateFaceClusterPCACache();
+    return true;
+  }
+
+  async mergeClusters(
+    sourceClusterId: string,
+    targetClusterId: string,
+  ): Promise<boolean> {
+    const sourceId = faceClusterIdFromString(sourceClusterId);
+    const targetId = faceClusterIdFromString(targetClusterId);
+    if (sourceId === null || targetId === null || sourceId <= 0 || targetId <= 0)
+      return false;
+    if (sourceId === targetId) return false;
+
+    const [sourceRow, targetRow] = await Promise.all([
+      this.db.get<{ id: number; personId: number | null }>(
+        "SELECT id, personId FROM faceClusters WHERE id = ?",
+        sourceId,
+      ),
+      this.db.get<{ id: number; personId: number | null }>(
+        "SELECT id, personId FROM faceClusters WHERE id = ?",
+        targetId,
+      ),
+    ]);
+    if (!sourceRow || !targetRow) return false;
+
+    const sourcePersonId = sourceRow.personId ?? sourceRow.id;
+    const targetPersonId = targetRow.personId ?? targetRow.id;
+    if (sourcePersonId === targetPersonId) return false;
+
+    const [sourcePersonRow, targetPersonRow] = await Promise.all([
+      this.db.get<{ name: string | null }>(
+        "SELECT name FROM faceClusters WHERE id = ?",
+        sourcePersonId,
+      ),
+      this.db.get<{ name: string | null }>(
+        "SELECT name FROM faceClusters WHERE id = ?",
+        targetPersonId,
+      ),
+    ]);
+
+    const canonicalTargetId =
+      targetPersonRow?.name == null && sourcePersonRow?.name != null
+        ? sourcePersonId
+        : targetPersonId;
+    const movedPersonId =
+      canonicalTargetId === sourcePersonId ? targetPersonId : sourcePersonId;
+    const movedClusterRows = await this.db.all<{ id: number }>(
+      `SELECT id FROM faceClusters
+       WHERE id = ? OR personId = ?`,
+      movedPersonId,
+      movedPersonId,
+    );
+    if (movedClusterRows.length === 0) return false;
+
+    const placeholders = movedClusterRows.map(() => "?").join(", ");
+    await this.db.transaction([
+      {
+        sql: "UPDATE faceClusters SET personId = ? WHERE id = ?",
+        params: [canonicalTargetId, canonicalTargetId],
+      },
+      {
+        sql: `UPDATE faceClusters
+              SET personId = ?, name = NULL
+              WHERE id IN (${placeholders})`,
+        params: [canonicalTargetId, ...movedClusterRows.map((row) => row.id)],
+      },
+      {
+        sql: "UPDATE faceClusters SET name = NULL WHERE personId = ? AND id != ?",
+        params: [canonicalTargetId, canonicalTargetId],
+      },
+    ]);
+
+    // Rescore the moved sub-clusters' faces against the person's canonical
+    // centroid so the merged person's clusterSimilarity values share one scale;
+    // otherwise each moved sub-cluster's seed stays pinned at 1.0 and dominates
+    // the person's representative/detail order with an arbitrary face. The
+    // canonical cluster's own faces are already scored against this centroid.
+    await this.faceClusters.rescoreFacesAgainstCluster(
+      canonicalTargetId,
+      movedClusterRows.map((row) => row.id),
+    );
+
+    this.invalidateFaceClusterPCACache();
+    return true;
+  }
+
+  async separateCluster(clusterId: string): Promise<boolean> {
+    const numericId = faceClusterIdFromString(clusterId);
+    if (numericId === null || numericId <= 0) return false;
+
+    const clusterRow = await this.db.get<{ id: number; personId: number | null }>(
+      "SELECT id, personId FROM faceClusters WHERE id = ?",
+      numericId,
+    );
+    if (
+      !clusterRow ||
+      clusterRow.personId === null ||
+      clusterRow.personId === clusterRow.id
+    ) {
+      return false;
+    }
+
+    await this.db.run(
+      "UPDATE faceClusters SET personId = NULL, name = NULL WHERE id = ?",
+      clusterRow.id,
+    );
+
+    // The cluster is a standalone person again; restore self-scoring so its
+    // similarities are relative to its own centroid rather than the former
+    // person's canonical one (set when it was merged in).
+    await this.faceClusters.rescoreFacesAgainstCluster(clusterRow.id, [clusterRow.id]);
+
+    this.invalidateFaceClusterPCACache();
+    return true;
+  }
+
+  /** Cheap index-only counts — polled by the backfill task's status hook. */
+  async getFaceClusteringProgress(): Promise<{ assigned: number; pending: number }> {
+    const [assignedRow, pendingRow] = await Promise.all([
+      this.db.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM faces WHERE clusterId > 0",
+      ),
+      this.db.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM faces WHERE clusterId IS NULL AND LENGTH(embedding) > 0",
+      ),
+    ]);
+    return { assigned: assignedRow?.count ?? 0, pending: pendingRow?.count ?? 0 };
   }
 
   async getFilesNeedingEmbedding(
@@ -1348,7 +2940,11 @@ export class IndexDatabase {
 
   async saveImageEmbedding(relativePath: string, embedding: Float32Array): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
-    const buffer = Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
+    const buffer = Buffer.from(
+      embedding.buffer,
+      embedding.byteOffset,
+      embedding.byteLength,
+    );
     await this.db.run(
       `UPDATE files
        SET imageEmbedding = ?, embeddingProcessedAt = ?, embeddingErrorAt = NULL
@@ -1364,6 +2960,17 @@ export class IndexDatabase {
     const { folder, fileName } = splitPath(relativePath);
     await this.db.run(
       `UPDATE files SET embeddingErrorAt = ? WHERE folder = ? AND fileName = ?`,
+      Date.now(),
+      folder,
+      fileName,
+    );
+  }
+
+  /** Record a permanent decode failure so this image is never re-queued for analysis. */
+  async saveImageAnalysisDecodeError(relativePath: string): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    await this.db.run(
+      `UPDATE files SET analysisDecodeErrorAt = ? WHERE folder = ? AND fileName = ?`,
       Date.now(),
       folder,
       fileName,
@@ -1388,12 +2995,14 @@ export class IndexDatabase {
          CASE WHEN embeddingProcessedAt IS NULL AND infoProcessedAt IS NOT NULL THEN 1 ELSE 0 END AS needsEmbedding
        FROM files
        WHERE mimeType LIKE 'image/%'
+         AND analysisDecodeErrorAt IS NULL
          AND (
            (facesProcessedAt IS NULL AND exifProcessedAt IS NOT NULL)
            OR (embeddingProcessedAt IS NULL AND infoProcessedAt IS NOT NULL)
          )
        ORDER BY (facesLastErrorAt IS NOT NULL OR embeddingErrorAt IS NOT NULL),
-                folder, fileName
+                dateTaken DESC NULLS LAST,
+                folder DESC, fileName DESC
        LIMIT ?`,
       limit,
     );
@@ -1402,6 +3011,19 @@ export class IndexDatabase {
       needsFaces: row.needsFaces === 1,
       needsEmbedding: row.needsEmbedding === 1,
     }));
+  }
+
+  /** True when images exist that are waiting for upstream EXIF/info tasks to run before analysis can start. */
+  async hasImagesPendingAnalysisPrerequisites(): Promise<boolean> {
+    const row = await this.db.get<{ count: number }>(
+      `SELECT COUNT(*) as count FROM files
+       WHERE mimeType LIKE 'image/%'
+         AND (
+           (facesProcessedAt IS NULL AND exifProcessedAt IS NULL)
+           OR (embeddingProcessedAt IS NULL AND infoProcessedAt IS NULL)
+         )`,
+    );
+    return (row?.count ?? 0) > 0;
   }
 
   async getEmbeddingProgress(): Promise<[total: number, done: number]> {
@@ -1465,6 +3087,24 @@ export class IndexDatabase {
     ]);
   }
 
+  async getAudioSegments(
+    relativePath: string,
+  ): Promise<Array<{ start: number; end: number; text: string }>> {
+    const { folder, fileName } = splitPath(relativePath);
+    const rows = await this.db.all<{ startTime: number; endTime: number; text: string }>(
+      `SELECT startTime, endTime, text FROM audioSegments
+       WHERE folder = ? AND fileName = ?
+       ORDER BY startTime`,
+      folder,
+      fileName,
+    );
+    return rows.map((row) => ({
+      start: row.startTime,
+      end: row.endTime,
+      text: row.text,
+    }));
+  }
+
   async saveAudioTranscriptionError(relativePath: string): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
     await this.db.run(
@@ -1513,7 +3153,11 @@ export class IndexDatabase {
 
   async saveAudioEmbedding(relativePath: string, embedding: Float32Array): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
-    const buffer = Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
+    const buffer = Buffer.from(
+      embedding.buffer,
+      embedding.byteOffset,
+      embedding.byteLength,
+    );
     await this.db.run(
       `UPDATE files
        SET audioEmbedding = ?, audioEmbeddingProcessedAt = ?, audioEmbeddingErrorAt = NULL
@@ -1529,6 +3173,16 @@ export class IndexDatabase {
     const { folder, fileName } = splitPath(relativePath);
     await this.db.run(
       `UPDATE files SET audioEmbeddingErrorAt = ? WHERE folder = ? AND fileName = ?`,
+      Date.now(),
+      folder,
+      fileName,
+    );
+  }
+
+  async markAudioEmbeddingSkipped(relativePath: string): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    await this.db.run(
+      `UPDATE files SET audioEmbedding = NULL, audioEmbeddingProcessedAt = ?, audioEmbeddingErrorAt = NULL WHERE folder = ? AND fileName = ?`,
       Date.now(),
       folder,
       fileName,
@@ -1554,42 +3208,32 @@ export class IndexDatabase {
   ): Promise<Array<FileRecord & { similarity: number }>> {
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
 
+    const queryBuffer = Buffer.from(
+      queryVector.buffer,
+      queryVector.byteOffset,
+      queryVector.byteLength,
+    );
+
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT *
+      `SELECT *, cosine_similarity_f32(audioEmbedding, ?) AS similarity
        FROM files
        WHERE audioEmbedding IS NOT NULL
          AND (
            (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL)
            OR mimeType LIKE 'audio/%'
          )
-         ${whereClause ? `AND (${whereClause})` : ""}`,
+         ${whereClause ? `AND (${whereClause})` : ""}
+       ORDER BY similarity DESC
+       LIMIT ?`,
+      queryBuffer,
       ...whereParams,
+      limit,
     );
 
-    type ScoredRow = { record: FileRecord; similarity: number };
-    const scored: ScoredRow[] = [];
-
-    for (const row of rows) {
-      const rawBuf = row.audioEmbedding as Buffer | null;
-      if (!rawBuf) continue;
-
-      const aligned = new Uint8Array(rawBuf.byteLength);
-      aligned.set(rawBuf);
-      const embedding = new Float32Array(aligned.buffer);
-
-      // CLAP embeddings are L2-normalised so cosine similarity == dot product
-      let dot = 0;
-      const len = Math.min(queryVector.length, embedding.length);
-      for (let i = 0; i < len; i++) {
-        dot += (queryVector[i] ?? 0) * (embedding[i] ?? 0);
-      }
-
-      const record = rowToFileRecord(row as Record<string, string | number>);
-      scored.push({ record, similarity: dot });
-    }
-
-    scored.sort((a, b) => b.similarity - a.similarity);
-    return scored.slice(0, limit).map(({ record, similarity }) => ({ ...record, similarity }));
+    return rows.map((row) => ({
+      ...rowToFileRecord(row as Record<string, string | number>),
+      similarity: typeof row.similarity === "number" ? row.similarity : 0,
+    }));
   }
 
   async audioTranscriptSearch(
@@ -1598,24 +3242,38 @@ export class IndexDatabase {
     limit: number,
   ): Promise<Array<FileRecord & { similarity: number }>> {
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
-    const likePattern = `%${query.replace(/[%_]/g, "\\$&")}%`;
+    const terms = tokenizeTranscriptSearchText(query);
+    if (terms.length === 0) {
+      return [];
+    }
+
+    const candidateLimit = Math.min(Math.max(limit * 10, limit), 500);
+    const transcriptWhere = terms
+      .map(() => "LOWER(audioTranscript) LIKE ? ESCAPE '\\'")
+      .join(" AND ");
+    const transcriptParams = terms.map((term) => `%${escapeLikeLiteral(term)}%`);
 
     const rows = await this.db.all<Record<string, unknown>>(
       `SELECT *
        FROM files
-       WHERE audioTranscript IS NOT NULL
-         AND audioTranscript LIKE ? ESCAPE '\\'
-         ${whereClause ? `AND (${whereClause})` : ""}
-       LIMIT ?`,
-      likePattern,
+        WHERE audioTranscript IS NOT NULL
+          AND ${transcriptWhere}
+          ${whereClause ? `AND (${whereClause})` : ""}
+        LIMIT ?`,
+      ...transcriptParams,
       ...whereParams,
-      limit,
+      candidateLimit,
     );
 
-    return rows.map((row) => ({
-      ...rowToFileRecord(row as Record<string, string | number>),
-      similarity: 0.6,
-    }));
+    return rows
+      .map((row) => {
+        const record = rowToFileRecord(row as Record<string, string | number>);
+        const similarity = scoreTranscriptMatch(query, String(row.audioTranscript ?? ""));
+        return similarity > 0 ? { ...record, similarity } : null;
+      })
+      .filter((row): row is FileRecord & { similarity: number } => row !== null)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
   }
 
   async semanticSearch(
@@ -1656,29 +3314,63 @@ export class IndexDatabase {
     }));
   }
 
+  /**
+   * Prime the OS page cache for image semantic search.
+   *
+   * `semanticSearch` scans every image-embedding BLOB (hundreds of MB on a large
+   * library). Cold — right after a restart, before background analysis has
+   * touched those pages — that read alone can exceed the search request timeout,
+   * so the first user query times out and returns nothing. That is the dominant
+   * cause of "semantic search failed" immediately after the server starts.
+   *
+   * Running one throwaway scan in the background at boot pulls the embedding
+   * pages into cache so the first real query is warm. Best-effort: the score is
+   * irrelevant (a zero query vector ranks nothing), the point is the read, and
+   * any failure is swallowed so a warmup problem never blocks startup.
+   */
+  async warmSemanticSearch(): Promise<void> {
+    // CLIP ViT-B-32 image-embedding dimension. An exact match is not required —
+    // even a length-mismatched probe forces SQLite to load every embedding BLOB
+    // to hand it to the scoring function — but matching keeps the scan realistic.
+    const probe = new Float32Array(512);
+    // Record the warm so the post-checkpoint throttle counts explicit warms
+    // (startup, search-warmup) too, and doesn't immediately re-scan right after.
+    this.lastSemanticWarmAt = Date.now();
+    await this.semanticSearch(probe, {}, 1);
+  }
+
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(
     options: QueryOptions,
   ): Promise<QueryResult<TMetadata>> {
-    const { filter, metadata, pageSize = 1_000, page: rawPage = 1 } = options;
+    const {
+      filter,
+      metadata,
+      pageSize = 1_000,
+      page: rawPage = 1,
+      expandToFolder,
+      sort,
+    } = options;
     const page = Math.max(1, rawPage);
 
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
 
-    const countSQL = `SELECT COUNT(*) as count FROM files ${whereClause ? `WHERE ${whereClause}` : ""}`;
+    // When expandToFolder is enabled, wrap the filter in a folder-IN-subquery so
+    // all files in a matched folder are returned, not just the matched files.
+    const effectiveWhere =
+      expandToFolder && whereClause
+        ? `folder IN (SELECT DISTINCT folder FROM files WHERE ${whereClause})`
+        : whereClause;
+
+    const countSQL = `SELECT COUNT(*) as count FROM files ${effectiveWhere ? `WHERE ${effectiveWhere}` : ""}`;
     const countResult = await (() =>
       this.db.get<{ count: number }>(countSQL, ...whereParams))();
     const total = countResult?.count ?? 0;
 
-    // Sort by whether date is not null (non-null first), then by date descending
     const offset = (page - 1) * pageSize;
     const mainSQL = `
-      SELECT * FROM files
-      ${whereClause ? `WHERE ${whereClause}` : ""}
-      ORDER BY
-        (COALESCE(dateTaken, created, modified) IS NOT NULL) DESC,
-        COALESCE(dateTaken, created, modified) DESC,
-        folder ASC,
-        fileName ASC
+      SELECT ${FILE_QUERY_COLUMNS} FROM files
+      ${effectiveWhere ? `WHERE ${effectiveWhere}` : ""}
+      ORDER BY ${buildQueryOrderBy(sort)}
       LIMIT ? OFFSET ?
     `;
 
@@ -1703,12 +3395,16 @@ export class IndexDatabase {
     filter: FilterElement,
   ): Promise<{ minDate: Date | null; maxDate: Date | null }> {
     const { where: whereClause, params } = filterToSQL(filter);
+    // typeof(dateTaken) = 'integer' guards against rows where dateTaken was
+    // written as a TEXT/ISO string. SQLite sorts TEXT above every INTEGER, so a
+    // single stray string poisons MAX(dateTaken) with garbage.
     const sql = `
       SELECT
         MIN(dateTaken) AS minDate,
         MAX(dateTaken) AS maxDate
       FROM files
       WHERE dateTaken IS NOT NULL
+      AND typeof(dateTaken) = 'integer'
       ${whereClause ? `AND ${whereClause}` : ""}
     `;
 
@@ -1729,62 +3425,103 @@ export class IndexDatabase {
     };
   }
 
-  async getDateHistogram(filter: FilterElement): Promise<DateHistogramResult> {
-    const range = await this.getDateRange(filter);
-    const minDate = range.minDate?.getTime() ?? null;
-    const maxDate = range.maxDate?.getTime() ?? null;
-
-    if (minDate === null || maxDate === null || minDate === maxDate) {
-      return { buckets: [], bucketSizeMs: 0, minDate, maxDate, grouping: "day" };
-    }
-
-    const spanMs = maxDate - minDate;
-    const dayMs = 24 * 60 * 60 * 1000;
-    const spanDays = spanMs / dayMs;
-    const monthDiff = (dateA: number, dateB: number) => {
-      const a = new Date(dateA);
-      const b = new Date(dateB);
-      return (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
-    };
-
-    // If the range is tight (within ~2 months) keep daily granularity; otherwise month buckets.
-    const grouping: "day" | "month" =
-      monthDiff(minDate, maxDate) <= 2 || spanDays <= 120 ? "day" : "month";
-    const bucketFormat = grouping === "day" ? "%Y-%m-%d" : "%Y-%m-01";
-
+  async getDateHistogram(
+    filter: FilterElement,
+    bucketCount = 40,
+  ): Promise<DateHistogramResult> {
     const { where: whereClause, params } = filterToSQL(filter);
-    const rows = await this.db.all<{ bucket: string; count: number }>(
-      `SELECT
-            strftime('${bucketFormat}', datetime(dateTaken / 1000, 'unixepoch')) AS bucket,
-            COUNT(*) AS count
-          FROM files
-          WHERE dateTaken IS NOT NULL
-          ${whereClause ? `AND ${whereClause}` : ""}
-          GROUP BY bucket
-          ORDER BY bucket`,
+    // Only integer timestamps take part: guards against TEXT dateTaken values
+    // that would poison MIN/MAX and the bucket math (see getDateRange).
+    const baseWhere = `dateTaken IS NOT NULL AND typeof(dateTaken) = 'integer'${
+      whereClause ? ` AND ${whereClause}` : ""
+    }`;
+
+    const stats = await this.db.get<{
+      total: number;
+      minDate: number | null;
+      maxDate: number | null;
+    }>(
+      `SELECT COUNT(*) AS total, MIN(dateTaken) AS minDate, MAX(dateTaken) AS maxDate
+         FROM files WHERE ${baseWhere}`,
       ...params,
     );
 
-    const buckets = rows.map(({ bucket, count }) => {
-      const start =
-        grouping === "day"
-          ? Date.UTC(
-              Number(bucket.slice(0, 4)),
-              Number(bucket.slice(5, 7)) - 1,
-              Number(bucket.slice(8, 10)),
-            )
-          : Date.UTC(Number(bucket.slice(0, 4)), Number(bucket.slice(5, 7)) - 1, 1);
+    const total = stats?.total ?? 0;
+    const trueMin = stats?.minDate ?? null;
+    const trueMax = stats?.maxDate ?? null;
 
-      const end =
-        grouping === "day"
-          ? start + dayMs
-          : Date.UTC(Number(bucket.slice(0, 4)), Number(bucket.slice(5, 7)), 1);
+    if (total === 0 || trueMin === null || trueMax === null || trueMin === trueMax) {
+      return {
+        buckets: [],
+        bucketSizeMs: 0,
+        minDate: trueMin,
+        maxDate: trueMax,
+        grouping: "day",
+      };
+    }
 
-      return { start, end, count };
-    });
+    // Trim sparse early outliers (e.g. one photo stamped 1899) that would
+    // otherwise stretch the axis and squash the meaningful range. We drop the
+    // lowest ~1% by clamping the domain start to that percentile, but keep the
+    // true max so recent photos are never hidden.
+    const nthValue = async (offset: number): Promise<number | null> => {
+      const clamped = Math.min(Math.max(offset, 0), total - 1);
+      const row = await this.db.get<{ dateTaken: number }>(
+        `SELECT dateTaken FROM files WHERE ${baseWhere}
+           ORDER BY dateTaken LIMIT 1 OFFSET ?`,
+        ...params,
+        clamped,
+      );
+      return row?.dateTaken ?? null;
+    };
 
-    const bucketSizeMs =
-      grouping === "day" ? dayMs : buckets[0] ? buckets[0].end - buckets[0].start : 0;
+    const trimmedMin =
+      total >= 50 ? ((await nthValue(Math.floor(total * 0.01))) ?? trueMin) : trueMin;
+
+    const minDate = trimmedMin;
+    const maxDate = trueMax;
+    const spanMs = maxDate - minDate;
+
+    if (spanMs <= 0) {
+      return { buckets: [], bucketSizeMs: 0, minDate, maxDate, grouping: "day" };
+    }
+
+    // Equal-width buckets across the (trimmed) domain give a stable number of
+    // readable bars regardless of how many years the library spans.
+    const count = Math.min(Math.max(Math.round(bucketCount), 12), 80);
+    const bucketSizeMs = spanMs / count;
+
+    const rows = await this.db.all<{ idx: number; count: number }>(
+      `SELECT
+            MIN(CAST((dateTaken - ?) / ? AS INTEGER), ?) AS idx,
+            COUNT(*) AS count
+          FROM files
+          WHERE ${baseWhere}
+            AND dateTaken >= ?
+          GROUP BY idx
+          ORDER BY idx`,
+      minDate,
+      bucketSizeMs,
+      count - 1,
+      ...params,
+      minDate,
+    );
+
+    const counts = new Array<number>(count).fill(0);
+    for (const { idx, count: c } of rows) {
+      if (idx >= 0 && idx < count) counts[idx] += c;
+    }
+
+    const buckets = counts.map((c, idx) => ({
+      start: Math.round(minDate + idx * bucketSizeMs),
+      end: Math.round(minDate + (idx + 1) * bucketSizeMs),
+      count: c,
+    }));
+
+    const dayMs = 24 * 60 * 60 * 1000;
+    const spanDays = spanMs / dayMs;
+    const grouping: DateHistogramGrouping =
+      spanDays <= 90 ? "day" : spanDays <= 3 * 365 ? "month" : "year";
 
     return { buckets, bucketSizeMs, minDate, maxDate, grouping };
   }

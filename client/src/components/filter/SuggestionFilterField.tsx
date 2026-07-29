@@ -48,13 +48,22 @@ export const SuggestionFilterField = ({
   mediaTypeFilter,
   locationBounds,
   dateRange,
-  peopleInImageFilter = [],
-  cameraModelFilter = [],
-  lensFilter = [],
+  peopleInImageFilter,
+  cameraModelFilter,
+  lensFilter,
 }: SuggestionFilterFieldProps) => {
   const [searchText, setSearchText] = useState("");
   const [suggestions, setSuggestions] = useState<SuggestionWithCount[]>([]);
   const [loading, setLoading] = useState(false);
+  const stablePeopleInImageFilter = useMemo(
+    () => peopleInImageFilter ?? [],
+    [peopleInImageFilter],
+  );
+  const stableCameraModelFilter = useMemo(
+    () => cameraModelFilter ?? [],
+    [cameraModelFilter],
+  );
+  const stableLensFilter = useMemo(() => lensFilter ?? [], [lensFilter]);
 
   const selectedLookup = useMemo(
     () => new Set(selectedValues.map((value) => value.toLocaleLowerCase())),
@@ -82,9 +91,9 @@ export const SuggestionFilterField = ({
           mediaTypeFilter,
           locationBounds,
           dateRange,
-          peopleInImageFilter,
-          cameraModelFilter,
-          lensFilter,
+          peopleInImageFilter: stablePeopleInImageFilter,
+          cameraModelFilter: stableCameraModelFilter,
+          lensFilter: stableLensFilter,
           signal: abortController.signal,
         });
 
@@ -119,9 +128,9 @@ export const SuggestionFilterField = ({
     mediaTypeFilter,
     locationBounds,
     dateRange,
-    peopleInImageFilter,
-    cameraModelFilter,
-    lensFilter,
+    stablePeopleInImageFilter,
+    stableCameraModelFilter,
+    stableLensFilter,
     selectedLookup,
   ]);
 
@@ -132,7 +141,8 @@ export const SuggestionFilterField = ({
     }
 
     const duplicate = selectedValues.some(
-      (candidate) => candidate.toLocaleLowerCase() === normalizedValue.toLocaleLowerCase(),
+      (candidate) =>
+        candidate.toLocaleLowerCase() === normalizedValue.toLocaleLowerCase(),
     );
     if (duplicate) {
       return;

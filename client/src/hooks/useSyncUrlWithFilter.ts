@@ -1,7 +1,13 @@
 import { useEffect } from "react";
 import { useFilter } from "../components/filter/FilterContext";
+import {
+  buildFilterSearchParams,
+  createFilterStateFromUrl,
+  readViewModeFromSearch,
+  type ViewMode,
+} from "../filterUrlState";
 
-export type ViewMode = "library" | "people";
+export type { ViewMode } from "../filterUrlState";
 
 export const useSyncUrlWithFilter = (
   view: ViewMode,
@@ -12,42 +18,24 @@ export const useSyncUrlWithFilter = (
 
   // Sync URL when filter or view changes
   useEffect(() => {
-    const params = new URLSearchParams();
-    if (filter.includeSubfolders === false) {
-      params.set("includeSubfolders", "false");
-    }
-    if (view !== "library") {
-      params.set("view", view);
-    }
+    const params = buildFilterSearchParams(filter, view, window.location.search);
+    const queryString = params.toString() ? `?${params.toString()}` : "";
+    const encodedPath = currentPath
+      ? currentPath.split("/").map(encodeURIComponent).join("/")
+      : "";
+    const nextUrl = `/${encodedPath}${queryString}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}`;
 
-    const currentSearch = new URLSearchParams(window.location.search);
-    const currentPathname = window.location.pathname.slice(1);
-    const currentInclude = currentSearch.get("includeSubfolders") !== "false";
-    const currentView = currentSearch.get("view") === "people" ? "people" : "library";
-
-    if (
-      decodeURIComponent(currentPathname) !== currentPath ||
-      currentInclude !== filter.includeSubfolders ||
-      currentView !== view
-    ) {
-      const queryString = params.toString() ? `?${params.toString()}` : "";
-      const encodedPath = currentPath
-        ? currentPath.split("/").map(encodeURIComponent).join("/")
-        : "";
-      window.history.pushState(null, "", `/${encodedPath}${queryString}`);
+    if (currentUrl !== nextUrl) {
+      window.history.pushState(null, "", nextUrl);
     }
-  }, [currentPath, filter.includeSubfolders, view]);
+  }, [currentPath, filter, view]);
 
   // Handle browser navigation
   useEffect(() => {
     const handlePopState = () => {
-      const params = new URLSearchParams(window.location.search);
-      const path = decodeURIComponent(window.location.pathname.slice(1));
-      setFilter({
-        path: path ? `${path}/` : "",
-        includeSubfolders: params.get("includeSubfolders") !== "false",
-      });
-      setView(params.get("view") === "people" ? "people" : "library");
+      setFilter(createFilterStateFromUrl(window.location));
+      setView(readViewModeFromSearch(window.location.search));
     };
 
     window.addEventListener("popstate", handlePopState);

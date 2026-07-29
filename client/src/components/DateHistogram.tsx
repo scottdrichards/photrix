@@ -20,8 +20,13 @@ const formatDate = (value: number) =>
     day: "numeric",
   });
 
-const formatTick = (value: number, grouping: "day" | "month") => {
+type Grouping = "day" | "month" | "year";
+
+const formatTick = (value: number, grouping: Grouping) => {
   const date = new Date(value);
+  if (grouping === "year") {
+    return date.toLocaleDateString(undefined, { year: "numeric" });
+  }
   if (grouping === "month") {
     return date.toLocaleDateString(undefined, { month: "short", year: "numeric" });
   }
@@ -36,7 +41,7 @@ const diffMonths = (start: number, end: number) => {
 
 const buildTicks = (
   domain: { min: number; max: number; span: number } | null,
-  grouping: "day" | "month",
+  grouping: Grouping,
   width: number,
   padding: { left: number; right: number },
 ) => {
@@ -44,6 +49,22 @@ const buildTicks = (
   const inner = Math.max(1, width - padding.left - padding.right);
   const maxTicks = Math.max(2, Math.floor(inner / 90));
   if (maxTicks <= 0) return [];
+
+  if (grouping === "year") {
+    const years = Math.max(1, new Date(domain.max).getFullYear() - new Date(domain.min).getFullYear());
+    const stepChoices = [1, 2, 5, 10, 20, 50];
+    const stepYears = stepChoices.find((step) => years / step <= maxTicks) ?? 100;
+    const first = new Date(domain.min);
+    first.setMonth(0, 1);
+    first.setHours(0, 0, 0, 0);
+    const ticks: number[] = [];
+    const current = new Date(first.getTime());
+    while (current.getTime() <= domain.max) {
+      ticks.push(current.getTime());
+      current.setFullYear(current.getFullYear() + stepYears, 0, 1);
+    }
+    return ticks;
+  }
 
   if (grouping === "month") {
     const months = Math.max(1, diffMonths(domain.min, domain.max));
@@ -92,15 +113,26 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
     (range: Range) => setFilter({ dateRange: range }),
     [setFilter],
   );
+  // Read the current selection inside the fetch effect without listing it as a
+  // dependency — otherwise every drag would re-trigger a histogram reload.
+  const valueRef = useRef(value);
+  valueRef.current = value;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(640);
   const height = 140;
   const padding = CHART_PADDING;
-  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  // Target roughly one bar per ~16px so buckets stay readable (~10px+ wide)
+  // instead of collapsing into hundreds of slivers over a multi-year library.
+  const desiredBuckets = Math.min(
+    60,
+    Math.max(12, Math.round((width - padding.left - padding.right) / 16)),
+  );
 
   const [buckets, setBuckets] = useState<DateHistogramBucket[]>([]);
   const [minDate, setMinDate] = useState<number | null>(null);
   const [maxDate, setMaxDate] = useState<number | null>(null);
+  const [grouping, setGrouping] = useState<Grouping>("month");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragRange, setDragRange] = useState<Range>(null);
@@ -139,6 +171,7 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
           locationBounds,
           dateRange: null,
           peopleInImageFilter,
+          buckets: desiredBuckets,
           signal: controller.signal,
         });
 
@@ -149,22 +182,24 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
         setBuckets(result.buckets);
         setMinDate(result.minDate);
         setMaxDate(result.maxDate);
+        setGrouping(result.grouping);
 
+        const current = valueRef.current;
         if (result.minDate !== null && result.maxDate !== null) {
-          if (value) {
+          if (current) {
             const clampedStart = Math.max(
               result.minDate,
-              Math.min(value.start, result.maxDate),
+              Math.min(current.start, result.maxDate),
             );
             const clampedEnd = Math.max(
               clampedStart,
-              Math.min(value.end, result.maxDate),
+              Math.min(current.end, result.maxDate),
             );
-            if (value.start !== clampedStart || value.end !== clampedEnd) {
+            if (current.start !== clampedStart || current.end !== clampedEnd) {
               onChange({ start: clampedStart, end: clampedEnd });
             }
           }
-        } else if (value) {
+        } else if (current) {
           onChange(null);
         }
       } catch (err) {
@@ -192,8 +227,8 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
     mediaTypeFilter,
     locationBounds,
     peopleInImageFilter,
+    desiredBuckets,
     onChange,
-    value,
   ]);
 
   const domain = useMemo(() => {
@@ -208,15 +243,6 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
   const maxCount = useMemo(
     () => buckets.reduce((m, b) => Math.max(m, b.count), 0),
     [buckets],
-  );
-
-  const bucketSpan = useMemo(
-    () => (buckets[0] ? buckets[0].end - buckets[0].start : 0),
-    [buckets],
-  );
-  const inferredGrouping: "day" | "month" = useMemo(
-    () => (bucketSpan > 28 * DAY_MS ? "month" : "day"),
-    [DAY_MS, bucketSpan],
   );
 
   const xFor = useCallback(
@@ -256,6 +282,9 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
       const startMs = invertX(event.clientX, rect);
       if (startMs === null) return;
       isDragging.current = true;
+      // Capture the pointer so touch drags keep delivering move events to this
+      // rect even as the finger drifts past the chart edges.
+      event.currentTarget.setPointerCapture?.(event.pointerId);
       const clamped = clampToDomain(startMs);
       setDragRange({ start: clamped, end: clamped });
     },
@@ -279,18 +308,34 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
     [clampToDomain, domain, invertX],
   );
 
+  // Snap a raw pointer range to the bucket edges it covers so a selection
+  // always aligns to whole bars. A click (start === end) collapses to the
+  // single bucket under the pointer.
+  const snapToBuckets = useCallback(
+    (rawStart: number, rawEnd: number): Range => {
+      if (buckets.length === 0) return null;
+      const lo = Math.min(rawStart, rawEnd);
+      const hi = Math.max(rawStart, rawEnd);
+      const bucketAt = (ms: number) =>
+        buckets.find((b) => ms >= b.start && ms <= b.end) ??
+        (ms < buckets[0].start ? buckets[0] : buckets[buckets.length - 1]);
+      const startBucket = bucketAt(lo);
+      const endBucket = bucketAt(hi);
+      return { start: startBucket.start, end: endBucket.end };
+    },
+    [buckets],
+  );
+
   const endDrag = useCallback(() => {
     if (!isDragging.current) return;
     isDragging.current = false;
     setDragRange((current) => {
       if (!current) return current;
-      const start = Math.min(current.start, current.end);
-      const end = Math.max(current.start, current.end);
-      const next = start === end ? null : { start, end };
+      const next = snapToBuckets(current.start, current.end);
       onChange(next);
       return next;
     });
-  }, [onChange]);
+  }, [onChange, snapToBuckets]);
 
   useEffect(() => {
     const handleUp = () => {
@@ -303,6 +348,33 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
   }, [endDrag]);
 
   const activeRange = dragRange ?? value;
+
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+
+  const bucketIndexAt = useCallback(
+    (ms: number) => {
+      if (buckets.length === 0) return null;
+      const idx = buckets.findIndex((b) => ms >= b.start && ms <= b.end);
+      if (idx !== -1) return idx;
+      return ms < buckets[0].start ? 0 : buckets.length - 1;
+    },
+    [buckets],
+  );
+
+  const updateHover = useCallback(
+    (event: React.PointerEvent<SVGRectElement>) => {
+      const svg = event.currentTarget.ownerSVGElement;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      const pos = invertX(event.clientX, rect);
+      if (pos === null) {
+        setHoverIndex(null);
+        return;
+      }
+      setHoverIndex(bucketIndexAt(pos));
+    },
+    [bucketIndexAt, invertX],
+  );
 
   const bars = useMemo(() => {
     if (!domain || maxCount === 0)
@@ -319,20 +391,20 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
       const x1 = xFor(bucket.end);
       const barW = Math.max(1, x1 - x0 - 1);
       const ratio = bucket.count / maxCount;
-      const barH = Math.max(2, innerHeight * ratio);
+      const barH = bucket.count === 0 ? 0 : Math.max(2, innerHeight * ratio);
       const y = height - padding.bottom - barH;
       return { x: x0, width: barW, height: barH, y, count: bucket.count };
     });
   }, [buckets, domain, height, maxCount, padding.bottom, padding.top, xFor]);
 
   const ticks = useMemo(
-    () => buildTicks(domain, inferredGrouping, width, padding),
-    [domain, inferredGrouping, width, padding],
+    () => buildTicks(domain, grouping, width, padding),
+    [domain, grouping, width, padding],
   );
 
   const filteredTicks = useMemo(() => {
     if (!domain) return ticks;
-    const minSpacing = inferredGrouping === "day" ? 50 : 70;
+    const minSpacing = grouping === "day" ? 50 : 70;
     const accepted: number[] = [];
     let lastX = -Infinity;
     for (const tick of ticks) {
@@ -343,7 +415,7 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
       }
     }
     return accepted;
-  }, [domain, inferredGrouping, ticks, xFor]);
+  }, [domain, grouping, ticks, xFor]);
 
   const selectionRect = useMemo(() => {
     if (!domain || !activeRange) return null;
@@ -353,6 +425,23 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
     const right = Math.max(x0, x1);
     return { x: left, width: Math.max(0, right - left) };
   }, [activeRange, domain, xFor]);
+
+  const hoverBar =
+    hoverIndex !== null && hoverIndex < bars.length ? bars[hoverIndex] : null;
+
+  const hoverTooltip = useMemo(() => {
+    if (hoverIndex === null) return null;
+    const bucket = buckets[hoverIndex];
+    const bar = bars[hoverIndex];
+    if (!bucket || !bar) return null;
+    const center = bar.x + bar.width / 2;
+    const left = Math.min(Math.max(center, 40), width - 40);
+    const label =
+      bucket.end - bucket.start > 24 * 60 * 60 * 1000 + 1000
+        ? `${formatDate(bucket.start)} – ${formatDate(bucket.end)}`
+        : formatDate(bucket.start);
+    return { left, count: bucket.count, label };
+  }, [bars, buckets, hoverIndex, width]);
 
   const showEmpty = !loading && (buckets.length === 0 || !domain);
   const canClear = Boolean(value);
@@ -376,17 +465,12 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
             <Spinner label="Loading dates" />
           </div>
         ) : null}
-        <svg width={width} height={height} role="presentation">
-          <rect
-            x={0}
-            y={0}
-            width={width}
-            height={height}
-            fill="transparent"
-            pointerEvents="all"
-            onPointerDown={beginDrag}
-            onPointerMove={updateDrag}
-          />
+        <svg
+          width={width}
+          height={height}
+          role="presentation"
+          style={{ touchAction: "none" }}
+        >
           {bars.map((bar, idx) => (
             <rect
               key={idx}
@@ -395,13 +479,14 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
               width={bar.width}
               height={bar.height}
               style={{ fill: "var(--blue-bg2)" }}
-              opacity={0.9}
+              opacity={hoverIndex === idx ? 1 : 0.9}
+              pointerEvents="none"
             />
           ))}
           {filteredTicks.map((t, idx) => {
             const x = xFor(t);
             return (
-              <g key={idx}>
+              <g key={idx} pointerEvents="none">
                 <line
                   x1={x}
                   x2={x}
@@ -417,7 +502,7 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
                   fontSize={10}
                   style={{ fill: "var(--fg2)" }}
                 >
-                  {formatTick(t, inferredGrouping)}
+                  {formatTick(t, grouping)}
                 </text>
               </g>
             );
@@ -433,7 +518,47 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
               pointerEvents="none"
             />
           ) : null}
+          {/* Interactive overlay sits on top so bars/ticks never swallow
+              pointer events; visuals below are all pointerEvents="none". */}
+          <rect
+            x={0}
+            y={0}
+            width={width}
+            height={height}
+            fill="transparent"
+            pointerEvents="all"
+            style={{ touchAction: "none" }}
+            onPointerDown={beginDrag}
+            onPointerMove={(event) => {
+              updateDrag(event);
+              updateHover(event);
+            }}
+            onPointerUp={endDrag}
+            onPointerLeave={() => setHoverIndex(null)}
+          />
+          {hoverBar ? (
+            <g pointerEvents="none">
+              <rect
+                x={hoverBar.x - 1}
+                y={padding.top}
+                width={hoverBar.width + 2}
+                height={height - padding.top - padding.bottom}
+                style={{ fill: "var(--fg2)" }}
+                opacity={0.08}
+              />
+            </g>
+          ) : null}
         </svg>
+        {hoverTooltip ? (
+          <div
+            className={css.tooltip}
+            style={{ left: hoverTooltip.left }}
+            role="presentation"
+          >
+            <strong>{hoverTooltip.count}</strong>
+            <span>{hoverTooltip.label}</span>
+          </div>
+        ) : null}
       </div>
       <div className={css.labels}>
         <small>{minDate ? formatDate(minDate) : ""}</small>

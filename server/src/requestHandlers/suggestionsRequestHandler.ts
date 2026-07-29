@@ -14,6 +14,7 @@ type SuggestionsField =
 
 type Options = {
   database: IndexDatabase;
+  shareFilter?: unknown;
 };
 
 const suggestionFields: SuggestionsField[] = [
@@ -33,7 +34,7 @@ const isSuggestionsField = (value: string): value is SuggestionsField => {
 export const suggestionsRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
   res: http.ServerResponse,
-  { database }: Options,
+  { database, shareFilter }: Options,
 ) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -63,12 +64,16 @@ export const suggestionsRequestHandler = async (
       ? (JSON.parse(filterParam) as FilterElement)
       : null;
 
-    const filter: FilterElement = extraFilter
-      ? {
-          operation: "and",
-          conditions: [pathFilter, extraFilter],
-        }
-      : pathFilter;
+    const filterParts: FilterElement[] = [
+      ...(shareFilter ? [shareFilter as FilterElement] : []),
+      pathFilter,
+      ...(extraFilter ? [extraFilter] : []),
+    ];
+
+    const filter: FilterElement =
+      filterParts.length === 1
+        ? filterParts[0]
+        : { operation: "and", conditions: filterParts };
 
     const limit = Number.isFinite(limitParam) ? limitParam : 8;
 

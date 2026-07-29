@@ -1,0 +1,71 @@
+.sortControl {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-inline-start: auto;
+}
+
+.label {
+  color: var(--fg2);
+  font-size: 0.85em;
+}
+
+/* Segmented pill group. */
+.segments {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  background-color: var(--input-bg);
+  border: 1px solid var(--stroke1);
+  border-radius: var(--radius-md);
+}
+
+.segment {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  padding: var(--space-xxs) var(--space-s);
+  color: var(--fg2);
+  background-color: transparent;
+  border: none;
+  border-radius: calc(var(--radius-md) - 2px);
+  font-size: 0.9em;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.segment:hover {
+  color: var(--fg1);
+  background-color: var(--bg1-hover);
+}
+
+.segment[data-active="true"] {
+  color: var(--fg1);
+  background-color: var(--bg1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+.fieldIcon {
+  font-size: 18px;
+}
+
+.segmentLabel {
+  white-space: nowrap;
+}
+
+.arrow {
+  font-size: 16px;
+  color: var(--accent, var(--fg1));
+}
+
+/* On narrow screens, collapse to icon-only pills. */
+@media (max-width: 32rem) {
+  .segmentLabel {
+    display: none;
+  }
+}

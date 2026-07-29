@@ -48,10 +48,10 @@ discard the other model's result.
   pipe fed without flooding the box (the single Python worker is the real
   throttle).
 - Respects the orchestrator: `ctrl.checkCancelled()` / `await
-  ctrl.waitUntilResumed()` at each chunk boundary.
+ctrl.waitUntilResumed()` at each chunk boundary.
 - Per-stage results are persisted independently; a per-stage failure records an
   error timestamp (`facesLastErrorAt` / `embeddingErrorAt`) so the file is retried
-  *after* the rest of the backlog instead of blocking it or being lost.
+  _after_ the rest of the backlog instead of blocking it or being lost.
 - `getStatus()` reports combined faces+embeddings progress. It is polled by the
   status SSE stream, so it must stay cheap.
 

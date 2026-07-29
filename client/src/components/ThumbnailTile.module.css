@@ -18,6 +18,11 @@
   border: none;
   padding: 0;
   position: relative;
+  content-visibility: auto;
+  /* Reserve the same box the rendered tile occupies (width tracks flex-basis:
+     thumbnail-size * ratio) so revealing an off-screen tile on scroll doesn't
+     jump. */
+  contain-intrinsic-size: auto calc(var(--thumbnail-size, 200px) * var(--ratio, 1)) auto var(--thumbnail-size, 200px);
 }
 
 .tile:hover {
@@ -31,7 +36,43 @@
 }
 
 .tileSelected {
-  box-shadow: inset 0 0 0 2px var(--brand);
+  box-shadow: inset 0 0 0 4px var(--brand);
+}
+
+.checkboxOverlay {
+  position: absolute;
+  top: var(--space-xs);
+  left: var(--space-xs);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+
+.checkboxChecked {
+  color: var(--brand);
+  background-color: white;
+  border-radius: 50%;
+  font-size: 24px;
+}
+
+.checkboxUnchecked {
+  color: white;
+  font-size: 24px;
+}
+
+.checkedOverlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--brand) 8%, transparent) 0%,
+    color-mix(in srgb, var(--brand) 38%, transparent) 100%
+  );
+  z-index: 1;
+  pointer-events: none;
 }
 
 .image {
@@ -90,6 +131,48 @@
   pointer-events: none;
 }
 
+.sourceBadges {
+  position: absolute;
+  bottom: var(--space-xxs);
+  left: var(--space-xxs);
+  display: flex;
+  gap: var(--space-xxs);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.sourceBadge {
+  background-color: var(--bg1);
+  color: var(--fg2);
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xs);
+  box-shadow: var(--shadow-sm);
+  opacity: 0.86;
+  pointer-events: auto;
+}
+
+.ratingBadge {
+  position: absolute;
+  bottom: var(--space-xxs);
+  right: var(--space-xxs);
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background-color: rgba(0, 0, 0, 0.55);
+  color: #ffc94f;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  z-index: 2;
+  pointer-events: none;
+}
+
 .unknownFile {
   width: 100%;
   height: 100%;
@@ -107,12 +190,4 @@
   word-break: break-word;
   font-size: 0.875rem;
   line-height: 1.4;
-}
-
-@media (max-width: 640px) {
-  .tile {
-    min-width: 100%;
-    flex-basis: 100%;
-    flex-grow: 1;
-  }
 }

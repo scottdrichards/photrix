@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { processImageAnalysis, type AnalyzeImage } from "./processImageAnalysis.ts";
+import { PermanentImageError } from "./imageAnalysisWorker.ts";
 import type { ImageAnalysisResult } from "./imageAnalysisWorker.ts";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -38,7 +39,14 @@ const makeDb = (
     regionWrites: Array<{ relativePath: string; data: Record<string, unknown> }>;
     embeddingSaves: Array<{ relativePath: string; embedding: Float32Array }>;
     embeddingErrors: string[];
-  } = { faceSaves: [], regionWrites: [], embeddingSaves: [], embeddingErrors: [] };
+    decodeErrors: string[];
+  } = {
+    faceSaves: [],
+    regionWrites: [],
+    embeddingSaves: [],
+    embeddingErrors: [],
+    decodeErrors: [],
+  };
 
   const db = {
     storagePath: path.join(os.tmpdir(), "photrix-analysis-test"),
@@ -47,6 +55,7 @@ const makeDb = (
       served = true;
       return rows;
     }),
+    hasImagesPendingAnalysisPrerequisites: jest.fn(async () => false),
     saveFaceDetectionResult: jest.fn(async (relativePath: string, faces: unknown[]) => {
       calls.faceSaves.push({ relativePath, faces });
     }),
@@ -55,13 +64,14 @@ const makeDb = (
         calls.regionWrites.push({ relativePath, data });
       },
     ),
-    saveImageEmbedding: jest.fn(
-      async (relativePath: string, embedding: Float32Array) => {
-        calls.embeddingSaves.push({ relativePath, embedding });
-      },
-    ),
+    saveImageEmbedding: jest.fn(async (relativePath: string, embedding: Float32Array) => {
+      calls.embeddingSaves.push({ relativePath, embedding });
+    }),
     saveImageEmbeddingError: jest.fn(async (relativePath: string) => {
       calls.embeddingErrors.push(relativePath);
+    }),
+    saveImageAnalysisDecodeError: jest.fn(async (relativePath: string) => {
+      calls.decodeErrors.push(relativePath);
     }),
     ...overrides,
   } as unknown as IndexDatabase;
@@ -129,9 +139,28 @@ describe("processImageAnalysis", () => {
     expect(calls.embeddingErrors).toEqual(["partial.jpg"]);
   });
 
-  it("marks every requested stage on a whole-image (decode) failure", async () => {
+  it("marks a PermanentImageError as a decode error (no retry)", async () => {
     const analyze = jest.fn<AnalyzeImage>(async () => {
-      throw new Error("decode failure");
+      throw new PermanentImageError("image file is truncated");
+    });
+
+    const { db, calls } = makeDb([
+      { relativePath: "corrupt.jpg", needsFaces: true, needsEmbedding: true },
+    ]);
+
+    await processImageAnalysis(db, analyze).onComplete();
+
+    expect(calls.faceSaves).toHaveLength(0);
+    expect(calls.embeddingSaves).toHaveLength(0);
+    // Permanent decode error recorded — not the per-stage retry error columns.
+    expect(calls.decodeErrors).toEqual(["corrupt.jpg"]);
+    expect(calls.embeddingErrors).toHaveLength(0);
+    expect(calls.regionWrites).toHaveLength(0);
+  });
+
+  it("marks every requested stage on a transient (worker) failure for retry", async () => {
+    const analyze = jest.fn<AnalyzeImage>(async () => {
+      throw new Error("worker timed out");
     });
 
     const { db, calls } = makeDb([
@@ -142,6 +171,7 @@ describe("processImageAnalysis", () => {
 
     expect(calls.faceSaves).toHaveLength(0);
     expect(calls.embeddingSaves).toHaveLength(0);
+    expect(calls.decodeErrors).toHaveLength(0);
     expect(calls.embeddingErrors).toEqual(["bad.jpg"]);
     const faceError = calls.regionWrites.find(
       (w) => w.relativePath === "bad.jpg" && "facesLastErrorAt" in w.data,
@@ -150,7 +180,9 @@ describe("processImageAnalysis", () => {
   });
 
   it("passes the full path joined from storagePath, stripping the leading slash", async () => {
-    const analyze = jest.fn<AnalyzeImage>(async () => ({ embedding: new Float32Array(1) }));
+    const analyze = jest.fn<AnalyzeImage>(async () => ({
+      embedding: new Float32Array(1),
+    }));
     const { db } = makeDb([
       { relativePath: "/sub/photo.jpg", needsFaces: false, needsEmbedding: true },
     ]);

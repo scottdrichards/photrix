@@ -9,13 +9,21 @@
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-s);
+  flex-wrap: wrap;
 }
 
 .summaryRow h3 {
   margin: 0;
 }
 
-.summaryRow small {
+.summaryActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+  flex-wrap: wrap;
+}
+
+.summaryActions small {
   color: var(--fg3);
 }
 
@@ -25,26 +33,95 @@
   padding: var(--space-l);
 }
 
+.selectHint {
+  font-size: 0.8rem;
+  color: var(--fg3);
+  margin: 0;
+}
+
+.mergeButton {
+  background: var(--brand);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-s);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.mergeButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cancelSelectButton {
+  background: none;
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-s);
+  cursor: pointer;
+  color: var(--fg2);
+  font-size: 0.85rem;
+}
+
+.cancelSelectButton:hover {
+  border-color: var(--stroke3);
+  background: var(--bg2);
+}
+
 .clusterList {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: var(--space-s);
 }
 
-.clusterButton {
+.showMoreButton {
+  display: block;
+  margin: var(--space-m) auto 0;
+  background: none;
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-m);
+  cursor: pointer;
+  color: var(--fg2);
+  font-size: 0.85rem;
+}
+
+.showMoreButton:hover {
+  border-color: var(--stroke3);
+  background: var(--bg2);
+}
+
+.clusterCard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   border: 1px solid var(--stroke2);
   border-radius: var(--radius-md);
   background: var(--bg1);
   padding: var(--space-xs);
+  transition: border-color 0.1s;
+}
+
+.clusterCard:hover {
+  border-color: var(--stroke3);
+}
+
+.clusterCardSelected {
+  border-color: var(--brand);
+  box-shadow: inset 0 0 0 1px var(--brand);
+}
+
+.clusterButton {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
   align-items: center;
-  cursor: pointer;
-}
-
-.clusterButton:hover {
-  border-color: var(--stroke3);
+  width: 100%;
 }
 
 .clusterButtonSelected {
@@ -65,7 +142,23 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform-origin: center center;
+}
+
+.selectedOverlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 100, 255, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  color: #fff;
+  font-weight: bold;
+}
+
+.clusterCount {
+  font-size: 0.75rem;
+  color: var(--fg3);
 }
 
 .clusterLabel {
@@ -73,7 +166,90 @@
   color: var(--fg2);
 }
 
+/* Inline name editor */
+.clusterName {
+  font-size: 0.8rem;
+  color: var(--fg1);
+  font-weight: 500;
+  background: none;
+  border: none;
+  cursor: text;
+  padding: 1px 2px;
+  border-radius: 3px;
+  text-align: center;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clusterName:hover {
+  background: var(--bg3);
+}
+
+.clusterNameEmpty {
+  font-size: 0.75rem;
+  color: var(--fg3);
+  background: none;
+  border: none;
+  cursor: text;
+  padding: 1px 2px;
+  border-radius: 3px;
+  text-align: center;
+  width: 100%;
+  font-style: italic;
+}
+
+.clusterNameEmpty:hover {
+  background: var(--bg3);
+  color: var(--fg2);
+}
+
+.nameForm {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  width: 100%;
+}
+
+.nameInput {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  padding: 2px 4px;
+  border: 1px solid var(--brand);
+  border-radius: 3px;
+  background: var(--bg1);
+  color: var(--fg1);
+  outline: none;
+}
+
+.nameSaveBtn,
+.nameCancelBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  font-size: 0.7rem;
+  color: var(--fg2);
+  line-height: 1;
+}
+
+.nameSaveBtn:hover {
+  color: var(--brand);
+}
+
+.nameCancelBtn:hover {
+  color: var(--fg1);
+}
+
 .personDetail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-m);
+}
+
+.personDetailSections {
   display: flex;
   flex-direction: column;
   gap: var(--space-m);
@@ -83,6 +259,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-m);
+  flex-wrap: wrap;
 }
 
 .backButton {
@@ -103,6 +280,176 @@
 .personDetailCount {
   color: var(--fg3);
   font-size: 0.9rem;
+  margin-left: auto;
+}
+
+.detailSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s);
+}
+
+.detailSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-s);
+}
+
+.detailSectionHeader h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.selectedFacesHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.selectedFacesMeta {
+  color: var(--fg3);
+  font-size: 0.8rem;
+}
+
+.clearFaceFilterButton {
+  background: none;
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--fg2);
+  font-size: 0.8rem;
+}
+
+.clearFaceFilterButton:hover {
+  border-color: var(--stroke3);
+  background: var(--bg2);
+}
+
+.mergedPeopleList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-s);
+}
+
+.mergedPersonChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  border: 1px solid var(--stroke2);
+  border-radius: 999px;
+  background: var(--bg2);
+  padding: 6px 10px;
+}
+
+.mergedPersonName {
+  color: var(--fg1);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.mergedPersonMeta {
+  color: var(--fg3);
+  font-size: 0.8rem;
+}
+
+.relatedPeopleList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-s);
+}
+
+.relatedPersonCard {
+  display: flex;
+  gap: var(--space-s);
+  align-items: stretch;
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  background: var(--bg1);
+  padding: var(--space-xs);
+}
+
+.relatedPersonCardSelected {
+  border-color: var(--brand);
+  box-shadow: inset 0 0 0 1px var(--brand);
+  background: var(--bg2);
+}
+
+.relatedPersonFaceWrap {
+  width: 72px;
+  min-width: 72px;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg3);
+}
+
+.relatedPersonFaceImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.relatedPersonBody {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--space-xs);
+}
+
+.relatedPersonTitleRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.relatedPersonTitleRow strong {
+  color: var(--fg1);
+  font-size: 0.9rem;
+}
+
+.relatedPersonTitleRow span {
+  color: var(--fg3);
+  font-size: 0.8rem;
+}
+
+.relatedPersonActions {
+  display: flex;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+.relatedPersonActionButton,
+.relatedPersonMergeButton {
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.relatedPersonActionButton {
+  border: 1px solid var(--stroke2);
+  background: none;
+  color: var(--fg2);
+}
+
+.relatedPersonActionButton:hover {
+  border-color: var(--stroke3);
+  background: var(--bg2);
+}
+
+.relatedPersonMergeButton {
+  border: none;
+  background: var(--brand);
+  color: #fff;
+}
+
+.relatedPersonMergeButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .faceGrid {
@@ -140,5 +487,26 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform-origin: center center;
+}
+
+.vizButton {
+  background: none;
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  color: var(--fg3);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 2px 7px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.vizButton:hover:not(:disabled) {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.vizButton:disabled {
+  opacity: 0.35;
+  cursor: default;
 }

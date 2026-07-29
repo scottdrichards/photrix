@@ -39,7 +39,7 @@ admits the first task whose resource requirements currently fit. `blocking` work
 `getResourceRequirements(type)` assigns each task type a notional fraction
 (≤ 1.0) of `gpu`/`cpu`/`disk`/`network`. The loop only starts a task if its
 requirements still fit under the cap, which bounds how much heavy work runs
-concurrently. This is a *coarse admission gate*, not real measurement — the live
+concurrently. This is a _coarse admission gate_, not real measurement — the live
 load gate (below) is the dynamic backstop.
 
 > ⚠️ **Reservations are held while a task is paused.** A paused background runner
@@ -54,10 +54,10 @@ Background/implied work always keeps making progress; under pressure it simply
 pauses for part of each cycle. Two independent pressure sources, evaluated
 **per-task-priority**:
 
-| Source | Trigger | Who yields |
-| --- | --- | --- |
-| `userActive()` | a request was served within `ACTIVITY_COOLDOWN_MS` (2s) | **all** background/implied tasks, including `high` |
-| `isOverloaded()` | normalized load > threshold (`PHOTRIX_LOAD_THRESHOLD`, default 0.9) | only `normal`-priority tasks |
+| Source           | Trigger                                                             | Who yields                                         |
+| ---------------- | ------------------------------------------------------------------- | -------------------------------------------------- |
+| `userActive()`   | a request was served within `ACTIVITY_COOLDOWN_MS` (2s)             | **all** background/implied tasks, including `high` |
+| `isOverloaded()` | normalized load > threshold (`PHOTRIX_LOAD_THRESHOLD`, default 0.9) | only `normal`-priority tasks                       |
 
 When any running task is under pressure, the orchestrator runs a duty cycle:
 `DUTY_ON_MS` running, `DUTY_OFF_MS` paused (both 2s, override via

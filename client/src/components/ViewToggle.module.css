@@ -29,6 +29,20 @@
     visibility 0s linear 0.2s;
 }
 
+.selectionBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-m);
+  width: 100%;
+}
+
+.selectionCount {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--fg1);
+  margin-inline-end: auto;
+}
+
 .toggleContainer {
   display: flex;
   align-items: center;

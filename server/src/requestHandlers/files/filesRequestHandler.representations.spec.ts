@@ -16,6 +16,19 @@ const baseOrchestrator: TaskOrchestrator = {
   addTask: () => {},
   onQueueExhausted: () => {},
   noteUserActivity: () => {},
+  beginUserRequest: () => {},
+  endUserRequest: () => {},
+  getDiagnosticsSnapshot: () => ({
+    processBackgroundTasks: true,
+    activeRequests: 0,
+    userActive: false,
+    overloaded: false,
+    dutyOff: false,
+    workersSuspended: false,
+    queueLengths: { blocking: 0, implied: 0, background: 0 },
+    runningTasks: [],
+    resourcesInUse: { gpu: 0, cpu: 0, disk: 0, network: 0, memoryMB: 0 },
+  }),
 };
 
 const createStreamingResponse = () => {
@@ -61,18 +74,24 @@ describe("filesRequestHandler representation paths", () => {
   it("serves converted cached image for webSafe representation", async () => {
     const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-websafe-"));
     const sourceFile = path.join(storageRoot, "photo.heic");
-    const cachedFile = path.join(storageRoot, "cache", "photo.320.jpg");
+    const cachedFile = path.join(storageRoot, "cache", "photo.320.webp");
 
     mkdirSync(path.dirname(cachedFile), { recursive: true });
     writeFileSync(sourceFile, "source");
-    writeFileSync(cachedFile, "jpeg-content");
+    writeFileSync(cachedFile, "webp-content");
 
     const convertImage = jest.fn(async () => cachedFile);
+    const convertImageCrop = jest.fn(async () => cachedFile);
     const convertImageToMultipleSizes = jest.fn(async () => undefined);
 
     jest.unstable_mockModule("../../imageProcessing/convertImage.ts", () => ({
       convertImage,
+      convertImageCrop,
       convertImageToMultipleSizes,
+      contentTypeForImageFormat: (format: string) =>
+        format === "jpeg" ? "image/jpeg" : "image/webp",
+      IMAGE_OUTPUT_CONTENT_TYPE: "image/webp",
+      IMAGE_OUTPUT_EXTENSION: "webp",
       ImageConversionError: class ImageConversionError extends Error {},
     }));
 
@@ -90,13 +109,67 @@ describe("filesRequestHandler representation paths", () => {
       {
         database: {} as IndexDatabase,
         storageRoot,
-        orchestrator: baseOrchestrator,
+        taskOrchestrator: baseOrchestrator,
       },
     );
 
     await once(res, "end");
 
     expect(convertImage).toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["Content-Type"]).toBe("image/webp");
+    expect(Buffer.concat(chunks).toString()).toBe("webp-content");
+  });
+
+  it("serves JPEG for format=jpeg (link-unfurl bots can't decode WebP)", async () => {
+    const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-jpeg-"));
+    const sourceFile = path.join(storageRoot, "photo.heic");
+    const cachedFile = path.join(storageRoot, "cache", "photo.630.jpg");
+
+    mkdirSync(path.dirname(cachedFile), { recursive: true });
+    writeFileSync(sourceFile, "source");
+    writeFileSync(cachedFile, "jpeg-content");
+
+    const convertImage = jest.fn(async () => cachedFile);
+    const convertImageCrop = jest.fn(async () => cachedFile);
+    const convertImageToMultipleSizes = jest.fn(async () => undefined);
+
+    jest.unstable_mockModule("../../imageProcessing/convertImage.ts", () => ({
+      convertImage,
+      convertImageCrop,
+      convertImageToMultipleSizes,
+      contentTypeForImageFormat: (format: string) =>
+        format === "jpeg" ? "image/jpeg" : "image/webp",
+      IMAGE_OUTPUT_CONTENT_TYPE: "image/webp",
+      IMAGE_OUTPUT_EXTENSION: "webp",
+      ImageConversionError: class ImageConversionError extends Error {},
+    }));
+
+    const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const res = createStreamingResponse();
+    const chunks: Buffer[] = [];
+    res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/photo.heic?representation=webSafe&height=630&format=jpeg",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      {
+        database: {} as IndexDatabase,
+        storageRoot,
+        taskOrchestrator: baseOrchestrator,
+      },
+    );
+
+    await once(res, "end");
+
+    expect(convertImage).toHaveBeenCalledWith(
+      expect.any(String),
+      640, // parseToStandardHeight snaps 630 up to the nearest standard height
+      expect.objectContaining({ format: "jpeg" }),
+    );
     expect(res.statusCode).toBe(200);
     expect(res.headers?.["Content-Type"]).toBe("image/jpeg");
     expect(Buffer.concat(chunks).toString()).toBe("jpeg-content");
@@ -125,7 +198,7 @@ describe("filesRequestHandler representation paths", () => {
       {
         database: {} as IndexDatabase,
         storageRoot,
-        orchestrator: baseOrchestrator,
+        taskOrchestrator: baseOrchestrator,
       },
     );
 
@@ -136,7 +209,7 @@ describe("filesRequestHandler representation paths", () => {
     expect(Buffer.concat(chunks).toString()).toBe("thumb");
   });
 
-  it("queues HLS task and serves master playlist when GPU available but not initialized", async () => {
+  it("serves master + VOD variant playlist without encoding, and queues the encode only on a segment request", async () => {
     const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-hls-queue-"));
     const sourceFile = path.join(storageRoot, "clip.mp4");
     writeFileSync(sourceFile, "video");
@@ -146,7 +219,7 @@ describe("filesRequestHandler representation paths", () => {
     // Pre-write master.m3u8 so readFile succeeds after prepareMultibitrateHLSStructure runs
     writeFileSync(
       masterPlaylistPath,
-      "#EXTM3U\n360p/playlist.m3u8\n720p/playlist.m3u8\n",
+      "#EXTM3U\n360p/playlist.m3u8\n720p/playlist.m3u8\n1080p/playlist.m3u8\n",
     );
 
     jest.unstable_mockModule("../../videoProcessing/gpuAcceleration.ts", () => ({
@@ -154,9 +227,12 @@ describe("filesRequestHandler representation paths", () => {
     }));
 
     const prepareMultibitrateHLSStructure = jest.fn(async () => {});
+    // Segment path that does not exist on disk, so a request for it triggers an encode.
+    const segmentPath = path.join(hlsDir, "720p", "segment_000.ts");
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
-      generateMultibitrateHLS: jest.fn(),
+      generateVariantHLS: jest.fn(),
+      clampToSupportedHeight: jest.fn((h: number) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: false,
         complete: false,
@@ -165,31 +241,65 @@ describe("filesRequestHandler representation paths", () => {
         masterPlaylistPath,
       })),
       getVariantPlaylistPath: jest.fn(),
-      getVariantSegmentPath: jest.fn(),
+      getVariantSegmentPath: jest.fn(() => segmentPath),
       prepareMultibitrateHLSStructure,
     }));
 
+    // Segment never appears → handler returns 404 after the (mocked) wait. We only
+    // care that requesting it queued the encode.
+    jest.unstable_mockModule("../../videoProcessing/hlsSegmentWatcher.ts", () => ({
+      waitForHlsFile: jest.fn(async () => false),
+      closeHlsWatcher: jest.fn(),
+    }));
+
     const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
-    const { res, getBody } = createJsonResponse();
     const addTask = jest.fn();
     const orchestrator = { ...baseOrchestrator, addTask };
+    const database = {
+      getFileRecord: jest.fn(async () => ({ duration: 30 })),
+    } as unknown as IndexDatabase;
 
+    // 1) Master request prepares the structure and serves the master playlist, no encode.
+    const master = createJsonResponse();
     await filesEndpointRequestHandler(
       {
         url: "/api/files/clip.mp4?representation=hls",
         headers: { host: "localhost" },
       } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-      res,
-      {
-        database: {
-          getFileRecord: jest.fn(async () => ({ duration: 30 })),
-        } as unknown as IndexDatabase,
-        storageRoot,
-        taskOrchestrator: orchestrator,
-      },
+      master.res,
+      { database, storageRoot, taskOrchestrator: orchestrator },
     );
 
     expect(prepareMultibitrateHLSStructure).toHaveBeenCalled();
+    expect((master.res.writeHead as jest.Mock).mock.calls.at(-1)?.[0]).toBe(200);
+    expect(master.getBody()).toContain("#EXTM3U");
+    expect(addTask).not.toHaveBeenCalled();
+
+    // 2) Variant playlist request serves a synthetic VOD playlist — still no encode
+    //    (the encode begins where the player actually asks for a segment).
+    const variant = createJsonResponse();
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/clip.mp4?representation=hls&variant=720",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      variant.res,
+      { database, storageRoot, taskOrchestrator: orchestrator },
+    );
+    expect(variant.getBody()).toContain("#EXT-X-ENDLIST");
+    expect(addTask).not.toHaveBeenCalled();
+
+    // 3) Requesting a segment queues the variant encode as a blocking task.
+    const seg = createJsonResponse();
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/clip.mp4?representation=hls&variant=720&segment=segment_000.ts",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      seg.res,
+      { database, storageRoot, taskOrchestrator: orchestrator },
+    );
+
     expect(addTask).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "videoConversion",
@@ -197,8 +307,6 @@ describe("filesRequestHandler representation paths", () => {
       }),
       "blocking",
     );
-    expect((res.writeHead as jest.Mock).mock.calls.at(-1)?.[0]).toBe(200);
-    expect(getBody()).toContain("#EXTM3U");
   });
 
   it("serves a complete VOD variant playlist with the full duration when known", async () => {
@@ -209,7 +317,8 @@ describe("filesRequestHandler representation paths", () => {
     const hlsDir = path.join(storageRoot, "cache", "hls", "abr");
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
-      generateMultibitrateHLS: jest.fn(),
+      generateVariantHLS: jest.fn(),
+      clampToSupportedHeight: jest.fn((h: number) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: false,
@@ -245,7 +354,7 @@ describe("filesRequestHandler representation paths", () => {
           getFileRecord: jest.fn(async () => ({ duration: 5 })),
         } as unknown as IndexDatabase,
         storageRoot,
-        orchestrator: baseOrchestrator,
+        taskOrchestrator: baseOrchestrator,
       },
     );
     await once(res, "end");
@@ -272,7 +381,8 @@ describe("filesRequestHandler representation paths", () => {
     const missingVariantPlaylistPath = path.join(hlsDir, "360p", "playlist.m3u8");
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
-      generateMultibitrateHLS: jest.fn(),
+      generateVariantHLS: jest.fn(),
+      clampToSupportedHeight: jest.fn((h: number) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: true,
@@ -311,7 +421,7 @@ describe("filesRequestHandler representation paths", () => {
           getFileRecord: jest.fn(async () => ({})),
         } as unknown as IndexDatabase,
         storageRoot,
-        orchestrator: baseOrchestrator,
+        taskOrchestrator: baseOrchestrator,
       },
     );
 
@@ -331,7 +441,8 @@ describe("filesRequestHandler representation paths", () => {
     }));
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
-      generateMultibitrateHLS: jest.fn(),
+      generateVariantHLS: jest.fn(),
+      clampToSupportedHeight: jest.fn((h: number) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: false,
         complete: false,
@@ -358,7 +469,7 @@ describe("filesRequestHandler representation paths", () => {
           getFileRecord: jest.fn(async () => ({ duration: 30 })),
         } as unknown as IndexDatabase,
         storageRoot,
-        orchestrator: baseOrchestrator,
+        taskOrchestrator: baseOrchestrator,
       },
     );
 
@@ -378,7 +489,8 @@ describe("filesRequestHandler representation paths", () => {
     writeFileSync(masterPlaylistPath, "#EXTM3U\n360p/playlist.m3u8\n");
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
-      generateMultibitrateHLS: jest.fn(),
+      generateVariantHLS: jest.fn(),
+      clampToSupportedHeight: jest.fn((h: number) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: false,
@@ -405,7 +517,7 @@ describe("filesRequestHandler representation paths", () => {
           getFileRecord: jest.fn(async () => ({ duration: 30 })),
         } as unknown as IndexDatabase,
         storageRoot,
-        orchestrator: baseOrchestrator,
+        taskOrchestrator: baseOrchestrator,
       },
     );
 
@@ -432,7 +544,8 @@ describe("filesRequestHandler representation paths", () => {
     );
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
-      generateMultibitrateHLS: jest.fn(),
+      generateVariantHLS: jest.fn(),
+      clampToSupportedHeight: jest.fn((h: number) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: true,
@@ -459,7 +572,7 @@ describe("filesRequestHandler representation paths", () => {
           getFileRecord: jest.fn(async () => ({ duration: 30 })),
         } as unknown as IndexDatabase,
         storageRoot,
-        orchestrator: baseOrchestrator,
+        taskOrchestrator: baseOrchestrator,
       },
     );
 

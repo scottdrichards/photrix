@@ -42,6 +42,10 @@ export const processFileInfoMetadata = (database: IndexDatabase): TaskRunner => 
         const infoProcessedAt = new Date().toISOString();
         try {
           const metadata = await getFileInfoMetadata(fullPath);
+          if (metadata.sizeInBytes === 0) {
+            await database.removeFile(relativePath);
+            continue;
+          }
           await database.addOrUpdateFileData(relativePath, {
             ...metadata,
             infoProcessedAt,

@@ -11,29 +11,164 @@ process.on("uncaughtException", (error) => {
   process.exit(1);
 });
 import { createServer } from "./createServer.ts";
-import { analyzeImage } from "./imageAnalysis/imageAnalysisWorker.ts";
+import { analyzeImage, embedText } from "./imageAnalysis/imageAnalysisWorker.ts";
 import { processImageAnalysis } from "./imageAnalysis/processImageAnalysis.ts";
 import { fileSystemScanFolder } from "./indexDatabase/fileSystemScanFolder.ts";
+import { fileSystemMonitorFolder } from "./indexDatabase/fileSystemMonitorFolder.ts";
 import { processExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { processFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
+import { processFaceClustering } from "./indexDatabase/processFaceClustering.ts";
+import { initAuthService } from "./auth/authService.ts";
+import { initPasskeyService } from "./auth/passkeyService.ts";
 import { measureOperation } from "./observability/requestTrace.ts";
 import { startTelemetry } from "./observability/telemetry.ts";
 import { createTaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
+import {
+  resumeComputeWorkers,
+  suspendComputeWorkers,
+  releaseGpuReclaim,
+  shutdownComputeWorkers,
+} from "./taskOrchestrator/computeWorkers.ts";
+import { reapOrphanedComputeWorkers } from "./taskOrchestrator/reapOrphanedWorkers.ts";
 import { transcribeWithWhisper } from "./audioProcessing/whisperWorker.ts";
 import { processAudioTranscription } from "./audioProcessing/processAudioTranscription.ts";
-import { embedAudioWithClap } from "./audioProcessing/clapWorker.ts";
+import { embedAudioWithClap, embedTextWithClap } from "./audioProcessing/clapWorker.ts";
 import { processAudioEmbedding } from "./audioProcessing/processAudioEmbedding.ts";
+import {
+  detectCuda,
+  detectOnnxRuntimeCudaProvider,
+} from "./audioProcessing/detectCuda.ts";
+import { registerBackgroundTasks } from "./backgroundTasks/registerBackgroundTasks.ts";
+import { setPlaybackLifecycleHooks } from "./videoProcessing/hlsSession.ts";
+import { resolveDetectedImageAnalysisEnv } from "./imageAnalysis/imageAnalysisRuntime.ts";
+import {
+  ensureImageConversionReady,
+  shutdownImageConversionWorkers,
+} from "./imageProcessing/convertImage.ts";
 
 const startServer = async () => {
+  // Kill any ML workers left resident by a prior instance before we spawn our
+  // own. Node doesn't reap its attached children on exit, so every restart
+  // (graceful or hard-killed) otherwise leaks a full set of GPU-resident
+  // workers; on a small card those orphans starve user video transcodes off
+  // NVENC/NVDEC and into a buffering libx264 fallback. Must run before any of
+  // our own workers spawn (below) so it can't kill them.
+  await reapOrphanedComputeWorkers();
+
   await initializeCacheDirectories();
   startCacheEviction();
+
+  // Serving photos is core, and the conversion path shells out to Python. Validate
+  // the interpreter and its image dependencies up front so a broken setup fails
+  // loudly at boot with an actionable message, rather than silently 422-ing every
+  // image request once the app is already "up".
+  try {
+    await ensureImageConversionReady();
+  } catch (err) {
+    logger.fatal({ err }, "Image conversion unavailable — refusing to start");
+    process.exit(1);
+  }
 
   const mediaRoot = process.env.MEDIA_ROOT || "./exampleFolder";
   const database = new IndexDatabase(mediaRoot);
   await database.init();
+  await initAuthService(database.asyncSqlite);
+  initPasskeyService(database.asyncSqlite);
 
-  const taskOrchestrator = createTaskOrchestrator();
+  const taskOrchestrator = createTaskOrchestrator({
+    // Freeze the heavy ML worker processes (SIGSTOP) while a user request is in
+    // flight so their in-flight native passes yield the CPU immediately, and
+    // thaw them (SIGCONT) once the request window lapses. Restartable by design:
+    // models stay loaded, so this is far cheaper than killing and respawning.
+    computeThrottle: {
+      suspend: suspendComputeWorkers,
+      resume: resumeComputeWorkers,
+      releaseReclaim: releaseGpuReclaim,
+    },
+  });
+  // An active HLS playback counts as user activity for its entire session
+  // lifetime (until the idle reaper fires), not just per segment fetch. A
+  // buffering player goes HTTP-quiet for seconds at a time; without this the
+  // 2s activity cooldown lapses mid-playback, background ML workers respawn
+  // and refill the VRAM that was reclaimed for the transcode, and the next
+  // ABR variant switch loses NVENC to a libx264 fallback that can't sustain
+  // realtime above ~360p.
+  setPlaybackLifecycleHooks({
+    onSessionStart: () => taskOrchestrator.beginUserRequest(),
+    onSessionEnd: () => taskOrchestrator.endUserRequest(),
+  });
+
+  // Bind the HTTP port now, before the GPU probes, model warmups, and background
+  // ingestion wiring below. None of those are preconditions for serving the
+  // library: CUDA detection only feeds background-ML scheduling, the warmups are
+  // best-effort, and the ingestion tasks process *new* work. So anything that
+  // blocks here is pure dead time during which the client gets connection-refused
+  // (surfaced as a proxy 500) — and a cold `import torch` in detectCuda alone can
+  // take several seconds. Everything after this line runs with the socket already
+  // accepting requests, so existing photos load immediately and the rest warms in
+  // behind it.
+  const server = createServer(database, mediaRoot, {
+    taskOrchestrator,
+  });
+  logger.info({ mediaRoot, port: process.env.PORT ?? 3000 }, "Server started");
+
+  const [cudaAvailable, faceCudaAvailable] = await Promise.all([
+    detectCuda(),
+    detectOnnxRuntimeCudaProvider(),
+  ]);
+  logger.info({ cudaAvailable, faceCudaAvailable }, "CUDA detection complete");
+  Object.assign(
+    process.env,
+    resolveDetectedImageAnalysisEnv(process.env, {
+      cudaAvailable,
+      faceCudaAvailable,
+    }),
+  );
+  // Prime semantic search before the background backlog starts churning, so the
+  // first query after a restart is fast instead of timing out. Three independent
+  // cold costs are warmed:
+  //   - the vector scan reads every image-embedding BLOB; cold, that read alone
+  //     can exceed the search timeout (warmSemanticSearch);
+  //   - the CLIP text model loads lazily on first use (~seconds);
+  //   - the CLAP audio model likewise — and a search awaits all enabled sources,
+  //     so a cold CLAP that times out at 15s pins the whole response there even
+  //     when the image results already resolved.
+  // Bracketed as a user request so background ML work stays suspended while the
+  // models load: cold, those loads otherwise lose the CPU to the analysis
+  // backlog and take a minute-plus, during which early queries time out. Tasks
+  // are added below *after* this begins, so none churn until warmup completes.
+  // Best-effort: failures are logged, never block startup, and always release
+  // the request bracket so background work resumes.
+  // The vector scan warm must run AFTER the ML model warmups — model weight
+  // files are several GBs and their page-cache footprint evicts the 347 MB of
+  // embedding blobs that a concurrent warmSemanticSearch would have just loaded.
+  // Running the scan last (sequentially) ensures it warms pages that will
+  // actually stay hot for the first real queries.
+  taskOrchestrator.beginUserRequest();
+  void Promise.allSettled([
+    embedText("warmup").then(() => logger.info("CLIP text-embedding model warmed")),
+    embedTextWithClap("warmup").then(() =>
+      logger.info("CLAP text-embedding model warmed"),
+    ),
+  ]).then(async (modelResults) => {
+    const scanResult = await Promise.allSettled([
+      database
+        .warmSemanticSearch()
+        .then(() => logger.info("Semantic search vector cache warmed")),
+    ]);
+    taskOrchestrator.endUserRequest();
+    for (const r of [...modelResults, ...scanResult]) {
+      if (r.status === "rejected") {
+        logger.warn({ err: r.reason }, "Search warmup step failed (non-fatal)");
+      }
+    }
+    logger.info("Semantic search warmup complete");
+  });
+
+  // On GPU the audio workers run on the GPU and barely touch CPU, so they don't
+  // conflict with the CPU-bound image-analysis task and can run concurrently.
+  const audioComputeResources = cudaAvailable ? { gpu: 0.5 } : { cpu: 0.5 };
 
   // When the background queue drains, the read connection goes quiet — the ideal
   // moment for a blocking WAL checkpoint to fully write back and truncate the WAL
@@ -43,8 +178,8 @@ const startServer = async () => {
     void database.checkpointWal();
   });
 
-  taskOrchestrator.addTask(
-    {
+  const { notifyFilesChanged } = registerBackgroundTasks(taskOrchestrator, {
+    fileSystemScan: {
       name: "File system scan",
       start: () => fileSystemScanFolder(database),
       type: "diskInfo",
@@ -52,59 +187,46 @@ const startServer = async () => {
       // running under load and only yields to in-flight user requests.
       priority: "high",
     },
-    "background",
-  );
-
-  taskOrchestrator.addTask(
-    {
+    fileMetadata: {
       name: "File metadata processing",
       start: () => processFileInfoMetadata(database),
       type: "mediaMedatadata",
     },
-    "background",
-  );
-
-  taskOrchestrator.addTask(
-    {
+    exifMetadata: {
       name: "EXIF metadata processing",
       start: () => processExifMetadata(database),
       type: "mediaMedatadata",
     },
-    "background",
-  );
-
-  taskOrchestrator.addTask(
-    {
+    imageAnalysis: {
       name: "Image analysis (faces + CLIP)",
       start: () => processImageAnalysis(database, analyzeImage),
       type: "imageAnalysis",
     },
-    "background",
-  );
-
-  taskOrchestrator.addTask(
-    {
+    faceClustering: {
+      name: "Face clustering",
+      start: () => processFaceClustering(database),
+      resources: { cpu: 0.25 },
+    },
+    audioTranscription: {
       name: "Audio transcription (Whisper)",
       start: () => processAudioTranscription(database, transcribeWithWhisper),
       type: "audioTranscription",
+      resources: { ...audioComputeResources, memoryMB: 3500 },
     },
-    "background",
-  );
-
-  taskOrchestrator.addTask(
-    {
+    audioEmbedding: {
       name: "Audio embedding (CLAP)",
       start: () => processAudioEmbedding(database, embedAudioWithClap),
       type: "audioEmbedding",
+      resources: { ...audioComputeResources, memoryMB: 2000 },
     },
-    "background",
-  );
-
-  const server = createServer(database, mediaRoot, {
-    taskOrchestrator,
   });
 
-  logger.info({ mediaRoot, port: process.env.PORT ?? 3000 }, "Server started");
+  // Keep the index live: after the initial scan, a recursive watcher tracks
+  // creates, deletes, moves, and in-place edits, re-queueing the processing
+  // pipeline so changes on disk are reflected without a restart.
+  const stopFileSystemMonitor = fileSystemMonitorFolder(database, {
+    onChange: notifyFilesChanged,
+  });
 
   // Graceful shutdown: stop accepting new connections and let in-flight requests
   // drain, then exit. A hard timeout guards against connections that never close.
@@ -120,6 +242,12 @@ const startServer = async () => {
     }, 10_000);
     forceExit.unref();
 
+    stopFileSystemMonitor();
+    // Free the GPU on the way out so the next instance isn't starved by our
+    // orphaned, still-VRAM-resident workers.
+    shutdownComputeWorkers();
+    shutdownImageConversionWorkers();
+
     server.close((err) => {
       if (err) {
         logger.error({ err }, "Error while closing server");
@@ -132,6 +260,10 @@ const startServer = async () => {
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
+  // SIGHUP fires when the controlling terminal closes (window closed, SSH
+  // dropped). node's default is to exit without our cleanup, orphaning the ML
+  // workers' VRAM; route it through the same shutdown so they're killed too.
+  process.on("SIGHUP", () => shutdown("SIGHUP"));
 };
 
 await startTelemetry();

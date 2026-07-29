@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import css from "./OptionListWithCounts.module.css";
 
 type OptionListWithCountsProps = {
-    options: {
+  options: {
     key: string;
     label: string;
     count: number;
@@ -11,7 +11,10 @@ type OptionListWithCountsProps = {
   onSelect: (optionKey: string) => void;
 };
 
-export const OptionListWithCounts = ({ options, onSelect }: OptionListWithCountsProps) => {
+export const OptionListWithCounts = ({
+  options,
+  onSelect,
+}: OptionListWithCountsProps) => {
   const formatNumber = useMemo(() => new Intl.NumberFormat(), []);
 
   if (options.length === 0) {
@@ -27,7 +30,9 @@ export const OptionListWithCounts = ({ options, onSelect }: OptionListWithCounts
           onClick={() => onSelect(option.key)}
         >
           <span>{option.label}</span>
-          <span className={css.countText}>{` (${formatNumber.format(option.count)})`}</span>
+          <span
+            className={css.countText}
+          >{` (${formatNumber.format(option.count)})`}</span>
         </button>
       ))}
     </div>

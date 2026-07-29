@@ -266,12 +266,55 @@ type ExifFieldMapping = {
   [K in keyof ExifMetadata]?: ExifSource<K> | ExifSource<K>[];
 };
 
+// exifr may hand back date fields as strings (e.g. non-standard EXIF timestamps
+// it can't revive) or even corrupt bytes. Coerce to a valid Date, or drop the
+// value — never let a raw string reach the DB, or MIN/MAX(dateTaken) breaks.
+const toExifDate = (value: unknown): Date | undefined => {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? undefined : value;
+  }
+  if (typeof value === "number") {
+    const fromNumber = new Date(value);
+    return Number.isNaN(fromNumber.getTime()) ? undefined : fromNumber;
+  }
+  if (typeof value === "string") {
+    // EXIF timestamps use "YYYY:MM:DD HH:MM:SS"; JS Date needs dashes in the date.
+    const normalized = value.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3");
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  }
+  return undefined;
+};
+
+// Human-authored captions arrive in several shapes: a plain string (EXIF
+// ImageDescription / IPTC Caption-Abstract), or an XMP language-alternative that
+// exifr surfaces as `{ value, lang }` or a bare string. Coerce to a trimmed
+// string; drop empty/whitespace-only values so blank captions never render.
+const toDescriptionString = (value: unknown): string | undefined => {
+  const raw =
+    typeof value === "object" && value !== null && "value" in value
+      ? (value as { value?: unknown }).value
+      : value;
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
 const exifFieldMapping = {
+  description: {
+    exifField: [
+      "ImageDescription",
+      "Caption-Abstract",
+      "dc:description",
+      "description",
+    ],
+    conversionFn: toDescriptionString,
+  },
   dateTaken: [
-    "DateTimeOriginal",
+    { exifField: "DateTimeOriginal", conversionFn: toExifDate },
     {
       exifField: ["photoshop:DateCreated", "xmp:CreateDate"],
-      conversionFn: (d) => new Date(d),
+      conversionFn: toExifDate,
     },
   ],
   dimensionWidth: {

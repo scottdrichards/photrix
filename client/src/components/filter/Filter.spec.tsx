@@ -1,9 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
 import { Filter } from "./Filter";
-import { FilterProvider, useFilter } from "./FilterContext";
+import { FilterProvider, useFilter, type FilterState } from "./FilterContext";
 
 const fetchFoldersMock = vi.fn();
 const fetchSuggestionsWithCountsMock = vi.fn();
+const fetchPeopleClustersMock = vi.fn();
 
 vi.mock("../../api", async () => {
   const actual = await vi.importActual<typeof import("../../api")>("../../api");
@@ -12,6 +14,7 @@ vi.mock("../../api", async () => {
     fetchFolders: (...args: unknown[]) => fetchFoldersMock(...args),
     fetchSuggestionsWithCounts: (...args: unknown[]) =>
       fetchSuggestionsWithCountsMock(...args),
+    fetchPeopleClusters: (...args: unknown[]) => fetchPeopleClustersMock(...args),
   };
 });
 
@@ -50,6 +53,16 @@ const FilterStateMutator = () => {
   );
 };
 
+const FilterStateInitializer = ({ nextFilter }: { nextFilter: Partial<FilterState> }) => {
+  const { setFilter } = useFilter();
+
+  useEffect(() => {
+    setFilter(nextFilter);
+  }, [nextFilter, setFilter]);
+
+  return null;
+};
+
 const renderFilter = () =>
   render(
     <FilterProvider>
@@ -63,8 +76,28 @@ describe("Filter", () => {
 
   beforeEach(() => {
     fetchFoldersMock.mockReset();
-    fetchFoldersMock.mockResolvedValue(["trip", "family"]);
+    fetchFoldersMock.mockResolvedValue([
+      { name: "trip", count: 7 },
+      { name: "family", count: 2 },
+    ]);
     fetchSuggestionsWithCountsMock.mockResolvedValue([]);
+    fetchPeopleClustersMock.mockReset();
+    fetchPeopleClustersMock.mockResolvedValue({
+      clusters: [
+        {
+          id: "person-3",
+          count: 7,
+          name: null,
+          representative: {
+            photo: { path: "trip/a.jpg", name: "a.jpg" },
+            box: { x: 0.5, y: 0.5, width: 0.2, height: 0.2 },
+          },
+        },
+      ],
+      totalFaces: 7,
+      totalClusters: 1,
+      pendingFaces: 0,
+    });
     window.history.pushState(null, "", "/");
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
@@ -74,18 +107,19 @@ describe("Filter", () => {
 
     getBoundingClientRectSpy = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")
-      .mockImplementation(() =>
-        ({
-          x: 0,
-          y: 0,
-          width: 36,
-          height: 36,
-          top: 100,
-          right: 80,
-          bottom: 136,
-          left: 44,
-          toJSON: () => ({}),
-        }) as DOMRect,
+      .mockImplementation(
+        () =>
+          ({
+            x: 0,
+            y: 0,
+            width: 36,
+            height: 36,
+            top: 100,
+            right: 80,
+            bottom: 136,
+            left: 44,
+            toJSON: () => ({}),
+          }) as DOMRect,
       );
   });
 
@@ -97,8 +131,52 @@ describe("Filter", () => {
     renderFilter();
 
     await waitFor(() => {
-      expect(fetchFoldersMock).toHaveBeenCalledWith("", expect.any(AbortSignal));
+      expect(fetchFoldersMock).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "", signal: expect.any(AbortSignal) }),
+      );
     });
+  });
+
+  it("does not re-request folders on each rerender when optional array filters are unset", async () => {
+    fetchFoldersMock.mockImplementation(() => new Promise(() => {}));
+
+    renderFilter();
+
+    await waitFor(() => {
+      expect(fetchFoldersMock).toHaveBeenCalledTimes(1);
+    });
+
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(fetchFoldersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes folders to the active non-folder filters and shows counts", async () => {
+    render(
+      <FilterProvider>
+        <FilterStateInitializer
+          nextFilter={{
+            mediaTypeFilter: "video",
+            ratingFilter: { rating: 4, atLeast: true },
+            peopleInImageFilter: ["Sam"],
+          }}
+        />
+        <Filter />
+        <FilterStateProbe />
+      </FilterProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
+
+    expect(await screen.findByText("trip (7)")).toBeInTheDocument();
+    expect(screen.getByText("family (2)")).toBeInTheDocument();
+    expect(fetchFoldersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaTypeFilter: "video",
+        ratingFilter: { rating: 4, atLeast: true },
+        peopleInImageFilter: ["Sam"],
+      }),
+    );
   });
 
   it("shows top people suggestions with counts before typing", async () => {
@@ -126,17 +204,15 @@ describe("Filter", () => {
   });
 
   it("shows top camera and lens suggestions with counts before typing", async () => {
-    fetchSuggestionsWithCountsMock.mockImplementation(
-      ({ field }: { field: string }) => {
-        if (field === "cameraModel") {
-          return Promise.resolve([{ value: "Canon EOS R6", count: 18 }]);
-        }
-        if (field === "lens") {
-          return Promise.resolve([{ value: "RF 24-70mm F2.8", count: 11 }]);
-        }
-        return Promise.resolve([]);
-      },
-    );
+    fetchSuggestionsWithCountsMock.mockImplementation(({ field }: { field: string }) => {
+      if (field === "cameraModel") {
+        return Promise.resolve([{ value: "Canon EOS R6", count: 18 }]);
+      }
+      if (field === "lens") {
+        return Promise.resolve([{ value: "RF 24-70mm F2.8", count: 11 }]);
+      }
+      return Promise.resolve([]);
+    });
 
     renderFilter();
 
@@ -166,57 +242,100 @@ describe("Filter", () => {
     );
   });
 
-  it("updates media type through media type panel", async () => {
+  it("cycles the photo and video filter directly from the toolbar button", async () => {
     renderFilter();
 
-    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Video" }));
+    const mediaTypeButton = screen.getByRole("button", { name: "Media type filter" });
+
+    fireEvent.click(mediaTypeButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("filter-state").textContent).toContain(
+        '"mediaTypeFilter":"photo"',
+      );
+    });
+
+    fireEvent.click(mediaTypeButton);
 
     await waitFor(() => {
       expect(screen.getByTestId("filter-state").textContent).toContain(
         '"mediaTypeFilter":"video"',
       );
     });
+
+    fireEvent.click(mediaTypeButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("filter-state").textContent).toContain(
+        '"mediaTypeFilter":"all"',
+      );
+    });
   });
 
-  it("toggles filter for items with face scan data", async () => {
+  it("selects a clustered face from the People face panel", async () => {
     renderFilter();
 
-    const button = screen.getByRole("button", { name: "Face scan data filter" });
+    fireEvent.click(screen.getByRole("button", { name: "People face filter" }));
 
-    fireEvent.click(button);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("filter-state").textContent).toContain(
-        '"hasFaceScanData":true',
-      );
-    });
-
-    fireEvent.click(button);
+    const faceButton = await screen.findByRole("button", { name: "7 faces" });
+    fireEvent.click(faceButton);
 
     await waitFor(() => {
       expect(screen.getByTestId("filter-state").textContent).toContain(
-        '"hasFaceScanData":false',
+        '"faceClusterFilter":["person-3"]',
       );
     });
+
+    fireEvent.click(faceButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("filter-state").textContent).toContain(
+        '"faceClusterFilter":null',
+      );
+    });
+  });
+
+  it("shows a named person in the People face panel", async () => {
+    fetchPeopleClustersMock.mockResolvedValue({
+      clusters: [
+        {
+          id: "person-4",
+          count: 11,
+          name: "Scott",
+          representative: {
+            photo: { path: "trip/b.jpg", name: "b.jpg" },
+            box: { x: 0.5, y: 0.5, width: 0.2, height: 0.2 },
+          },
+        },
+      ],
+      totalFaces: 11,
+      totalClusters: 1,
+      pendingFaces: 0,
+    });
+
+    renderFilter();
+
+    fireEvent.click(screen.getByRole("button", { name: "People face filter" }));
+
+    expect(await screen.findByRole("button", { name: "Scott, 11 faces" })).toBeInTheDocument();
+    expect(screen.getByText("Scott")).toBeInTheDocument();
+    expect(screen.getByText("11 faces")).toBeInTheDocument();
   });
 
   it("shows rating counts and applies selected rating", async () => {
     const localizedTwelveThousand = new Intl.NumberFormat().format(12000);
-    fetchSuggestionsWithCountsMock.mockImplementation(
-      ({ field }: { field: string }) => {
-        if (field === "rating") {
-          return Promise.resolve([
-            { value: "5", count: 12000 },
-            { value: "4", count: 8 },
-            { value: "3", count: 5 },
-            { value: "2", count: 2 },
-            { value: "1", count: 1 },
-          ]);
-        }
-        return Promise.resolve([]);
-      },
-    );
+    fetchSuggestionsWithCountsMock.mockImplementation(({ field }: { field: string }) => {
+      if (field === "rating") {
+        return Promise.resolve([
+          { value: "5", count: 12000 },
+          { value: "4", count: 8 },
+          { value: "3", count: 5 },
+          { value: "2", count: 2 },
+          { value: "1", count: 1 },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
 
     renderFilter();
 
@@ -289,7 +408,7 @@ describe("Filter", () => {
     renderFilter();
 
     fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
-    fireEvent.click(await screen.findByText("trip"));
+    fireEvent.click(await screen.findByText("trip (7)"));
 
     await waitFor(() => {
       expect(screen.getByTestId("filter-state").textContent).toContain('"path":"trip/"');
@@ -316,8 +435,9 @@ describe("Filter", () => {
       );
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Video" }));
+    const mediaTypeButton = screen.getByRole("button", { name: "Media type filter" });
+    fireEvent.click(mediaTypeButton);
+    fireEvent.click(mediaTypeButton);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Media type filter" })).toHaveAttribute(
@@ -336,9 +456,9 @@ describe("Filter", () => {
 
     renderFilter();
 
-    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
 
-    const panelTitle = await screen.findByText("Media type");
+    const panelTitle = await screen.findByText("Folders");
     const panel = panelTitle.closest(".popover-surface");
 
     expect(panel).not.toBeNull();
@@ -358,9 +478,9 @@ describe("Filter", () => {
 
     renderFilter();
 
-    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
 
-    const panelTitle = await screen.findByText("Media type");
+    const panelTitle = await screen.findByText("Folders");
     const panel = panelTitle.closest(".popover-surface");
 
     expect(panel).not.toBeNull();

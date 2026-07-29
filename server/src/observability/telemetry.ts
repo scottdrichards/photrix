@@ -15,8 +15,7 @@ const getTracesEndpoint = () =>
 
 const configureTelemetryEnvironment = () => {
   process.env.OTEL_SERVICE_NAME ??= "photrix-server";
-  process.env.OTEL_RESOURCE_ATTRIBUTES ??=
-    `service.namespace=photrix,deployment.environment=${process.env.NODE_ENV ?? "development"}`;
+  process.env.OTEL_RESOURCE_ATTRIBUTES ??= `service.namespace=photrix,deployment.environment=${process.env.NODE_ENV ?? "development"}`;
 };
 
 export const startTelemetry = async (): Promise<void> => {
@@ -36,14 +35,11 @@ export const startTelemetry = async (): Promise<void> => {
     }),
   });
 
-  telemetryStartPromise = Promise.resolve(telemetrySdk.start())
-    .then(() => {
-    })
-    .catch((error) => {
-      telemetryStartPromise = null;
-      telemetrySdk = undefined;
-      throw error;
-    });
+  telemetryStartPromise = Promise.resolve(telemetrySdk.start()).catch((error) => {
+    telemetryStartPromise = null;
+    telemetrySdk = undefined;
+    throw error;
+  });
 
   return await telemetryStartPromise;
 };

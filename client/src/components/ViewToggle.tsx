@@ -1,4 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { Dismiss24Regular, Share24Regular } from "@fluentui/react-icons";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ShareOptionsModal } from "./ShareOptionsModal";
+import { useSelectionContext } from "./selection/SelectionContext";
 import css from "./ViewToggle.module.css";
 
 type ViewToggleProps = {
@@ -13,7 +16,14 @@ const NEAR_TOP_THRESHOLD_PX = 24;
 export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
   const [hidden, setHidden] = useState(false);
   const [anchorTop, setAnchorTop] = useState(0);
+  const [showShareModal, setShowShareModal] = useState(false);
   const lastScrollYRef = useRef(0);
+  const { selectionMode, checkedPaths, exitSelectionMode, items } = useSelectionContext();
+
+  const selectedPhotos = useMemo(
+    () => items.filter((item) => checkedPaths.has(item.path)),
+    [items, checkedPaths],
+  );
 
   useEffect(() => {
     const computeTopAnchor = () => {
@@ -58,39 +68,70 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
   }, []);
 
   return (
-    <div
-      className={hidden ? `${css.toggleWrapper} ${css.toggleWrapperHidden}` : css.toggleWrapper}
-      style={{ top: anchorTop }}
-      aria-hidden={hidden}
-    >
-      <div className={css.toggleContainer} role="tablist" aria-label="Current view">
-        <div className={css.toggleTrack}>
-          <div
-            className={css.toggleSlider}
-            data-active={view}
-          />
-          <button
-            type="button"
-            className={css.toggleButton}
-            onClick={() => onViewChange("library")}
-            role="tab"
-            aria-selected={view === "library"}
-            tabIndex={hidden ? -1 : 0}
-          >
-            Thumbnails
-          </button>
-          <button
-            type="button"
-            className={css.toggleButton}
-            onClick={() => onViewChange("people")}
-            role="tab"
-            aria-selected={view === "people"}
-            tabIndex={hidden ? -1 : 0}
-          >
-            People
-          </button>
-        </div>
+    <>
+      {showShareModal && (
+        <ShareOptionsModal
+          photos={selectedPhotos}
+          onClose={() => setShowShareModal(false)}
+        />
+      )}
+      <div
+        className={hidden ? `${css.toggleWrapper} ${css.toggleWrapperHidden}` : css.toggleWrapper}
+        style={{ top: anchorTop }}
+        aria-hidden={hidden}
+      >
+        {selectionMode ? (
+          <div className={css.selectionBar}>
+            <span className={css.selectionCount}>{checkedPaths.size} selected</span>
+            <button
+              className="btn btn-subtle"
+              onClick={() => setShowShareModal(true)}
+              disabled={checkedPaths.size === 0}
+              tabIndex={hidden ? -1 : 0}
+            >
+              <Share24Regular fontSize={18} />
+              Share
+            </button>
+            <button
+              className="btn btn-subtle"
+              onClick={exitSelectionMode}
+              tabIndex={hidden ? -1 : 0}
+            >
+              <Dismiss24Regular fontSize={18} />
+              Clear
+            </button>
+          </div>
+        ) : (
+          <div className={css.toggleContainer} role="tablist" aria-label="Current view">
+            <div className={css.toggleTrack}>
+              <div
+                className={css.toggleSlider}
+                data-active={view}
+              />
+              <button
+                type="button"
+                className={css.toggleButton}
+                onClick={() => onViewChange("library")}
+                role="tab"
+                aria-selected={view === "library"}
+                tabIndex={hidden ? -1 : 0}
+              >
+                Thumbnails
+              </button>
+              <button
+                type="button"
+                className={css.toggleButton}
+                onClick={() => onViewChange("people")}
+                role="tab"
+                aria-selected={view === "people"}
+                tabIndex={hidden ? -1 : 0}
+              >
+                People
+              </button>
+            </div>
+          </div>
+        )}
       </div>
-    </div>
+    </>
   );
 };

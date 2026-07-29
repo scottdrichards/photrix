@@ -59,14 +59,24 @@ describe("main.ts HTTP Server", () => {
     );
 
     mkdirSync(path.join(storagePath, "subFolder"), { recursive: true });
+    mkdirSync(path.join(storagePath, "otherFolder"), { recursive: true });
     writeFileSync(path.join(storagePath, "root.jpg"), "root");
     writeFileSync(path.join(storagePath, "subFolder", "child.jpg"), "child");
+    writeFileSync(path.join(storagePath, "otherFolder", "other.jpg"), "other");
 
     database = await IndexDatabase.create(storagePath);
     const relativePaths = [...walkFiles(storagePath)].map((filePath) =>
       path.relative(storagePath, filePath).replace(/\\/g, "/"),
     );
     await database.addPaths(relativePaths);
+    await database.addOrUpdateFileData("subFolder/child.jpg", {
+      exifProcessedAt: "2026-01-01T00:00:00.000Z",
+      rating: 5,
+    });
+    await database.addOrUpdateFileData("otherFolder/other.jpg", {
+      exifProcessedAt: "2026-01-01T00:00:00.000Z",
+      rating: 2,
+    });
 
     const { createServer } = await import("./createServer.ts");
     server = await createServer(database, storagePath, {
@@ -118,11 +128,22 @@ describe("main.ts HTTP Server", () => {
   it("lists folders from root and nested paths", async () => {
     const rootResponse = await makeRequest(TEST_PORT, "/api/folders/");
     const nestedResponse = await makeRequest(TEST_PORT, "/api/folders/subFolder/");
+    const filteredResponse = await makeRequest(
+      TEST_PORT,
+      `/api/folders/?filter=${encodeURIComponent(JSON.stringify({ rating: { min: 5 } }))}`,
+    );
 
     expect(rootResponse.status).toBe(200);
-    expect(JSON.parse(rootResponse.body).folders).toEqual(["subFolder"]);
+    expect(JSON.parse(rootResponse.body).folders).toEqual([
+      { name: "otherFolder", count: 1 },
+      { name: "subFolder", count: 1 },
+    ]);
     expect(nestedResponse.status).toBe(200);
     expect(JSON.parse(nestedResponse.body).folders).toEqual([]);
+    expect(filteredResponse.status).toBe(200);
+    expect(JSON.parse(filteredResponse.body).folders).toEqual([
+      { name: "subFolder", count: 1 },
+    ]);
   });
 
   it("returns files query results", async () => {
@@ -146,9 +167,10 @@ describe("main.ts HTTP Server", () => {
 
     expect(rootData.total).toBe(1);
     expect(rootData.items.map((item) => item.fileName)).toEqual(["root.jpg"]);
-    expect(recursiveData.total).toBe(2);
+    expect(recursiveData.total).toBe(3);
     expect(recursiveData.items.map((item) => item.fileName).sort()).toEqual([
       "child.jpg",
+      "other.jpg",
       "root.jpg",
     ]);
   });

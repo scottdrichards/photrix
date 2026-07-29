@@ -33,6 +33,7 @@ Thumbs.db
 
 # Editor directories and files
 .idea/
+.claude/
 .vscode/settings.json
 *.swp
 
@@ -60,4 +61,13 @@ tools/
 # Cache
 .cache/
 **/.cache/
+.cache-e2e/
+**/.cache-e2e/
+__pycache__/
+**/__pycache__/
 
+# E2E (Playwright) artifacts
+test-results/
+**/test-results/
+playwright-report/
+**/playwright-report/

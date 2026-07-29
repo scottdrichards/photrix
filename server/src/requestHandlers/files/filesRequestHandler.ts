@@ -1,17 +1,25 @@
 import * as http from "http";
 import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
-import { stat, readFile } from "fs/promises";
+import type { FilterElement } from "../../indexDatabase/indexDatabase.type.ts";
+import { stat, readFile, rm, mkdir } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
-import { createReadStream, type Stats } from "fs";
+import { createReadStream, existsSync, type Stats } from "fs";
 import path from "path";
 import {
   convertImage,
+  convertImageCrop,
+  contentTypeForImageFormat,
+  IMAGE_OUTPUT_CONTENT_TYPE,
   ImageConversionError,
+  type CropBox,
+  type ImageOutputFormat,
 } from "../../imageProcessing/convertImage.ts";
+import { convertEmbeddedThumbnail } from "../../imageProcessing/embeddedThumbnail.ts";
 import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
 import { markCacheAccess } from "../../common/cacheEviction.ts";
 import {
-  generateMultibitrateHLS,
+  clampToSupportedHeight,
+  generateVariantHLS,
   getMultibitrateHLSInfo,
   getVariantPlaylistPath,
   getVariantSegmentPath,
@@ -20,8 +28,10 @@ import {
 import { waitForHlsFile } from "../../videoProcessing/hlsSegmentWatcher.ts";
 import { buildVodVariantPlaylist } from "../../videoProcessing/buildHlsPlaylist.ts";
 import {
+  claimVariantEncode,
   registerHlsProcess,
   touchHlsSession,
+  touchVariant,
 } from "../../videoProcessing/hlsSession.ts";
 import { getLogger } from "../../observability/logger.ts";
 
@@ -32,25 +42,37 @@ import { StandardHeight, parseToStandardHeight } from "../../common/standardHeig
 import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";
 import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../utils.ts";
+import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
 
 type Options = {
   database: IndexDatabase;
   storageRoot: string;
   taskOrchestrator: TaskOrchestrator;
+  shareFilter?: unknown;
 };
 
 export const filesEndpointRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
   res: http.ServerResponse,
-  { database, storageRoot, taskOrchestrator }: Options,
+  { database, storageRoot, taskOrchestrator, shareFilter }: Options,
 ) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathMatch = url.pathname.match(/^\/api\/files\/(.*)/);
     if (!pathMatch) return writeJson(res, 400, { error: "Bad request" });
     const subPath = decodeURIComponent(pathMatch[1]) || "/";
-    if (subPath.endsWith("/")) return queryHandler(url, subPath, database, res);
-    await fileHandler(req, url, subPath, storageRoot, res, database, taskOrchestrator);
+    if (subPath.endsWith("/"))
+      return queryHandler(url, subPath, database, res, shareFilter);
+    await fileHandler(
+      req,
+      url,
+      subPath,
+      storageRoot,
+      res,
+      database,
+      taskOrchestrator,
+      shareFilter,
+    );
   } catch (error) {
     if (!res.headersSent)
       writeJson(res, 500, {
@@ -149,7 +171,11 @@ const streamCachedFile = (
   filePath: string,
   opts: { contentType: string; size: number; cacheControl?: string },
 ) => {
-  const { contentType, size, cacheControl = "public, max-age=31536000" } = opts;
+  const {
+    contentType,
+    size,
+    cacheControl = "public, max-age=31536000, immutable",
+  } = opts;
   // Bump the file's timestamp so the cache eviction policy treats it as
   // recently used (approximate LRU).
   markCacheAccess(filePath);
@@ -193,18 +219,47 @@ const streamHlsSegment = async (res: http.ServerResponse, segmentPath: string) =
   });
 };
 
+/** Extracts the integer index N from an HLS segment name `segment_NNN.ts`. */
+const parseSegmentIndex = (segment: string): number | null => {
+  const match = segment.match(/segment_(\d+)\.ts$/);
+  return match ? Number(match[1]) : null;
+};
+
 type FileHandlingContext = {
   normalizedPath: string;
   subPath: string;
   height: StandardHeight;
   res: http.ServerResponse;
   representation: string | null;
+  outputFormat: ImageOutputFormat;
   needsResize: boolean;
   needsFormatChange: boolean;
   isImage: boolean;
   isVideo: boolean;
+  crop: CropBox | null;
   database: IndexDatabase;
   taskOrchestrator: TaskOrchestrator;
+};
+
+/**
+ * Parses a `crop=x,y,w,h` query param of normalized top-left fractions (0..1)
+ * of the EXIF-oriented image. Returns null when absent, or throws a message when
+ * malformed so the caller can respond with 400.
+ */
+const parseCrop = (raw: string | null): CropBox | null => {
+  if (raw === null) return null;
+  const parts = raw.split(",").map((p) => Number.parseFloat(p));
+  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) {
+    throw new Error("crop must be four comma-separated numbers: x,y,w,h");
+  }
+  const [x, y, width, height] = parts;
+  if (width <= 0 || height <= 0) {
+    throw new Error("crop width and height must be positive");
+  }
+  if (x < 0 || y < 0 || x >= 1 || y >= 1) {
+    throw new Error("crop x and y must be in [0, 1)");
+  }
+  return { x, y, width, height };
 };
 
 const serveVideoThumb = async (ctx: FileHandlingContext, height: StandardHeight) => {
@@ -241,6 +296,12 @@ const tryHLSStream = async (
 
   const segment = url.searchParams.get("segment");
   const variant = url.searchParams.get("variant"); // e.g., "360" or "720"
+  // Propagate the auth token through rewritten playlist/segment URLs so that
+  // native HLS players (Safari) and any client that can't add Authorization
+  // headers can still authenticate sub-requests.
+  const tokenSuffix = url.searchParams.get("token")
+    ? `&token=${encodeURIComponent(url.searchParams.get("token")!)}`
+    : "";
 
   try {
     // Get duration from database, falling back to ffprobe if not indexed yet
@@ -265,9 +326,12 @@ const tryHLSStream = async (
     // player is fetching, then deletes it (and kills any running encode) once idle.
     touchHlsSession(multibitrateInfo.hlsDir);
 
-    // If not initialized, set up the directory structure immediately and queue FFmpeg.
-    // The master playlist is returned to the client right away; segments become available
-    // as FFmpeg encodes them and are served via the segment watcher.
+    const hlsDir = multibitrateInfo.hlsDir;
+
+    // If not initialized, set up the directory structure immediately so the master
+    // playlist can be returned to the client right away. Encodes are started lazily
+    // per variant when the client requests segments (see ensureEncoding below);
+    // segments become available as FFmpeg writes them and are served via the watcher.
     if (!multibitrateInfo.initialized) {
       if (!(await getGpuAcceleration())) {
         writeJson(res, 422, {
@@ -278,30 +342,57 @@ const tryHLSStream = async (
         return true;
       }
 
-      // Create dirs + write master.m3u8 synchronously so the response is immediate
+      // Create dirs + write the multi-variant master.m3u8 synchronously so the
+      // response is immediate.
       await prepareMultibitrateHLSStructure(normalizedPath);
+    }
 
-      // Queue HLS generation as a user-blocking task. The output is ephemeral —
-      // it is served while the player fetches, then deleted by the reaper once
-      // playback goes idle (which may kill this encode mid-flight), so we don't
-      // persist any "HLS generated" marker in the database.
-      const hlsDir = multibitrateInfo.hlsDir;
+    // Ensure a live encode is running for `variantHeight`. Encodes always start from
+    // segment 0 — no offset encodes. When a dead encode is restarted, we first clear
+    // the variant's cached segments so the new encode starts with a clean slate (no
+    // stale segments from a previous encode session causing inconsistent playback).
+    // Queued as a user-blocking task. The output is ephemeral — served while the
+    // player fetches, then reaped once that variant goes idle (an ABR switch away) or
+    // the whole tree goes idle, so we persist no DB marker.
+    const ensureEncoding = (variantHeight: number): void => {
+      const needsStart = claimVariantEncode(hlsDir, variantHeight);
+      if (!needsStart) return;
+      const variantDir = path.join(hlsDir, `${variantHeight}p`);
+      recordServerDiagnosticEvent({
+        level: "warn",
+        event: "video.hls.encode.queued",
+        message: `Queued ${variantHeight}p encode (from start)`,
+        data: {
+          path: subPath,
+          hlsDir,
+          variantHeight,
+          queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
+        },
+      });
       ctx.taskOrchestrator.addTask(
         {
-          name: "HLS generation",
+          name: `HLS encode ${variantHeight}p`,
           type: "videoConversion",
           start: () => {
-            const promise = generateMultibitrateHLS(normalizedPath, {
-              onSpawn: (child) => registerHlsProcess(hlsDir, child),
-            }).then(
+            const promise = (async () => {
+              // Clear stale segments so the new encode is the sole author of this
+              // variant's cache — prevents mixed-session segments causing stutter.
+              await rm(variantDir, { recursive: true, force: true });
+              await mkdir(variantDir, { recursive: true });
+              await generateVariantHLS(normalizedPath, variantHeight, {
+                onSpawn: (child) => registerHlsProcess(hlsDir, variantHeight, child),
+              });
+            })().then(
               () => {},
               (error) => {
-                // A reaped session kills ffmpeg on purpose; that's an expected
-                // outcome for ephemeral HLS, not a real failure.
-                hlsLog.debug({ err: error, hlsDir }, "HLS generation ended early");
+                // A reaped session/variant kills ffmpeg on purpose; expected for
+                // ephemeral HLS, not a real failure.
+                hlsLog.debug(
+                  { err: error, hlsDir, variantHeight },
+                  "HLS encode ended early",
+                );
               },
             );
-
             return {
               onComplete: async () => {
                 await promise;
@@ -311,40 +402,89 @@ const tryHLSStream = async (
         },
         "blocking",
       );
-    }
+    };
 
     // Serve variant segment — wait for FFmpeg to write it if not ready yet
     if (segment && variant) {
-      const variantHeight = parseInt(variant, 10);
-      const segmentPath = getVariantSegmentPath(
-        multibitrateInfo.hlsDir,
-        variantHeight,
-        segment,
-      );
+      const variantHeight = clampToSupportedHeight(parseInt(variant, 10));
+      const segmentPath = getVariantSegmentPath(hlsDir, variantHeight, segment);
+      const segmentIndex = parseSegmentIndex(segment);
+      touchVariant(hlsDir, variantHeight);
 
-      const available = await waitForHlsFile(multibitrateInfo.hlsDir, segmentPath);
+      // If the segment isn't on disk yet, make sure an encode is running.
+      if (!existsSync(segmentPath) && segmentIndex !== null) {
+        ensureEncoding(variantHeight);
+      }
+
+      recordServerDiagnosticEvent({
+        level: "info",
+        event: "video.hls.segment.requested",
+        message: `Requested HLS segment ${segment}`,
+        data: {
+          path: subPath,
+          hlsDir,
+          variantHeight,
+          segment,
+          segmentIndex,
+          queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
+        },
+      });
+
+      const available = await waitForHlsFile(hlsDir, segmentPath);
       if (!available) {
+        recordServerDiagnosticEvent({
+          level: "error",
+          event: "video.hls.segment.timeout",
+          message: `Timed out waiting for HLS segment ${segment}`,
+          data: {
+            path: subPath,
+            hlsDir,
+            variantHeight,
+            segment,
+            segmentIndex,
+            queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
+          },
+        });
         writeJson(res, 404, { error: "HLS segment not found or timed out" });
         return true;
       }
+      recordServerDiagnosticEvent({
+        level: "info",
+        event: "video.hls.segment.ready",
+        message: `Served HLS segment ${segment}`,
+        data: {
+          path: subPath,
+          hlsDir,
+          variantHeight,
+          segment,
+        },
+      });
       await streamHlsSegment(res, segmentPath);
       return true;
     }
 
     // Serve variant playlist
     if (variant) {
-      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}&segment=`;
+      const variantHeight = clampToSupportedHeight(parseInt(variant, 10));
+      touchVariant(hlsDir, variantHeight);
+      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}${tokenSuffix}&segment=`;
 
       // When the total duration is known, synthesize a complete VOD playlist that
       // lists every segment up front and ends with #EXT-X-ENDLIST. This gives the
       // player the true total length immediately, instead of FFmpeg's growing EVENT
-      // playlist whose duration creeps up as segments are appended. Not-yet-encoded
-      // segments are long-polled by the segment handler below until FFmpeg writes them.
+      // playlist whose duration creeps up as segments are appended. The encode runs
+      // from segment 0; the segment handler waits for each segment to be produced.
       if (
         typeof knownDuration === "number" &&
         Number.isFinite(knownDuration) &&
         knownDuration > 0
       ) {
+        recordServerDiagnosticEvent({
+          level: "info",
+          event: "video.hls.variant.playlist",
+          message: `Served synthetic VOD playlist for ${variantHeight}p`,
+          data: { path: subPath, hlsDir, variantHeight, knownDuration },
+        });
         const playlist = buildVodVariantPlaylist({
           durationSeconds: knownDuration,
           segmentBaseUrl: baseUrl,
@@ -355,9 +495,8 @@ const tryHLSStream = async (
         return true;
       }
 
-      // Duration unknown — fall back to FFmpeg's growing EVENT playlist, waiting for
-      // it to be written if it isn't ready yet.
-      const variantHeight = parseInt(variant, 10);
+      // Duration unknown — fall back to FFmpeg's own growing EVENT playlist.
+      ensureEncoding(variantHeight);
       const variantPlaylistPath = getVariantPlaylistPath(
         multibitrateInfo.hlsDir,
         variantHeight,
@@ -368,6 +507,17 @@ const tryHLSStream = async (
         variantPlaylistPath,
       );
       if (!available) {
+        recordServerDiagnosticEvent({
+          level: "error",
+          event: "video.hls.variant.playlist.timeout",
+          message: `Timed out waiting for ${variantHeight}p playlist`,
+          data: {
+            path: subPath,
+            hlsDir,
+            variantHeight,
+            queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
+          },
+        });
         writeJson(res, 404, { error: "HLS variant playlist not found or timed out" });
         return true;
       }
@@ -384,10 +534,20 @@ const tryHLSStream = async (
     }
 
     // Serve master playlist
+    recordServerDiagnosticEvent({
+      level: "info",
+      event: "video.hls.master.playlist",
+      message: `Served HLS master playlist for ${subPath}`,
+      data: {
+        path: subPath,
+        hlsDir,
+        queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
+      },
+    });
     let masterContent = await readFile(multibitrateInfo.masterPlaylistPath, "utf-8");
 
     // Rewrite variant playlist paths to use API endpoint
-    const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=`;
+    const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls${tokenSuffix}&variant=`;
     masterContent = masterContent.replace(
       /^(\d+)p\/playlist\.m3u8$/gm,
       (_, variantHeight) => `${baseVariantUrl}${variantHeight}`,
@@ -404,17 +564,80 @@ const tryHLSStream = async (
   }
 };
 
-const tryImageVariant = async (ctx: FileHandlingContext) => {
-  const { needsFormatChange, needsResize, isImage, normalizedPath, height, res } = ctx;
-  if (!(needsFormatChange || needsResize) || !isImage) return false;
+const tryImageCrop = async (ctx: FileHandlingContext) => {
+  const { crop, isImage, normalizedPath, height, res } = ctx;
+  if (!crop || !isImage) return false;
 
   try {
-    const cachedPath = await convertImage(normalizedPath, height, {
+    const cachedPath = await convertImageCrop(normalizedPath, crop, height, {
       priority: "userBlocked",
     });
     const cachedStats = await stat(cachedPath);
     streamCachedFile(res, cachedPath, {
-      contentType: "image/jpeg",
+      contentType: IMAGE_OUTPUT_CONTENT_TYPE,
+      size: cachedStats.size,
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof ImageConversionError) {
+      writeJson(res, 422, { error: "Invalid image", message: error.message });
+      return true;
+    }
+    return false;
+  }
+};
+
+// Fixed size for the progressive-grid micro thumbnail. Matches the largest
+// commonly-available embedded EXIF thumbnail; the grid upgrades to the 320 tile
+// lazily on dwell/hover.
+const MICRO_THUMBNAIL_HEIGHT = 160;
+
+// Instant, I/O-cheap grid tile: serve a JPEG's embedded EXIF thumbnail (a
+// header-only read) instead of decoding the full source. Falls back to a normal
+// 160 full-decode conversion for files without an embedded thumbnail (all HEIC,
+// ~11% of JPEGs), so a `micro` request always resolves to a 160 tile.
+const tryMicroThumbnail = async (ctx: FileHandlingContext) => {
+  const { representation, isImage, normalizedPath, res } = ctx;
+  if (representation !== "micro" || !isImage) return false;
+
+  try {
+    const embeddedPath = await convertEmbeddedThumbnail(
+      normalizedPath,
+      MICRO_THUMBNAIL_HEIGHT,
+    );
+    const cachedPath =
+      embeddedPath ??
+      (await convertImage(normalizedPath, MICRO_THUMBNAIL_HEIGHT, {
+        priority: "userBlocked",
+      }));
+    const cachedStats = await stat(cachedPath);
+    streamCachedFile(res, cachedPath, {
+      contentType: IMAGE_OUTPUT_CONTENT_TYPE,
+      size: cachedStats.size,
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof ImageConversionError) {
+      writeJson(res, 422, { error: "Invalid image", message: error.message });
+      return true;
+    }
+    return false;
+  }
+};
+
+const tryImageVariant = async (ctx: FileHandlingContext) => {
+  const { needsFormatChange, needsResize, isImage, normalizedPath, height, res } = ctx;
+  const forcesFormat = ctx.outputFormat !== "webp";
+  if (!(needsFormatChange || needsResize || forcesFormat) || !isImage) return false;
+
+  try {
+    const cachedPath = await convertImage(normalizedPath, height, {
+      priority: "userBlocked",
+      format: ctx.outputFormat,
+    });
+    const cachedStats = await stat(cachedPath);
+    streamCachedFile(res, cachedPath, {
+      contentType: contentTypeForImageFormat(ctx.outputFormat),
       size: cachedStats.size,
     });
     return true;
@@ -435,6 +658,7 @@ const fileHandler = async (
   res: http.ServerResponse,
   database: IndexDatabase,
   taskOrchestrator: TaskOrchestrator,
+  shareFilter: unknown = null,
 ) => {
   if (!subPath) {
     return writeJson(res, 400, { error: "Missing file path" });
@@ -444,6 +668,16 @@ const fileHandler = async (
 
   if (!isPathInsideStorage(storageRoot, normalizedPath)) {
     return writeJson(res, 403, { error: "Access denied" });
+  }
+
+  if (shareFilter) {
+    const allowed = await database.fileMatchesFilter(
+      subPath,
+      shareFilter as FilterElement,
+    );
+    if (!allowed) {
+      return writeJson(res, 403, { error: "Access denied" });
+    }
   }
 
   let fileStats: Stats | null = null;
@@ -468,9 +702,31 @@ const fileHandler = async (
   const needsResize = height !== "original";
   const needsFormatChange =
     representation === "webSafe" &&
-    (mimeType === "image/heic" || mimeType === "image/heif");
+    (mimeType === "image/heic" ||
+      mimeType === "image/heif" ||
+      mimeType === "image/x-canon-cr3");
   const isImage = mimeType.startsWith("image/");
   const isVideo = mimeType.startsWith("video/");
+  // Link-unfurl bots (Teams/Outlook) can't decode WebP and drop the whole
+  // preview card; og:image URLs request `format=jpeg` for a universal encoding.
+  const outputFormat: ImageOutputFormat =
+    url.searchParams.get("format") === "jpeg" ? "jpeg" : "webp";
+
+  let crop: CropBox | null;
+  try {
+    crop = parseCrop(url.searchParams.get("crop"));
+  } catch (error) {
+    return writeJson(res, 400, {
+      error: "Invalid crop",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (crop && !isImage) {
+    return writeJson(res, 415, {
+      error: "Unsupported Media Type",
+      message: "Crop is only supported for image files",
+    });
+  }
 
   const handlingContext: FileHandlingContext = {
     normalizedPath,
@@ -478,28 +734,50 @@ const fileHandler = async (
     height,
     res,
     representation,
+    outputFormat,
     needsResize,
     needsFormatChange,
     isImage,
     isVideo,
+    crop,
     database,
     taskOrchestrator,
   };
+
+  if (representation === "transcript") {
+    const segments = await database.getAudioSegments(subPath);
+    writeJson(res, 200, { segments });
+    return;
+  }
 
   // HLS handler needs URL for segment parameter
   const hlsHandled = await tryHLSStream({ ...handlingContext, url });
   if (hlsHandled) return;
 
-  const handlers = [tryVideoThumbnail, tryImageVariant];
+  const handlers = [tryVideoThumbnail, tryImageCrop, tryMicroThumbnail, tryImageVariant];
   for (const handler of handlers) {
     const handled = await handler(handlingContext);
     if (handled) return;
   }
 
+  if (representation === "preview" && !isVideo) {
+    return writeJson(res, 415, {
+      error: "Unsupported Media Type",
+      message: "Preview is only available for video files",
+    });
+  }
+
+  if (representation !== null && !isImage && !isVideo) {
+    return writeJson(res, 415, {
+      error: "Unsupported Media Type",
+      message: "Requested representation is not supported for this file type",
+    });
+  }
+
   streamFile(req, res, normalizedPath, {
     contentType: mimeType,
     size: fileStats.size,
-    cacheControl: "public, max-age=31536000",
+    cacheControl: "public, max-age=31536000, immutable",
     acceptRanges: isVideo,
   });
 };

@@ -11,3 +11,23 @@ if (typeof HTMLDialogElement !== "undefined") {
     this.removeAttribute("aria-modal");
   };
 }
+
+if (typeof HTMLMediaElement !== "undefined") {
+  Object.defineProperty(HTMLMediaElement.prototype, "play", {
+    configurable: true,
+    writable: true,
+    value: function play() {
+      return Promise.resolve();
+    },
+  });
+  Object.defineProperty(HTMLMediaElement.prototype, "pause", {
+    configurable: true,
+    writable: true,
+    value: function pause() {},
+  });
+  Object.defineProperty(HTMLMediaElement.prototype, "load", {
+    configurable: true,
+    writable: true,
+    value: function load() {},
+  });
+}

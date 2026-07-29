@@ -56,7 +56,7 @@ export type LogicalFilter<TCondition> = {
 
 export type FilterElement<TCondition> = TCondition | LogicalFilter<TCondition>;
 
-export type FileQueryExtraField = "relativePath" | "hasFaces";
+export type FileQueryExtraField = "relativePath" | "hasFaces" | "faceCluster";
 
 type FilterConstraintForValue<TField extends string, TValue> =
   | null
@@ -93,6 +93,57 @@ export type RecordFilterElement<
 
 export type MediaTypeFilter = "all" | "photo" | "video" | "other";
 
+/**
+ * Semantic-search modalities that contribute results, each rankable independently.
+ * Exposed so the UI can toggle sources on/off for debugging which modality matched.
+ * - `image`: CLIP image-embedding similarity
+ * - `audio`: CLAP audio-embedding similarity
+ * - `transcript`: substring match against speech transcripts
+ */
+export type SearchSource = "image" | "audio" | "transcript";
+export const SEARCH_SOURCES: readonly SearchSource[] = ["image", "audio", "transcript"];
+
+export type ShareScope<TFilter = unknown> = {
+  filter: TFilter;
+  semanticQuery?: string;
+  searchSources?: SearchSource[];
+  sortBy?: SortOption;
+  /** Human-readable label embedded for link-preview generation. */
+  description?: string;
+};
+
+/**
+ * How results are ordered.
+ * - `date`: capture date (dateTaken, falling back to created/modified)
+ * - `rating`: user star rating (unrated always sorts last)
+ * - `relevance`: semantic-search match quality; only meaningful while a search
+ *   query is active, and ignored (treated as `date`) for plain library browsing
+ */
+export type SortField = "date" | "rating" | "relevance";
+export type SortDirection = "asc" | "desc";
+export type SortOption = { field: SortField; direction: SortDirection };
+
+export const SORT_FIELDS: readonly SortField[] = ["date", "rating", "relevance"];
+
+/** Newest first — the historical default when no sort is specified. */
+export const DEFAULT_SORT: SortOption = { field: "date", direction: "desc" };
+
+/** Serialize a sort for a URL/query param, e.g. `date:desc`. */
+export const serializeSort = (sort: SortOption): string =>
+  `${sort.field}:${sort.direction}`;
+
+/**
+ * Parse a `field:direction` sort param. Returns undefined for absent/malformed
+ * input so callers can fall back to DEFAULT_SORT.
+ */
+export const parseSort = (raw: string | null | undefined): SortOption | undefined => {
+  if (!raw) return undefined;
+  const [field, direction] = raw.split(":");
+  if (!(SORT_FIELDS as readonly string[]).includes(field)) return undefined;
+  if (direction !== "asc" && direction !== "desc") return undefined;
+  return { field: field as SortField, direction };
+};
+
 export type RatingFilter = {
   rating: number;
   atLeast: boolean;
@@ -123,15 +174,26 @@ export type DateRangeSelection = {
 export type ClientFilterState = Partial<{
   includeSubfolders: boolean;
   path: string;
+  /**
+   * When true, results are expanded to include all files in any folder that
+   * contains a matched item. Useful with location or people filters to see
+   * the full set of related photos from the same shoot.
+   */
+  expandToFolder: boolean;
   mediaTypeFilter: MediaTypeFilter;
-  hasFaceScanData: boolean;
   peopleInImageFilter: string[] | null;
+  /** Face-cluster ids (People-tab clusters, e.g. `person-3`) to match faces against. */
+  faceClusterFilter: string[] | null;
   cameraModelFilter: string[] | null;
   lensFilter: string[] | null;
   ratingFilter: RatingFilter | null;
   locationBounds: GeoBoundsLike | null;
   dateRange: DateRangeSelection | null;
   semanticQuery: string;
+  /** Enabled semantic-search sources; `undefined` means all sources are used. */
+  searchSources: SearchSource[];
+  /** Result ordering; `undefined` means DEFAULT_SORT (newest first). */
+  sortBy: SortOption;
 }>;
 
 /**
@@ -141,13 +203,13 @@ export type ClientFilterState = Partial<{
  */
 export const FIELD_METADATA = {
   peopleInImageFilter: { nullable: true, supportsArray: true },
+  faceClusterFilter: { nullable: true, supportsArray: true },
   cameraModelFilter: { nullable: true, supportsArray: true },
   lensFilter: { nullable: true, supportsArray: true },
   ratingFilter: { nullable: true, supportsArray: false },
   locationBounds: { nullable: true, supportsArray: false },
   dateRange: { nullable: true, supportsArray: false },
   mediaTypeFilter: { nullable: false, supportsArray: false },
-  hasFaceScanData: { nullable: false, supportsArray: false },
 } as const;
 
 /**
@@ -203,6 +265,24 @@ export type BackgroundTaskStatus = {
   description?: string;
 };
 
+export type ComputeProcessRole = "image" | "clap" | "whisper" | "other";
+
+export type GpuProcess = {
+  pid: number;
+  role: ComputeProcessRole;
+  vramMB: number;
+};
+
+export type ComputeWorkerMetric = {
+  id: string;
+  role: ComputeProcessRole;
+  pid: number;
+  vramMB: number; // 0 when the worker holds no VRAM (e.g. running on CPU)
+  rssMB: number;
+  suspended: boolean;
+  leases: number;
+};
+
 export type SystemMetrics = {
   cpu: {
     usage: number; // percentage 0-100
@@ -226,7 +306,25 @@ export type SystemMetrics = {
       used: number; // MB
       total: number; // MB
     };
+    processes?: GpuProcess[];
+    // VRAM in use on the card but not attributable to any visible pid — e.g.
+    // processes on the host or in sibling containers sharing a passed-through
+    // GPU. A small residue (driver/context overhead) is normal.
+    unaccountedMB?: number;
   };
+  workers?: ComputeWorkerMetric[];
+};
+
+// Live arbitration state, so the status UI can show *why* the ML workers are (or
+// aren't) holding VRAM right now: a user request in flight fully stops
+// background work, and a user GPU request additionally reclaims (kills) the
+// background workers' VRAM until the user goes idle.
+export type ArbitrationState = {
+  userActive: boolean;
+  workersSuspended: boolean;
+  gpuReclaimed: boolean;
+  overloaded: boolean;
+  runningTasks: { name: string; queue: string; priority: string }[];
 };
 
 export type ServerStatus = {
@@ -235,4 +333,5 @@ export type ServerStatus = {
     backgroundTasksEnabled: boolean;
   };
   system: SystemMetrics;
+  arbitration?: ArbitrationState;
 };

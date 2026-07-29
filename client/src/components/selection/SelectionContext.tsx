@@ -8,6 +8,11 @@ import {
 } from "react";
 import type { PhotoItem } from "../../api";
 
+export type PhotoMetadataOverride = {
+  rating?: number | null;
+  tags?: string[];
+};
+
 export type SelectionContextValue = {
   items: PhotoItem[];
   selected: PhotoItem | null;
@@ -15,6 +20,17 @@ export type SelectionContextValue = {
   setItems: (items: PhotoItem[]) => void;
   selectNext: () => void;
   selectPrevious: () => void;
+  selectionMode: boolean;
+  checkedPaths: Set<string>;
+  enterSelectionMode: () => void;
+  exitSelectionMode: () => void;
+  toggleChecked: (photo: PhotoItem) => void;
+  /**
+   * Optimistically merges a tagging patch (rating/tags) onto the given paths.
+   * Overrides are kept in a side map so they survive the grid re-pushing its
+   * item list (e.g. on pagination) until the next full refetch reflects them.
+   */
+  applyMetadataOverride: (paths: string[], patch: PhotoMetadataOverride) => void;
 };
 
 const SelectionContext = createContext<SelectionContextValue | null>(null);
@@ -28,8 +44,40 @@ export const useSelectionContext = (): SelectionContextValue => {
 };
 
 export const SelectionProvider = ({ children }: { children: ReactNode }) => {
-  const [items, setItems] = useState<PhotoItem[]>([]);
+  const [rawItems, setRawItems] = useState<PhotoItem[]>([]);
+  const [overrides, setOverrides] = useState<Record<string, PhotoMetadataOverride>>({});
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [checkedPaths, setCheckedPaths] = useState<Set<string>>(new Set());
+
+  // Merge any optimistic tagging overrides onto the grid-provided items so the
+  // viewer/tiles reflect edits immediately without waiting for a refetch.
+  const items = useMemo(() => {
+    if (Object.keys(overrides).length === 0) return rawItems;
+    return rawItems.map((item) => {
+      const override = overrides[item.path];
+      if (!override) return item;
+      return { ...item, metadata: { ...item.metadata, ...override } };
+    });
+  }, [rawItems, overrides]);
+
+  const setItems = useCallback((next: PhotoItem[]) => {
+    setRawItems(next);
+  }, []);
+
+  const applyMetadataOverride = useCallback(
+    (paths: string[], patch: PhotoMetadataOverride) => {
+      if (paths.length === 0) return;
+      setOverrides((prev) => {
+        const next = { ...prev };
+        for (const path of paths) {
+          next[path] = { ...next[path], ...patch };
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   const selected = useMemo(() => {
     if (!selectedPath) return null;
@@ -54,6 +102,27 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
     setSelectedPath(items[index - 1].path);
   }, [items, selectedPath]);
 
+  const enterSelectionMode = useCallback(() => {
+    setSelectionMode(true);
+  }, []);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setCheckedPaths(new Set());
+  }, []);
+
+  const toggleChecked = useCallback((photo: PhotoItem) => {
+    setCheckedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(photo.path)) {
+        next.delete(photo.path);
+      } else {
+        next.add(photo.path);
+      }
+      return next;
+    });
+  }, []);
+
   const value = useMemo(
     () => ({
       items,
@@ -62,8 +131,27 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
       setItems,
       selectNext,
       selectPrevious,
+      selectionMode,
+      checkedPaths,
+      enterSelectionMode,
+      exitSelectionMode,
+      toggleChecked,
+      applyMetadataOverride,
     }),
-    [items, selected, setSelected, setItems, selectNext, selectPrevious],
+    [
+      items,
+      selected,
+      setSelected,
+      setItems,
+      selectNext,
+      selectPrevious,
+      selectionMode,
+      checkedPaths,
+      enterSelectionMode,
+      exitSelectionMode,
+      toggleChecked,
+      applyMetadataOverride,
+    ],
   );
 
   return <SelectionContext.Provider value={value}>{children}</SelectionContext.Provider>;

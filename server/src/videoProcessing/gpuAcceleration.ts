@@ -27,7 +27,18 @@ const NVIDIA: GpuAcceleration = {
     const s = stderr.toLowerCase();
     return s.includes("nvcuda") || s.includes("cuda") || s.includes("h264_nvenc");
   },
-  cqArgs: (q) => ["-preset", "p1", "-tune", "ll", "-rc", "vbr", "-cq", String(q), "-b:v", "0"],
+  cqArgs: (q) => [
+    "-preset",
+    "p1",
+    "-tune",
+    "ll",
+    "-rc",
+    "vbr",
+    "-cq",
+    String(q),
+    "-b:v",
+    "0",
+  ],
   vbrArgs: (q) => ["-preset", "p1", "-tune", "ll", "-rc", "vbr", "-cq", String(q)],
 };
 
@@ -40,12 +51,42 @@ const AMD: GpuAcceleration = {
     const s = stderr.toLowerCase();
     return s.includes("amf") || s.includes("h264_amf") || s.includes("directx");
   },
-  cqArgs: (q) => ["-quality", "balanced", "-rc", "cqp", "-qp_i", String(q), "-qp_p", String(q)],
-  vbrArgs: (q) => ["-quality", "balanced", "-rc", "vbr_peak", "-qp_i", String(q), "-qp_p", String(q)],
+  cqArgs: (q) => [
+    "-quality",
+    "balanced",
+    "-rc",
+    "cqp",
+    "-qp_i",
+    String(q),
+    "-qp_p",
+    String(q),
+  ],
+  vbrArgs: (q) => [
+    "-quality",
+    "balanced",
+    "-rc",
+    "vbr_peak",
+    "-qp_i",
+    String(q),
+    "-qp_p",
+    String(q),
+  ],
 };
 
-const probeNvidia = (): Promise<boolean> =>
-  new Promise<boolean>((resolve) => {
+/**
+ * Result of the NVIDIA probe:
+ * - "available": CUDA initialized and a context allocated cleanly.
+ * - "present-oom": CUDA loaded far enough to report the card, but couldn't
+ *   allocate a context because VRAM is currently exhausted. The GPU exists and
+ *   NVENC works — this is the reclaimable case: a user transcode frees VRAM from
+ *   background ML workers (see ensureGpuHeadroom) before encoding. Treating this
+ *   as "no GPU" is what made a saturated card fall back to raw direct playback.
+ * - "absent": no usable NVIDIA GPU (driver/library missing, or ffmpeg lacks CUDA).
+ */
+type NvidiaProbeResult = "available" | "present-oom" | "absent";
+
+const probeNvidia = (): Promise<NvidiaProbeResult> =>
+  new Promise<NvidiaProbeResult>((resolve) => {
     const proc = spawn("ffmpeg", [
       "-hide_banner",
       "-init_hw_device",
@@ -67,14 +108,30 @@ const probeNvidia = (): Promise<boolean> =>
     });
 
     proc.on("close", (code) => {
-      resolve(
-        code === 0 &&
-          !stderr.includes("Cannot load nvcuda.dll") &&
-          !stderr.includes("Could not dynamically load CUDA"),
-      );
+      if (code === 0) {
+        resolve("available");
+        return;
+      }
+      const s = stderr.toLowerCase();
+      // Driver/library genuinely missing, or ffmpeg built without CUDA → no GPU.
+      if (
+        s.includes("cannot load nvcuda.dll") ||
+        s.includes("could not dynamically load cuda")
+      ) {
+        resolve("absent");
+        return;
+      }
+      // CUDA initialized enough to attempt (and fail) a context allocation for
+      // lack of free VRAM. The hardware is present and NVENC-capable; the memory
+      // pressure is transient and reclaimed at encode time.
+      if (s.includes("out of memory")) {
+        resolve("present-oom");
+        return;
+      }
+      resolve("absent");
     });
 
-    proc.on("error", () => resolve(false));
+    proc.on("error", () => resolve("absent"));
   });
 
 const probeAmd = (): Promise<boolean> =>
@@ -99,7 +156,10 @@ const probeAmd = (): Promise<boolean> =>
   });
 
 const detect = async (): Promise<GpuAcceleration | null> => {
-  if (await probeNvidia()) {
+  // "present-oom" still means an NVENC-capable card exists — treat it as NVIDIA
+  // so negotiation offers HLS and the encoder reclaims VRAM rather than falling
+  // back to raw direct playback on a momentarily-full card.
+  if ((await probeNvidia()) !== "absent") {
     return NVIDIA;
   }
   if (await probeAmd()) {
@@ -108,17 +168,39 @@ const detect = async (): Promise<GpuAcceleration | null> => {
   return null;
 };
 
+// Once a GPU is confirmed it never changes, so cache it permanently.
+// A null result (probe failed) is not cached — the probe may have failed
+// transiently (e.g. during ML model loading), so we retry after a cooldown.
+const RETRY_COOLDOWN_MS = 60_000;
+let gpuResult: GpuAcceleration | null | undefined = undefined;
 let gpuPromise: Promise<GpuAcceleration | null> | null = null;
+let lastNullMs = 0;
 
 export const getGpuAcceleration = (): Promise<GpuAcceleration | null> => {
+  if (gpuResult != null) {
+    return Promise.resolve(gpuResult);
+  }
+  if (Date.now() - lastNullMs < RETRY_COOLDOWN_MS) {
+    return Promise.resolve(null);
+  }
   if (!gpuPromise) {
-    gpuPromise = detect();
+    gpuPromise = detect().then((result) => {
+      gpuPromise = null;
+      if (result) {
+        gpuResult = result;
+      } else {
+        lastNullMs = Date.now();
+      }
+      return result;
+    });
   }
   return gpuPromise;
 };
 
 export const resetGpuAccelerationForTests = (value: GpuAcceleration | null) => {
-  gpuPromise = Promise.resolve(value);
+  gpuResult = value ?? undefined;
+  gpuPromise = null;
+  lastNullMs = 0;
 };
 
 export { NVIDIA, AMD };

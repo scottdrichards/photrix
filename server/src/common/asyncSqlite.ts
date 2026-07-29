@@ -1,6 +1,7 @@
 ﻿import { Worker } from "node:worker_threads";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getRequestAbortSignal } from "./requestAbort.ts";
 
 const workerScriptPath = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -13,6 +14,8 @@ type CustomFunctionType = "regexp" | "cosine_similarity" | "cosine_similarity_f3
 
 type AsyncSqliteOptions = {
   pragmas?: string[];
+  /** Number of read workers (default: PHOTRIX_DB_READ_WORKERS env or 2). */
+  readPoolSize?: number;
   customFunctions?: Array<{
     name: string;
     options: { deterministic?: boolean };
@@ -24,6 +27,18 @@ type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 };
+
+type ReadQueueEntry = {
+  id: number;
+  message: Record<string, unknown>;
+  settle: PendingRequest;
+  cleanup?: () => void;
+};
+
+const abortError = (): Error =>
+  Object.assign(new Error("Query aborted: client disconnected"), {
+    name: "AbortError",
+  });
 
 const spawnWorker = async (
   dbPath: string,
@@ -61,12 +76,25 @@ const spawnWorker = async (
 export class AsyncSqlite {
   /** Handles writes: run, exec, transaction */
   private writeWorker: Worker;
-  /** Handles reads: get, all  separate worker so writes never block reads in WAL mode */
-  private readWorker: Worker;
+  /**
+   * Handles reads: get, all — separate workers so writes never block reads in
+   * WAL mode, and a pool so one slow query doesn't block fast ones behind it.
+   */
+  private readWorkers: Worker[];
+  private idleReadWorkers: Worker[];
   private nextId = 0;
   private pending = new Map<number, PendingRequest>();
+  // Reads are queued here instead of in the workers' message ports, so a query
+  // whose HTTP request was aborted (client disconnected, superseded map zoom)
+  // can be dropped before a synchronous read worker ever runs it.
+  private readQueue: ReadQueueEntry[] = [];
 
   private rejectAllPending(error: Error): void {
+    const queued = this.readQueue.splice(0);
+    for (const entry of queued) {
+      entry.cleanup?.();
+      entry.settle.reject(error);
+    }
     for (const [id, entry] of this.pending.entries()) {
       this.pending.delete(id);
       entry.reject(error);
@@ -107,28 +135,42 @@ export class AsyncSqlite {
     });
   }
 
-  private constructor(writeWorker: Worker, readWorker: Worker) {
+  private constructor(writeWorker: Worker, readWorkers: Worker[]) {
     this.writeWorker = writeWorker;
-    this.readWorker = readWorker;
+    this.readWorkers = readWorkers;
+    this.idleReadWorkers = [...readWorkers];
     this.attachWorkerHandlers(writeWorker, "write");
-    this.attachWorkerHandlers(readWorker, "read");
+    for (const worker of readWorkers) {
+      this.attachWorkerHandlers(worker, "read");
+    }
   }
 
   static async open(
     dbPath: string,
     options: AsyncSqliteOptions = {},
   ): Promise<AsyncSqlite> {
-    const writeWorker = await spawnWorker(dbPath, { ...options, readonly: false });
+    // WAL readers don't block each other, so a small pool keeps fast queries
+    // flowing past a slow one. Kept small: each worker is a thread plus its own
+    // SQLite connection and page cache.
+    const readPoolSize =
+      options.readPoolSize ?? (Number(process.env.PHOTRIX_DB_READ_WORKERS) || 2);
+    const spawned: Worker[] = [];
     try {
-      const readWorker = await spawnWorker(dbPath, {
-        readonly: true,
-        customFunctions: options.customFunctions,
-      });
-      return new AsyncSqlite(writeWorker, readWorker);
+      spawned.push(await spawnWorker(dbPath, { ...options, readonly: false }));
+      for (let i = 0; i < Math.max(1, readPoolSize); i++) {
+        spawned.push(
+          await spawnWorker(dbPath, {
+            readonly: true,
+            customFunctions: options.customFunctions,
+          }),
+        );
+      }
     } catch (error) {
-      await writeWorker.terminate();
+      await Promise.all(spawned.map((worker) => worker.terminate()));
       throw error;
     }
+    const [writeWorker, ...readWorkers] = spawned;
+    return new AsyncSqlite(writeWorker, readWorkers);
   }
 
   private send<T>(
@@ -146,11 +188,87 @@ export class AsyncSqlite {
     });
   }
 
+  private pumpReadQueue(): void {
+    const worker = this.idleReadWorkers.pop();
+    if (!worker) return;
+    const entry = this.readQueue.shift();
+    if (!entry) {
+      this.idleReadWorkers.push(worker);
+      return;
+    }
+    const release = () => {
+      entry.cleanup?.();
+      this.idleReadWorkers.push(worker);
+      this.pumpReadQueue();
+    };
+    this.pending.set(entry.id, {
+      resolve: (value) => {
+        release();
+        entry.settle.resolve(value);
+      },
+      reject: (error) => {
+        release();
+        entry.settle.reject(error);
+      },
+    });
+    worker.postMessage(entry.message);
+  }
+
+  private sendRead<T>(op: string, payload: Record<string, unknown>): Promise<T> {
+    const signal = getRequestAbortSignal();
+    const id = this.nextId++;
+    return new Promise<T>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+      // The caller must be settled at most once: an in-flight abort rejects it
+      // immediately, then the worker's eventual reply must be discarded.
+      let settled = false;
+      const entry: ReadQueueEntry = {
+        id,
+        message: { id, op, ...payload },
+        settle: {
+          resolve: (value) => {
+            if (settled) return;
+            settled = true;
+            (resolve as (v: unknown) => void)(value);
+          },
+          reject: (error) => {
+            if (settled) return;
+            settled = true;
+            reject(error);
+          },
+        },
+      };
+      if (signal) {
+        const onAbort = () => {
+          const index = this.readQueue.indexOf(entry);
+          if (index !== -1) {
+            // Still queued: drop it so it never reaches the worker.
+            this.readQueue.splice(index, 1);
+            entry.cleanup?.();
+            entry.settle.reject(abortError());
+            return;
+          }
+          // Already running. better-sqlite3 can't interrupt a query mid-flight,
+          // so unblock the caller now; the pending wrapper still fires on the
+          // worker's reply to free the queue, and settle() ignores the result.
+          entry.settle.reject(abortError());
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        entry.cleanup = () => signal.removeEventListener("abort", onAbort);
+      }
+      this.readQueue.push(entry);
+      this.pumpReadQueue();
+    });
+  }
+
   async get<T = Record<string, unknown>>(
     sql: string,
     ...params: unknown[]
   ): Promise<T | undefined> {
-    return this.send<T | undefined>(this.readWorker, "get", { sql, params });
+    return this.sendRead<T | undefined>("get", { sql, params });
   }
 
   async getFromWriteWorker<T = Record<string, unknown>>(
@@ -164,7 +282,7 @@ export class AsyncSqlite {
     sql: string,
     ...params: unknown[]
   ): Promise<T[]> {
-    return this.send<T[]>(this.readWorker, "all", { sql, params });
+    return this.sendRead<T[]>("all", { sql, params });
   }
 
   async run(sql: string, ...params: unknown[]): Promise<RunResult> {
@@ -182,10 +300,14 @@ export class AsyncSqlite {
   }
 
   async close(): Promise<void> {
-    await Promise.all([
-      this.send<void>(this.writeWorker, "close"),
-      this.send<void>(this.readWorker, "close"),
-    ]);
-    await Promise.all([this.writeWorker.terminate(), this.readWorker.terminate()]);
+    // Queued reads will never be dispatched once the worker closes.
+    const queued = this.readQueue.splice(0);
+    for (const entry of queued) {
+      entry.cleanup?.();
+      entry.settle.reject(new Error("AsyncSqlite is closing"));
+    }
+    const workers = [this.writeWorker, ...this.readWorkers];
+    await Promise.all(workers.map((worker) => this.send<void>(worker, "close")));
+    await Promise.all(workers.map((worker) => worker.terminate()));
   }
 }
