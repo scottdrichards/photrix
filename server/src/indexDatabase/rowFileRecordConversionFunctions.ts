@@ -13,6 +13,8 @@ export const rowToFileRecord = (
   const json = (v: string) => JSON.parse(v);
   const processedAtToIso = (v: string | number | null) =>
     v === null || v === undefined ? undefined : new Date(v).toISOString();
+  // `flash` is stored as INTEGER 0/1 (see fileRecordToColumnNamesAndValues).
+  const boolFromInt = (v: string | number) => Number(v) === 1;
 
   // folder and fileName come from the row
   const folder = normalizeFolderPath(row.folder as string);
@@ -36,6 +38,9 @@ export const rowToFileRecord = (
     "iso",
     "focalLength",
     "lens",
+    ["flash", boolFromInt],
+    "whiteBalance",
+    "subjectDistance",
     "duration",
     "framerate",
     "videoCodec",
@@ -153,6 +158,9 @@ export const fileRecordToColumnNamesAndValues = (
     addColumn("iso", entry.iso);
     addColumn("focalLength", entry.focalLength);
     addColumn("lens", entry.lens);
+    addColumn("flash", entry.flash === undefined ? undefined : entry.flash ? 1 : 0);
+    addColumn("whiteBalance", entry.whiteBalance);
+    addColumn("subjectDistance", entry.subjectDistance);
     addColumn("duration", entry.duration);
     addColumn("framerate", entry.framerate);
     addColumn("videoCodec", entry.videoCodec);

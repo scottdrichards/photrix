@@ -38,6 +38,12 @@ export const tables = {
       { name: "iso", type: "INTEGER" },
       { name: "focalLength", type: "TEXT" },
       { name: "lens", type: "TEXT" },
+      // Decoded from the EXIF Flash bitmask's low bit: 1 = flash fired, 0 = did not.
+      { name: "flash", type: "INTEGER" },
+      // Decoded EXIF WhiteBalance enum, e.g. "Auto" / "Manual".
+      { name: "whiteBalance", type: "TEXT" },
+      // EXIF SubjectDistance in meters.
+      { name: "subjectDistance", type: "REAL" },
       { name: "duration", type: "REAL" },
       { name: "framerate", type: "REAL" },
       { name: "videoCodec", type: "TEXT" },
@@ -54,9 +60,11 @@ export const tables = {
       { name: "regions", type: "TEXT" },
       { name: "orientation", type: "INTEGER" },
       { name: "livePhotoVideoFileName", type: "TEXT" },
-      // Human-authored caption embedded in the file (EXIF ImageDescription / IPTC
-      // Caption-Abstract / XMP dc:description). Distinct from the AI-generated
-      // `aiDescription`.
+      // Human-authored caption. Seeded from the file's embedded caption (EXIF
+      // ImageDescription / IPTC Caption-Abstract / XMP dc:description) on first
+      // EXIF scan; editable in-app thereafter via PATCH /api/files (same
+      // DB-only-overlay pattern as `rating`/`tags` — the file itself is never
+      // written). Distinct from the AI-generated `aiDescription`.
       { name: "description", type: "TEXT" },
       { name: "aiDescription", type: "TEXT" },
       { name: "aiTags", type: "TEXT" },

@@ -90,6 +90,34 @@ describe("IndexDatabase", () => {
       });
     });
 
+    it("sets, trims, and clears the description without touching other columns", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(
+          createRecord("captioned.jpg", {
+            exifProcessedAt: new Date(),
+            description: "From EXIF",
+            cameraMake: "Canon",
+          }),
+        );
+
+        await db.updateUserMetadata("captioned.jpg", {
+          description: "  My own caption  ",
+        });
+        let record = await db.getFileRecord("captioned.jpg");
+        expect(record?.description).toBe("My own caption");
+        expect(record?.cameraMake).toBe("Canon");
+
+        // Empty/whitespace-only clears back to NULL, same convention as rating.
+        await db.updateUserMetadata("captioned.jpg", { description: "   " });
+        record = await db.getFileRecord("captioned.jpg");
+        expect(record?.description ?? null).toBeNull();
+
+        await db.updateUserMetadata("captioned.jpg", { description: null });
+        record = await db.getFileRecord("captioned.jpg");
+        expect(record?.description ?? null).toBeNull();
+      });
+    });
+
     it("returns false for a missing file", async () => {
       await withTempDb(async (db) => {
         await expect(db.updateUserMetadata("missing.jpg", { rating: 3 })).resolves.toBe(

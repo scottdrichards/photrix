@@ -300,6 +300,27 @@ const toDescriptionString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+// EXIF `Flash` is a bitmask (e.g. 0x0 "No Flash", 0x1 "Fired", 0x19 "Auto,
+// Fired", 0x18 "Auto, Did not fire"); bit 0 alone means "flash fired",
+// regardless of mode/return-light bits above it.
+const toFlashFired = (value: unknown): boolean | undefined => {
+  const num = toFiniteNumber(value);
+  if (num === undefined) return undefined;
+  return (num & 0x1) === 1;
+};
+
+// EXIF `WhiteBalance` is a small enum: 0 = Auto, 1 = Manual. translateValues is
+// off for the rest of this parse (see parseRawExifData), so decode it here.
+const WHITE_BALANCE_LABELS: Record<number, string> = {
+  0: "Auto",
+  1: "Manual",
+};
+const toWhiteBalanceLabel = (value: unknown): string | undefined => {
+  const num = toFiniteNumber(value);
+  if (num === undefined) return undefined;
+  return WHITE_BALANCE_LABELS[num] ?? `Unknown (${num})`;
+};
+
 const exifFieldMapping = {
   description: {
     exifField: [
@@ -340,6 +361,12 @@ const exifFieldMapping = {
   iso: "ISO",
   focalLength: "FocalLength",
   lens: ["aux:Lens", "exifEX:LensModel", "Lens"],
+  flash: { exifField: "Flash", conversionFn: toFlashFired },
+  whiteBalance: { exifField: "WhiteBalance", conversionFn: toWhiteBalanceLabel },
+  subjectDistance: {
+    exifField: "SubjectDistance",
+    conversionFn: (value) => toFiniteNumber(value),
+  },
   duration: "Duration",
   framerate: "FrameRate",
   videoCodec: "VideoCodec",

@@ -637,15 +637,27 @@ export class IndexDatabase {
   }
 
   /**
-   * Updates only the user-editable tagging columns (`rating`, `tags`) on an
-   * existing file row. Written as a targeted UPDATE of just the provided
-   * columns — not through fileRecordToColumnNamesAndValues — so it never touches
-   * (and therefore never clobbers) the EXIF/AI/face columns, and doesn't depend
-   * on exifProcessedAt being set. Returns false if no matching row exists.
+   * Updates only the user-editable tagging columns (`rating`, `tags`,
+   * `description`) on an existing file row. Written as a targeted UPDATE of just
+   * the provided columns — not through fileRecordToColumnNamesAndValues — so it
+   * never touches (and therefore never clobbers) the EXIF/AI/face columns, and
+   * doesn't depend on exifProcessedAt being set. Returns false if no matching
+   * row exists.
+   *
+   * `description` is dual-purpose like `rating`/`tags`: EXIF processing seeds it
+   * from the file's embedded caption (if any) on first scan, and an in-app edit
+   * here simply overlays/replaces that value going forward (marked dirty for a
+   * future writeback task, same as rating/tags). The file itself is never
+   * touched — this is a DB-only edit.
    */
   async updateUserMetadata(
     relativePath: string,
-    patch: { rating?: number | null; tags?: string[]; editAdj?: string | null },
+    patch: {
+      rating?: number | null;
+      tags?: string[];
+      editAdj?: string | null;
+      description?: string | null;
+    },
   ): Promise<boolean> {
     const { folder, fileName } = splitPath(relativePath);
     const sets: string[] = [];
@@ -676,6 +688,13 @@ export class IndexDatabase {
       params.push(patch.editAdj ?? null);
     }
 
+    if ("description" in patch) {
+      const d = patch.description;
+      const normalized = typeof d === "string" ? d.trim() : "";
+      sets.push("description = ?");
+      params.push(normalized.length > 0 ? normalized : null);
+    }
+
     if (sets.length === 0) return false;
 
     // Mark the row as carrying in-app edits so a future writeback task can find
@@ -700,16 +719,23 @@ export class IndexDatabase {
   async getFilesPendingMetadataWriteback(
     limit = 500,
   ): Promise<
-    Array<{ path: string; rating: number | null; tags: string[]; dirtyAt: number }>
+    Array<{
+      path: string;
+      rating: number | null;
+      tags: string[];
+      description: string | null;
+      dirtyAt: number;
+    }>
   > {
     const rows = await this.db.all<{
       folder: string;
       fileName: string;
       rating: number | null;
       tags: string | null;
+      description: string | null;
       userMetadataDirtyAt: number;
     }>(
-      `SELECT folder, fileName, rating, tags, userMetadataDirtyAt
+      `SELECT folder, fileName, rating, tags, description, userMetadataDirtyAt
        FROM files
        WHERE userMetadataDirtyAt IS NOT NULL
        ORDER BY userMetadataDirtyAt ASC
@@ -732,6 +758,7 @@ export class IndexDatabase {
         path: `${row.folder}${row.fileName}`,
         rating: row.rating,
         tags,
+        description: row.description,
         dirtyAt: row.userMetadataDirtyAt,
       };
     });
