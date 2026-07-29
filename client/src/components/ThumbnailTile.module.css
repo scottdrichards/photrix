@@ -36,7 +36,13 @@
 }
 
 .tileSelected {
-  box-shadow: inset 0 0 0 4px var(--brand);
+  /* Two rings (brand color + a bright inner hairline) so the selected border
+     reads clearly at a glance regardless of what color the photo underneath
+     happens to be — a single brand-colored ring alone can disappear against a
+     similarly-colored photo. */
+  box-shadow:
+    inset 0 0 0 4px var(--brand),
+    inset 0 0 0 6px rgba(255, 255, 255, 0.9);
 }
 
 .checkboxOverlay {
@@ -66,10 +72,15 @@
 .checkedOverlay {
   position: absolute;
   inset: 0;
+  /* Selection reads from the border + edge vignette, not a wash over the
+     photo: the center stays fully clear so the image content is never
+     muddied, and the tint only builds up in a band right at the edge. */
   background: radial-gradient(
     ellipse at center,
-    color-mix(in srgb, var(--brand) 8%, transparent) 0%,
-    color-mix(in srgb, var(--brand) 38%, transparent) 100%
+    transparent 0%,
+    transparent 55%,
+    color-mix(in srgb, var(--brand) 30%, transparent) 80%,
+    color-mix(in srgb, var(--brand) 55%, rgba(0, 0, 0, 0.65)) 100%
   );
   z-index: 1;
   pointer-events: none;

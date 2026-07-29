@@ -295,6 +295,31 @@ describe("Filter", () => {
     });
   });
 
+  it("shows the People face icon as active for a photo-ready attribute filter with no person selected", async () => {
+    render(
+      <FilterProvider>
+        <Filter />
+        <FilterStateInitializer
+          nextFilter={{
+            faceAttributeFilter: { attributes: ["smiling", "eyesOpen"] },
+          }}
+        />
+      </FilterProvider>,
+    );
+
+    const faceFilterButton = await screen.findByRole("button", {
+      name: "People face filter",
+    });
+
+    // "Photo ready"/per-attribute selections are a real, active filter even
+    // with no faceClusterFilter (no person picked) — the icon must reflect
+    // that the same way it does for every other active filter.
+    await waitFor(() => {
+      expect(faceFilterButton).toHaveAttribute("aria-pressed", "true");
+    });
+    expect(faceFilterButton.className).toContain("btn-primary");
+  });
+
   it("shows a named person in the People face panel", async () => {
     fetchPeopleClustersMock.mockResolvedValue({
       clusters: [

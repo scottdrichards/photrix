@@ -1004,24 +1004,15 @@ export function FullscreenViewer() {
   const faceToggleDisabled =
     photo?.mediaType === "video" || (!hasFaceOverlayData && peopleFaces.length === 0);
 
-  // Close the viewer and deep-link to the clicked person's page in the People
-  // view. pushState doesn't emit popstate, so dispatch it manually to drive the
-  // app's URL-sync handler (which flips to the People view and loads the cluster).
-  const openPersonPage = (personId: string) => {
-    setSelected(null);
-    const params = new URLSearchParams(window.location.search);
-    params.set("view", "people");
-    params.set("cluster", personId);
-    params.delete("group");
-    window.history.pushState(null, "", `${window.location.pathname}?${params}`);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  };
-
   const zoomStyle = {
     "--zoom-origin-x": `${photoZoom.originXPercent}%`,
     "--zoom-origin-y": `${photoZoom.originYPercent}%`,
     "--zoom-scale": photoZoom.isZoomed ? photoZoom.scale.toString() : "1",
     "--zoom-cursor": photoZoom.isZoomed ? "zoom-out" : "zoom-in",
+    // Counter-scale for face labels: they must stay a fixed screen size while
+    // the photo (and their own anchor position) zooms in, otherwise a crowded
+    // photo becomes *harder* to read the more you zoom in on it.
+    "--label-counter-scale": photoZoom.isZoomed ? (1 / photoZoom.scale).toString() : "1",
   } as React.CSSProperties;
 
   return (
@@ -1306,8 +1297,6 @@ export function FullscreenViewer() {
                       faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
                       aspectRatio={photoAspectRatio}
                       namedFaces={peopleFaces}
-                      onSelectPerson={openPersonPage}
-                      labelsHidden={photoZoom.isZoomed}
                     />
                   )}
                   <div ref={setCropContainerEl} className={css.cropOverlayContainer} />
@@ -1336,8 +1325,6 @@ export function FullscreenViewer() {
                       faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
                       aspectRatio={photoAspectRatio}
                       namedFaces={peopleFaces}
-                      onSelectPerson={openPersonPage}
-                      labelsHidden={photoZoom.isZoomed}
                     />
                   )}
                 </SwipePhotoViewer>

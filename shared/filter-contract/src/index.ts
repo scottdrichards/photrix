@@ -56,7 +56,53 @@ export type LogicalFilter<TCondition> = {
 
 export type FilterElement<TCondition> = TCondition | LogicalFilter<TCondition>;
 
-export type FileQueryExtraField = "relativePath" | "hasFaces" | "faceCluster";
+export type FileQueryExtraField =
+  | "relativePath"
+  | "hasFaces"
+  | "faceCluster"
+  | "faceMatch";
+
+/** The per-face "photo ready" attributes a face filter can require. */
+export const FACE_ATTRIBUTE_KEYS = [
+  "smiling",
+  "eyesOpen",
+  "inFocus",
+  "wellExposed",
+] as const;
+
+export type FaceAttributeKey = (typeof FACE_ATTRIBUTE_KEYS)[number];
+
+/**
+ * Face filter carrying both *who* and *how they look*.
+ *
+ * Distinct from the plain `faceCluster` field because the attributes have to
+ * apply to the selected person's own face — "Ana, smiling" is not "a photo of
+ * Ana that also contains somebody smiling". Both halves are optional: attributes
+ * with no `clusterIds` match any face in the photo.
+ *
+ * `includeUnknown` (default true) decides whether a face the pipeline has not
+ * scored yet counts as a match. Unknown is genuinely unknown, so it is included
+ * unless the user opts into the strict reading.
+ */
+export type FaceMatchFilter = {
+  clusterIds?: number[];
+  attributes?: FaceAttributeKey[];
+  includeUnknown?: boolean;
+};
+
+/** UI-level selection of face attribute requirements. */
+export type FaceAttributeFilter = {
+  attributes: FaceAttributeKey[];
+  /**
+   * Whether faces the pipeline has not scored yet still match. Defaults to true
+   * — "not yet analysed" is not the same as "not smiling", and while the
+   * backfill runs most of the library is unscored.
+   */
+  includeUnknown?: boolean;
+};
+
+/** The attribute set behind the combined "photo ready" toggle. */
+export const PHOTO_READY_ATTRIBUTES: readonly FaceAttributeKey[] = FACE_ATTRIBUTE_KEYS;
 
 type FilterConstraintForValue<TField extends string, TValue> =
   | null
@@ -184,6 +230,11 @@ export type ClientFilterState = Partial<{
   peopleInImageFilter: string[] | null;
   /** Face-cluster ids (People-tab clusters, e.g. `person-3`) to match faces against. */
   faceClusterFilter: string[] | null;
+  /**
+   * Per-face "photo ready" requirements, applied to the same face that matched
+   * `faceClusterFilter` (or to any face when no person is selected).
+   */
+  faceAttributeFilter: FaceAttributeFilter | null;
   cameraModelFilter: string[] | null;
   lensFilter: string[] | null;
   ratingFilter: RatingFilter | null;
@@ -195,6 +246,65 @@ export type ClientFilterState = Partial<{
   /** Result ordering; `undefined` means DEFAULT_SORT (newest first). */
   sortBy: SortOption;
 }>;
+
+/**
+ * Filter-state fields a natural-language query is allowed to set. Deliberately a
+ * narrow subset of ClientFilterState: the interpreter may only produce filters
+ * the user can see as a chip and remove in one click.
+ */
+export type InterpretedSearchFilter = Pick<
+  ClientFilterState,
+  | "path"
+  | "includeSubfolders"
+  | "mediaTypeFilter"
+  | "peopleInImageFilter"
+  | "faceClusterFilter"
+  | "ratingFilter"
+  | "dateRange"
+  | "semanticQuery"
+>;
+
+export type InterpretedFilterField = keyof InterpretedSearchFilter;
+
+/**
+ * One removable piece of an interpretation, rendered as a filter chip.
+ * `value` identifies the single entry for array-valued fields (people), so
+ * removing one person leaves the others in place.
+ */
+export type InterpretedFilterChip = {
+  field: InterpretedFilterField;
+  label: string;
+  value?: string;
+};
+
+/**
+ * Result of translating a natural-language search into structured filters.
+ *
+ * `interpreted: false` is the normal, non-error outcome whenever the local model
+ * is unconfigured/unreachable/slow, answers with something unusable, or finds
+ * nothing structured in the query — the caller then runs the query exactly as a
+ * plain semantic search.
+ */
+export type SearchInterpretation =
+  | {
+      interpreted: true;
+      /** The original query text, echoed so a stale response can be discarded. */
+      query: string;
+      filter: InterpretedSearchFilter;
+      chips: InterpretedFilterChip[];
+      /** Names/places the model asked for that do not exist in this library. */
+      ignored: string[];
+    }
+  | {
+      interpreted: false;
+      reason:
+        | "unavailable"
+        | "malformed"
+        | "no-filters"
+        | "empty-query"
+        | "disabled"
+        | "error";
+    };
 
 /**
  * Master field metadata: single source of truth for field capabilities.

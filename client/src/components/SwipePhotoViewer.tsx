@@ -349,7 +349,12 @@ export function SwipePhotoViewer({
     transform: `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.scale})`,
     transition: zoomAnimating ? "transform 180ms ease-out" : "none",
     cursor: zoom.scale > 1 ? "grab" : "zoom-in",
-  };
+    // Exposed so a nested FaceOverlay's name labels can counter-scale by the
+    // inverse of this value — the box itself (and everything painted inside
+    // it, including the face label layer) is being scaled up by `zoom.scale`,
+    // so without this the labels would grow right along with the photo.
+    "--label-counter-scale": (1 / zoom.scale).toString(),
+  } as React.CSSProperties;
 
   const renderNeighbor = (item: PhotoItem | null, key: string) => (
     <div className={css.pane} key={key} data-role="pane">

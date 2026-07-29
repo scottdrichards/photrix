@@ -6,6 +6,11 @@ import type {
 } from "./indexDatabase.type.ts";
 import { normalizeFolderPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
+import {
+  faceAttributeConditions,
+  isFaceAttributeKey,
+  type FaceAttributeKey,
+} from "../faceDetection/faceAttributes.ts";
 
 type SQLPart = {
   where: string;
@@ -69,6 +74,77 @@ const buildFilterSQL = (filter: FilterElement, results: SQLPart[]): void => {
   }
 };
 
+const toClusterIds = (constraint: unknown): number[] =>
+  (Array.isArray(constraint) ? constraint : [constraint]).filter(
+    (id): id is number => typeof id === "number" && Number.isFinite(id),
+  );
+
+/**
+ * Builds the correlated-EXISTS face predicate.
+ *
+ * Two properties matter here and are easy to lose:
+ *
+ * 1. The attribute conditions go *inside* the same EXISTS as the person match,
+ *    not alongside it. "These people, smiling" means the selected person's own
+ *    face is smiling — not that the photo contains that person and, separately,
+ *    somebody who happens to be smiling.
+ * 2. Every column referenced (folder, fileName, clusterId, and the four score
+ *    columns) is carried by the `by_file_v4` index, so each EXISTS stays an
+ *    index-only probe. Referencing any other face column would make SQLite fetch
+ *    the face row and drag its ~4 KB embedding BLOB page along — the difference
+ *    between sub-second and tens of seconds across the library.
+ */
+const faceMatchToSQL = (
+  clusterIds: number[],
+  attributes: readonly FaceAttributeKey[],
+  includeUnknown: boolean,
+): SQLPart | null => {
+  const { conditions: attributeConditions, params: attributeParams } =
+    faceAttributeConditions(attributes, { includeUnknown });
+
+  if (clusterIds.length === 0) {
+    if (attributeConditions.length === 0) return null;
+    // No person selected: any one face in the photo has to satisfy the
+    // attributes.
+    return {
+      where: `EXISTS (SELECT 1 FROM faces WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND ${attributeConditions.join(" AND ")})`,
+      params: [...attributeParams],
+    };
+  }
+
+  // AND semantics across people: the file must contain a matching face from
+  // *every* selected person. A person can span multiple adopted clusters, so
+  // match the effective person id rather than the raw face cluster id.
+  const clauses = clusterIds.map(
+    () =>
+      `EXISTS (SELECT 1 FROM faces JOIN faceClusters ON faceClusters.id = faces.clusterId WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND COALESCE(faceClusters.personId, faces.clusterId) = ?${attributeConditions.map((condition) => ` AND ${condition}`).join("")})`,
+  );
+
+  return {
+    where: clauses.join(" AND "),
+    params: clusterIds.flatMap((clusterId) => [clusterId, ...attributeParams]),
+  };
+};
+
+const faceMatchConstraintToSQL = (constraint: unknown): SQLPart | null => {
+  if (!constraint || typeof constraint !== "object" || Array.isArray(constraint)) {
+    return null;
+  }
+  const source = constraint as {
+    clusterIds?: unknown;
+    attributes?: unknown;
+    includeUnknown?: unknown;
+  };
+  const clusterIds = toClusterIds(source.clusterIds);
+  const attributes = (Array.isArray(source.attributes) ? source.attributes : []).filter(
+    isFaceAttributeKey,
+  );
+  // Unknown counts as a match unless the caller explicitly says otherwise, so a
+  // half-backfilled library does not silently look empty.
+  const includeUnknown = source.includeUnknown !== false;
+  return faceMatchToSQL(clusterIds, attributes, includeUnknown);
+};
+
 const constraintToSQL = (
   field: FilterField,
   constraint: FilterCondition[FilterField],
@@ -96,24 +172,15 @@ const constraintToSQL = (
   }
 
   if (fieldName === "faceCluster") {
-    const clusterIds = (Array.isArray(constraint) ? constraint : [constraint]).filter(
-      (id): id is number => typeof id === "number" && Number.isFinite(id),
-    );
+    const clusterIds = toClusterIds(constraint);
     if (clusterIds.length === 0) {
       return null;
     }
-    // AND semantics: the file must contain a face from *every* selected person.
-    // A person can span multiple adopted clusters, so match against the effective
-    // person id rather than the raw face cluster id.
-    return {
-      where: clusterIds
-        .map(
-          () =>
-            "EXISTS (SELECT 1 FROM faces JOIN faceClusters ON faceClusters.id = faces.clusterId WHERE faces.folder = files.folder AND faces.fileName = files.fileName AND COALESCE(faceClusters.personId, faces.clusterId) = ?)",
-        )
-        .join(" AND "),
-      params: clusterIds,
-    };
+    return faceMatchToSQL(clusterIds, [], true);
+  }
+
+  if (fieldName === "faceMatch") {
+    return faceMatchConstraintToSQL(constraint);
   }
 
   if (fieldName === "semanticImage") {

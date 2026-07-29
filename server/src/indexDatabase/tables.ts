@@ -44,6 +44,7 @@ export const tables = {
       { name: "audioCodec", type: "TEXT" },
       { name: "rating", type: "INTEGER", indexExpression: true },
       { name: "tags", type: "TEXT" },
+      { name: "editAdj", type: "TEXT" },
       // Set to a timestamp when the user edits rating/tags in-app (DB-only; the
       // original files stay read-only). A future writeback task can find these
       // rows (userMetadataDirtyAt IS NOT NULL) and, if ever desired, persist the
@@ -149,6 +150,23 @@ export const tables = {
       // People queries pick representatives and order faces without reading
       // embedding BLOBs.
       { name: "clusterSimilarity", type: "REAL" },
+      // "Photo ready" attributes, each 0..1, all derived per face during image
+      // analysis (see python/face_attributes.py). NULL means *unknown* — the
+      // face predates the feature, or the attribute could not be judged (a
+      // profile view tells you nothing about eye openness, a 30-pixel face
+      // nothing about sharpness). Filters must never silently read NULL as a
+      // failing score.
+      { name: "smileScore", type: "REAL" },
+      { name: "eyesOpenScore", type: "REAL" },
+      { name: "focusScore", type: "REAL" },
+      { name: "exposureScore", type: "REAL" },
+      // Version of the attribute derivation that produced the four scores
+      // above, or NULL for "never scored". This column *is* the backfill queue:
+      // the attribute task claims NULL rows, and improving the algorithm is a
+      // constant bump plus a one-time reset of rows below it (see
+      // resetStaleFaceAttributes). Stamped even when every score came back
+      // unknown, so an unjudgeable face is not retried forever.
+      { name: "faceAttrVersion", type: "INTEGER" },
     ],
     compositeIndexes: [
       {
@@ -166,11 +184,29 @@ export const tables = {
         // face filter; without them every joined face row is fetched, dragging
         // its embedding BLOB pages).
         //
-        // Renamed from `by_file_v2` so prepareTables drops the old index and
-        // rebuilds this wider one (CREATE INDEX IF NOT EXISTS won't widen an
-        // index that already exists under the same name).
-        name: "by_file_v3",
-        expression: "folder, fileName, clusterId, clusterSimilarity, id",
+        // The four attribute scores are appended for the same reason: the
+        // "photo ready" filter adds predicates on them *inside* the correlated
+        // EXISTS, and any column it reads that isn't in the index turns the
+        // index-only probe back into a row fetch — which is precisely the
+        // embedding-BLOB drag this index exists to avoid. They cost ~1 byte per
+        // face while NULL and 8 once scored.
+        //
+        // Renamed from `by_file_v3` (itself from `by_file_v2`) so prepareTables
+        // drops the old index and rebuilds this wider one — CREATE INDEX IF NOT
+        // EXISTS won't widen an index that already exists under the same name.
+        name: "by_file_v4",
+        expression:
+          "folder, fileName, clusterId, clusterSimilarity, id, smileScore, eyesOpenScore, focusScore, exposureScore",
+      },
+      {
+        // Drives the attribute backfill's "next files with unscored faces"
+        // query. Partial, so it covers only outstanding work and shrinks to
+        // nothing as the backfill completes; ordered by (folder, fileName) so
+        // `SELECT DISTINCT folder, fileName ... LIMIT n` is an index walk that
+        // stops at n rather than grouping the whole table.
+        name: "needing_attributes",
+        expression: "folder, fileName",
+        where: "faceAttrVersion IS NULL",
       },
       {
         // Serves the clustering backfill's "next unassigned faces, best
@@ -298,6 +334,14 @@ export const tables = {
       { name: "label", type: "TEXT" },
       { name: "createdAt", type: "INTEGER" },
       { name: "revokedAt", type: "INTEGER" },
+    ],
+    compositeIndexes: [],
+  },
+  feedback: {
+    columns: [
+      { name: "id", type: "INTEGER", isPrimaryKey: true },
+      { name: "text", type: "TEXT" },
+      { name: "createdAt", type: "INTEGER", indexExpression: true },
     ],
     compositeIndexes: [],
   },

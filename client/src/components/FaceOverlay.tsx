@@ -22,12 +22,14 @@ type FaceOverlayProps = {
   regionsRaw: unknown;
   faceTableBoxesRaw?: unknown;
   aspectRatio: number;
-  /** Detected faces with resolved People names, rendered as clickable labels. */
+  /**
+   * Detected faces with resolved People names, rendered as labels. Not
+   * clickable — a name label sits on top of the zoomable photo and clicking it
+   * has no special behavior of its own (it just falls through to the same
+   * zoom click as the rest of the image), so it deliberately has no cursor or
+   * click handler of its own.
+   */
   namedFaces?: NamedFace[];
-  /** Invoked with the `person-N` cluster id when a name label is clicked. */
-  onSelectPerson?: (personId: string) => void;
-  /** Hide labels while the photo is zoomed (the frame layer scales, they don't). */
-  labelsHidden?: boolean;
 };
 
 const unwrapJsonString = (value: unknown): unknown => {
@@ -219,7 +221,6 @@ export function FaceOverlay({
   faceTableBoxesRaw,
   aspectRatio,
   namedFaces,
-  labelsHidden = false,
 }: FaceOverlayProps) {
   const exifFaceRegions = useMemo(() => parseFaceRegions(regionsRaw), [regionsRaw]);
   const tableFaceRegions = useMemo(
@@ -284,7 +285,7 @@ export function FaceOverlay({
           className={`${css.faceFrameRect} ${css.faceTableFrameRect}`}
         />
       </svg>
-      {!labelsHidden && nameLabels.length > 0 && (
+      {nameLabels.length > 0 && (
         <div className={css.faceLabelLayer}>
           {nameLabels.map((face, index) => (
             <span

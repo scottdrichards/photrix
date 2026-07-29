@@ -42,6 +42,7 @@ export const Filter = () => {
     path,
     peopleInImageFilter,
     faceClusterFilter,
+    faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
     locationBounds,
@@ -177,7 +178,13 @@ export const Filter = () => {
           : "Photos and videos";
   const isFolderFilterActive = Boolean(currentPath) || includeSubfolders === false;
   const isMediaTypeFilterActive = Boolean(mediaTypeFilter && mediaTypeFilter !== "all");
-  const isFaceClusterFilterActive = (faceClusterFilter ?? []).length > 0;
+  // Covers both halves of the face filter: specific people picked, and/or a
+  // "photo ready" / per-attribute requirement with no person selected. Either
+  // one alone is a real, active filter and must light up the icon — checking
+  // faceClusterFilter alone missed the attribute-only case entirely.
+  const isFaceClusterFilterActive =
+    (faceClusterFilter ?? []).length > 0 ||
+    (faceAttributeFilter?.attributes.length ?? 0) > 0;
   const isPeopleFilterActive = selectedPeople.length > 0;
   const isGearFilterActive =
     selectedCameraModels.length > 0 || selectedLensModels.length > 0;
