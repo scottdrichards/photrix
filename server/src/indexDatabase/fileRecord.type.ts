@@ -27,8 +27,10 @@ export type ExifMetadata = {
     rotation?: number;
   }>;
   personInImage?: string[];
-  /** Human-authored caption from the file (EXIF/IPTC/XMP). See `aiDescription`
-   * on {@link AIMetadata} for the machine-generated counterpart. */
+  /** Human-authored caption. Seeded from the file's EXIF/IPTC/XMP on first
+   * scan; also user-editable in-app thereafter (DB-only overlay, like
+   * `rating`/`tags`). See `aiDescription` on {@link AIMetadata} for the
+   * machine-generated counterpart. */
   description?: string;
   dateTaken?: Date;
   dimensionWidth?: number;
@@ -42,6 +44,12 @@ export type ExifMetadata = {
   iso?: number;
   focalLength?: string;
   lens?: string;
+  /** Whether the flash fired (decoded from the EXIF `Flash` bitmask's low bit). */
+  flash?: boolean;
+  /** e.g. "Auto" / "Manual" (decoded from the EXIF `WhiteBalance` enum). */
+  whiteBalance?: string;
+  /** Subject distance in meters, from the EXIF `SubjectDistance` tag. */
+  subjectDistance?: number;
   duration?: number;
   framerate?: number;
   videoCodec?: string;
@@ -80,6 +88,9 @@ export const MetadataGroups = {
     "iso",
     "focalLength",
     "lens",
+    "flash",
+    "whiteBalance",
+    "subjectDistance",
     "duration",
     "framerate",
     "videoCodec",

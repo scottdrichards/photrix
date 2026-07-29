@@ -4,12 +4,19 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that lets AI
 agents query your Photrix photo library — semantic search, face recognition,
 "on this day" nostalgia, metadata filtering, and viewing actual photos.
 
-It runs as its own process and talks to Photrix over the **HTTP API** (the same
-endpoints the web client uses), so it inherits Photrix's auth/share-scoping and
-can run on a different host from Photrix itself. It never opens the SQLite index
-directly.
+It talks to Photrix over the **HTTP API** (the same endpoints the web client
+uses), so it inherits Photrix's auth/share-scoping and can run on a different
+host from Photrix itself. It never opens the SQLite index directly.
 
 ## Running
+
+**It starts automatically** in-process alongside the main app (`npm start` /
+`tsx src/main.ts`) — there's nothing extra to run for the common case of
+Photrix and its MCP server living on the same host.
+
+If you want it as a separate process instead (e.g. running it on a different
+host from Photrix, or restarting it independently), set `MCP_AUTOSTART=false`
+in the main app's env to opt out of the in-process copy, then run it standalone:
 
 ```bash
 # from server/
@@ -18,13 +25,14 @@ npm run mcp
 
 Configuration (env vars, e.g. in `server/.env`):
 
-| Variable                 | Default                 | Purpose                                                              |
-| ------------------------ | ----------------------- | -------------------------------------------------------------------- |
-| `MCP_PORT`               | `3100`                  | Port the MCP server listens on.                                      |
-| `PHOTRIX_BASE_URL`       | `http://localhost:3000` | Base URL of the Photrix HTTP server to proxy.                        |
-| `PHOTRIX_TOKEN`          | _(none)_                | Default Photrix bearer used when a caller sends no key of their own. |
-| `MCP_AUTH_TOKEN`         | _(none)_                | Legacy shared-secret gate (see Authentication below).                |
-| `PHOTRIX_MCP_TIMEOUT_MS` | `30000`                 | Per-request timeout when calling Photrix.                            |
+| Variable                 | Default                 | Purpose                                                                              |
+| ------------------------ | ------------------------ | ------------------------------------------------------------------------------------ |
+| `MCP_AUTOSTART`          | `true`                   | Whether the main app starts this in-process on boot. Set `false` to run it standalone only. |
+| `MCP_PORT`               | `3100`                   | Port the MCP server listens on.                                                      |
+| `PHOTRIX_BASE_URL`       | `http://localhost:3000`  | Base URL of the Photrix HTTP server to proxy.                                        |
+| `PHOTRIX_TOKEN`          | _(none)_                 | Default Photrix bearer used when a caller sends no key of their own.                 |
+| `MCP_AUTH_TOKEN`         | _(none)_                 | Legacy shared-secret gate (see Authentication below).                                |
+| `PHOTRIX_MCP_TIMEOUT_MS` | `30000`                  | Per-request timeout when calling Photrix.                                            |
 
 ## Authentication
 

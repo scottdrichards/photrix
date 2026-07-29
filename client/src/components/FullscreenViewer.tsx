@@ -28,6 +28,7 @@ import {
 import type { PhotoPersonFace } from "../api/types";
 import { StarRating } from "./StarRating";
 import { TagEditor } from "./TagEditor";
+import { DescriptionEditor } from "./DescriptionEditor";
 import { getToken } from "../auth";
 import { createClientOperationId, logClientEvent } from "../diagnostics";
 import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes } from "./FaceOverlay";
@@ -1047,12 +1048,14 @@ export function FullscreenViewer() {
   // The override survives grid re-pushes; a failed PATCH just logs (the value is
   // reconciled on the next refetch).
   const persistTagging = useCallback(
-    (patch: { rating?: number; tags?: string[] }) => {
+    (patch: { rating?: number; tags?: string[]; description?: string | null }) => {
       const path = photo?.path;
       if (!path) return;
-      const override: { rating?: number | null; tags?: string[] } = {};
+      const override: { rating?: number | null; tags?: string[]; description?: string | null } =
+        {};
       if (patch.rating !== undefined) override.rating = patch.rating > 0 ? patch.rating : null;
       if (patch.tags !== undefined) override.tags = patch.tags;
+      if (patch.description !== undefined) override.description = patch.description;
       applyMetadataOverride([path], override);
       void updatePhotoMetadata(path, patch).catch(() => {
         // Best-effort; optimistic value stays until the next refetch.
@@ -1502,12 +1505,20 @@ export function FullscreenViewer() {
               <aside className={css.infoSidebar} aria-label="File info panel">
                 <h3 className={css.infoTitle}>File info</h3>
 
-                {/* Human-authored caption embedded in the file */}
-                {Boolean(meta?.description) && (
-                  <>
-                    <h4 className={css.infoSubtitle}>Description</h4>
+                {/* Human-authored caption: seeded from the file's embedded EXIF/IPTC/XMP
+                    caption if present, and editable in-app (DB-only, the file itself is
+                    never modified) — same overlay pattern as the star rating/tags below. */}
+                <h4 className={css.infoSubtitle}>Description</h4>
+                {READ_ONLY ? (
+                  Boolean(meta?.description) && (
                     <p className={css.infoDescription}>{String(meta?.description)}</p>
-                  </>
+                  )
+                ) : (
+                  <DescriptionEditor
+                    key={photo.path}
+                    value={typeof meta?.description === "string" ? meta.description : ""}
+                    onSave={(next) => persistTagging({ description: next.length > 0 ? next : null })}
+                  />
                 )}
 
                 {/* AI-generated description */}
@@ -1547,7 +1558,10 @@ export function FullscreenViewer() {
                 {(meta?.aperture != null ||
                   meta?.exposureTime != null ||
                   meta?.iso != null ||
-                  meta?.focalLength != null) && (
+                  meta?.focalLength != null ||
+                  meta?.flash != null ||
+                  meta?.whiteBalance != null ||
+                  meta?.subjectDistance != null) && (
                   <>
                     <h4 className={css.infoSubtitle}>Capture</h4>
                     <dl className={css.infoList}>
@@ -1573,6 +1587,24 @@ export function FullscreenViewer() {
                         <div className={css.infoRow}>
                           <dt>Focal Length</dt>
                           <dd>{formatFocalLength(meta.focalLength)}</dd>
+                        </div>
+                      )}
+                      {meta.flash != null && (
+                        <div className={css.infoRow}>
+                          <dt>Flash</dt>
+                          <dd>{meta.flash ? "Fired" : "Did not fire"}</dd>
+                        </div>
+                      )}
+                      {meta.whiteBalance != null && (
+                        <div className={css.infoRow}>
+                          <dt>White Balance</dt>
+                          <dd>{String(meta.whiteBalance)}</dd>
+                        </div>
+                      )}
+                      {meta.subjectDistance != null && (
+                        <div className={css.infoRow}>
+                          <dt>Subject Distance</dt>
+                          <dd>{Number(meta.subjectDistance).toFixed(2)} m</dd>
                         </div>
                       )}
                     </dl>

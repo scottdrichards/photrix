@@ -51,6 +51,7 @@ import {
   ensureImageConversionReady,
   shutdownImageConversionWorkers,
 } from "./imageProcessing/convertImage.ts";
+import { startMcpServer } from "./mcp/mcpServer.ts";
 
 const startServer = async () => {
   // Kill any ML workers left resident by a prior instance before we spawn our
@@ -117,6 +118,22 @@ const startServer = async () => {
     taskOrchestrator,
   });
   logger.info({ mediaRoot, port: process.env.PORT ?? 3000 }, "Server started");
+
+  // Start the MCP server in-process alongside the main app by default, so AI
+  // agents wired to it don't depend on a second process (`npm run mcp`) being
+  // started and kept alive separately — a past source of orphaned processes
+  // across restarts. Set MCP_AUTOSTART=false to keep running it standalone
+  // instead (e.g. deploying it on a different host, per its README). Best
+  // effort: a failure here (e.g. MCP_PORT already bound by a standalone
+  // instance) is logged, not fatal — it never blocks serving photos.
+  let mcpServer: Awaited<ReturnType<typeof startMcpServer>> | undefined;
+  if (process.env.MCP_AUTOSTART !== "false") {
+    try {
+      mcpServer = await startMcpServer();
+    } catch (err) {
+      logger.warn({ err }, "MCP server failed to start (continuing without it)");
+    }
+  }
 
   const [cudaAvailable, faceCudaAvailable] = await Promise.all([
     detectCuda(),
@@ -259,6 +276,9 @@ const startServer = async () => {
     // orphaned, still-VRAM-resident workers.
     shutdownComputeWorkers();
     shutdownImageConversionWorkers();
+    // In-process, so there's no separate PID to orphan — but close its
+    // listener explicitly so a fast restart can rebind MCP_PORT immediately.
+    mcpServer?.close();
 
     server.close((err) => {
       if (err) {

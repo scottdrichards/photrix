@@ -84,7 +84,10 @@ export const SuggestionFilterField = ({
           q: searchText.trim(),
           allowBlankQuery: true,
           includeCounts: true,
-          limit: 8,
+          // The option list scrolls internally (OptionListWithCounts), so fetch
+          // enough matches to make that scrolling useful instead of capping the
+          // dropdown to a handful of values.
+          limit: 50,
           includeSubfolders,
           path,
           ratingFilter,

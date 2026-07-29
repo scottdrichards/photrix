@@ -354,6 +354,8 @@ export type PhotoMetadataPatch = {
   tags?: string[];
   /** JSON-serialized EditAdj, or null to clear all edits. */
   editAdj?: string | null;
+  /** Free-text caption; null/empty clears it back to unset. */
+  description?: string | null;
 };
 
 /**

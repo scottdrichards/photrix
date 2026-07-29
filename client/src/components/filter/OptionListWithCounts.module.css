@@ -2,6 +2,11 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+  /* Keep the dropdown's footprint fixed even when a field has many matching
+     values (e.g. cameraModel/lens) — scroll within this list instead of
+     growing the popover. */
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 .button {

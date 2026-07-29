@@ -11,6 +11,7 @@ import type { PhotoItem } from "../../api";
 export type PhotoMetadataOverride = {
   rating?: number | null;
   tags?: string[];
+  description?: string | null;
 };
 
 export type SelectionContextValue = {
