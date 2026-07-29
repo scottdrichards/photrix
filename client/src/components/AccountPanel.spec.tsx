@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   revokeShareLink: vi.fn(),
   revokeSession: vi.fn(),
   revokeAllSessions: vi.fn(),
+  revokeOtherSessions: vi.fn(),
 }));
 
 vi.mock("../api/account", () => mocks);
@@ -28,7 +29,7 @@ vi.mock("../hooks/useShareFilter", () => ({
 }));
 
 const resetMocks = () => {
-  mocks.fetchAccount.mockResolvedValue({ username: "alice" });
+  mocks.fetchAccount.mockResolvedValue({ username: "alice", passkeysAvailable: false });
   mocks.fetchMcpKeys.mockResolvedValue([
     { id: "abc123", name: "Claude", createdAt: 1_700_000_000_000, lastUsedAt: null },
   ]);
@@ -42,7 +43,14 @@ const resetMocks = () => {
     },
   ]);
   mocks.fetchSessions.mockResolvedValue([
-    { id: "sess1", createdAt: 1_700_000_000_000, current: true },
+    {
+      id: "sess1",
+      createdAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      current: true,
+      ip: "203.0.113.5",
+      location: "Internet",
+    },
   ]);
   mocks.createMcpKey.mockResolvedValue({
     token: "photrix-mcp-v1.newsecret",

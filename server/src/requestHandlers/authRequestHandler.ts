@@ -22,6 +22,7 @@ import {
   verifyPasskeyRegistration,
 } from "../auth/passkeyService.ts";
 import { normalizeShareSearchSources } from "../auth/shareScope.ts";
+import { clientIpFromRequest } from "../auth/ipLocation.ts";
 import { writeJson } from "../utils.ts";
 
 const readBody = (req: http.IncomingMessage): Promise<string> =>
@@ -49,7 +50,7 @@ export const authLoginHandler = async (
     return;
   }
 
-  const token = validateCredentials(body.username, body.password);
+  const token = validateCredentials(body.username, body.password, clientIpFromRequest(req));
   if (!token) {
     writeJson(res, 401, { error: "Invalid username or password" });
     return;
@@ -256,7 +257,7 @@ export const passkeyAuthenticationVerifyHandler = async (
     return;
   }
 
-  const token = issueToken(username);
+  const token = issueToken(username, clientIpFromRequest(req));
   writeJson(res, 200, { token });
 };
 

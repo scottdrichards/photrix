@@ -261,6 +261,13 @@ export const tables = {
       { name: "token", type: "TEXT", isPrimaryKey: true },
       { name: "username", type: "TEXT" },
       { name: "createdAt", type: "INTEGER" },
+      // Best-effort client address at login time (X-Forwarded-For's first hop
+      // behind a reverse proxy, else the raw socket address). Used to show a
+      // coarse "local network vs internet" hint per session in account settings.
+      { name: "ip", type: "TEXT" },
+      // Refreshed (throttled) whenever the session authenticates a request, so
+      // stale-but-never-revoked sessions can be told apart from active ones.
+      { name: "lastSeenAt", type: "INTEGER" },
     ],
     compositeIndexes: [],
   },
