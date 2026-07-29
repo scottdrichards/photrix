@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ViewToggle } from "./ViewToggle";
+import { SelectionProvider } from "./selection/SelectionContext";
 
 const setScrollY = (value: number) => {
   Object.defineProperty(window, "scrollY", {
@@ -9,20 +10,27 @@ const setScrollY = (value: number) => {
   });
 };
 
+const renderViewToggle = (view: "library" | "people" = "library") =>
+  render(
+    <SelectionProvider>
+      <ViewToggle view={view} onViewChange={() => {}} />
+    </SelectionProvider>,
+  );
+
 describe("ViewToggle", () => {
   beforeEach(() => {
     setScrollY(0);
   });
 
   it("renders visible (not hidden) at the top of the page", () => {
-    render(<ViewToggle view="library" onViewChange={() => {}} />);
+    renderViewToggle();
 
     const tablist = screen.getByRole("tablist", { name: "Current view" });
     expect(tablist.parentElement).toHaveAttribute("aria-hidden", "false");
   });
 
   it("hides completely (no layout/hit-test footprint) when scrolling down", () => {
-    render(<ViewToggle view="library" onViewChange={() => {}} />);
+    renderViewToggle();
 
     setScrollY(50);
     fireEvent.scroll(window);
@@ -44,7 +52,7 @@ describe("ViewToggle", () => {
       writable: true,
       value: 800,
     });
-    render(<ViewToggle view="library" onViewChange={() => {}} />);
+    renderViewToggle();
 
     // Scroll down first so the pill is hidden and scrolled away from the top.
     setScrollY(50);
@@ -63,7 +71,7 @@ describe("ViewToggle", () => {
   });
 
   it("returns to the top anchor and reveals itself once scrolled back near the top", () => {
-    render(<ViewToggle view="library" onViewChange={() => {}} />);
+    renderViewToggle();
 
     setScrollY(50);
     fireEvent.scroll(window);

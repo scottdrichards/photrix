@@ -90,4 +90,30 @@ describe("AccountPanel", () => {
 
     await waitFor(() => expect(mocks.revokeMcpKey).toHaveBeenCalledWith("abc123"));
   });
+
+  it("closes when clicking the dialog backdrop, not when clicking inside it", async () => {
+    const onDismiss = vi.fn();
+    render(<AccountPanel isOpen={true} onDismiss={onDismiss} />);
+    await screen.findByText("Signed in as alice");
+
+    // A click on a child of the dialog (its content) must not close it.
+    fireEvent.click(screen.getByText("Signed in as alice"));
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    // A click that lands on the <dialog> element itself (the
+    // backdrop/padding area, since content lives in a nested wrapper) closes
+    // it, same as clicking "Done".
+    fireEvent.click(screen.getByRole("dialog"));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("still closes via the explicit Done button", async () => {
+    const onDismiss = vi.fn();
+    render(<AccountPanel isOpen={true} onDismiss={onDismiss} />);
+    await screen.findByText("Signed in as alice");
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
 });

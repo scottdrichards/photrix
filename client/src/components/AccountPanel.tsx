@@ -164,7 +164,17 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
     });
 
   return (
-    <dialog ref={dialogRef} onClose={onDismiss} className={css.dialog}>
+    <dialog
+      ref={dialogRef}
+      onClose={onDismiss}
+      onClick={(e) => {
+        // Native <dialog> click-outside-to-close: a click that lands on the
+        // dialog element itself (not a child) hit the backdrop/padding
+        // area, matching the pattern used in SuggestionModal.tsx.
+        if (e.target === e.currentTarget) onDismiss();
+      }}
+      className={css.dialog}
+    >
       <div className={css.body}>
         <header className={css.head}>
           <h2 className={css.title}>Account</h2>

@@ -168,8 +168,13 @@ describe("Filter", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
 
-    expect(await screen.findByText("trip (7)")).toBeInTheDocument();
-    expect(screen.getByText("family (2)")).toBeInTheDocument();
+    // The count renders in its own nested <span> (for the muted color
+    // treatment), so it's a separate text node from the folder name rather
+    // than one combined string.
+    expect(await screen.findByText("trip")).toBeInTheDocument();
+    expect(screen.getByText("(7)")).toBeInTheDocument();
+    expect(screen.getByText("family")).toBeInTheDocument();
+    expect(screen.getByText("(2)")).toBeInTheDocument();
     expect(fetchFoldersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaTypeFilter: "video",
@@ -408,7 +413,9 @@ describe("Filter", () => {
     renderFilter();
 
     fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
-    fireEvent.click(await screen.findByText("trip (7)"));
+    // Click the folder name; the count now lives in its own nested <span>
+    // (see above), and the click still bubbles up to the folderCard.
+    fireEvent.click(await screen.findByText("trip"));
 
     await waitFor(() => {
       expect(screen.getByTestId("filter-state").textContent).toContain('"path":"trip/"');
