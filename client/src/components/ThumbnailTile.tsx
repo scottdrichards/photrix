@@ -16,6 +16,7 @@ import { useSelectionContext } from "./selection/SelectionContext";
 import { type EditAdj, computeStyle, isDirty, EditSvgDefs } from "./PhotoEditor";
 import { formatDuration } from "./tileMedia/formatDuration";
 import { requestLiveOpen } from "./tileMedia/liveOpenIntent";
+import { useGatedThumbnailUrl } from "./tileMedia/useGatedThumbnailUrl";
 import { useLivePhotoPreview } from "./tileMedia/useLivePhotoPreview";
 import { useTileVideoPreview } from "./tileMedia/useTileVideoPreview";
 import {
@@ -426,9 +427,20 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   const microUrl = shouldLoad ? photo.microThumbnailUrl : undefined;
   const sharpUrl = shouldLoad && (!hasMicro || wantSharp) ? photo.thumbnailUrl : undefined;
 
-  const videoFade = useImageFade(thumbnailUrl, updateRatioFromImg);
+  // Both the video thumbnail and the photo "sharp" 320 are full decode-heavy
+  // fetches, and neither is otherwise rate-limited: the video one fires as
+  // soon as a tile enters the wide prefetch band, and the photo one is only
+  // dwell-gated *per tile* — a screenful of tiles clearing that dwell at once
+  // (a scroll that pauses, or one that simply isn't a fling) still asks for
+  // every one of them in the same tick. Routing both through the shared queue
+  // (see sharpThumbnailQueue) turns that burst into a steady trickle instead
+  // of the reported "hangs like it's loading a bunch of images at once".
+  const gatedVideoThumbnail = useGatedThumbnailUrl(thumbnailUrl);
+  const gatedSharpUrl = useGatedThumbnailUrl(sharpUrl);
+
+  const videoFade = useImageFade(gatedVideoThumbnail.admittedUrl, updateRatioFromImg);
   const microFade = useImageFade(microUrl, updateRatioFromImg);
-  const sharpFade = useImageFade(sharpUrl, updateRatioFromImg);
+  const sharpFade = useImageFade(gatedSharpUrl.admittedUrl, updateRatioFromImg);
 
   return (
     <button
@@ -531,13 +543,18 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           </span>
           <img
             ref={videoFade.ref}
-            src={thumbnailUrl}
+            src={gatedVideoThumbnail.admittedUrl}
             alt={photo.name}
             loading={loading}
             fetchPriority={fetchPriority}
+            decoding="async"
             className={css.image}
             style={videoFade.style}
-            onLoad={videoFade.onLoad}
+            onLoad={(event) => {
+              videoFade.onLoad(event);
+              gatedVideoThumbnail.release();
+            }}
+            onError={gatedVideoThumbnail.release}
           />
           {(isDwelt || isPreviewPlaying || isPreviewLeaving) && isNear && (
             // Mounted for the whole dwell, and for the coast-to-a-stop-then-fade
@@ -585,6 +602,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
               alt={photo.name}
               loading={loading}
               fetchPriority={fetchPriority}
+              decoding="async"
               className={css.image}
               style={{
                 ...microFade.style,
@@ -597,10 +615,11 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           )}
           <img
             ref={sharpFade.ref}
-            src={sharpUrl}
+            src={gatedSharpUrl.admittedUrl}
             alt={photo.name}
             loading={loading}
             fetchPriority={hasMicro ? "low" : fetchPriority}
+            decoding="async"
             className={css.image}
             style={{
               ...sharpFade.style,
@@ -610,7 +629,11 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
               ...(tileEditStyle?.transform ? { transform: tileEditStyle.transform } : {}),
               ...(tileEditStyle?.clipPath ? { clipPath: tileEditStyle.clipPath } : {}),
             }}
-            onLoad={sharpFade.onLoad}
+            onLoad={(event) => {
+              sharpFade.onLoad(event);
+              gatedSharpUrl.release();
+            }}
+            onError={gatedSharpUrl.release}
           />
         </>
       ) : (

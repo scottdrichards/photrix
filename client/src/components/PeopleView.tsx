@@ -465,6 +465,9 @@ const PeopleViewComponent = ({
   const [visibleCount, setVisibleCount] = useState(PEOPLE_PAGE_SIZE);
   const vizRequestRef = useRef<AbortController | null>(null);
   const selectedFaceGroupRequestRef = useRef<AbortController | null>(null);
+  // Tracks the post-merge refresh (detail + grid) kicked off by the most
+  // recent suggested-merge action — see handleMergeSuggestion.
+  const mergeSuggestionRefreshRef = useRef<AbortController | null>(null);
   // Id of the cluster currently loaded into `personDetail`, read by effects that
   // must not re-run merely because the detail object was replaced.
   const loadedClusterIdRef = useRef<string | null>(null);
@@ -545,6 +548,10 @@ const PeopleViewComponent = ({
 
   useEffect(() => () => {
     selectedFaceGroupRequestRef.current?.abort();
+  }, []);
+
+  useEffect(() => () => {
+    mergeSuggestionRefreshRef.current?.abort();
   }, []);
 
   // Load the person named by the URL. This is the *only* path that opens a
@@ -791,12 +798,25 @@ const PeopleViewComponent = ({
     setMergingSuggestionId(suggestion.id);
     setPersonDetail((prev) => (prev ? applyOptimisticDetailMerge(prev, suggestion) : prev));
     setData((prev) => applyOptimisticClusterMerge(prev, [mergedAwayCluster], canonicalTarget));
+    // Merging suggestions A, then B, then D in quick succession must not let an
+    // earlier merge's post-merge refresh resolve *after* a later one and
+    // re-populate the suggestions list with stale data — that's the reported
+    // flicker (disappear, reappear, then disappear again). Same discipline as
+    // loadViz/the related-group effect above: abort the previous in-flight
+    // refresh before starting this one's.
+    mergeSuggestionRefreshRef.current?.abort();
+    const refreshController = new AbortController();
+    mergeSuggestionRefreshRef.current = refreshController;
     try {
       await mergeClusters([suggestion.id], personDetail.id);
-      loadClusterDetail(canonicalTarget.id, undefined, { showSpinner: false }).catch((err) => {
-        console.error("Failed to refresh merged cluster detail:", err);
-      });
-      refreshPeopleClusters().catch((err) => {
+      loadClusterDetail(canonicalTarget.id, refreshController.signal, { showSpinner: false }).catch(
+        (err) => {
+          if (err?.name === "AbortError") return;
+          console.error("Failed to refresh merged cluster detail:", err);
+        },
+      );
+      refreshPeopleClusters(refreshController.signal).catch((err) => {
+        if (err?.name === "AbortError") return;
         console.error("Failed to refresh people clusters after suggested merge:", err);
       });
     } catch (err) {

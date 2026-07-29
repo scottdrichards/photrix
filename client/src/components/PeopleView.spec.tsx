@@ -626,6 +626,133 @@ describe("PeopleView", () => {
     });
   });
 
+  it("aborts an earlier suggested merge's refresh when a newer merge supersedes it", async () => {
+    const photo = (path: string) => ({
+      path,
+      name: path,
+      mediaType: "photo" as const,
+      originalUrl: `http://localhost/${path}`,
+      thumbnailUrl: `http://localhost/${path}`,
+      previewUrl: `http://localhost/${path}`,
+      fullUrl: `http://localhost/${path}`,
+    });
+    const box = { x: 0.1, y: 0.2, width: 0.3, height: 0.3 };
+
+    fetchPeopleClustersMock.mockResolvedValue({
+      clusters: [
+        {
+          id: "person-1",
+          count: 2,
+          name: "Alex",
+          representative: { photo: photo("a.jpg"), box },
+        },
+      ],
+      totalFaces: 2,
+      totalClusters: 1,
+      pendingFaces: 0,
+    });
+
+    // Call #1: initial detail load (two suggestions pending).
+    fetchClusterDetailMock.mockResolvedValueOnce({
+      cluster: {
+        id: "person-1",
+        count: 2,
+        name: "Alex",
+        representative: { photo: photo("a.jpg"), box },
+        faces: [{ photo: photo("a.jpg"), box }],
+        centroids: [],
+        mergeSuggestions: [
+          { id: "person-2", count: 1, name: null, representative: { photo: photo("b.jpg"), box } },
+          { id: "person-3", count: 1, name: null, representative: { photo: photo("c.jpg"), box } },
+        ],
+      },
+    });
+
+    // Call #2: the background refresh kicked off by merging suggestion
+    // person-2 — this is the stale one that must never win. Modeled on real
+    // fetch semantics (which the production code relies on): it only settles
+    // by rejecting once its signal is aborted, exactly like a real in-flight
+    // request cancelled by AbortController.abort().
+    fetchClusterDetailMock.mockImplementationOnce(
+      ({ signal }: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        }),
+    );
+
+    // Call #3: the background refresh kicked off by the superseding merge of
+    // suggestion person-3 — this one must win.
+    fetchClusterDetailMock.mockResolvedValueOnce({
+      cluster: {
+        id: "person-1",
+        count: 4,
+        name: "Alex",
+        representative: { photo: photo("a.jpg"), box },
+        faces: [
+          { photo: photo("a.jpg"), box },
+          { photo: photo("b.jpg"), box },
+          { photo: photo("c.jpg"), box },
+        ],
+        centroids: [],
+        mergeSuggestions: [],
+      },
+    });
+
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    render(<PeopleViewHarness />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Alex")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("2 faces").closest("button") as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Merge person-2 into Alex" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Merge person-3 into Alex" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge person-2 into Alex" }));
+
+    // Let the merge (A) resolve and its background refresh (call #2) start —
+    // it's the never-settling-until-abort promise from above.
+    await waitFor(() => {
+      expect(mergeClustersMock).toHaveBeenCalledWith(["person-2"], "person-1");
+      expect(fetchClusterDetailMock).toHaveBeenCalledTimes(2);
+    });
+
+    const staleSignal = fetchClusterDetailMock.mock.calls[1][0].signal as AbortSignal;
+    expect(staleSignal.aborted).toBe(false);
+
+    // Merge B (person-3) fires before A's background refresh ever settles —
+    // "quick succession". Its handler must abort A's refresh synchronously.
+    fireEvent.click(screen.getByRole("button", { name: "Merge person-3 into Alex" }));
+    expect(staleSignal.aborted).toBe(true);
+
+    await waitFor(() => {
+      expect(mergeClustersMock).toHaveBeenCalledWith(["person-3"], "person-1");
+      // The correct, superseding refresh landed and neither suggestion chip
+      // reappeared — no disappear/reappear/disappear flicker.
+      expect(screen.queryByRole("button", { name: "Merge person-2 into Alex" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Merge person-3 into Alex" })).not.toBeInTheDocument();
+    });
+
+    // The aborted stale request settles (rejects) quietly — it must not be
+    // logged as a real failure.
+    await waitFor(() => {
+      expect(
+        consoleErrorSpy.mock.calls.some(([msg]) =>
+          String(msg).includes("Failed to refresh merged cluster detail"),
+        ),
+      ).toBe(false);
+    });
+
+    consoleErrorSpy.mockRestore();
+  });
+
   it("separates a match group from the person detail view", async () => {
     fetchPeopleClustersMock.mockResolvedValue({
       clusters: [
