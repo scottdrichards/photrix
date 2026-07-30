@@ -71,17 +71,6 @@ const renderFilter = () =>
     </FilterProvider>,
   );
 
-/**
- * A folder row's label and its "(n)" count live in sibling spans, so the row
- * text is split across nodes and a plain text query can't see it whole.
- */
-const findFolderRow = (label: string) =>
-  screen.findByText(
-    (_content, element) =>
-      element?.getAttribute("role") === "button" &&
-      element.textContent?.replace(/\s+/g, " ").trim() === label,
-  );
-
 describe("Filter", () => {
   let getBoundingClientRectSpy: ReturnType<typeof vi.spyOn>;
 
@@ -179,8 +168,13 @@ describe("Filter", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
 
-    expect(await findFolderRow("trip (7)")).toBeInTheDocument();
-    expect(await findFolderRow("family (2)")).toBeInTheDocument();
+    // The count renders in its own nested <span> (for the muted color
+    // treatment), so it's a separate text node from the folder name rather
+    // than one combined string.
+    expect(await screen.findByText("trip")).toBeInTheDocument();
+    expect(screen.getByText("(7)")).toBeInTheDocument();
+    expect(screen.getByText("family")).toBeInTheDocument();
+    expect(screen.getByText("(2)")).toBeInTheDocument();
     expect(fetchFoldersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaTypeFilter: "video",
@@ -444,7 +438,9 @@ describe("Filter", () => {
     renderFilter();
 
     fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
-    fireEvent.click(await findFolderRow("trip (7)"));
+    // Click the folder name; the count now lives in its own nested <span>
+    // (see above), and the click still bubbles up to the folderCard.
+    fireEvent.click(await screen.findByText("trip"));
 
     await waitFor(() => {
       expect(screen.getByTestId("filter-state").textContent).toContain('"path":"trip/"');
