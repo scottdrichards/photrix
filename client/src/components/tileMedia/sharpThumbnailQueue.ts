@@ -21,7 +21,7 @@
  * is looking at.
  */
 
-const MAX_CONCURRENT_LOADS = 6;
+export const MAX_CONCURRENT_LOADS = 6;
 
 type Waiter = { start: () => void; revoked: boolean };
 

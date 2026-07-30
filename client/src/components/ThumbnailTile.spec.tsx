@@ -4,6 +4,10 @@ import { ThumbnailTile } from "./ThumbnailTile";
 import { __resetTilePlaybackCoordinatorForTests } from "./tileMedia/tilePlaybackCoordinator";
 import { clearLiveOpenIntent, consumeLiveOpenIntent } from "./tileMedia/liveOpenIntent";
 import { __resetHoverIntentForTests } from "./ThumbnailTile.hoverIntent";
+import {
+  MAX_CONCURRENT_LOADS,
+  resetSharpThumbnailQueue,
+} from "./tileMedia/sharpThumbnailQueue";
 
 const useSelectionContextMock = vi.fn();
 const negotiateVideoPlaybackMock = vi.fn<() => Promise<VideoNegotiationResult>>();
@@ -140,6 +144,7 @@ describe("ThumbnailTile", () => {
     __resetTilePlaybackCoordinatorForTests();
     clearLiveOpenIntent();
     __resetHoverIntentForTests();
+    resetSharpThumbnailQueue();
     for (const instance of fakeObservers) instance.elements.length = 0;
     useSelectionContextMock.mockReturnValue({
       items: [],
@@ -315,6 +320,75 @@ describe("ThumbnailTile", () => {
     fireEvent.load(image);
 
     expect(image).toHaveStyle({ opacity: "1" });
+  });
+
+  it("releases the sharp-thumbnail queue slot for a video thumbnail resolved from cache", () => {
+    // Simulates an image the browser already had cached: `complete`/`naturalWidth`
+    // read true before React's onLoad listener ever attaches, so useImageFade's
+    // mount effect (not the `load` event) is what resolves it. Regression for the
+    // "video thumbnails aren't showing" report: the gate's release() used to be
+    // wired only to the JSX onLoad handler, so a cache-resolved load never freed
+    // its slot in sharpThumbnailQueue — six of those permanently pinned the shared
+    // queue at capacity and every tile after sat queued forever, which showed up
+    // worst on video tiles since (unlike photos) they have no micro-thumbnail
+    // fallback to display while starved.
+    const completeDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLImageElement.prototype,
+      "complete",
+    );
+    const naturalWidthDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLImageElement.prototype,
+      "naturalWidth",
+    );
+    Object.defineProperty(HTMLImageElement.prototype, "complete", {
+      configurable: true,
+      get: () => true,
+    });
+    Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", {
+      configurable: true,
+      get: () => 100,
+    });
+
+    try {
+      // Fill every concurrency slot with videos that resolve via the cache-hit path.
+      for (let i = 0; i < MAX_CONCURRENT_LOADS; i += 1) {
+        const filler = createVideo({
+          path: `a/filler-${i}.mp4`,
+          name: `filler-${i}.mp4`,
+          thumbnailUrl: `http://localhost/a/filler-${i}.jpg`,
+        });
+        render(<ThumbnailTile photo={filler} />);
+      }
+      triggerIntersection(true);
+
+      // A tile past the concurrency limit must still be admitted immediately: if
+      // any of the cache-resolved loads above leaked its slot, this one would be
+      // left permanently queued (no src) instead.
+      const overflow = createVideo({
+        path: "a/overflow.mp4",
+        name: "overflow.mp4",
+        thumbnailUrl: "http://localhost/a/overflow.jpg",
+      });
+      render(<ThumbnailTile photo={overflow} />);
+      triggerIntersection(true);
+
+      expect(screen.getByRole("img", { name: "overflow.mp4" })).toHaveAttribute(
+        "src",
+        "http://localhost/a/overflow.jpg",
+      );
+    } finally {
+      if (completeDescriptor) {
+        Object.defineProperty(HTMLImageElement.prototype, "complete", completeDescriptor);
+      }
+      if (naturalWidthDescriptor) {
+        Object.defineProperty(
+          HTMLImageElement.prototype,
+          "naturalWidth",
+          naturalWidthDescriptor,
+        );
+      }
+      resetSharpThumbnailQueue();
+    }
   });
 
   it("shows live photo badge for photos with livePhotoUrl", () => {

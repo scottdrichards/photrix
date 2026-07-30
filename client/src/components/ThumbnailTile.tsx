@@ -425,7 +425,21 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   // image the user is about to scroll back to.
   const thumbnailUrl = shouldLoad ? photo.thumbnailUrl : undefined;
   const microUrl = shouldLoad ? photo.microThumbnailUrl : undefined;
-  const sharpUrl = shouldLoad && (!hasMicro || wantSharp) ? photo.thumbnailUrl : undefined;
+  // Gated on `!isVideo && isImage`, not just hasMicro/wantSharp: the <img> that
+  // would ever consume gatedSharpUrl (and call its release()) only renders in
+  // the isImage JSX branch below. Videos never set a micro thumbnail, so
+  // without this guard sharpUrl resolved to the same URL as the video's own
+  // thumbnailUrl for every video tile — silently opening a *second*,
+  // independent queue slot (via gatedSharpUrl below) that nothing ever
+  // released, since the video branch only wires release() to its own
+  // gatedVideoThumbnail. Three video tiles were enough to permanently pin
+  // sharpThumbnailQueue at its 6-slot capacity, starving every thumbnail
+  // (video or photo) requested after — the reported "video thumbnails aren't
+  // showing".
+  const sharpUrl =
+    !isVideo && isImage && shouldLoad && (!hasMicro || wantSharp)
+      ? photo.thumbnailUrl
+      : undefined;
 
   // Both the video thumbnail and the photo "sharp" 320 are full decode-heavy
   // fetches, and neither is otherwise rate-limited: the video one fires as
@@ -438,9 +452,24 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   const gatedVideoThumbnail = useGatedThumbnailUrl(thumbnailUrl);
   const gatedSharpUrl = useGatedThumbnailUrl(sharpUrl);
 
-  const videoFade = useImageFade(gatedVideoThumbnail.admittedUrl, updateRatioFromImg);
+  // The slot release has to live in onDecoded, not the JSX onLoad handler:
+  // useImageFade's own mount effect resolves an already-cached image (see its
+  // "Served from cache before React could hear about it" branch below) by
+  // calling onDecoded directly, without ever firing a `load` event for a JSX
+  // onLoad handler to catch. Wiring release() only to onLoad left every
+  // cache-resolved thumbnail's queue slot permanently held — six of those
+  // (MAX_CONCURRENT_LOADS) and the shared queue wedges for every tile after,
+  // which is disproportionately visible on video tiles since they have no
+  // micro-thumbnail fallback to fall back on while starved.
+  const videoFade = useImageFade(gatedVideoThumbnail.admittedUrl, (img) => {
+    updateRatioFromImg(img);
+    gatedVideoThumbnail.release();
+  });
   const microFade = useImageFade(microUrl, updateRatioFromImg);
-  const sharpFade = useImageFade(gatedSharpUrl.admittedUrl, updateRatioFromImg);
+  const sharpFade = useImageFade(gatedSharpUrl.admittedUrl, (img) => {
+    updateRatioFromImg(img);
+    gatedSharpUrl.release();
+  });
 
   return (
     <button
@@ -550,10 +579,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
             decoding="async"
             className={css.image}
             style={videoFade.style}
-            onLoad={(event) => {
-              videoFade.onLoad(event);
-              gatedVideoThumbnail.release();
-            }}
+            onLoad={videoFade.onLoad}
             onError={gatedVideoThumbnail.release}
           />
           {(isDwelt || isPreviewPlaying || isPreviewLeaving) && isNear && (
@@ -629,10 +655,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
               ...(tileEditStyle?.transform ? { transform: tileEditStyle.transform } : {}),
               ...(tileEditStyle?.clipPath ? { clipPath: tileEditStyle.clipPath } : {}),
             }}
-            onLoad={(event) => {
-              sharpFade.onLoad(event);
-              gatedSharpUrl.release();
-            }}
+            onLoad={sharpFade.onLoad}
             onError={gatedSharpUrl.release}
           />
           {tileEditStyle?.vignetteBackground && (
