@@ -4,7 +4,7 @@ import {
   type FaceAttributeKey,
 } from "../../../../shared/filter-contract/src";
 import type { PersonCluster } from "../../api";
-import { buildFaceCropUrl, fetchPeopleClusters } from "../../api";
+import { buildFaceCropUrl, fetchPeopleClusters, fetchStatus } from "../../api";
 import { Spinner } from "../../Spinner";
 import { useFilter } from "./FilterContext";
 import css from "./FaceFilterPanel.module.css";
@@ -12,6 +12,12 @@ import css from "./FaceFilterPanel.module.css";
 type FaceFilterPanelProps = {
   isActive: boolean;
 };
+
+// Must match the `name` the server registers the backfill task under in
+// server/src/main.ts. There is no shared constant for this today (the same
+// string-matching pattern is used server-side in statusRequestHandler.ts to
+// spot the EXIF task), so keep the two in sync by hand if either changes.
+const FACE_ATTRIBUTES_TASK_NAME = "Face attributes (photo ready)";
 
 const ATTRIBUTE_LABELS: Record<FaceAttributeKey, string> = {
   smiling: "Smiling",
@@ -48,6 +54,15 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
   const [clusters, setClusters] = useState<PersonCluster[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // How many faces the "photo ready" backfill still has left to score, or
+  // `null` once we know there is no backlog (or haven't checked yet). The
+  // backfill task only appears in /api/status while it actually has unscored
+  // faces to work through — see registerBackgroundTasks.ts's reentrant
+  // wrapper — so its absence from the list *is* the "nothing left to do"
+  // signal, not just a missing value.
+  const [pendingFaceAttributes, setPendingFaceAttributes] = useState<number | null>(
+    null,
+  );
 
   const applyAttributes = (
     attributes: readonly FaceAttributeKey[],
@@ -114,6 +129,36 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
     return () => abortController.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, queryKey]);
+
+  // Only relevant once the "hide unscored" control is actually on screen (an
+  // attribute filter is active). Checked once when it appears rather than
+  // polled, since this is a one-line disclaimer, not a live progress bar —
+  // the Server Status panel already covers live progress.
+  const showUnknownControl = activeAttributes.length > 0;
+  useEffect(() => {
+    if (!isActive || !showUnknownControl) return;
+    let cancelled = false;
+
+    fetchStatus()
+      .then((status) => {
+        if (cancelled) return;
+        const task = status.backgroundTasks.find(
+          (candidate) => candidate.name === FACE_ATTRIBUTES_TASK_NAME,
+        );
+        const remaining =
+          task?.total != null && task?.itemsProcessed != null
+            ? Math.max(0, task.total - task.itemsProcessed)
+            : null;
+        setPendingFaceAttributes(remaining && remaining > 0 ? remaining : null);
+      })
+      .catch(() => {
+        if (!cancelled) setPendingFaceAttributes(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isActive, showUnknownControl]);
 
   const toggleCluster = (clusterId: string) => {
     const next = selected.includes(clusterId)
@@ -225,10 +270,19 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
             />
             <span>
               Hide faces not yet analysed
-              <small className={css.note}>
-                Older photos are still being scored in the background. Until a face is
-                scored it counts as a match, because unknown is not the same as no.
-              </small>
+              {pendingFaceAttributes ? (
+                <small className={css.note}>
+                  {pendingFaceAttributes.toLocaleString()} older face
+                  {pendingFaceAttributes === 1 ? "" : "s"} still need scoring in the
+                  background (see Status for progress). Until scored, a face counts as
+                  a match — unknown is not the same as no.
+                </small>
+              ) : (
+                <small className={css.note}>
+                  Unknown is not the same as no, so an unscored face still counts as a
+                  match by default.
+                </small>
+              )}
             </span>
           </label>
         ) : null}

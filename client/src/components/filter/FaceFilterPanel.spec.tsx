@@ -5,6 +5,25 @@ import type { FaceAttributeFilter } from "../../../../shared/filter-contract/src
 import { FaceFilterPanel } from "./FaceFilterPanel";
 import { FilterProvider, useFilter } from "./FilterContext";
 
+// vi.mock factories are hoisted above top-level const declarations, so the
+// mock fn has to be created inside vi.hoisted rather than referenced from a
+// plain module-scope const.
+const { fetchStatusMock } = vi.hoisted(() => ({
+  fetchStatusMock: vi.fn(async () => ({
+    backgroundTasks: [] as Array<{
+      id: string;
+      name: string;
+      queue: "background" | "implied";
+      state: "queued" | "running" | "paused" | "cancelled" | "complete";
+      itemsProcessed?: number;
+      total?: number;
+      portionComplete?: number;
+      description?: string;
+    }>,
+    maintenance: { backgroundTasksEnabled: true },
+  })),
+}));
+
 vi.mock("../../api", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("../../api");
   return {
@@ -16,6 +35,7 @@ vi.mock("../../api", async () => {
       pendingFaces: 0,
     })),
     buildFaceCropUrl: () => "/crop.jpg",
+    fetchStatus: fetchStatusMock,
   };
 });
 
@@ -45,6 +65,11 @@ describe("FaceFilterPanel attribute controls", () => {
     window.history.pushState(null, "", "/");
     lastAttributeFilter = undefined;
     lastClusterFilter = undefined;
+    fetchStatusMock.mockClear();
+    fetchStatusMock.mockResolvedValue({
+      backgroundTasks: [],
+      maintenance: { backgroundTasksEnabled: true },
+    });
   });
 
   it("starts with no attribute constraints", async () => {
@@ -183,5 +208,50 @@ describe("FaceFilterPanel attribute controls", () => {
     await waitFor(() => expect(chip("Smiling")).toBeTruthy());
 
     expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
+  });
+
+  it("does not claim background scoring is happening when the backfill has no backlog", async () => {
+    // /api/status omits the backfill task entirely once it has drained (see
+    // registerBackgroundTasks.ts's reentrant wrapper), so an empty
+    // backgroundTasks list is the real "nothing left to score" signal.
+    fetchStatusMock.mockResolvedValue({
+      backgroundTasks: [],
+      maintenance: { backgroundTasksEnabled: true },
+    });
+    renderPanel();
+    await waitFor(() => expect(chip("Smiling")).toBeTruthy());
+
+    fireEvent.click(chip("Smiling"));
+    await waitFor(() => expect(fetchStatusMock).toHaveBeenCalled());
+
+    expect(
+      screen.queryByText(/still need scoring in the background/i),
+    ).toBeNull();
+    expect(
+      await screen.findByText(/counts as a match by default/i),
+    ).toBeTruthy();
+  });
+
+  it("shows the remaining count when the backfill task reports an active backlog", async () => {
+    fetchStatusMock.mockResolvedValue({
+      backgroundTasks: [
+        {
+          id: "background:Face attributes (photo ready)",
+          name: "Face attributes (photo ready)",
+          queue: "background",
+          state: "running",
+          itemsProcessed: 300_000,
+          total: 360_511,
+        },
+      ],
+      maintenance: { backgroundTasksEnabled: true },
+    });
+    renderPanel();
+    await waitFor(() => expect(chip("Smiling")).toBeTruthy());
+
+    fireEvent.click(chip("Smiling"));
+
+    expect(await screen.findByText(/60,511 older faces/i)).toBeTruthy();
+    expect(screen.getByText(/still need scoring in the background/i)).toBeTruthy();
   });
 });
