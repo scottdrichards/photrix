@@ -31,13 +31,22 @@ export const tables = {
       { name: "dimensionsHeight", type: "INTEGER" },
       { name: "locationLatitude", type: "REAL" },
       { name: "locationLongitude", type: "REAL" },
-      { name: "cameraMake", type: "TEXT" },
-      { name: "cameraModel", type: "TEXT" },
+      // indexExpression on cameraMake/cameraModel/lens: the filter panel's
+      // suggestions dropdown runs SELECT DISTINCT .../GROUP BY over these
+      // columns, and without an index that's a full `files` scan — every row
+      // fetched drags its ~4-32 KB imageEmbedding/audioEmbedding BLOB pages
+      // along (same drag pattern as dateTaken_range/by_file_v4). Measured
+      // ~29s -> a few ms over 191k rows. A single-column index still lets
+      // SQLite answer the DISTINCT/GROUP BY as an index-only scan even though
+      // the `LIKE '%term%'` predicate itself can't seek the index (leading
+      // wildcard) — it just avoids ever touching the main table row.
+      { name: "cameraMake", type: "TEXT", indexExpression: true },
+      { name: "cameraModel", type: "TEXT", indexExpression: true },
       { name: "exposureTime", type: "REAL" },
       { name: "aperture", type: "REAL" },
       { name: "iso", type: "INTEGER" },
       { name: "focalLength", type: "TEXT" },
-      { name: "lens", type: "TEXT" },
+      { name: "lens", type: "TEXT", indexExpression: true },
       // Decoded from the EXIF Flash bitmask's low bit: 1 = flash fired, 0 = did not.
       { name: "flash", type: "INTEGER" },
       // Decoded EXIF WhiteBalance enum, e.g. "Auto" / "Manual".
