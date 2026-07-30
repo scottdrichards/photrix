@@ -2040,7 +2040,10 @@ export class IndexDatabase {
     const total = rows.reduce((sum, row) => sum + (row.count ?? 0), 0);
 
     return {
-      clusters: rows,
+      // minDate/maxDate are populated by the map-clustering date-color feature
+      // (not part of this change); stubbed here only to satisfy the shared
+      // GeoCluster type.
+      clusters: rows.map((row) => ({ ...row, minDate: null, maxDate: null })),
       total,
     };
   }
