@@ -67,8 +67,8 @@
 
 .mediaTypeIconStack {
   position: relative;
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
 }
 
 .mediaTypeGlyph {
@@ -76,8 +76,15 @@
   align-items: center;
   justify-content: center;
   position: absolute;
-  inset: 0;
-  transition: opacity 120ms ease, transform 120ms ease;
+  inset: 2px;
+  border-radius: 50%;
+  /* Opaque backdrop so the two overlapping, rotated icons read as distinct
+     badges instead of blending into each other — a plain transparency-based
+     dim made the pair illegible where they overlapped. */
+  background: var(--bg3);
+  box-shadow: 0 0 0 1.5px var(--bg1);
+  color: var(--fg3);
+  transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
 .mediaTypePhotoGlyph {
@@ -91,11 +98,13 @@
 }
 
 .mediaTypeGlyphActive {
-  opacity: 1;
+  background: var(--accent);
+  color: var(--fg-inv);
 }
 
 .mediaTypeGlyphInactive {
-  opacity: 0.35;
+  background: var(--bg3);
+  color: var(--fg3);
 }
 
 .mediaTypePhotoGlyph.mediaTypeGlyphInactive {
