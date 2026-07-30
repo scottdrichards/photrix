@@ -46,12 +46,7 @@ describe("ViewToggle", () => {
     }
   });
 
-  it("reappears roughly halfway down the viewport when scrolling back up", () => {
-    Object.defineProperty(window, "innerHeight", {
-      configurable: true,
-      writable: true,
-      value: 800,
-    });
+  it("reappears anchored under the header when scrolling back up", () => {
     renderViewToggle();
 
     // Scroll down first so the pill is hidden and scrolled away from the top.
@@ -67,7 +62,7 @@ describe("ViewToggle", () => {
     const tablist = screen.getByRole("tablist", { name: "Current view" });
     const wrapper = tablist.parentElement as HTMLElement;
     expect(wrapper).toHaveAttribute("aria-hidden", "false");
-    expect(wrapper.style.top).toBe("400px"); // window.innerHeight / 2
+    expect(wrapper.style.top).toBe("12px"); // no <header> in test DOM, so headerHeight is 0
   });
 
   it("returns to the top anchor and reveals itself once scrolled back near the top", () => {

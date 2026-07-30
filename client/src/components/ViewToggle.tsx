@@ -52,10 +52,9 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
       }
 
       if (y < previousY) {
-        // Scrolling up from further down the page: reappear roughly halfway
-        // down the viewport rather than snapping back under the header.
+        // Scrolling up: reappear anchored just under the header.
         setHidden(false);
-        setAnchorTop(Math.round(window.innerHeight / 2));
+        setAnchorTop(computeTopAnchor());
       }
     };
 
