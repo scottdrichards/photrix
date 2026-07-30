@@ -37,12 +37,21 @@ import {
   type ThemeOverride,
 } from "./theme";
 import { probeVideoPlaybackProfile } from "./videoPlaybackProfile";
-import { extractUrlToken, getAuthHeaders, initAuth, onUnauthorized } from "./auth";
+import {
+  extractUrlToken,
+  getAuthHeaders,
+  hasAccountSession,
+  initAuth,
+  onUnauthorized,
+} from "./auth";
 
 // Extract a token from the URL immediately (before auth check) so share links self-authenticate.
 extractUrlToken();
 
 const sharedView = isSharedView();
+// Whether a real account session exists underneath this share view — read before
+// any request can disturb it, same as sharedView.
+const ownsAccountSession = hasAccountSession();
 
 const initialNavFromUrl = (): UrlNavState => {
   if (typeof window === "undefined") {
@@ -230,6 +239,16 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
           </div>
           <ThemeToggle theme={theme} followsSystem={followsSystem} onToggle={onThemeToggle} />
           <ShareButton />
+          {sharedView && ownsAccountSession && (
+            // A signed-in owner viewing their own share link is not trapped in it:
+            // the account session is still there, and dropping the ?token= URL
+            // restores the full library. A full navigation (not pushState) is
+            // deliberate — share mode is read once at module load.
+            <a className="btn btn-subtle" href="/" title="Return to your full library">
+              <Person24Regular fontSize={20} />
+              <span className={css.btnLabel}>My library</span>
+            </a>
+          )}
           {!sharedView && (
             <>
               <button
