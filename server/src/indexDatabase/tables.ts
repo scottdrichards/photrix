@@ -251,7 +251,12 @@ export const tables = {
         // migration stamps every face with no decodable embedding as
         // UNCLUSTERABLE_CLUSTER_ID, and detectFaces does the same for new ones,
         // so "clusterId IS NULL" already excludes them.
-        name: "needing_cluster",
+        //
+        // Renamed from `needing_cluster` (same reason as `by_file_v4` above):
+        // CREATE INDEX IF NOT EXISTS won't rebuild an index that already exists
+        // under the same name, so the old `LENGTH(embedding) > 0` predicate
+        // would survive on disk and block the later DROP COLUMN embedding.
+        name: "needing_cluster_v2",
         expression: "confidence DESC",
         where: "clusterId IS NULL",
       },
