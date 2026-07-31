@@ -6,6 +6,13 @@ import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 const mockGetSystemMetrics = jest.fn(() => ({
   cpu: { usage: 25, cores: 4 },
   memory: { used: 4000000000, total: 16000000000, usage: 25 },
+  whisper: {
+    status: "ready",
+    pid: 4242,
+    device: "cpu",
+    fallbackFrom: "cuda",
+    fallbackReason: "CUDA failed with error out of memory",
+  },
 }));
 
 jest.unstable_mockModule("../observability/systemMetrics.ts", () => ({
@@ -117,6 +124,13 @@ describe("statusRequestHandler", () => {
     expect(payload.system).toEqual({
       cpu: { usage: 25, cores: 4 },
       memory: { used: 4000000000, total: 16000000000, usage: 25 },
+      whisper: {
+        status: "ready",
+        pid: 4242,
+        device: "cpu",
+        fallbackFrom: "cuda",
+        fallbackReason: "CUDA failed with error out of memory",
+      },
     });
   });
 

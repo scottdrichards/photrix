@@ -86,22 +86,36 @@ def _is_cuda_lib_error(exc: Exception) -> bool:
 
 def main():
     device = detect_device()
+    fallback_from = None
+    fallback_reason = None
 
     try:
         model = load_model(device)
     except Exception as e:
         if device == "cuda":
             try:
+                fallback_from = device
+                fallback_reason = str(e)
                 device = "cpu"
                 model = load_model(device)
             except Exception as e2:
-                send({"type": "error", "error": str(e2)})
+                send({
+                    "type": "error",
+                    "error": (
+                        "Whisper CUDA initialization failed: "
+                        f"{e}; CPU fallback also failed: {e2}"
+                    ),
+                })
                 sys.exit(1)
         else:
             send({"type": "error", "error": str(e)})
             sys.exit(1)
 
-    send({"type": "ready", "device": device})
+    ready = {"type": "ready", "device": device}
+    if fallback_from is not None:
+        ready["fallbackFrom"] = fallback_from
+        ready["fallbackReason"] = fallback_reason
+    send(ready)
 
     for line in sys.stdin:
         line = line.strip()

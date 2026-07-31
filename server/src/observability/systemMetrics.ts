@@ -6,6 +6,7 @@ import {
   getComputeWorkerPids,
   type ComputeWorkerRole,
 } from "../taskOrchestrator/computeWorkers.ts";
+import { getWhisperRuntimeState, type WhisperRuntimeState } from "../audioProcessing/whisperRuntimeState.ts";
 
 const execAsync = promisify(exec);
 
@@ -70,6 +71,7 @@ export type SystemMetrics = {
   // show who is holding VRAM and whether they've been reclaimed for a user
   // request.
   workers?: ComputeWorkerMetric[];
+  whisper?: WhisperRuntimeState;
 };
 
 let lastCpuMeasure = getCpuMeasure();
@@ -344,6 +346,7 @@ async function computeSystemMetrics(): Promise<SystemMetrics> {
     disk,
     gpu,
     workers,
+    whisper: getWhisperRuntimeState(),
   };
 }
 

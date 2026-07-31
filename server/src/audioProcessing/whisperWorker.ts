@@ -7,6 +7,12 @@ import { CACHE_DIR } from "../common/cacheUtils.js";
 import { getLogger } from "../observability/logger.ts";
 import { buildPythonProcessEnv, resolvePythonCommand } from "../python/pythonRuntime.ts";
 import {
+  noteWhisperWorkerExit,
+  noteWhisperWorkerReady,
+  noteWhisperWorkerStarting,
+  noteWhisperWorkerTimeout,
+} from "./whisperRuntimeState.ts";
+import {
   COMPUTE_WORKER_IDS,
   registerComputeWorker,
   acquireGpuInitSlot,
@@ -20,7 +26,13 @@ const log = getLogger("whisperWorker");
 export type TranscriptSegment = { start: number; end: number; text: string };
 
 type WorkerResponse =
-  | { type: "ready" }
+  | {
+      type: "ready";
+      device?: string;
+      fallbackFrom?: string;
+      fallbackReason?: string;
+    }
+  | { type: "error"; error: string }
   | { id: number; segments: TranscriptSegment[] }
   | { id: number | null; error: string };
 
@@ -28,10 +40,14 @@ type PendingRequest = {
   resolve: (segments: TranscriptSegment[]) => void;
   reject: (error: Error) => void;
   timeout: { clear: () => void };
+  operation: string;
+  videoPath?: string;
+  startedAt: number;
 };
 
 // Long timeout: large-v3 on CPU can be slow for long videos
 const REQUEST_TIMEOUT_MS = 30 * 60 * 1_000;
+const SLOW_REQUEST_MS = 5 * 60 * 1_000;
 const WHISPER_SCRIPT = path.resolve(process.cwd(), "python", "whisper_worker.py");
 
 let nextRequestId = 1;
@@ -60,7 +76,22 @@ const rejectAllPending = (error: Error) => {
   pending.clear();
 };
 
-const onWorkerLine = (line: string, onReady: () => void) => {
+const describePendingRequests = () =>
+  [...pending.entries()]
+    .map(([id, request]) => ({
+      id,
+      operation: request.operation,
+      videoPath: request.videoPath,
+      elapsedMs: Date.now() - request.startedAt,
+    }))
+    .sort((a, b) => b.elapsedMs - a.elapsedMs)
+    .slice(0, 5);
+
+const onWorkerLine = (
+  line: string,
+  onReady: (message: Extract<WorkerResponse, { type: "ready" }>) => void,
+  onInitError: (msg: string) => void,
+) => {
   let message: WorkerResponse;
   try {
     message = JSON.parse(line) as WorkerResponse;
@@ -68,8 +99,12 @@ const onWorkerLine = (line: string, onReady: () => void) => {
     return;
   }
 
-  if ("type" in message && message.type === "ready") {
-    onReady();
+  if ("type" in message) {
+    if (message.type === "ready") {
+      onReady(message);
+    } else if (message.type === "error") {
+      onInitError(message.error);
+    }
     return;
   }
 
@@ -81,12 +116,37 @@ const onWorkerLine = (line: string, onReady: () => void) => {
   pending.delete(message.id);
   request.timeout.clear();
 
+  const elapsedMs = Date.now() - request.startedAt;
+
   if ("error" in message) {
+    log.warn(
+      {
+        id: message.id,
+        operation: request.operation,
+        videoPath: request.videoPath,
+        elapsedMs,
+        error: message.error,
+      },
+      "Whisper request failed",
+    );
     request.reject(new Error((message as { id: number; error: string }).error));
     return;
   }
 
-  request.resolve((message as { id: number; segments: TranscriptSegment[] }).segments);
+  const segments = (message as { id: number; segments: TranscriptSegment[] }).segments;
+  const logMethod = elapsedMs >= SLOW_REQUEST_MS ? log.info.bind(log) : log.debug.bind(log);
+  logMethod(
+    {
+      id: message.id,
+      operation: request.operation,
+      videoPath: request.videoPath,
+      elapsedMs,
+      segmentCount: segments.length,
+    },
+    elapsedMs >= SLOW_REQUEST_MS ? "Whisper request completed slowly" : "Whisper request completed",
+  );
+
+  request.resolve(segments);
 };
 
 const ensureWorkerReady = async (): Promise<void> => {
@@ -110,6 +170,7 @@ const ensureWorkerReady = async (): Promise<void> => {
       env: { ...pythonEnv, HF_HOME: path.join(CACHE_DIR, "huggingface") },
     });
     worker = child;
+    noteWhisperWorkerStarting(child.pid);
 
     // The child's stdin can emit an async 'error' (e.g. EPIPE) if the Python
     // process dies between requests. Without a listener Node escalates it to an
@@ -126,8 +187,8 @@ const ensureWorkerReady = async (): Promise<void> => {
       );
     }, 15_000);
 
-    const ready = new Promise<void>((resolve, reject) => {
-      let settled = false;
+      const ready = new Promise<void>((resolve, reject) => {
+        let settled = false;
 
       // Bound model load/init. Without this a worker that never emits "ready"
       // (stuck import, partial model download) leaves ensureWorkerReady awaiting
@@ -151,12 +212,25 @@ const ensureWorkerReady = async (): Promise<void> => {
         },
       );
 
-      const resolveReady = () => {
+      const resolveReady = (readyState: Extract<WorkerResponse, { type: "ready" }>) => {
         if (settled) return;
         clearTimeout(slowTimer);
         readyTimer.clear();
         settled = true;
-        log.info("Whisper worker ready");
+        noteWhisperWorkerReady({
+          pid: child.pid,
+          device: readyState.device,
+          fallbackFrom: readyState.fallbackFrom,
+          fallbackReason: readyState.fallbackReason,
+        });
+        log.info(
+          {
+            device: readyState.device ?? "unknown",
+            fallbackFrom: readyState.fallbackFrom,
+            fallbackReason: readyState.fallbackReason,
+          },
+          "Whisper worker ready",
+        );
         resolve();
       };
 
@@ -169,7 +243,9 @@ const ensureWorkerReady = async (): Promise<void> => {
       };
 
       createInterface({ input: child.stdout }).on("line", (line) => {
-        onWorkerLine(line, resolveReady);
+        onWorkerLine(line, resolveReady, (msg) =>
+          rejectReady(new Error(`Whisper worker failed to initialise: ${msg}`)),
+        );
       });
 
       createInterface({ input: child.stderr }).on("line", (line) => {
@@ -195,8 +271,23 @@ const ensureWorkerReady = async (): Promise<void> => {
         const err = new Error(
           `Whisper worker exited${signal ? ` with signal ${signal}` : ` with code ${code ?? "unknown"}`}${evicted ? " (deliberately evicted for a user request)" : ""}`,
         );
+        noteWhisperWorkerExit({
+          code: code ?? null,
+          signal: signal ?? null,
+          evicted,
+          pendingCount,
+        });
         if (evicted) markWorkerEvictedError(err);
-        log.warn({ code, signal, pendingCount, evicted }, "Whisper worker exited");
+        log.warn(
+          {
+            code,
+            signal,
+            pendingCount,
+            evicted,
+            pending: describePendingRequests(),
+          },
+          "Whisper worker exited",
+        );
         rejectAllPending(err);
         if (!settled) rejectReady(err);
       });
@@ -225,20 +316,46 @@ const sendRequest = async (
   if (!worker) throw new Error("Whisper worker is not available");
 
   const id = nextRequestId++;
+  const operation = typeof payload.operation === "string" ? payload.operation : "unknown";
+  const videoPath = typeof payload.videoPath === "string" ? payload.videoPath : undefined;
 
   return new Promise<TranscriptSegment[]>((resolve, reject) => {
     const timeout = createSuspensionAwareTimeout(
       COMPUTE_WORKER_IDS.whisper,
       REQUEST_TIMEOUT_MS,
       () => {
+        const request = pending.get(id);
         pending.delete(id);
+        noteWhisperWorkerTimeout({
+          requestId: id,
+          operation: request?.operation ?? operation,
+          videoPath: request?.videoPath ?? videoPath,
+          elapsedMs: request ? Date.now() - request.startedAt : undefined,
+        });
+        log.warn(
+          {
+            id,
+            pid: worker?.pid,
+            operation: request?.operation ?? operation,
+            videoPath: request?.videoPath ?? videoPath,
+            elapsedMs: request ? Date.now() - request.startedAt : undefined,
+            timeoutMs: REQUEST_TIMEOUT_MS,
+            otherPending: describePendingRequests(),
+          },
+          "Whisper worker timed out — killing process",
+        );
+        worker?.kill();
         reject(new Error(`Whisper worker timed out for request ${id}`));
       },
     );
 
-    pending.set(id, { resolve, reject, timeout });
+    pending.set(id, { resolve, reject, timeout, operation, videoPath, startedAt: Date.now() });
 
     try {
+      log.debug(
+        { id, pid: worker?.pid, operation, videoPath, pendingCount: pending.size },
+        "Dispatching Whisper request",
+      );
       worker?.stdin.write(JSON.stringify({ id, ...payload }) + "\n");
     } catch (error) {
       timeout.clear();
