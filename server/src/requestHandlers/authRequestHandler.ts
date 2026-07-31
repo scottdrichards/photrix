@@ -18,6 +18,7 @@ import {
   generatePasskeyAuthenticationOptions,
   generatePasskeyRegistrationOptions,
   isPasskeySupported,
+  isPublicOriginConfigured,
   verifyPasskeyAuthentication,
   verifyPasskeyRegistration,
 } from "../auth/passkeyService.ts";
@@ -147,7 +148,7 @@ export const passkeyRegistrationOptionsHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<void> => {
-  if (!isPasskeySupported()) {
+  if (!isPasskeySupported() || !isPublicOriginConfigured()) {
     writeJson(res, 503, { error: "Passkeys not available" });
     return;
   }
@@ -187,7 +188,7 @@ export const passkeyRegistrationVerifyHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<void> => {
-  if (!isPasskeySupported()) {
+  if (!isPasskeySupported() || !isPublicOriginConfigured()) {
     writeJson(res, 503, { error: "Passkeys not available" });
     return;
   }
@@ -228,7 +229,7 @@ export const passkeyAuthenticationOptionsHandler = async (
   _req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<void> => {
-  if (!isPasskeySupported()) {
+  if (!isPasskeySupported() || !isPublicOriginConfigured()) {
     writeJson(res, 503, { error: "Passkeys not available" });
     return;
   }
@@ -241,7 +242,7 @@ export const passkeyAuthenticationVerifyHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<void> => {
-  if (!isPasskeySupported()) {
+  if (!isPasskeySupported() || !isPublicOriginConfigured()) {
     writeJson(res, 503, { error: "Passkeys not available" });
     return;
   }
