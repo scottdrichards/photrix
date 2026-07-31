@@ -6,18 +6,21 @@
   gap: 0;
 }
 
+.topRail {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin-inline: calc(var(--space-m) * -1);
+}
+
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-m);
-  position: sticky;
-  top: 0;
-  z-index: 10;
   padding-block: var(--space-m);
   padding-inline: var(--space-m);
-  margin-inline: calc(var(--space-m) * -1);
   background-color: var(--surface-glass);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--stroke2);
@@ -33,10 +36,19 @@
   }
 }
 
-.headerStatusOpen {
+.topRailStatusOpen {
   z-index: 2000;
   pointer-events: none;
 }
+
+.viewToggleDock {
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  z-index: 1;
+  transform: translate(-50%, 50%);
+}
+
 .headerActions {
   display: flex;
   align-items: center;

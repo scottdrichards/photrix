@@ -1,31 +1,23 @@
-/*
- * The pill floats over the content instead of sitting inline, so it never
- * reserves grid layout space (fixes a leftover blank strip at the top of the
- * grid). It fades/hides completely on scroll-down and re-anchors partway
- * down the viewport when it reappears on scroll-up.
- */
 .toggleWrapper {
-  position: fixed;
-  left: 50%;
-  z-index: 15;
-  transform: translateX(-50%);
+  display: flex;
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
   transition:
-    top 0.3s ease,
-    opacity 0.2s ease;
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 
 .toggleWrapperHidden {
   opacity: 0;
   visibility: hidden;
+  transform: translateY(-8px);
   /* Drop hit-testing immediately so nothing lingers as a dead click zone,
      even while the opacity transition is still fading out. */
   pointer-events: none;
   transition:
-    top 0.3s ease,
     opacity 0.2s ease,
+    transform 0.2s ease,
     visibility 0s linear 0.2s;
 }
 

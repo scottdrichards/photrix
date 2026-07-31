@@ -15,7 +15,6 @@ const NEAR_TOP_THRESHOLD_PX = 24;
 
 export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
   const [hidden, setHidden] = useState(false);
-  const [anchorTop, setAnchorTop] = useState(0);
   const [showShareModal, setShowShareModal] = useState(false);
   const lastScrollYRef = useRef(0);
   const { selectionMode, checkedPaths, exitSelectionMode, items } = useSelectionContext();
@@ -26,13 +25,7 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
   );
 
   useEffect(() => {
-    const computeTopAnchor = () => {
-      const header = document.querySelector("header");
-      const headerHeight = header ? header.getBoundingClientRect().height : 0;
-      return headerHeight + 12;
-    };
-
-    setAnchorTop(computeTopAnchor());
+    lastScrollYRef.current = window.scrollY;
 
     const onScroll = () => {
       const y = window.scrollY;
@@ -41,7 +34,6 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
 
       if (y <= NEAR_TOP_THRESHOLD_PX) {
         setHidden(false);
-        setAnchorTop(computeTopAnchor());
         return;
       }
 
@@ -52,17 +44,14 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
       }
 
       if (y < previousY) {
-        // Scrolling up: reappear anchored just under the header.
+        // Scrolling up: reappear in the header rail's docked position.
         setHidden(false);
-        setAnchorTop(computeTopAnchor());
       }
     };
 
     window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onScroll, { passive: true });
     return () => {
       window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onScroll);
     };
   }, []);
 
@@ -76,7 +65,6 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
       )}
       <div
         className={hidden ? `${css.toggleWrapper} ${css.toggleWrapperHidden}` : css.toggleWrapper}
-        style={{ top: anchorTop }}
         aria-hidden={hidden}
       >
         {selectionMode ? (

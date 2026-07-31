@@ -12,6 +12,7 @@ import { ShareLinkModal } from "./components/ShareLinkModal";
 import { StatusModal } from "./components/StatusModal";
 import { SuggestionModal } from "./components/SuggestionModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
+import { TopRailPortalProvider } from "./components/TopRailPortal";
 import { Filter } from "./components/filter/Filter";
 import { FilterProvider, useFilter } from "./components/filter/FilterContext";
 import { SelectionProvider } from "./components/selection/SelectionContext";
@@ -183,6 +184,7 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isSuggestionOpen, setIsSuggestionOpen] = useState(false);
+  const [viewToggleHost, setViewToggleHost] = useState<HTMLDivElement | null>(null);
   const [nav, setNav] = useState<UrlNavState>(initialNavFromUrl);
   const { view } = nav;
 
@@ -225,77 +227,84 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   }, []);
 
   return (
-    <div className={css.app}>
-      <header className={cx(css.header, isStatusOpen ? css.headerStatusOpen : undefined)}>
-        <div className={css.title}>
-          <h2>Photrix</h2>
-          <small>{sharedView ? "Shared view" : "A better way to view photos."}</small>
-        </div>
+    <TopRailPortalProvider host={viewToggleHost}>
+      <div className={css.app}>
+        <div className={cx(css.topRail, isStatusOpen ? css.topRailStatusOpen : undefined)}>
+          <header className={css.header}>
+            <div className={css.title}>
+              <h2>Photrix</h2>
+              <small>{sharedView ? "Shared view" : "A better way to view photos."}</small>
+            </div>
 
-        <div className={css.headerActions}>
-          <SearchBar />
-          <div className={css.filterSlot}>
-            <Filter />
+            <div className={css.headerActions}>
+              <SearchBar />
+              <div className={css.filterSlot}>
+                <Filter />
+              </div>
+              <ThemeToggle theme={theme} followsSystem={followsSystem} onToggle={onThemeToggle} />
+              <ShareButton />
+              {sharedView && ownsAccountSession && (
+                // A signed-in owner viewing their own share link is not trapped in it:
+                // the account session is still there, and dropping the ?token= URL
+                // restores the full library. A full navigation (not pushState) is
+                // deliberate — share mode is read once at module load.
+                <a className="btn btn-subtle" href="/" title="Return to your full library">
+                  <Person24Regular fontSize={20} />
+                  <span className={css.btnLabel}>My library</span>
+                </a>
+              )}
+              {!sharedView && (
+                <>
+                  <button
+                    title="Account"
+                    className="btn btn-subtle"
+                    onClick={() => setIsAccountOpen(true)}
+                  >
+                    <Person24Regular fontSize={20} />
+                    <span className={css.btnLabel}>Account</span>
+                  </button>
+                  <button
+                    title="Server Status"
+                    className="btn btn-subtle"
+                    onClick={() => setIsStatusOpen(true)}
+                  >
+                    <Info24Regular fontSize={20} />
+                    <span className={css.btnLabel}>Status</span>
+                  </button>
+                </>
+              )}
+            </div>
+          </header>
+          <div className={css.viewToggleDock}>
+            <div ref={setViewToggleHost} />
           </div>
-          <ThemeToggle theme={theme} followsSystem={followsSystem} onToggle={onThemeToggle} />
-          <ShareButton />
-          {sharedView && ownsAccountSession && (
-            // A signed-in owner viewing their own share link is not trapped in it:
-            // the account session is still there, and dropping the ?token= URL
-            // restores the full library. A full navigation (not pushState) is
-            // deliberate — share mode is read once at module load.
-            <a className="btn btn-subtle" href="/" title="Return to your full library">
-              <Person24Regular fontSize={20} />
-              <span className={css.btnLabel}>My library</span>
-            </a>
-          )}
-          {!sharedView && (
-            <>
-              <button
-                title="Account"
-                className="btn btn-subtle"
-                onClick={() => setIsAccountOpen(true)}
-              >
-                <Person24Regular fontSize={20} />
-                <span className={css.btnLabel}>Account</span>
-              </button>
-              <button
-                title="Server Status"
-                className="btn btn-subtle"
-                onClick={() => setIsStatusOpen(true)}
-              >
-                <Info24Regular fontSize={20} />
-                <span className={css.btnLabel}>Status</span>
-              </button>
-            </>
-          )}
         </div>
-      </header>
 
-      {!sharedView && (
-        <>
-          <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
-          <AccountPanel
-            isOpen={isAccountOpen}
-            onDismiss={() => setIsAccountOpen(false)}
+        {!sharedView && (
+          <>
+            <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
+            <AccountPanel
+              isOpen={isAccountOpen}
+              onDismiss={() => setIsAccountOpen(false)}
+            />
+            {isSuggestionOpen && <SuggestionModal onClose={() => setIsSuggestionOpen(false)} />}
+          </>
+        )}
+
+        {view === "library" ? (
+          <ThumbnailGrid view={view} onViewChange={handleViewChange} />
+        ) : (
+          <PeopleView
+            view={view}
+            onViewChange={handleViewChange}
+            personId={nav.people.personId}
+            groupId={nav.people.groupId}
+            onNavigate={handlePeopleNavigate}
           />
-          {isSuggestionOpen && <SuggestionModal onClose={() => setIsSuggestionOpen(false)} />}
-        </>
-      )}
-
-      {view === "library" ? (
-        <ThumbnailGrid view={view} onViewChange={handleViewChange} />
-      ) : (
-        <PeopleView
-          view={view}
-          onViewChange={handleViewChange}
-          personId={nav.people.personId}
-          groupId={nav.people.groupId}
-          onNavigate={handlePeopleNavigate}
-        />
-      )}
-      <FullscreenViewer />
-    </div>
+        )}
+        <FullscreenViewer />
+      </div>
+    </TopRailPortalProvider>
   );
 };
 

@@ -62,7 +62,9 @@ describe("ViewToggle", () => {
     const tablist = screen.getByRole("tablist", { name: "Current view" });
     const wrapper = tablist.parentElement as HTMLElement;
     expect(wrapper).toHaveAttribute("aria-hidden", "false");
-    expect(wrapper.style.top).toBe("12px"); // no <header> in test DOM, so headerHeight is 0
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab).toHaveAttribute("tabindex", "0");
+    }
   });
 
   it("returns to the top anchor and reveals itself once scrolled back near the top", () => {

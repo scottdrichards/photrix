@@ -7,6 +7,7 @@ import { useSelectionContext } from "./selection/SelectionContext";
 import { ThumbnailTile } from "./ThumbnailTile";
 import { SelectionActionBar } from "./SelectionActionBar";
 import { SortControl } from "./SortControl";
+import { TopRailPortal } from "./TopRailPortal";
 import { ViewToggle } from "./ViewToggle";
 import css from "./ThumbnailGrid.module.css";
 
@@ -150,7 +151,9 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
 
   return (
     <>
-      <ViewToggle view={view} onViewChange={onViewChange} />
+      <TopRailPortal>
+        <ViewToggle view={view} onViewChange={onViewChange} />
+      </TopRailPortal>
       {error ? <h3>{error}</h3> : null}
       {resultCountLabel ? (
         <div className={css.statusRow} aria-live="polite">

@@ -20,8 +20,9 @@ import {
 import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
-import { ViewToggle } from "./ViewToggle";
 import { FaceClusterViz } from "./FaceClusterViz";
+import { TopRailPortal } from "./TopRailPortal";
+import { ViewToggle } from "./ViewToggle";
 import { isSharedView } from "../hooks/useShareFilter";
 import css from "./PeopleView.module.css";
 
@@ -897,7 +898,9 @@ const PeopleViewComponent = ({
   if (shownDetail) {
     return (
       <section className={css.peopleView}>
-        <ViewToggle view={view} onViewChange={onViewChange} />
+        <TopRailPortal>
+          <ViewToggle view={view} onViewChange={onViewChange} />
+        </TopRailPortal>
         <PersonDetail
           cluster={shownDetail}
           loadingFaces={!personDetail}
@@ -919,6 +922,9 @@ const PeopleViewComponent = ({
 
   return (
     <section className={css.peopleView}>
+      <TopRailPortal>
+        <ViewToggle view={view} onViewChange={onViewChange} />
+      </TopRailPortal>
       {vizPoints !== null && (
         <FaceClusterViz
           points={vizPoints}
@@ -928,7 +934,6 @@ const PeopleViewComponent = ({
           onClose={handleCloseViz}
         />
       )}
-      <ViewToggle view={view} onViewChange={onViewChange} />
       <div className={css.summaryRow}>
         <h3>People</h3>
         <div className={css.summaryActions}>
