@@ -53,6 +53,12 @@ const loadAccounts = (): Map<string, Buffer> => {
 
 const accounts = loadAccounts();
 
+// Sessions expire after this many ms of inactivity. Configurable so a home
+// server that restarts infrequently can pick a longer window without forking
+// the code; 30 days is the default.
+const SESSION_EXPIRY_DAYS = Number(process.env.PHOTRIX_SESSION_EXPIRY_DAYS ?? 30);
+export const SESSION_EXPIRY_MS = SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
 // In-memory session store — seeded from DB on startup, kept in sync on writes.
 const tokens = new Map<string, TokenData>();
 // Long-lived personal API tokens ("MCP keys"), same seed-from-DB pattern.
@@ -64,6 +70,10 @@ let db: AsyncSqlite | null = null;
 
 export const initAuthService = async (database: AsyncSqlite): Promise<void> => {
   db = database;
+  const cutoff = Date.now() - SESSION_EXPIRY_MS;
+  // Hard-delete expired sessions so the DB doesn't grow unboundedly.
+  await db.run("DELETE FROM auth_sessions WHERE lastSeenAt < ?", [cutoff]);
+
   const rows = await db.all<{
     token: string;
     username: string;
@@ -228,7 +238,15 @@ const touchSession = (token: string): void => {
 };
 
 export const validateToken = (token: string): boolean => {
-  if (tokens.has(token)) {
+  const session = tokens.get(token);
+  if (session) {
+    if (Date.now() - session.lastSeenAt > SESSION_EXPIRY_MS) {
+      // Expired — evict eagerly so the Map doesn't grow with dead entries.
+      tokens.delete(token);
+      sessionLastTouched.delete(token);
+      db?.run("DELETE FROM auth_sessions WHERE token = ?", [token]).catch(() => {});
+      return false;
+    }
     touchSession(token);
     return true;
   }
