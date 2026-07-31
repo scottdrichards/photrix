@@ -116,6 +116,23 @@
   display: block;
 }
 
+/* Live edit preview: the canvas always renders the full, uncropped, unrotated
+   image (see drawEditPreview) so it shares one stable coordinate space with
+   the crop-box overlay. Rotation, flip, and the crop itself are applied
+   on top as pure CSS so the frame never resizes/recenters mid-edit — only
+   the final export bakes the crop/rotation into actual pixels. Specificity
+   matches the shared zoom-transform rule above; source order lets this one
+   win for `transform` on the canvas while still inheriting cursor/transition
+   /will-change from that rule. */
+.photoFrame > .photoMedia {
+  transform:
+    scale(var(--zoom-scale, 1))
+    rotate(var(--edit-rotate-deg, 0deg))
+    scaleX(var(--edit-flip-x, 1))
+    scaleY(var(--edit-flip-y, 1));
+  clip-path: var(--edit-clip-path, none);
+}
+
 .cropOverlayContainer {
   position: absolute;
   inset: 0;

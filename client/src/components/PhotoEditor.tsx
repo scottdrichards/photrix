@@ -765,7 +765,11 @@ function CropBox({ top, right, bottom, left, rotationDeg, minCrop, onChange }: C
   const midY = (tPct + bPct) / 2;
 
   return (
-    <div ref={containerRef} className={css.cropOverlay}>
+    <div
+      ref={containerRef}
+      className={css.cropOverlay}
+      style={rotationDeg !== 0 ? { transform: `rotate(${rotationDeg}deg)` } : undefined}
+    >
       {/* Shadow over cropped areas */}
       <div className={css.cropShadow} style={{ top: 0, left: 0, right: 0, height: `${tPct}%` }} />
       <div className={css.cropShadow} style={{ bottom: 0, left: 0, right: 0, height: `${100 - bPct}%` }} />

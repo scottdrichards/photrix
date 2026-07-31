@@ -201,58 +201,27 @@ const readMetadataAspectRatio = (metadata: Record<string, unknown> | undefined):
   return 1;
 };
 
-function computeEditOutputAR(natW: number, natH: number, adj: EditAdj): number {
-  const cw = natW * (1 - (adj.cropLeft + adj.cropRight) / 100);
-  const ch = natH * (1 - (adj.cropTop + adj.cropBottom) / 100);
-  const totalDeg = ((adj.rotation + adj.rotate90 * 90) % 360 + 360) % 360;
-  const rad = (totalDeg * Math.PI) / 180;
-  const cos = Math.abs(Math.cos(rad));
-  const sin = Math.abs(Math.sin(rad));
-  const outW = cw * cos + ch * sin;
-  const outH = cw * sin + ch * cos;
-  return outH > 0 ? outW / outH : 1;
-}
-
 const PREVIEW_MAX_EDGE = 1200;
 
+// Draws the full, uncropped, unrotated image (pixel adjustments only — tone,
+// color, dehaze, clarity/sharpness convolution, vignette). Rotation, flip,
+// and crop are applied afterward as CSS on the canvas element itself, so the
+// canvas/frame never resizes based on the crop or rotation angle — it stays
+// the one stable coordinate space the crop-box overlay's handle math expects.
 function drawEditPreview(canvas: HTMLCanvasElement, img: HTMLImageElement, adj: EditAdj) {
   const iw = img.naturalWidth;
   const ih = img.naturalHeight;
   if (iw === 0 || ih === 0) return;
 
-  const cropL = Math.round(iw * (adj.cropLeft / 100));
-  const cropR = Math.round(iw * (adj.cropRight / 100));
-  const cropT = Math.round(ih * (adj.cropTop / 100));
-  const cropB = Math.round(ih * (adj.cropBottom / 100));
-  const cw = Math.max(1, iw - cropL - cropR);
-  const ch = Math.max(1, ih - cropT - cropB);
-
-  const totalDeg = ((adj.rotation + adj.rotate90 * 90) % 360 + 360) % 360;
-  const rad = (totalDeg * Math.PI) / 180;
-  const cos = Math.abs(Math.cos(rad));
-  const sin = Math.abs(Math.sin(rad));
-  const outW = Math.round(cw * cos + ch * sin);
-  const outH = Math.round(cw * sin + ch * cos);
-
-  const scale = Math.min(1, PREVIEW_MAX_EDGE / Math.max(outW, outH));
-  const pw = Math.max(1, Math.round(outW * scale));
-  const ph = Math.max(1, Math.round(outH * scale));
+  const scale = Math.min(1, PREVIEW_MAX_EDGE / Math.max(iw, ih));
+  const pw = Math.max(1, Math.round(iw * scale));
+  const ph = Math.max(1, Math.round(ih * scale));
 
   canvas.width = pw;
   canvas.height = ph;
 
   const ctx = canvas.getContext("2d")!;
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, pw, ph);
-  ctx.save();
-  ctx.translate(pw / 2, ph / 2);
-  if (adj.flipH) ctx.scale(-1, 1);
-  if (adj.flipV) ctx.scale(1, -1);
-  ctx.scale(scale, scale);
-  if (totalDeg !== 0) ctx.rotate(rad);
-  ctx.translate(-cw / 2, -ch / 2);
-  ctx.drawImage(img, cropL, cropT, cw, ch, 0, 0, cw, ch);
-  ctx.restore();
+  ctx.drawImage(img, 0, 0, pw, ph);
 
   const imageData = ctx.getImageData(0, 0, pw, ph);
   applyPixelAdj(imageData.data, pw, ph, adj);
@@ -331,7 +300,6 @@ export function FullscreenViewer() {
   const [editMode, setEditMode] = useState(false);
   const [canvasAdj, setCanvasAdj] = useState<EditAdj>(DEFAULT_ADJ);
   const [previewImgLoaded, setPreviewImgLoaded] = useState(false);
-  const [previewNatSize, setPreviewNatSize] = useState({ w: 0, h: 0 });
   const previewImgRef = useRef<HTMLImageElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewRafRef = useRef<number | null>(null);
@@ -366,7 +334,6 @@ export function FullscreenViewer() {
     setExportMode(null);
     setEditMode(false);
     setPreviewImgLoaded(false);
-    setPreviewNatSize({ w: 0, h: 0 });
     setCanvasAdj(DEFAULT_ADJ);
     const rawEditAdj = photo?.metadata?.editAdj;
     const parsedAdj =
@@ -1135,9 +1102,12 @@ export function FullscreenViewer() {
     "--label-counter-scale": photoZoom.isZoomed ? (1 / photoZoom.scale).toString() : "1",
   } as React.CSSProperties;
 
-  const previewOutputAR = previewNatSize.w > 0
-    ? computeEditOutputAR(previewNatSize.w, previewNatSize.h, canvasAdj)
-    : photoAspectRatio;
+  const editTotalDeg = canvasAdj.rotation + canvasAdj.rotate90 * 90;
+  const editClipPath =
+    canvasAdj.cropTop === 0 && canvasAdj.cropRight === 0 &&
+    canvasAdj.cropBottom === 0 && canvasAdj.cropLeft === 0
+      ? "none"
+      : `inset(${canvasAdj.cropTop}% ${canvasAdj.cropRight}% ${canvasAdj.cropBottom}% ${canvasAdj.cropLeft}%)`;
 
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
@@ -1375,7 +1345,7 @@ export function FullscreenViewer() {
                   style={
                     {
                       ...zoomStyle,
-                      "--photo-ar": String(previewOutputAR),
+                      "--photo-ar": String(photoAspectRatio),
                     } as React.CSSProperties
                   }
                 >
@@ -1401,7 +1371,6 @@ export function FullscreenViewer() {
                       const img = previewImgRef.current;
                       if (!img) return;
                       setPreviewImgLoaded(true);
-                      setPreviewNatSize({ w: img.naturalWidth, h: img.naturalHeight });
                       if (img.naturalWidth > 0 && img.naturalHeight > 0) {
                         setPhotoAspectRatio(img.naturalWidth / img.naturalHeight);
                         setFullImageLoaded(true);
@@ -1421,7 +1390,11 @@ export function FullscreenViewer() {
                     style={{
                       ...zoomStyle,
                       opacity: previewImgLoaded ? 1 : 0,
-                    }}
+                      "--edit-rotate-deg": `${editTotalDeg}deg`,
+                      "--edit-flip-x": canvasAdj.flipH ? -1 : 1,
+                      "--edit-flip-y": canvasAdj.flipV ? -1 : 1,
+                      "--edit-clip-path": editClipPath,
+                    } as React.CSSProperties}
                   />
                   {showFaces && (
                     <FaceOverlay
