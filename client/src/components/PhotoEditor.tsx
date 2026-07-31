@@ -736,8 +736,6 @@ function CropBox({ top, right, bottom, left, rotationDeg, minCrop, onChange }: C
       if (h.includes("l")) newLeft = Math.max(minCrop.left, Math.min(49, ds.startLeft + pctX));
       if (h.includes("r")) newRight = Math.max(minCrop.right, Math.min(49, ds.startRight - pctX));
 
-      // eslint-disable-next-line no-console
-      console.log("DEBUG pointerMove", { h, pctX, pctY, newTop, newRight, newBottom, newLeft });
       onChange({ top: newTop, right: newRight, bottom: newBottom, left: newLeft });
     },
     [rotationDeg, minCrop, onChange],
@@ -829,8 +827,6 @@ export function PhotoEditor({
   useEffect(() => {
     const effectiveAR = adj.rotate90 % 2 !== 0 ? 1 / imageAspectRatio : imageAspectRatio;
     const crop = computeAlignCrop(adj.rotation, effectiveAR);
-    // eslint-disable-next-line no-console
-    console.log("DEBUG auto-crop effect fired", { rotation: adj.rotation, rotate90: adj.rotate90, imageAspectRatio, crop });
     setAdj((prev) => ({
       ...prev,
       cropTop: crop.top,
@@ -898,7 +894,15 @@ export function PhotoEditor({
             left={adj.cropLeft}
             rotationDeg={totalRotationDeg}
             minCrop={minCrop}
-            onChange={(crop) => setAdj((prev) => ({ ...prev, ...crop }))}
+            onChange={(crop) =>
+              setAdj((prev) => ({
+                ...prev,
+                cropTop: crop.top,
+                cropRight: crop.right,
+                cropBottom: crop.bottom,
+                cropLeft: crop.left,
+              }))
+            }
           />,
           cropContainerEl,
         )}
