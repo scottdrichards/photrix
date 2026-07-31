@@ -96,14 +96,16 @@ export const tables = {
       { name: "hlsGeneratedAt", type: "INTEGER", indexExpression: true },
       { name: "facesProcessedAt", type: "INTEGER", indexExpression: true },
       { name: "facesLastErrorAt", type: "INTEGER", indexExpression: true },
-      { name: "imageEmbedding", type: "BLOB" },
+      // NOTE: the imageEmbedding/audioEmbedding BLOBs themselves live in
+      // `fileEmbeddings`, not here — see that table for why. The *ProcessedAt /
+      // *ErrorAt pipeline markers stay on `files` because every task-queue query
+      // filters on them and none of them need the vector.
       { name: "embeddingProcessedAt", type: "INTEGER", indexExpression: true },
       { name: "embeddingErrorAt", type: "INTEGER", indexExpression: true },
       { name: "analysisDecodeErrorAt", type: "INTEGER", indexExpression: true },
       { name: "audioTranscript", type: "TEXT" },
       { name: "audioTranscribedAt", type: "INTEGER", indexExpression: true },
       { name: "audioTranscribeErrorAt", type: "INTEGER", indexExpression: true },
-      { name: "audioEmbedding", type: "BLOB" },
       { name: "audioEmbeddingProcessedAt", type: "INTEGER", indexExpression: true },
       { name: "audioEmbeddingErrorAt", type: "INTEGER", indexExpression: true },
     ],
@@ -169,7 +171,10 @@ export const tables = {
       { name: "boxWidth", type: "REAL" },
       { name: "boxHeight", type: "REAL" },
       { name: "confidence", type: "REAL" },
-      { name: "embedding", type: "BLOB" },
+      // The embedding BLOB lives in `faceEmbeddings`. A face row without it is
+      // ~100 bytes and fits inline in a page; with it, every row spilled to
+      // overflow pages, which is what the wide covering indexes below exist to
+      // work around.
       { name: "personId", type: "INTEGER", indexExpression: true },
       { name: "detectedAt", type: "INTEGER" },
       // Persistent cluster assignment (see faceClusterEngine.ts). NULL means
@@ -240,9 +245,15 @@ export const tables = {
       {
         // Serves the clustering backfill's "next unassigned faces, best
         // detections first" query without scanning assigned rows.
+        // The old predicate also required LENGTH(embedding) > 0, which is no
+        // longer expressible here now that the vector lives in another table
+        // (partial-index predicates can't reference one). It isn't needed: the
+        // migration stamps every face with no decodable embedding as
+        // UNCLUSTERABLE_CLUSTER_ID, and detectFaces does the same for new ones,
+        // so "clusterId IS NULL" already excludes them.
         name: "needing_cluster",
         expression: "confidence DESC",
-        where: "clusterId IS NULL AND LENGTH(embedding) > 0",
+        where: "clusterId IS NULL",
       },
       {
         // Covering index for the People queries: the per-cluster COUNT +
@@ -255,6 +266,46 @@ export const tables = {
         where: "clusterId > 0",
       },
     ],
+  },
+  /**
+   * Face recognition vectors, one row per face that has a decodable embedding.
+   *
+   * Split out of `faces` because SQLite stores rows in a B-tree keyed by rowid:
+   * a 4 KB embedding inline meant every `faces` row spilled onto overflow pages,
+   * so *any* query that fetched a face row — even one reading only clusterId —
+   * paid for the vector. That is the "BLOB drag" the wide covering indexes on
+   * `faces` were built to dodge. With the vector out of the row, a face row is
+   * ~100 bytes and fits in a single page.
+   *
+   * Absence of a row means "no usable embedding"; such faces are stamped
+   * UNCLUSTERABLE_CLUSTER_ID in `faces.clusterId` rather than tracked here.
+   */
+  faceEmbeddings: {
+    columns: [
+      { name: "faceId", type: "INTEGER", isPrimaryKey: true },
+      // int8-quantized unit vector — see indexDatabase/embeddingCodec.ts.
+      { name: "embedding", type: "BLOB" },
+    ],
+    compositeIndexes: [],
+  },
+  /**
+   * CLIP image and audio vectors, one row per file that has at least one.
+   *
+   * Same reasoning as `faceEmbeddings`: the two 2 KB BLOBs inline pushed every
+   * `files` row past the page size, so grid listings and the filter panel's
+   * DISTINCT queries dragged vector pages they never read. Keyed by
+   * (folder, fileName) to match `files`' own unique key, so writes can upsert
+   * without a lookup and moveFile can carry embeddings across a rename.
+   */
+  fileEmbeddings: {
+    columns: [
+      { name: "folder", type: "TEXT", isPrimaryKey: true },
+      { name: "fileName", type: "TEXT", isPrimaryKey: true },
+      // Both int8-quantized unit vectors — see indexDatabase/embeddingCodec.ts.
+      { name: "imageEmbedding", type: "BLOB" },
+      { name: "audioEmbedding", type: "BLOB" },
+    ],
+    compositeIndexes: [],
   },
   faceClusters: {
     columns: [

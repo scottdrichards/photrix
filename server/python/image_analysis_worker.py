@@ -50,6 +50,7 @@ from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 
 from face_attributes import compute_face_attributes
+from worker_memory import trim_heap
 
 # Local files can be legitimately large (panoramas, high-res cameras); both
 # models downscale internally so the decompression-bomb guard adds no safety.
@@ -465,6 +466,9 @@ def main() -> int:
     text_thread = threading.Thread(target=_run_text_worker, daemon=True)
     stdin_thread.start()
     text_thread.start()
+
+    # Release the one-off weight-loading buffers glibc is still holding.
+    trim_heap()
 
     send({"type": "ready"})
 

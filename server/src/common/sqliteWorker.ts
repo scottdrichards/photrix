@@ -11,7 +11,11 @@ type WorkerInit = {
   customFunctions?: Array<{
     name: string;
     options: { deterministic?: boolean };
-    type: "regexp" | "cosine_similarity" | "cosine_similarity_f32";
+    type:
+      | "regexp"
+      | "cosine_similarity"
+      | "cosine_similarity_f32"
+      | "cosine_similarity_i8";
   }>;
 };
 
@@ -49,6 +53,39 @@ const cosineSimilarityBlob = (
     const off = i * bytesPerEl;
     const x = f32 ? av.getFloat32(off, true) : av.getFloat64(off, true);
     const y = f32 ? bv.getFloat32(off, true) : bv.getFloat64(off, true);
+    dot += x * y;
+    leftMag += x * x;
+    rightMag += y * y;
+  }
+  const denom = Math.sqrt(leftMag) * Math.sqrt(rightMag);
+  return denom > 0 ? dot / denom : 0;
+};
+
+// Cosine similarity between two int8-quantized embedding blobs (see
+// indexDatabase/embeddingCodec.ts for the layout: a 4-byte Float32 scale header
+// followed by one int8 per dimension).
+//
+// The per-vector scales cancel out of cosine entirely — for q = v/s, both the
+// numerator and the denominator pick up the same s_a * s_b factor — so this
+// never reads the header and runs as pure integer arithmetic. That makes it
+// substantially cheaper per row than the float path it replaces: no DataView
+// float decoding, and the blobs it scans are a quarter the size, so the same
+// full-table similarity scan touches a quarter of the pages.
+const INT8_SCALE_HEADER_BYTES = 4;
+const cosineSimilarityInt8 = (a: Buffer | null, b: Buffer | null): number => {
+  if (!a || !b || a.length !== b.length) return 0;
+  const n = a.length - INT8_SCALE_HEADER_BYTES;
+  if (n <= 0) return 0;
+
+  let dot = 0;
+  let leftMag = 0;
+  let rightMag = 0;
+  for (let i = 0; i < n; i++) {
+    // readInt8 semantics without the call overhead: bytes >= 128 are negative.
+    const rawX = a[i + INT8_SCALE_HEADER_BYTES];
+    const rawY = b[i + INT8_SCALE_HEADER_BYTES];
+    const x = rawX > 127 ? rawX - 256 : rawX;
+    const y = rawY > 127 ? rawY - 256 : rawY;
     dot += x * y;
     leftMag += x * x;
     rightMag += y * y;
@@ -107,6 +144,14 @@ for (const fn of init.customFunctions ?? []) {
       fn.name,
       { deterministic: fn.options.deterministic ?? true },
       (a: Buffer | null, b: Buffer | null) => cosineSimilarityBlob(a, b, 4),
+    );
+  }
+
+  if (fn.type === "cosine_similarity_i8") {
+    db.function(
+      fn.name,
+      { deterministic: fn.options.deterministic ?? true },
+      (a: Buffer | null, b: Buffer | null) => cosineSimilarityInt8(a, b),
     );
   }
 }

@@ -25,6 +25,8 @@ import sys
 
 import numpy as np
 
+from worker_memory import trim_heap
+
 
 def send(payload: dict) -> None:
     sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
@@ -124,9 +126,6 @@ def main():
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
         model = ClapModel.from_pretrained(MODEL_ID, cache_dir=hf_home)
         processor = ClapProcessor.from_pretrained(MODEL_ID, cache_dir=hf_home)
         model = model.to(device)
@@ -134,6 +133,9 @@ def main():
     except Exception as e:
         send({"type": "error", "error": f"Failed to load CLAP model: {e}"})
         sys.exit(1)
+
+    # Release the one-off weight-loading buffers glibc is still holding.
+    trim_heap()
 
     send({"type": "ready", "device": device})
 

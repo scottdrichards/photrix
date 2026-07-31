@@ -4,6 +4,7 @@ import type {
   FilterField,
   Range,
 } from "./indexDatabase.type.ts";
+import { encodeEmbedding } from "./embeddingCodec.ts";
 import { normalizeFolderPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 import {
@@ -203,13 +204,22 @@ const constraintToSQL = (
       return null;
     }
 
+    // Vectors live in fileEmbeddings now, so the predicate reaches them through
+    // a correlated EXISTS on the primary key rather than reading a column of
+    // `files`. Every call site embeds this fragment into an unaliased
+    // `FROM files`, which is what makes `files.folder` resolvable here.
+    const encoded = encodeEmbedding(queryVector);
+    if (!encoded) return null;
+
     return {
       where:
-        "mimeType LIKE 'image/%' AND imageEmbedding IS NOT NULL AND cosine_similarity_f32(imageEmbedding, ?) >= ?",
-      params: [
-        Buffer.from(queryVector.buffer, queryVector.byteOffset, queryVector.byteLength),
-        constraint.minSimilarity,
-      ],
+        `mimeType LIKE 'image/%' AND EXISTS (
+           SELECT 1 FROM fileEmbeddings fe
+           WHERE fe.folder = files.folder AND fe.fileName = files.fileName
+             AND fe.imageEmbedding IS NOT NULL
+             AND cosine_similarity_i8(fe.imageEmbedding, ?) >= ?
+         )`,
+      params: [encoded, constraint.minSimilarity],
     };
   }
 
@@ -233,13 +243,18 @@ const constraintToSQL = (
       return null;
     }
 
+    const encoded = encodeEmbedding(queryVector);
+    if (!encoded) return null;
+
     return {
       where:
-        "audioEmbedding IS NOT NULL AND (((mimeType LIKE 'video/%' AND audioCodec IS NOT NULL) OR mimeType LIKE 'audio/%')) AND cosine_similarity_f32(audioEmbedding, ?) >= ?",
-      params: [
-        Buffer.from(queryVector.buffer, queryVector.byteOffset, queryVector.byteLength),
-        constraint.minSimilarity,
-      ],
+        `(((mimeType LIKE 'video/%' AND audioCodec IS NOT NULL) OR mimeType LIKE 'audio/%')) AND EXISTS (
+           SELECT 1 FROM fileEmbeddings fe
+           WHERE fe.folder = files.folder AND fe.fileName = files.fileName
+             AND fe.audioEmbedding IS NOT NULL
+             AND cosine_similarity_i8(fe.audioEmbedding, ?) >= ?
+         )`,
+      params: [encoded, constraint.minSimilarity],
     };
   }
 

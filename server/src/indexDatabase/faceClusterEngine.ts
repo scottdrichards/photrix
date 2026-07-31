@@ -1,6 +1,7 @@
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
 import { getLogger } from "../observability/logger.ts";
+import { decodeEmbedding } from "./embeddingCodec.ts";
 
 const log = getLogger("faceClusterEngine");
 
@@ -79,9 +80,12 @@ const REFRESH_WRITE_CHUNK = 512;
  *   re-detection does subtract, so the steady state stays accurate, and
  *   `pruneEmptyClusters` drops clusters with no remaining members.
  *
- * All math is Float32: the face model emits 32-bit precision, so the Float64
- * storage of `faces.embedding` carries no extra information, and Float32 halves
- * the memory traffic in the hot dot-product loop.
+ * All math is Float32: the face model emits 32-bit precision, so nothing wider
+ * carries extra information, and Float32 halves the memory traffic in the hot
+ * dot-product loop. Vectors are *stored* narrower still — int8, in the
+ * `faceEmbeddings` table (see embeddingCodec.ts) — and decoded to Float32 units
+ * on read; measured against the old Float64 blobs that costs ~3.6e-4 of cosine
+ * error, three orders of magnitude below this file's 0.62 threshold.
  */
 export class FaceClusterEngine {
   private db: AsyncSqlite;
@@ -171,8 +175,8 @@ export class FaceClusterEngine {
 
   /**
    * Assigns each face to a cluster and persists the results. Faces whose
-   * embedding is empty or zero are skipped (they stay clusterId NULL but are
-   * excluded from the backfill query by its LENGTH(embedding) > 0 filter).
+   * embedding is empty or zero are stamped UNCLUSTERABLE_CLUSTER_ID, which is
+   * what keeps the backfill (now selecting on clusterId alone) off them.
    */
   assignFaces(
     faces: Array<{
@@ -465,13 +469,16 @@ export class FaceClusterEngine {
 
     for (const clusterId of subjectClusterIds) {
       const idRows = await this.db.all<{ id: number }>(
-        "SELECT id FROM faces WHERE clusterId = ? AND LENGTH(embedding) > 0",
+        `SELECT f.id FROM faces f
+         JOIN faceEmbeddings fe ON fe.faceId = f.id
+         WHERE f.clusterId = ?`,
         clusterId,
       );
       for (let i = 0; i < idRows.length; i += REFRESH_READ_CHUNK) {
         const ids = idRows.slice(i, i + REFRESH_READ_CHUNK).map((row) => row.id);
         const faceRows = await this.db.all<{ id: number; embedding: Buffer }>(
-          `SELECT id, embedding FROM faces WHERE id IN (${ids.map(() => "?").join(", ")})`,
+          `SELECT faceId AS id, embedding FROM faceEmbeddings
+           WHERE faceId IN (${ids.map(() => "?").join(", ")})`,
           ...ids,
         );
         for (const row of faceRows) {
@@ -589,28 +596,14 @@ export const toAlignedFloat32 = (buffer: Buffer | Uint8Array): Float32Array => {
 };
 
 /**
- * Converts a stored Float64 embedding BLOB into a Float32 unit vector.
- * Returns null for empty or zero-magnitude embeddings.
+ * Converts a stored face embedding BLOB into a Float32 unit vector.
+ *
+ * Delegates to the storage codec, which infers the dimension from the blob
+ * length. Returns null for empty, malformed or zero-magnitude embeddings;
+ * callers stamp those UNCLUSTERABLE.
  */
-export const toUnitFloat32 = (buffer: Buffer | Uint8Array): Float32Array | null => {
-  if (buffer.byteLength === 0 || buffer.byteLength % 8 !== 0) return null;
-  const aligned = new Uint8Array(buffer.byteLength);
-  aligned.set(buffer);
-  const f64 = new Float64Array(aligned.buffer);
-
-  let magnitudeSquared = 0;
-  for (let i = 0; i < f64.length; i += 1) {
-    magnitudeSquared += f64[i] * f64[i];
-  }
-  if (magnitudeSquared <= 0) return null;
-
-  const magnitude = Math.sqrt(magnitudeSquared);
-  const unit = new Float32Array(f64.length);
-  for (let i = 0; i < f64.length; i += 1) {
-    unit[i] = f64[i] / magnitude;
-  }
-  return unit;
-};
+export const toUnitFloat32 = (buffer: Buffer | Uint8Array): Float32Array | null =>
+  decodeEmbedding(buffer);
 
 /** 4-way unrolled dot product — ~1.5× the plain loop on 512-dim vectors. */
 export const dotProduct = (a: Float32Array, b: Float32Array): number => {

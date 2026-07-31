@@ -19,6 +19,8 @@ import json
 import os
 import sys
 
+from worker_memory import trim_heap
+
 
 def send(payload: dict) -> None:
     sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
@@ -110,6 +112,10 @@ def main():
         else:
             send({"type": "error", "error": str(e)})
             sys.exit(1)
+
+    # The weights are on the card now; hand the load buffers back to the OS.
+    # Measured: 2229 MB -> 685 MB resident for large-v3/int8_float16 on CUDA.
+    trim_heap()
 
     ready = {"type": "ready", "device": device}
     if fallback_from is not None:

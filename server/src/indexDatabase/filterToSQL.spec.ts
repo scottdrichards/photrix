@@ -388,7 +388,11 @@ describe("filterToSQL", () => {
       semanticImage: { queryVector: [0.1, 0.2], minSimilarity: 0.18 },
     });
 
-    expect(result.where).toContain("cosine_similarity_f32(imageEmbedding, ?) >= ?");
+    // Vectors live in fileEmbeddings, so the predicate reaches them through a
+    // correlated EXISTS on the primary key rather than a column of `files`.
+    expect(result.where).toContain("cosine_similarity_i8(fe.imageEmbedding, ?) >= ?");
+    expect(result.where).toContain("FROM fileEmbeddings fe");
+    expect(result.where).toContain("fe.folder = files.folder");
     expect(result.params).toHaveLength(2);
     expect(result.params[0]).toBeInstanceOf(Buffer);
     expect(result.params[1]).toBe(0.18);

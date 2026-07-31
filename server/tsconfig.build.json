@@ -1,0 +1,13 @@
+{
+  // Emitting build. The base config is typecheck-only (noEmit) and lets source
+  // import with explicit ".ts" specifiers, which Node cannot resolve at runtime.
+  // rewriteRelativeImportExtensions rewrites those to ".js" on the way out so
+  // the compiled tree runs on plain `node` with no loader hook.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rewriteRelativeImportExtensions": true,
+    "outDir": "dist"
+  },
+  "exclude": ["dist", "node_modules", "**/*.spec.ts", "**/*.test.ts"]
+}

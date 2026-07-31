@@ -28,10 +28,13 @@ import {
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 import { prepareTables } from "./prepareTables.ts";
+import { migrateEmbeddingStorage } from "./migrateEmbeddingStorage.ts";
+import { decodeEmbedding, encodeEmbedding } from "./embeddingCodec.ts";
 import {
   FaceClusterEngine,
   LOW_CONFIDENCE_CLUSTER_ID,
   MIN_FACE_CONFIDENCE_FOR_CLUSTERING,
+  UNCLUSTERABLE_CLUSTER_ID,
   toAlignedFloat32,
 } from "./faceClusterEngine.ts";
 import { tables } from "./tables.ts";
@@ -77,12 +80,13 @@ const FACE_ATTRIBUTE_RESET_VERSION = 4;
 // re-clustering rather than left behind under a junk-derived centroid.
 const HUB_RECLUSTER_PURGE_FRACTION = 0.3;
 
-// Columns to read for file queries: everything except the embedding BLOBs. Each
-// row carries a ~2 KB imageEmbedding (and audioEmbedding) that no read path
-// consumes, so `SELECT *` would drag megabytes of vector data off disk per page.
-// rowToFileRecord never looks at these columns, so omitting them is transparent.
+// Columns to read for file queries. This used to exclude the embedding BLOBs
+// explicitly — each row carried a ~2 KB imageEmbedding (and audioEmbedding) that
+// no read path consumes, so `SELECT *` dragged megabytes of vector data off disk
+// per page. The vectors now live in `fileEmbeddings`, so there is nothing left on
+// `files` to exclude; the list stays explicit so a future BLOB column added here
+// has to be a deliberate choice rather than something `SELECT *` picks up.
 const FILE_QUERY_COLUMNS = tables.files.columns
-  .filter((column) => column.type !== "BLOB")
   .map((column) => column.name)
   .join(", ");
 
@@ -434,8 +438,20 @@ export class IndexDatabase {
           options: { deterministic: true },
           type: "cosine_similarity_f32",
         },
+        {
+          // Current storage form for every embedding: int8 with a scale header
+          // (see embeddingCodec.ts). Pure integer arithmetic, over blobs a
+          // quarter the size of the Float32 ones the f32 variant reads.
+          name: "cosine_similarity_i8",
+          options: { deterministic: true },
+          type: "cosine_similarity_i8",
+        },
       ],
     });
+
+    // Must precede prepareTables: it moves embeddings into their side tables by
+    // reading legacy columns that prepareTables would otherwise have dropped.
+    await migrateEmbeddingStorage(this.db);
 
     await prepareTables(this.db);
 
@@ -609,6 +625,14 @@ export class IndexDatabase {
       },
       {
         sql: "UPDATE audioSegments SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
+        params: [newFolder, newFile, oldFolder, oldFile],
+      },
+      {
+        // fileEmbeddings is keyed by (folder, fileName), so a move has to carry
+        // the row across or the file silently loses its CLIP vectors and drops
+        // out of semantic search. faceEmbeddings is keyed by faceId and needs no
+        // update — the `faces` rename above is enough.
+        sql: "UPDATE fileEmbeddings SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
         params: [newFolder, newFile, oldFolder, oldFile],
       },
     ]);
@@ -1000,17 +1024,19 @@ export class IndexDatabase {
 
     const statements: Array<{ sql: string; params: unknown[] }> = [
       {
+        // Must precede the face delete — it resolves the outgoing face ids
+        // through the rows it is about to remove.
+        sql: `DELETE FROM faceEmbeddings WHERE faceId IN (
+                SELECT id FROM faces WHERE folder = ? AND fileName = ?)`,
+        params: [folder, fileName],
+      },
+      {
         sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
         params: [folder, fileName],
       },
     ];
 
     for (const face of faces) {
-      const embeddingBuffer = Buffer.from(
-        face.embedding.buffer,
-        face.embedding.byteOffset,
-        face.embedding.byteLength,
-      );
       const centeredBox = toCenterBoxFromTopLeft(face.box);
       // The detection pass derives attributes from landmarks it already ran and
       // from the image it already decoded, so they arrive with the detection and
@@ -1019,9 +1045,9 @@ export class IndexDatabase {
       const attributes = face.attributes;
       statements.push({
         sql: `INSERT INTO faces
-                (folder, fileName, boxX, boxY, boxWidth, boxHeight, confidence, embedding, detectedAt,
+                (folder, fileName, boxX, boxY, boxWidth, boxHeight, confidence, detectedAt,
                  smileScore, eyesOpenScore, focusScore, exposureScore, faceAttrVersion)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         params: [
           folder,
           fileName,
@@ -1030,7 +1056,6 @@ export class IndexDatabase {
           centeredBox.width,
           centeredBox.height,
           face.confidence,
-          embeddingBuffer,
           detectedAtMs,
           attributes?.smile ?? null,
           attributes?.eyesOpen ?? null,
@@ -1063,6 +1088,44 @@ export class IndexDatabase {
     });
 
     await this.db.transaction(statements);
+
+    // `faces.id` is an autoincrement rowid, so the embeddings can only be
+    // written once the rows exist. The delete-then-insert above means every row
+    // for this file was just created in `faces` order, so reading the ids back
+    // ordered by id pairs them with the input array positionally.
+    const insertedIds = await this.db.all<{ id: number }>(
+      "SELECT id FROM faces WHERE folder = ? AND fileName = ? ORDER BY id",
+      folder,
+      fileName,
+    );
+    if (insertedIds.length === faces.length) {
+      const embeddingStatements: Array<{ sql: string; params: unknown[] }> = [];
+      faces.forEach((face, index) => {
+        const encoded = encodeEmbedding(face.embedding);
+        if (encoded) {
+          embeddingStatements.push({
+            sql: "INSERT INTO faceEmbeddings (faceId, embedding) VALUES (?, ?)",
+            params: [insertedIds[index].id, encoded],
+          });
+        } else {
+          // No usable vector: stamp the sentinel so the clustering backfill
+          // (which now selects purely on `clusterId IS NULL`) skips it forever.
+          embeddingStatements.push({
+            sql: "UPDATE faces SET clusterId = ? WHERE id = ?",
+            params: [UNCLUSTERABLE_CLUSTER_ID, insertedIds[index].id],
+          });
+        }
+      });
+      if (embeddingStatements.length > 0) {
+        await this.db.transaction(embeddingStatements);
+      }
+    } else {
+      log.warn(
+        { path: relativePath, inserted: insertedIds.length, expected: faces.length },
+        "Face row count did not match detection count; skipping embedding write",
+      );
+    }
+
     this.invalidateFaceClusterPCACache();
     this.invalidateStatusCountsCache();
 
@@ -1075,7 +1138,10 @@ export class IndexDatabase {
         embedding: Buffer;
         confidence: number | null;
       }>(
-        "SELECT id, embedding, confidence FROM faces WHERE folder = ? AND fileName = ? AND LENGTH(embedding) > 0",
+        `SELECT f.id, fe.embedding, f.confidence
+         FROM faces f
+         JOIN faceEmbeddings fe ON fe.faceId = f.id
+         WHERE f.folder = ? AND f.fileName = ?`,
         folder,
         fileName,
       );
@@ -1237,8 +1303,9 @@ export class IndexDatabase {
   ): Promise<void> {
     try {
       const assigned = await this.db.all<{ clusterId: number; embedding: Buffer }>(
-        `SELECT clusterId, embedding FROM faces
-         WHERE folder = ? AND fileName = ? AND clusterId IS NOT NULL AND LENGTH(embedding) > 0`,
+        `SELECT f.clusterId, fe.embedding FROM faces f
+         JOIN faceEmbeddings fe ON fe.faceId = f.id
+         WHERE f.folder = ? AND f.fileName = ? AND f.clusterId IS NOT NULL`,
         folder,
         fileName,
       );
@@ -1291,12 +1358,22 @@ export class IndexDatabase {
 
     const statements: Array<{ sql: string; params: unknown[] }> = [
       {
+        // Before the faces delete — it resolves ids through those rows.
+        sql: `DELETE FROM faceEmbeddings WHERE faceId IN (
+                SELECT id FROM faces WHERE folder = ? AND fileName = ?)`,
+        params: [folder, fileName],
+      },
+      {
         sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
         params: [folder, fileName],
       },
       ...faces.map((face) => ({
+        // Faces named by EXIF regions carry no recognition vector, so they get
+        // no faceEmbeddings row. UNCLUSTERABLE is what keeps the clustering
+        // backfill — which now selects on clusterId alone — from picking them up
+        // forever; the old `LENGTH(embedding) > 0` filter used to do that job.
         sql: `INSERT INTO faces
-                (folder, fileName, boxX, boxY, boxWidth, boxHeight, confidence, embedding, personId, detectedAt)
+                (folder, fileName, boxX, boxY, boxWidth, boxHeight, confidence, personId, detectedAt, clusterId)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         params: [
           folder,
@@ -1306,9 +1383,9 @@ export class IndexDatabase {
           face.box.width,
           face.box.height,
           1,
-          Buffer.alloc(0),
           face.personId,
           detectedAtMs,
+          UNCLUSTERABLE_CLUSTER_ID,
         ],
       })),
       {
@@ -1345,20 +1422,22 @@ export class IndexDatabase {
       personId: number | null;
       detectedAt: number;
     }>(
-      `SELECT id, boxX, boxY, boxWidth, boxHeight, confidence, embedding, personId, detectedAt
-       FROM faces
-       WHERE folder = ? AND fileName = ?
-       ORDER BY id`,
+      `SELECT f.id, f.boxX, f.boxY, f.boxWidth, f.boxHeight, f.confidence,
+              fe.embedding, f.personId, f.detectedAt
+       FROM faces f
+       LEFT JOIN faceEmbeddings fe ON fe.faceId = f.id
+       WHERE f.folder = ? AND f.fileName = ?
+       ORDER BY f.id`,
       folder,
       fileName,
     );
 
     return rows.map((row) => {
-      // Defensive copy: SQLite BLOB buffers may not be 8-byte aligned which
-      // would cause `new Float64Array(buffer, offset, length)` to throw.
-      // Copying into a fresh Uint8Array gives us an aligned ArrayBuffer.
-      const aligned = new Uint8Array(row.embedding.byteLength);
-      aligned.set(row.embedding);
+      // The stored form is int8 (see embeddingCodec.ts); the codec decodes it —
+      // and any legacy blob — to a Float32 unit vector. This signature stays
+      // Float64 for its callers, so widen on the way out. The LEFT JOIN means a
+      // face with no embedding row yields an empty vector rather than throwing.
+      const unit = decodeEmbedding(row.embedding);
       return {
         id: row.id,
         box: {
@@ -1368,7 +1447,7 @@ export class IndexDatabase {
           height: row.boxHeight,
         },
         confidence: row.confidence,
-        embedding: new Float64Array(aligned.buffer),
+        embedding: unit ? Float64Array.from(unit) : new Float64Array(0),
         personId: row.personId,
         detectedAt: row.detectedAt,
       };
@@ -1495,7 +1574,17 @@ export class IndexDatabase {
       "DELETE FROM files WHERE folder = ? AND fileName = ?",
       [folder, fileName],
     );
+    // Before the faces delete — it resolves ids through the rows it removes.
+    await this.db.run(
+      `DELETE FROM faceEmbeddings WHERE faceId IN (
+         SELECT id FROM faces WHERE folder = ? AND fileName = ?)`,
+      [folder, fileName],
+    );
     await this.db.run("DELETE FROM faces WHERE folder = ? AND fileName = ?", [
+      folder,
+      fileName,
+    ]);
+    await this.db.run("DELETE FROM fileEmbeddings WHERE folder = ? AND fileName = ?", [
       folder,
       fileName,
     ]);
@@ -1518,6 +1607,13 @@ export class IndexDatabase {
    */
   async markFileForResync(relativePath: string): Promise<boolean> {
     const { folder, fileName } = splitPath(relativePath);
+    // The vectors themselves live in fileEmbeddings; dropping that row is the
+    // equivalent of the old "imageEmbedding = NULL, audioEmbedding = NULL".
+    await this.db.run(
+      "DELETE FROM fileEmbeddings WHERE folder = ? AND fileName = ?",
+      folder,
+      fileName,
+    );
     const result = await this.db.run(
       `UPDATE files SET
          infoProcessedAt = NULL,
@@ -1526,14 +1622,12 @@ export class IndexDatabase {
          hlsGeneratedAt = NULL,
          facesProcessedAt = NULL,
          facesLastErrorAt = NULL,
-         imageEmbedding = NULL,
          embeddingProcessedAt = NULL,
          embeddingErrorAt = NULL,
          analysisDecodeErrorAt = NULL,
          audioTranscript = NULL,
          audioTranscribedAt = NULL,
          audioTranscribeErrorAt = NULL,
-         audioEmbedding = NULL,
          audioEmbeddingProcessedAt = NULL,
          audioEmbeddingErrorAt = NULL
        WHERE folder = ? AND fileName = ?`,
@@ -1543,6 +1637,11 @@ export class IndexDatabase {
 
     // Face/audio detections are keyed by path and describe the old content, so
     // drop them; the analysis pass regenerates them from the new bytes.
+    await this.db.run(
+      `DELETE FROM faceEmbeddings WHERE faceId IN (
+         SELECT id FROM faces WHERE folder = ? AND fileName = ?)`,
+      [folder, fileName],
+    );
     await this.db.run("DELETE FROM faces WHERE folder = ? AND fileName = ?", [
       folder,
       fileName,
@@ -1567,7 +1666,17 @@ export class IndexDatabase {
           params: [folder, fileName] as unknown[],
         },
         {
+          // Before the faces delete — it resolves ids through those rows.
+          sql: `DELETE FROM faceEmbeddings WHERE faceId IN (
+                  SELECT id FROM faces WHERE folder = ? AND fileName = ?)`,
+          params: [folder, fileName] as unknown[],
+        },
+        {
           sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
+          params: [folder, fileName] as unknown[],
+        },
+        {
+          sql: "DELETE FROM fileEmbeddings WHERE folder = ? AND fileName = ?",
           params: [folder, fileName] as unknown[],
         },
         {
@@ -1590,7 +1699,17 @@ export class IndexDatabase {
         params: [likePattern],
       },
       {
+        // Before the faces delete — it resolves ids through those rows.
+        sql: `DELETE FROM faceEmbeddings WHERE faceId IN (
+                SELECT id FROM faces WHERE folder LIKE ? ESCAPE '\\')`,
+        params: [likePattern],
+      },
+      {
         sql: "DELETE FROM faces WHERE folder LIKE ? ESCAPE '\\'",
+        params: [likePattern],
+      },
+      {
+        sql: "DELETE FROM fileEmbeddings WHERE folder LIKE ? ESCAPE '\\'",
         params: [likePattern],
       },
       {
@@ -1674,12 +1793,6 @@ export class IndexDatabase {
     return rows.map((row) => ({
       relativePath: joinPath(row.folder, row.fileName),
     }));
-  }
-
-  async allFiles(): Promise<FileRecord[]> {
-    const rows =
-      await this.db.all<Record<string, string | number>>("SELECT * FROM files");
-    return rows.map((row) => rowToFileRecord(row));
   }
 
   /**
@@ -2157,12 +2270,11 @@ export class IndexDatabase {
            CROSS JOIN faces
              ON faces.folder = filtered_files.folder
             AND faces.fileName = filtered_files.fileName
-           WHERE faces.clusterId IS NULL AND LENGTH(faces.embedding) > 0`,
+           WHERE faces.clusterId IS NULL`,
           ...whereParams,
         )
       : await this.db.get<{ count: number }>(
-          `SELECT COUNT(*) AS count FROM faces
-           WHERE clusterId IS NULL AND LENGTH(embedding) > 0`,
+          `SELECT COUNT(*) AS count FROM faces WHERE clusterId IS NULL`,
         );
 
     // Step 2: hydrate the representative faces — only for the clusters the
@@ -2854,7 +2966,7 @@ export class IndexDatabase {
   async clusterPendingFaces(batchSize = 256): Promise<number> {
     const idRows = await this.db.all<{ id: number }>(
       `SELECT id FROM faces
-       WHERE clusterId IS NULL AND LENGTH(embedding) > 0
+       WHERE clusterId IS NULL
        ORDER BY confidence DESC
        LIMIT ?`,
       batchSize,
@@ -2866,9 +2978,32 @@ export class IndexDatabase {
       embedding: Buffer;
       confidence: number | null;
     }>(
-      `SELECT id, embedding, confidence FROM faces WHERE id IN (${idRows.map(() => "?").join(", ")})`,
+      `SELECT f.id, fe.embedding, f.confidence FROM faces f
+       JOIN faceEmbeddings fe ON fe.faceId = f.id
+       WHERE f.id IN (${idRows.map(() => "?").join(", ")})`,
       ...idRows.map((row) => row.id),
     );
+
+    // The id query selects on clusterId alone, which assumes every unassigned
+    // face has an embedding row (the migration and detectFaces both stamp
+    // UNCLUSTERABLE otherwise). Self-heal if that invariant ever breaks —
+    // without this, a face with no embedding would be re-selected forever and
+    // the backfill's "handled > 0" loop would never drain.
+    if (faces.length < idRows.length) {
+      const withEmbeddings = new Set(faces.map((face) => face.id));
+      const orphaned = idRows.filter((row) => !withEmbeddings.has(row.id));
+      await this.db.transaction(
+        orphaned.map((row) => ({
+          sql: "UPDATE faces SET clusterId = ? WHERE id = ?",
+          params: [UNCLUSTERABLE_CLUSTER_ID, row.id],
+        })),
+      );
+      log.warn(
+        { count: orphaned.length },
+        "Unassigned faces had no embedding row; marked unclusterable",
+      );
+    }
+
     await this.faceClusters.assignFaces(faces);
     // Cluster membership changed — drop the PCA cache so the next request recomputes
     this.invalidateFaceClusterPCACache();
@@ -3267,7 +3402,7 @@ export class IndexDatabase {
         "SELECT COUNT(*) AS count FROM faces WHERE clusterId > 0",
       ),
       this.db.get<{ count: number }>(
-        "SELECT COUNT(*) AS count FROM faces WHERE clusterId IS NULL AND LENGTH(embedding) > 0",
+        "SELECT COUNT(*) AS count FROM faces WHERE clusterId IS NULL",
       ),
     ]);
     return { assigned: assignedRow?.count ?? 0, pending: pendingRow?.count ?? 0 };
@@ -3293,20 +3428,22 @@ export class IndexDatabase {
 
   async saveImageEmbedding(relativePath: string, embedding: Float32Array): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
-    const buffer = Buffer.from(
-      embedding.buffer,
-      embedding.byteOffset,
-      embedding.byteLength,
-    );
-    await this.db.run(
-      `UPDATE files
-       SET imageEmbedding = ?, embeddingProcessedAt = ?, embeddingErrorAt = NULL
-       WHERE folder = ? AND fileName = ?`,
-      buffer,
-      Date.now(),
-      folder,
-      fileName,
-    );
+    const encoded = encodeEmbedding(embedding);
+    await this.db.transaction([
+      {
+        sql: `INSERT INTO fileEmbeddings (folder, fileName, imageEmbedding)
+              VALUES (?, ?, ?)
+              ON CONFLICT(folder, fileName) DO UPDATE SET imageEmbedding = excluded.imageEmbedding`,
+        params: [folder, fileName, encoded],
+      },
+      {
+        // The pipeline markers stay on `files`; only the vector moved.
+        sql: `UPDATE files
+              SET embeddingProcessedAt = ?, embeddingErrorAt = NULL
+              WHERE folder = ? AND fileName = ?`,
+        params: [Date.now(), folder, fileName],
+      },
+    ]);
   }
 
   async saveImageEmbeddingError(relativePath: string): Promise<void> {
@@ -3506,20 +3643,21 @@ export class IndexDatabase {
 
   async saveAudioEmbedding(relativePath: string, embedding: Float32Array): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
-    const buffer = Buffer.from(
-      embedding.buffer,
-      embedding.byteOffset,
-      embedding.byteLength,
-    );
-    await this.db.run(
-      `UPDATE files
-       SET audioEmbedding = ?, audioEmbeddingProcessedAt = ?, audioEmbeddingErrorAt = NULL
-       WHERE folder = ? AND fileName = ?`,
-      buffer,
-      Date.now(),
-      folder,
-      fileName,
-    );
+    const encoded = encodeEmbedding(embedding);
+    await this.db.transaction([
+      {
+        sql: `INSERT INTO fileEmbeddings (folder, fileName, audioEmbedding)
+              VALUES (?, ?, ?)
+              ON CONFLICT(folder, fileName) DO UPDATE SET audioEmbedding = excluded.audioEmbedding`,
+        params: [folder, fileName, encoded],
+      },
+      {
+        sql: `UPDATE files
+              SET audioEmbeddingProcessedAt = ?, audioEmbeddingErrorAt = NULL
+              WHERE folder = ? AND fileName = ?`,
+        params: [Date.now(), folder, fileName],
+      },
+    ]);
   }
 
   async saveAudioEmbeddingError(relativePath: string): Promise<void> {
@@ -3534,12 +3672,16 @@ export class IndexDatabase {
 
   async markAudioEmbeddingSkipped(relativePath: string): Promise<void> {
     const { folder, fileName } = splitPath(relativePath);
-    await this.db.run(
-      `UPDATE files SET audioEmbedding = NULL, audioEmbeddingProcessedAt = ?, audioEmbeddingErrorAt = NULL WHERE folder = ? AND fileName = ?`,
-      Date.now(),
-      folder,
-      fileName,
-    );
+    await this.db.transaction([
+      {
+        sql: "UPDATE fileEmbeddings SET audioEmbedding = NULL WHERE folder = ? AND fileName = ?",
+        params: [folder, fileName],
+      },
+      {
+        sql: `UPDATE files SET audioEmbeddingProcessedAt = ?, audioEmbeddingErrorAt = NULL WHERE folder = ? AND fileName = ?`,
+        params: [Date.now(), folder, fileName],
+      },
+    ]);
   }
 
   async getAudioEmbeddingProgress(): Promise<[total: number, done: number]> {
@@ -3561,17 +3703,20 @@ export class IndexDatabase {
   ): Promise<Array<FileRecord & { similarity: number }>> {
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
 
-    const queryBuffer = Buffer.from(
-      queryVector.buffer,
-      queryVector.byteOffset,
-      queryVector.byteLength,
-    );
+    const queryBuffer = encodeEmbedding(queryVector);
+    if (!queryBuffer) return [];
 
+    // The embedding is joined in from fileEmbeddings rather than read off the
+    // row. The join subquery renames its key columns so `folder`/`fileName` in
+    // the caller-supplied filter fragment stay unambiguously `files`'.
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT *, cosine_similarity_f32(audioEmbedding, ?) AS similarity
+      `SELECT files.*, cosine_similarity_i8(emb.vector, ?) AS similarity
        FROM files
-       WHERE audioEmbedding IS NOT NULL
-         AND (
+       JOIN (
+         SELECT folder AS embFolder, fileName AS embFileName, audioEmbedding AS vector
+         FROM fileEmbeddings WHERE audioEmbedding IS NOT NULL
+       ) AS emb ON emb.embFolder = files.folder AND emb.embFileName = files.fileName
+       WHERE (
            (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL)
            OR mimeType LIKE 'audio/%'
          )
@@ -3640,19 +3785,19 @@ export class IndexDatabase {
     // embedding-bearing row (BLOBs and all columns) onto the JS heap and scored
     // them here; on a large library that materialised the whole table twice (once
     // in the read worker, once cloned across the worker boundary) and exhausted
-    // V8's heap. Pushing cosine_similarity_f32 into the ORDER BY ... LIMIT keeps
-    // the per-row embedding work in C and returns only `limit` rows.
-    const queryBuffer = Buffer.from(
-      queryVector.buffer,
-      queryVector.byteOffset,
-      queryVector.byteLength,
-    );
+    // V8's heap. Pushing the similarity into the ORDER BY ... LIMIT keeps the
+    // per-row embedding work in C and returns only `limit` rows.
+    const queryBuffer = encodeEmbedding(queryVector);
+    if (!queryBuffer) return [];
 
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT *, cosine_similarity_f32(imageEmbedding, ?) AS similarity
+      `SELECT files.*, cosine_similarity_i8(emb.vector, ?) AS similarity
        FROM files
-       WHERE imageEmbedding IS NOT NULL
-         AND (mimeType LIKE 'image/%')
+       JOIN (
+         SELECT folder AS embFolder, fileName AS embFileName, imageEmbedding AS vector
+         FROM fileEmbeddings WHERE imageEmbedding IS NOT NULL
+       ) AS emb ON emb.embFolder = files.folder AND emb.embFileName = files.fileName
+       WHERE (mimeType LIKE 'image/%')
          ${whereClause ? `AND (${whereClause})` : ""}
        ORDER BY similarity DESC
        LIMIT ?`,

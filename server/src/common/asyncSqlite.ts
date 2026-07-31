@@ -3,14 +3,23 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getRequestAbortSignal } from "./requestAbort.ts";
 
+// Under tsx (dev) this module is loaded as .ts, and the worker needs the .mjs
+// shim that registers the tsx ESM loader before importing the TypeScript worker.
+// In the compiled build it is loaded as .js and the worker is plain JavaScript,
+// so we point straight at it and skip the loader hook entirely.
+const runningCompiled = import.meta.url.endsWith(".js");
 const workerScriptPath = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  "sqliteWorkerEntry.mjs",
+  runningCompiled ? "sqliteWorker.js" : "sqliteWorkerEntry.mjs",
 );
 
 type RunResult = { changes: number; lastInsertRowid: number };
 
-type CustomFunctionType = "regexp" | "cosine_similarity" | "cosine_similarity_f32";
+type CustomFunctionType =
+  | "regexp"
+  | "cosine_similarity"
+  | "cosine_similarity_f32"
+  | "cosine_similarity_i8";
 
 type AsyncSqliteOptions = {
   pragmas?: string[];

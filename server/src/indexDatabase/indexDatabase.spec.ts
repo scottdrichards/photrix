@@ -596,8 +596,31 @@ describe("IndexDatabase", () => {
         expect(rows[0]?.detectedAt).toBe(new Date("2026-03-15T12:00:00.000Z").getTime());
         expect(rows[0]?.embedding).toBeInstanceOf(Float64Array);
         expect(rows[0]?.embedding.length).toBe(128);
-        expect(Array.from(rows[0]!.embedding)).toEqual(Array.from(embedding1));
-        expect(Array.from(rows[1]!.embedding)).toEqual(Array.from(embedding2));
+        // Embeddings are stored int8-quantized and unit-normalized, so a
+        // round trip preserves *direction*, not the original components. Every
+        // consumer (clustering, identify) compares by cosine, which is exactly
+        // what direction determines — see embeddingCodec.ts.
+        const cosine = (a: Float64Array, b: Float64Array): number => {
+          let dot = 0;
+          let magA = 0;
+          let magB = 0;
+          for (let i = 0; i < a.length; i += 1) {
+            dot += a[i] * b[i];
+            magA += a[i] * a[i];
+            magB += b[i] * b[i];
+          }
+          return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+        };
+        expect(cosine(rows[0]!.embedding, Float64Array.from(embedding1))).toBeGreaterThan(
+          0.9999,
+        );
+        expect(cosine(rows[1]!.embedding, Float64Array.from(embedding2))).toBeGreaterThan(
+          0.9999,
+        );
+        // ...and the two faces stay distinguishable from each other.
+        expect(cosine(rows[0]!.embedding, Float64Array.from(embedding2))).toBeLessThan(
+          0.9999,
+        );
 
         const record = await db.getFileRecord("portraits/two.jpg");
         expect(record?.facesProcessedAt).toBe("2026-03-15T12:00:00.000Z");
