@@ -72,27 +72,52 @@ describe("identifyFaces", () => {
     expect(identifyFaces(tilted, centroids, { threshold: 0.15 })[0].name).toBe("Bob");
   });
 
-  it("withholds a name when two people score almost the same", () => {
-    // Near-equidistant between Alice and Bob: the shape a face the model has no
-    // real opinion about produces, and the shape two siblings produce.
+  /** A face pointing between two people, scaled so its top similarity is `peak`. */
+  const between = (peak: number): DetectedFace => {
     const embedding = new Float64Array(DIMENSIONS);
+    // Equal parts Alice and Bob, so the margin between them is ~0, then tilted
+    // onto the neutral axis until the best similarity lands on `peak`.
     embedding[0] = 1;
-    embedding[1] = 0.99;
-    const [result] = identifyFaces(
-      [{ box: { x: 0, y: 0, width: 0.2, height: 0.2 }, confidence: 0.95, embedding }],
-      centroids,
-    );
+    embedding[1] = 0.98;
+    const planar = Math.hypot(embedding[0], embedding[1]);
+    const best = embedding[0] / planar;
+    embedding[NEUTRAL_AXIS] = planar * Math.sqrt((best / peak) ** 2 - 1);
+    return { box: { x: 0, y: 0, width: 0.2, height: 0.2 }, confidence: 0.95, embedding };
+  };
+
+  it("withholds a name when a moderate match has two people neck and neck", () => {
+    // The shape junk produces: no real opinion, so the top scores bunch up.
+    const [result] = identifyFaces([between(0.25)], centroids);
+    expect(result.similarity).toBeGreaterThan(0.2);
+    expect(result.similarity).toBeLessThan(0.3);
+    expect(result.margin).toBeLessThan(0.05);
     expect(result.name).toBeNull();
     expect(result.rejectedFor).toBe("margin");
+  });
+
+  it("names a strong match even with a thin margin, because relatives resemble each other", () => {
+    // Measured case: a correct match at 0.381 similarity had only a 0.034
+    // margin against the subject's own family. The margin gate must not veto it.
+    const [result] = identifyFaces([between(0.38)], centroids);
+    expect(result.similarity).toBeGreaterThan(0.3);
     expect(result.margin).toBeLessThan(0.05);
-    // Absolute similarity was high — only the margin caught this.
-    expect(result.similarity).toBeGreaterThan(0.2);
+    expect(result.name).toBe("Alice");
+    expect(result.rejectedFor).toBeNull();
+  });
+
+  it("still rejects a strong-looking match that is too small to be a face", () => {
+    const tiny = { ...between(0.38), box: { x: 0, y: 0, width: 0.002, height: 0.002 } };
+    const [result] = identifyFaces([tiny], centroids, { decodedSize: BIG });
+    expect(result.name).toBeNull();
+    expect(result.rejectedFor).toBe("tooSmall");
   });
 
   it("drops detections below the confidence floor rather than naming them", () => {
     // A low-confidence detection is texture, not a face: it must not be scored
-    // at all, because its embedding matches everyone equally badly.
-    expect(identifyFaces([face(1, { confidence: 0.4 })], centroids)).toHaveLength(0);
+    // at all, because its embedding matches everyone equally badly. Measured
+    // junk detections sat at 0.57-0.58, real matches from 0.66 up.
+    expect(identifyFaces([face(1, { confidence: 0.57 })], centroids)).toHaveLength(0);
+    expect(identifyFaces([face(1, { confidence: 0.66 })], centroids)).toHaveLength(1);
   });
 
   it("rejects a face too small to carry an identity", () => {

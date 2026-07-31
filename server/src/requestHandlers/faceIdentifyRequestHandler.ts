@@ -10,12 +10,14 @@ import {
   DEFAULT_MIN_FACE_CONFIDENCE,
   DEFAULT_MIN_FACE_PIXELS,
   DEFAULT_MIN_MARGIN,
+  DEFAULT_STRONG_THRESHOLD,
   identifyFaces,
   prepareCentroids,
   type IdentifiedFace,
   type PreparedCentroid,
 } from "../faceDetection/identifyFaces.ts";
 import type { analyzeImage as AnalyzeImageFn } from "../imageAnalysis/imageAnalysisWorker.ts";
+import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../utils.ts";
@@ -174,7 +176,46 @@ const numberParam = (params: URLSearchParams, key: string, fallback: number): nu
 };
 
 /** Lazily-resolved frames: raw bytes are already here, URLs are fetched on demand. */
-type FrameSource = { label: string; load: () => Promise<Buffer> };
+type FrameSource = {
+  label: string;
+  load: () => Promise<Buffer>;
+  /** Normalized [x, y, w, h] to crop to before detection, if the caller gave one. */
+  box?: readonly number[];
+  pad?: number;
+};
+
+const isNormalizedBox = (value: unknown): value is number[] =>
+  Array.isArray(value) &&
+  value.length === 4 &&
+  value.every((n) => typeof n === "number" && Number.isFinite(n));
+
+/**
+ * One entry of `imageUrls`: either a bare URL string, or an object carrying the
+ * URL plus the crop box for that moment. Per-frame boxes matter because a
+ * walking subject is in a different place in every frame sampled.
+ */
+const parseFrameEntry = (entry: unknown): FrameSource => {
+  if (typeof entry === "string") {
+    return { label: entry, load: () => fetchFrame(entry) };
+  }
+  if (typeof entry !== "object" || entry === null) {
+    throw new BadRequest("Each imageUrls entry must be a URL string or an object");
+  }
+  const object = entry as Record<string, unknown>;
+  if (typeof object.url !== "string") {
+    throw new BadRequest("Each imageUrls object needs a url");
+  }
+  const url = object.url;
+  if (object.box !== undefined && !isNormalizedBox(object.box)) {
+    throw new BadRequest("box must be four numbers: [x, y, width, height], normalized");
+  }
+  return {
+    label: url,
+    load: () => fetchFrame(url),
+    ...(object.box ? { box: object.box } : {}),
+    ...(typeof object.pad === "number" ? { pad: object.pad } : {}),
+  };
+};
 
 /**
  * Resolves the frames to classify from any accepted request shape: raw bytes
@@ -204,16 +245,23 @@ const resolveFrames = async (req: http.IncomingMessage): Promise<FrameSource[]> 
   const object = parsed as Record<string, unknown>;
 
   if (Array.isArray(object.imageUrls)) {
-    const urls = object.imageUrls.filter((u): u is string => typeof u === "string");
-    if (urls.length === 0) throw new BadRequest("imageUrls contained no strings");
-    if (urls.length > MAX_FRAMES) {
+    if (object.imageUrls.length === 0) throw new BadRequest("imageUrls was empty");
+    if (object.imageUrls.length > MAX_FRAMES) {
       throw new BadRequest(`imageUrls accepts at most ${MAX_FRAMES} frames`);
     }
-    return urls.map((url) => ({ label: url, load: () => fetchFrame(url) }));
+    return object.imageUrls.map(parseFrameEntry);
   }
   if (typeof object.imageUrl === "string") {
     const url = object.imageUrl;
-    return [{ label: url, load: () => fetchFrame(url) }];
+    const box = isNormalizedBox(object.box) ? object.box : undefined;
+    return [
+      {
+        label: url,
+        load: () => fetchFrame(url),
+        ...(box ? { box } : {}),
+        ...(typeof object.pad === "number" ? { pad: object.pad } : {}),
+      },
+    ];
   }
   if (typeof object.imageBase64 === "string") {
     const bytes = Buffer.from(
@@ -224,6 +272,55 @@ const resolveFrames = async (req: http.IncomingMessage): Promise<FrameSource[]> 
     return [{ label: "imageBase64", load: () => Promise.resolve(bytes) }];
   }
   throw new BadRequest("JSON body must contain imageUrl, imageUrls or imageBase64");
+};
+
+/**
+ * Default padding added around a supplied crop box, as a fraction of the box.
+ *
+ * A caller's box bounds the *subject* (a person), and it is usually the box
+ * from one moment of a moving subject. Padding covers the drift and, more
+ * importantly, gives the detector context around the head — a box cut tight to
+ * a torso can clip the very face we are looking for.
+ */
+const DEFAULT_CROP_PAD = 0.3;
+
+/**
+ * Crops to a normalized [x, y, width, height] box, padded.
+ *
+ * This exists because of how InsightFace sizes its input: the detector runs at
+ * 640x640, so handing it a 2560x1920 frame downscales a distant face to a
+ * dozen pixels and finds nothing at all — measured on this doorbell, the
+ * full-resolution frame yielded zero detections while the same frame cropped to
+ * the person yielded a 180x290px face. Cropping is what converts "more
+ * megapixels" into "more face pixels".
+ *
+ * Face boxes in the response are normalized against the *cropped* image, not
+ * the original frame; the crop rect is reported per frame so a caller that
+ * needs original-frame coordinates can map back.
+ */
+const cropToBox = async (
+  bytes: Buffer,
+  box: readonly number[],
+  pad: number,
+): Promise<{
+  bytes: Buffer;
+  rect: { left: number; top: number; width: number; height: number };
+}> => {
+  const [bx, by, bw, bh] = box;
+  const { width, height } = await sharp(bytes).metadata();
+  if (!width || !height) throw new BadRequest("Could not read frame dimensions to crop");
+
+  const left = Math.max(0, Math.round((bx - bw * pad) * width));
+  const top = Math.max(0, Math.round((by - bh * pad) * height));
+  const right = Math.min(width, Math.round((bx + bw * (1 + pad)) * width));
+  const bottom = Math.min(height, Math.round((by + bh * (1 + pad)) * height));
+  const rect = { left, top, width: right - left, height: bottom - top };
+  if (rect.width < 1 || rect.height < 1) {
+    throw new BadRequest(`Crop box ${JSON.stringify(box)} is empty for this frame`);
+  }
+  // Rotation is baked in first: an EXIF-rotated frame would otherwise have its
+  // crop applied to the unrotated pixels.
+  return { bytes: await sharp(bytes).rotate().extract(rect).toBuffer(), rect };
 };
 
 /**
@@ -249,6 +346,16 @@ const decodedSizeOf = async (
   }
 };
 
+/**
+ * Pause before retrying a frame whose worker was evicted mid-pass.
+ *
+ * Long enough for the killed worker to be respawned by the next `ensureReady`,
+ * short enough to stay inside the caller's timeout. If a video is still
+ * playing the GPU reclaim is still in force and the retry will be killed too —
+ * that is reported honestly rather than retried into the ground.
+ */
+const EVICTION_RETRY_DELAY_MS = 2_000;
+
 /** Writes one frame to a scratch file, runs the detector, then cleans up. */
 const analyzeFrame = async (
   bytes: Buffer,
@@ -262,9 +369,27 @@ const analyzeFrame = async (
   const tempPath = path.join(TEMP_DIR, `${randomUUID()}.img`);
   await writeFile(tempPath, bytes);
   try {
-    const analysis = await analyzeImage(tempPath, { faces: true, embed: false });
-    if (analysis.facesError) throw new Error(analysis.facesError);
-    return { faces: analysis.faces ?? [] };
+    // The shared ML workers are SIGKILLed whenever a user starts a video
+    // transcode, which reclaims their VRAM (see reclaimGpuForUser). That has
+    // nothing to do with this frame, so — like the background analysis pass,
+    // which defers and retries on the next sweep — treat it as transient and
+    // give it exactly one more go rather than reporting "no face" for an image
+    // the detector never actually looked at.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const analysis = await analyzeImage(tempPath, {
+          faces: true,
+          embed: false,
+          foreground: true,
+        });
+        if (analysis.facesError) throw new Error(analysis.facesError);
+        return { faces: analysis.faces ?? [] };
+      } catch (error) {
+        if (attempt > 0 || !isWorkerEvictedError(error)) throw error;
+        log.info("Analysis worker was evicted for a user GPU request; retrying frame");
+        await new Promise((resolve) => setTimeout(resolve, EVICTION_RETRY_DELAY_MS));
+      }
+    }
   } finally {
     await rm(tempPath, { force: true }).catch(() => undefined);
   }
@@ -339,6 +464,11 @@ export const faceIdentifyRequestHandler = async (
     const options = {
       threshold: numberParam(url.searchParams, "threshold", DEFAULT_IDENTIFY_THRESHOLD),
       minMargin: numberParam(url.searchParams, "minMargin", DEFAULT_MIN_MARGIN),
+      strongThreshold: numberParam(
+        url.searchParams,
+        "strongThreshold",
+        DEFAULT_STRONG_THRESHOLD,
+      ),
       minFaceConfidence: numberParam(
         url.searchParams,
         "minFaceConfidence",
@@ -352,7 +482,12 @@ export const faceIdentifyRequestHandler = async (
     };
 
     const bestByName = new Map<string, Match>();
-    const frameReports: Array<{ frame: number; faces: number; error?: string }> = [];
+    const frameReports: Array<{
+      frame: number;
+      faces: number;
+      crop?: { left: number; top: number; width: number; height: number };
+      error?: string;
+    }> = [];
     // Faces of the frame that saw the most of them — the one worth rendering a
     // box overlay from, and the best single estimate of how many people were
     // actually there.
@@ -361,8 +496,18 @@ export const faceIdentifyRequestHandler = async (
 
     for (const [index, frame] of frames.entries()) {
       let faces: IdentifiedFace[];
+      let crop: { left: number; top: number; width: number; height: number } | undefined;
       try {
-        const bytes = await frame.load();
+        let bytes = await frame.load();
+        if (frame.box) {
+          const cropped = await cropToBox(
+            bytes,
+            frame.box,
+            frame.pad ?? DEFAULT_CROP_PAD,
+          );
+          bytes = cropped.bytes;
+          crop = cropped.rect;
+        }
         const [analysis, decodedSize] = await Promise.all([
           analyzeFrame(bytes, analyzeImage),
           decodedSizeOf(bytes),
@@ -380,7 +525,7 @@ export const faceIdentifyRequestHandler = async (
       }
 
       framesAnalyzed += 1;
-      frameReports.push({ frame: index, faces: faces.length });
+      frameReports.push({ frame: index, faces: faces.length, ...(crop ? { crop } : {}) });
       if (faces.length > bestFrameFaces.length) bestFrameFaces = faces;
 
       for (const face of faces) {

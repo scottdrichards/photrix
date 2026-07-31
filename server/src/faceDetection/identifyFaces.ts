@@ -30,28 +30,53 @@ import type { DetectedFace } from "./faceDetector.type.ts";
 export const DEFAULT_IDENTIFY_THRESHOLD = 0.2;
 
 /**
- * How far the best candidate must beat the runner-up to be reported.
+ * How far the best candidate must beat the runner-up, for a *moderate* match.
  *
- * This is the load-bearing gate. A face the model has no real opinion about —
- * too small, too blurred, turned away — lands near-equidistant from everybody,
- * so its top scores bunch together no matter how high they are in absolute
- * terms. In the doorbell sample, true matches cleared the runner-up by
- * 0.077-0.095 while every junk detection and stranger sat at 0.004-0.018. The
- * gap between those two bands is wide and this threshold sits in it.
+ * A face the model has no real opinion about — too small, too blurred, turned
+ * away — lands near-equidistant from everybody, so its top scores bunch
+ * together no matter how high they are in absolute terms. Measured junk
+ * detections sat at 0.004-0.018 margin; moderate true matches at 0.085-0.098.
  *
- * The runner-up is usually a sibling or parent, so this doubles as the
- * family-resemblance guard: a coin flip between two relatives is reported as
- * no-match rather than as a confident wrong name.
+ * On its own this over-rejects, which is why `DEFAULT_STRONG_THRESHOLD` exists:
+ * the runner-up is usually a sibling or parent, so a genuinely good match
+ * against one family member is *expected* to score close against the others.
+ * A measured true match at 0.381 similarity had a margin of only 0.034 — the
+ * right answer, nearly rejected for resembling its own relatives.
  */
 export const DEFAULT_MIN_MARGIN = 0.05;
 
 /**
- * InsightFace `det_score` below which a detection is not treated as a face at
- * all. Same floor the clustering path uses: under it the "faces" are texture
- * that all looks mutually similar, so they match everyone equally badly and
- * would otherwise produce confident nonsense.
+ * Similarity that stands on its own, no margin required.
+ *
+ * The two gates guard different failure modes and neither subsumes the other,
+ * which the measurements show plainly:
+ *
+ * | sample | similarity | margin | truth |
+ * |---|---|---|---|
+ * | known person, close up | 0.381 | 0.034 | correct — margin alone rejects it |
+ * | known person, mid range | 0.266-0.284 | 0.085-0.098 | correct |
+ * | stranger | 0.192 | 0.075 | wrong — margin alone *accepts* it |
+ * | stranger | 0.114 | 0.030 | wrong |
+ * | junk detection | 0.252 | 0.006 | wrong — similarity alone accepts it |
+ *
+ * So a name is reported when the match is strong outright, or moderate *and*
+ * clearly ahead of the runner-up. That rule classifies every sample above
+ * correctly; either gate used alone misclassifies at least one.
  */
-export const DEFAULT_MIN_FACE_CONFIDENCE = 0.7;
+export const DEFAULT_STRONG_THRESHOLD = 0.3;
+
+/**
+ * InsightFace `det_score` below which a detection is not treated as a face at
+ * all.
+ *
+ * Lower than the 0.7 the clustering path uses. Clustering can afford to be
+ * picky because it sees the same person across thousands of library photos and
+ * only needs the good ones; a doorbell gets one visit and a handful of frames,
+ * and a correct match measured here sat at det 0.66. The similarity and margin
+ * gates below are what reject nonsense, so this floor only has to exclude the
+ * detections that are plainly not faces (measured junk: 0.57-0.58).
+ */
+export const DEFAULT_MIN_FACE_CONFIDENCE = 0.6;
 
 /**
  * Smallest face, in decoded pixels on the shorter side, worth scoring.
@@ -107,6 +132,7 @@ export type IdentifiedFace = {
 
 export type IdentifyOptions = {
   threshold?: number;
+  strongThreshold?: number;
   minMargin?: number;
   minFaceConfidence?: number;
   minFacePixels?: number;
@@ -169,6 +195,7 @@ export const identifyFaces = (
   options: IdentifyOptions = {},
 ): IdentifiedFace[] => {
   const threshold = options.threshold ?? DEFAULT_IDENTIFY_THRESHOLD;
+  const strongThreshold = options.strongThreshold ?? DEFAULT_STRONG_THRESHOLD;
   const minMargin = options.minMargin ?? DEFAULT_MIN_MARGIN;
   const minFaceConfidence = options.minFaceConfidence ?? DEFAULT_MIN_FACE_CONFIDENCE;
   const minFacePixels = options.minFacePixels ?? DEFAULT_MIN_FACE_PIXELS;
@@ -211,11 +238,14 @@ export const identifyFaces = (
 
     // Gates are ordered cheapest-excuse-first so `rejectedFor` names the most
     // fundamental reason: a 9-pixel face is "too small", not "below threshold".
+    // A strong-enough similarity skips the margin check outright — see
+    // DEFAULT_STRONG_THRESHOLD for why resembling your own relatives must not
+    // count against you.
     let rejectedFor: Rejection = null;
     if (!best) rejectedFor = "threshold";
     else if (tooSmall) rejectedFor = "tooSmall";
     else if (similarity < threshold) rejectedFor = "threshold";
-    else if (margin < minMargin) rejectedFor = "margin";
+    else if (similarity < strongThreshold && margin < minMargin) rejectedFor = "margin";
 
     results.push({
       box: face.box,

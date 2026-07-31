@@ -67,7 +67,22 @@ export class PermanentImageError extends Error {
   }
 }
 
-export type AnalyzeImageOptions = { faces: boolean; embed: boolean };
+export type AnalyzeImageOptions = {
+  faces: boolean;
+  embed: boolean;
+  /**
+   * Run as *foreground* work: take a lease that pins the worker awake for the
+   * duration of the call, the same way a search query's text embedding does.
+   *
+   * Background callers must leave this off — they queue politely behind
+   * foreground work. A live caller must turn it on, because the orchestrator
+   * suspends (SIGSTOP) and GPU-reclaims (SIGKILL) any worker with no lease on
+   * it, and a request that is itself bracketed as user activity would otherwise
+   * freeze or kill the very worker it is waiting on. Both suspension and
+   * reclaim skip leased workers.
+   */
+  foreground?: boolean;
+};
 
 export type ImageAnalysisResult = {
   faces?: DetectedFace[];
@@ -354,21 +369,25 @@ registerComputeWorker(
  */
 export const analyzeImage = async (
   imagePath: string,
-  { faces, embed }: AnalyzeImageOptions,
+  { faces, embed, foreground = false }: AnalyzeImageOptions,
 ): Promise<ImageAnalysisResult> => {
-  // Yield to any in-flight foreground search embedding: it shares this process
-  // and its model lock, so dispatching background passes first would starve it.
-  await awaitForegroundIdle(COMPUTE_WORKER_IDS.image);
-  await analysisWorker.ensureReady();
-  if (!analysisWorker.getProcess())
-    throw new Error("Image analysis worker is not available");
+  const dispatch = async () => {
+    await analysisWorker.ensureReady();
+    if (!analysisWorker.getProcess())
+      throw new Error("Image analysis worker is not available");
+    return analysisWorker.send({ operation: "analyzeImage", imagePath, faces, embed });
+  };
 
-  const raw = await analysisWorker.send({
-    operation: "analyzeImage",
-    imagePath,
-    faces,
-    embed,
-  });
+  let raw;
+  if (foreground) {
+    // Holds the worker awake for the call and pauses background passes on it.
+    raw = await withForegroundWorker(COMPUTE_WORKER_IDS.image, dispatch);
+  } else {
+    // Yield to any in-flight foreground work: it shares this process and its
+    // model lock, so dispatching background passes first would starve it.
+    await awaitForegroundIdle(COMPUTE_WORKER_IDS.image);
+    raw = await dispatch();
+  }
 
   const result: ImageAnalysisResult = {};
   if (raw.faces) result.faces = raw.faces.map(asDetectedFace);
