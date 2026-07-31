@@ -45,7 +45,7 @@ type PendingRequest = {
   startedAt: number;
 };
 
-// Long timeout: large-v3 on CPU can be slow for long videos
+// Long timeout: transcription on CPU can be slow for long videos
 const REQUEST_TIMEOUT_MS = 30 * 60 * 1_000;
 const SLOW_REQUEST_MS = 5 * 60 * 1_000;
 const WHISPER_SCRIPT = path.resolve(process.cwd(), "python", "whisper_worker.py");

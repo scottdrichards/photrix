@@ -31,8 +31,8 @@ def load_model(device: str):
     from faster_whisper import WhisperModel
 
     # int8_float16 keeps compute in fp16 but stores weights as int8, roughly
-    # halving resident VRAM (~3.1GB -> ~1.7GB for large-v3) with negligible
-    # accuracy loss. Leaves more headroom for image previews / transcode.
+    # halving resident VRAM with negligible accuracy loss. Leaves more
+    # headroom for image previews / transcode.
     compute_type = "int8_float16" if device == "cuda" else "int8"
     # On CPU, cap threads so transcription doesn't starve foreground work.
     # SIGSTOP already freezes the worker during user requests; this keeps
@@ -40,7 +40,10 @@ def load_model(device: str):
     kwargs = {}
     if device == "cpu":
         kwargs["cpu_threads"] = int(os.environ.get("WHISPER_CPU_THREADS", "2"))
-    return WhisperModel("large-v3", device=device, compute_type=compute_type, **kwargs)
+    # "medium" instead of "large-v3": ~1/3 the VRAM and noticeably faster,
+    # with a modest accuracy trade-off. large-v3 kept crowding out image
+    # preview / transcode workers on the shared 8GB card.
+    return WhisperModel("medium", device=device, compute_type=compute_type, **kwargs)
 
 
 def transcribe(model, video_path: str) -> list:
@@ -114,7 +117,6 @@ def main():
             sys.exit(1)
 
     # The weights are on the card now; hand the load buffers back to the OS.
-    # Measured: 2229 MB -> 685 MB resident for large-v3/int8_float16 on CUDA.
     trim_heap()
 
     ready = {"type": "ready", "device": device}
