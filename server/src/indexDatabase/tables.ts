@@ -434,6 +434,11 @@ export const tables = {
       { name: "id", type: "INTEGER", isPrimaryKey: true },
       { name: "text", type: "TEXT" },
       { name: "createdAt", type: "INTEGER", indexExpression: true },
+      // Populated when an agent atomically claims the suggestion to work on it.
+      // A claim older than CLAIM_EXPIRY_MS is treated as expired (agent crashed).
+      { name: "claimedAt", type: "INTEGER" },
+      { name: "claimedBy", type: "TEXT" },
+      { name: "completedAt", type: "INTEGER" },
     ],
     compositeIndexes: [],
   },

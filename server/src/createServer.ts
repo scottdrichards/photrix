@@ -382,8 +382,16 @@ export const createServer = (
             return;
           }
 
-          if (req.url === "/api/feedback" && req.method === "POST") {
-            await feedbackHandler(req, res, database);
+          if (req.url?.startsWith("/api/feedback")) {
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
+            await feedbackHandler(
+              req as http.IncomingMessage & { url: string },
+              res,
+              database,
+            );
             return;
           }
 
