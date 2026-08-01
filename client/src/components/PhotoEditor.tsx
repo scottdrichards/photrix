@@ -2,14 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDownload24Regular,
-  ArrowRotateClockwise24Regular,
-  ArrowRotateCounterclockwise24Regular,
   Crop24Regular,
   Dismiss24Regular,
   Eye24Regular,
   EyeOff24Regular,
   ImageArrowCounterclockwise24Regular,
-  RotateLeft24Regular,
   RotateRight24Regular,
   Wand24Regular,
 } from "@fluentui/react-icons";
@@ -1011,34 +1008,10 @@ export function PhotoEditor({
               <button
                 type="button"
                 className={css.transformBtn}
-                onClick={() => update("rotate90", ((adj.rotate90 - 1 + 4) % 4))}
-                title="Rotate 90° counter-clockwise"
-              >
-                <RotateLeft24Regular /> CCW
-              </button>
-              <button
-                type="button"
-                className={css.transformBtn}
                 onClick={() => update("rotate90", (adj.rotate90 + 1) % 4)}
                 title="Rotate 90° clockwise"
               >
-                <RotateRight24Regular /> CW
-              </button>
-              <button
-                type="button"
-                className={`${css.transformBtn} ${adj.flipH ? css.transformBtnActive : ""}`}
-                onClick={() => update("flipH", !adj.flipH)}
-                title="Flip horizontal"
-              >
-                <ArrowRotateClockwise24Regular /> Flip H
-              </button>
-              <button
-                type="button"
-                className={`${css.transformBtn} ${adj.flipV ? css.transformBtnActive : ""}`}
-                onClick={() => update("flipV", !adj.flipV)}
-                title="Flip vertical"
-              >
-                <ArrowRotateCounterclockwise24Regular /> Flip V
+                <RotateRight24Regular /> Rotate CW
               </button>
             </div>
           </section>

@@ -275,8 +275,8 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
               )}
             </div>
           </header>
-          <div className={css.viewToggleDock}>
-            <div ref={setViewToggleHost} />
+          <div className={css.viewToggleDock} style={{ pointerEvents: "none" }}>
+            <div ref={setViewToggleHost} style={{ pointerEvents: "none" }} />
           </div>
         </div>
 
