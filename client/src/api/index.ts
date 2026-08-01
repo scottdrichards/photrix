@@ -42,7 +42,7 @@ export type {
 
 export { buildFullShareFilter, buildShareScope } from "./filters";
 
-export { subscribeStatusStream, fetchStatus, setBackgroundTasksEnabled } from "./status";
+export { subscribeStatusStream, fetchStatus, setBackgroundTasksEnabled, clearHlsSessions } from "./status";
 
 export {
   fetchFolders,

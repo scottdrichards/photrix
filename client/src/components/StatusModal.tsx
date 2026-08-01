@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   type BackgroundTaskStatus,
   setBackgroundTasksEnabled,
+  clearHlsSessions,
   subscribeStatusStream,
   type ServerStatus,
   type FeedbackItem,
@@ -177,12 +178,16 @@ const ComputeSection = ({
   totalVramMB,
   unaccountedVramMB,
   arbitration,
+  onClearTranscodes,
+  clearTranscodesLabel,
 }: {
   workers: WorkerMetric[];
   processes: GpuProc[];
   totalVramMB: number | undefined;
   unaccountedVramMB: number | undefined;
   arbitration: Arbitration | undefined;
+  onClearTranscodes: () => void;
+  clearTranscodesLabel: string;
 }) => {
   // VRAM held outside this container (host / sibling containers) shows up as
   // unaccounted with no visible worker or process. Still render so that usage —
@@ -256,6 +261,16 @@ const ComputeSection = ({
           <span className={css.workerStat}>{formatMB(unaccountedVramMB!)} VRAM</span>
         </div>
       )}
+
+      <div>
+        <button
+          className={`btn btn-ghost ${css.tabBtn}`}
+          onClick={onClearTranscodes}
+          disabled={clearTranscodesLabel === "Clearing..."}
+        >
+          {clearTranscodesLabel}
+        </button>
+      </div>
     </div>
   );
 };
@@ -359,6 +374,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   const [status, setStatus] = useState<ServerStatus | undefined>(undefined);
   const [isTogglingBackgroundTasks, setIsTogglingBackgroundTasks] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
+  const [clearTranscodesLabel, setClearTranscodesLabel] = useState("Clear transcodes");
   const [activeTab, setActiveTab] = useState<ActiveTab>("tasks");
   const dialogRef = useRef<HTMLDialogElement>(null);
   const progressHistoryRef = useRef<Map<string, ProgressSample[]>>(new Map());
@@ -425,6 +441,18 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
       );
     } finally {
       setIsTogglingBackgroundTasks(false);
+    }
+  };
+
+  const onClearTranscodes = async () => {
+    setClearTranscodesLabel("Clearing...");
+    try {
+      await clearHlsSessions();
+      setClearTranscodesLabel("Cleared");
+    } catch {
+      setClearTranscodesLabel("Error — retry?");
+    } finally {
+      setTimeout(() => setClearTranscodesLabel("Clear transcodes"), 3000);
     }
   };
 
@@ -511,6 +539,8 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                 totalVramMB={status.system.gpu?.memory?.total}
                 unaccountedVramMB={status.system.gpu?.unaccountedMB}
                 arbitration={status.arbitration}
+                onClearTranscodes={onClearTranscodes}
+                clearTranscodesLabel={clearTranscodesLabel}
               />
             )}
 

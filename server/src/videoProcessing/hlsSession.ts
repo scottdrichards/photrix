@@ -187,6 +187,20 @@ export const claimVariantEncode = (hlsDir: string, height: number): boolean => {
 };
 
 /**
+ * Force-kills all active HLS sessions immediately, freeing any GPU VRAM held by
+ * running ffmpeg/NVENC processes. Intended as a manual "clear transcodes" action;
+ * the normal idle reaper handles routine cleanup. Each session's directory is
+ * deleted after its encoders are killed, matching the reap() behaviour.
+ */
+export const killAllSessions = (): void => {
+  const dirs = [...sessions.keys()];
+  for (const hlsDir of dirs) {
+    void reap(hlsDir);
+  }
+  log.info({ count: dirs.length }, "Force-killed all HLS sessions");
+};
+
+/**
  * Associates a spawned ffmpeg process with a variant so the reaper can terminate it.
  * Marks the slot dead automatically when the process exits, so a request for a
  * not-yet-produced segment after the encode ends restarts it instead of hanging.

@@ -47,3 +47,11 @@ export const setBackgroundTasksEnabled = async (
     },
   );
 };
+
+export const clearHlsSessions = async (): Promise<void> => {
+  await fetchJsonOrThrow<{ ok: boolean }>(
+    "/api/status/clear-hls",
+    "clear HLS sessions",
+    { method: "POST" },
+  );
+};

@@ -49,6 +49,7 @@ import { pageTitleHandler } from "./requestHandlers/pageTitleHandler.ts";
 import { feedbackHandler } from "./requestHandlers/feedbackHandler.ts";
 import { faceIdentifyRequestHandler } from "./requestHandlers/faceIdentifyRequestHandler.ts";
 import { analyzeImage } from "./imageAnalysis/imageAnalysisWorker.ts";
+import { killAllSessions } from "./videoProcessing/hlsSession.ts";
 
 const log = getLogger("httpServer");
 
@@ -331,6 +332,16 @@ export const createServer = (
               return;
             }
             await statusBackgroundTasksRequestHandler(req, res, { taskOrchestrator });
+            return;
+          }
+
+          if (req.url === "/api/status/clear-hls" && req.method === "POST") {
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
+            killAllSessions();
+            writeJson(res, 200, { ok: true });
             return;
           }
 
