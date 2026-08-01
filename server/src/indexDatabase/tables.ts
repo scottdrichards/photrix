@@ -69,6 +69,7 @@ export const tables = {
       { name: "regions", type: "TEXT" },
       { name: "orientation", type: "INTEGER" },
       { name: "livePhotoVideoFileName", type: "TEXT" },
+      { name: "embeddedVideoLength", type: "INTEGER" },
       // Human-authored caption. Seeded from the file's embedded caption (EXIF
       // ImageDescription / IPTC Caption-Abstract / XMP dc:description) on first
       // EXIF scan; editable in-app thereafter via PATCH /api/files (same

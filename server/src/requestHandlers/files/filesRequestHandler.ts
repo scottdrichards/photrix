@@ -753,6 +753,44 @@ const fileHandler = async (
     return;
   }
 
+  if (representation === "live-photo") {
+    const fileRecord = await database.getFileRecord(subPath);
+    const videoLength = fileRecord?.embeddedVideoLength;
+    if (!videoLength) {
+      return writeJson(res, 404, { error: "No embedded motion photo video" });
+    }
+    const videoStart = fileStats.size - videoLength;
+    if (videoStart < 0) {
+      return writeJson(res, 500, { error: "Embedded video length exceeds file size" });
+    }
+    // Stream only the tail slice; treat it as a standalone video for range requests.
+    const rangeHeader = req.headers.range;
+    const getSliceRange = (rangeHeader: string | undefined) => {
+      const match = rangeHeader?.match(/^bytes=(\d+)-(\d+)?$/);
+      if (!match) return null;
+      const start = parseInt(match[1] ?? "", 10);
+      const end = match[2] ? parseInt(match[2], 10) : videoLength - 1;
+      if (Number.isFinite(start) && Number.isFinite(end) && start <= end && end < videoLength)
+        return { start, end };
+      return null;
+    };
+    const range = getSliceRange(rangeHeader);
+    const headers: http.OutgoingHttpHeaders = {
+      "Content-Type": "video/mp4",
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Accept-Ranges": "bytes",
+      "content-length": range ? range.end - range.start + 1 : videoLength,
+    };
+    if (range) {
+      headers["Content-Range"] = `bytes ${range.start}-${range.end}/${videoLength}`;
+    }
+    res.writeHead(range ? 206 : 200, headers);
+    const fileStart = videoStart + (range?.start ?? 0);
+    const fileEnd = videoStart + (range?.end ?? videoLength - 1);
+    createReadStream(normalizedPath, { start: fileStart, end: fileEnd }).pipe(res);
+    return;
+  }
+
   // HLS handler needs URL for segment parameter
   const hlsHandled = await tryHLSStream({ ...handlingContext, url });
   if (hlsHandled) return;

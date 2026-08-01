@@ -487,7 +487,51 @@ export const getExifMetadataFromFile = async (
     metadata.livePhotoVideoFileName = livePhotoVideoFileName;
   }
 
+  if (mimeType === "image/heic" || mimeType === "image/heif") {
+    const embeddedVideoLength = await findEmbeddedMotionPhotoLength(fullPath);
+    if (embeddedVideoLength !== undefined) {
+      metadata.embeddedVideoLength = embeddedVideoLength;
+    }
+  }
+
   return metadata as ExifMetadata;
+};
+
+/**
+ * Detects a Google/Samsung Motion Photo embedded in a HEIC/HEIF file by
+ * inspecting the ISOBMFF (HEIF) top-level box structure. Samsung wraps the
+ * embedded MP4 in a custom `mpvd` box; reading only the 8-byte box headers
+ * (size + type) lets us locate it without loading any media data into memory.
+ *
+ * The video is the raw MP4 starting immediately after the `mpvd` box header,
+ * so videoLength = fileSize − (mpvdOffset + 8).
+ *
+ * Returns the byte length of the embedded video, or undefined if the file is
+ * not a Samsung motion photo.
+ */
+const findEmbeddedMotionPhotoLength = async (
+  fullPath: string,
+): Promise<number | undefined> => {
+  const fh = await open(fullPath, "r");
+  try {
+    const { size } = await fh.stat();
+    const hdr = Buffer.alloc(8);
+    let offset = 0;
+    while (offset + 8 <= size) {
+      await fh.read(hdr, 0, 8, offset);
+      const boxSize = hdr.readUInt32BE(0);
+      const boxType = hdr.slice(4, 8).toString("ascii");
+      if (boxType === "mpvd") {
+        const videoLength = size - (offset + 8);
+        return videoLength > 0 ? videoLength : undefined;
+      }
+      if (boxSize < 8 || boxSize > size - offset) break;
+      offset += boxSize;
+    }
+    return undefined;
+  } finally {
+    await fh.close();
+  }
 };
 
 const LIVE_PHOTO_VIDEO_EXTENSIONS = [".mov", ".MOV", ".mp4", ".MP4"];

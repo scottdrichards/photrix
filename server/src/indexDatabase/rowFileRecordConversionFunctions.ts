@@ -49,6 +49,7 @@ export const rowToFileRecord = (
     ["tags", json],
     "orientation",
     "livePhotoVideoFileName",
+    "embeddedVideoLength",
     "aiDescription",
     ["aiTags", json],
     "photoQualityScore",
@@ -170,6 +171,7 @@ export const fileRecordToColumnNamesAndValues = (
     addColumn("tags", JSON.stringify(entry.tags));
     addColumn("orientation", entry.orientation);
     addColumn("livePhotoVideoFileName", entry.livePhotoVideoFileName);
+    addColumn("embeddedVideoLength", entry.embeddedVideoLength);
   }
 
   // AI Metadata

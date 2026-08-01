@@ -33,6 +33,7 @@ export const DEFAULT_METADATA_KEYS = [
   "framerate",
   "videoCodec",
   "livePhotoVideoFileName",
+  "embeddedVideoLength",
 ] as const;
 
 const VIDEO_EXTENSIONS = [".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".wmv"];
@@ -116,7 +117,9 @@ export const createPhotoItem = (item: ApiPhotoItem): PhotoItem => {
   const livePhotoUrl =
     mediaType === "photo" && typeof livePhotoVideoFileName === "string"
       ? buildFileUrl(item.folder + livePhotoVideoFileName, {})
-      : undefined;
+      : mediaType === "photo" && typeof item.embeddedVideoLength === "number"
+        ? buildFileUrl(relativePath, { representation: "live-photo" })
+        : undefined;
 
   const metadata = Object.fromEntries(
     Object.entries(item).filter(([key]) => key !== "folder" && key !== "fileName"),

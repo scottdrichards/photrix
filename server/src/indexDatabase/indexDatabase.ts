@@ -75,6 +75,11 @@ const EXIF_DESCRIPTION_BACKFILL_VERSION = 3;
 // invalidate existing scores.
 const FACE_ATTRIBUTE_RESET_VERSION = 4;
 
+// PRAGMA user_version marking that HEIC/HEIF files have been re-queued for
+// EXIF re-scan so the new embeddedVideoLength column (Samsung motion photos)
+// gets populated for existing files.
+const HEIC_EMBEDDED_VIDEO_BACKFILL_VERSION = 5;
+
 // A cluster losing at least this fraction of its members to the confidence
 // purge is treated as a junk hub: its confident survivors are freed for
 // re-clustering rather than left behind under a junk-derived centroid.
@@ -488,6 +493,9 @@ export class IndexDatabase {
       // Return faces scored by a superseded attribute derivation to the
       // backfill queue. No-op unless FACE_ATTRIBUTE_VERSION moved.
       await this.resetStaleFaceAttributes();
+      // Re-queue HEIC/HEIF files for EXIF re-scan so embeddedVideoLength
+      // (Samsung motion photos) gets populated for already-indexed files.
+      await this.backfillHeicEmbeddedVideoDetection();
       // Warm the PCA cache from the post-migration state so the first People-tab
       // request is instant.
       this.pcaCache = await this.computePCACache();
@@ -3150,6 +3158,26 @@ export class IndexDatabase {
     log.info(
       { requeued: result?.changes ?? 0 },
       "Re-queued images for EXIF re-scan to backfill human descriptions",
+    );
+  }
+
+  private async backfillHeicEmbeddedVideoDetection(): Promise<void> {
+    const versionRow = await this.db.get<{ user_version: number }>(
+      "PRAGMA user_version",
+    );
+    if ((versionRow?.user_version ?? 0) >= HEIC_EMBEDDED_VIDEO_BACKFILL_VERSION) return;
+
+    const result = await this.db.run(
+      `UPDATE files SET exifProcessedAt = NULL
+       WHERE exifProcessedAt IS NOT NULL
+         AND mimeType IN ('image/heic', 'image/heif')`,
+    );
+
+    await this.db.exec(`PRAGMA user_version = ${HEIC_EMBEDDED_VIDEO_BACKFILL_VERSION}`);
+    this.invalidateStatusCountsCache();
+    log.info(
+      { requeued: result?.changes ?? 0 },
+      "Re-queued HEIC/HEIF files for EXIF re-scan to detect embedded Samsung motion photos",
     );
   }
 

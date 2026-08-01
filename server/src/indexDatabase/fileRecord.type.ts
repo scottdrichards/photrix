@@ -58,6 +58,8 @@ export type ExifMetadata = {
   tags?: string[];
   orientation?: number;
   livePhotoVideoFileName?: string;
+  /** Byte length of the MP4 video embedded at the tail of a HEIC motion photo (Google/Samsung format). */
+  embeddedVideoLength?: number;
 };
 
 export type AIMetadata = {
@@ -103,6 +105,7 @@ export const MetadataGroups = {
     "tags",
     "orientation",
     "livePhotoVideoFileName",
+    "embeddedVideoLength",
   ],
   aiMetadata: ["aiDescription", "aiTags", "photoQualityScore"],
   faces: [],
