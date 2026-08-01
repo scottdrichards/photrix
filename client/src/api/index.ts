@@ -75,3 +75,6 @@ export { fetchSuggestions, fetchSuggestionsWithCounts } from "./suggestions";
 export { negotiateVideoPlayback, fetchTranscriptSegments } from "./video";
 
 export { interpretSearchQuery } from "./naturalLanguageSearch";
+
+export type { FeedbackItem, FeedbackStatus } from "./feedback";
+export { fetchFeedbackItems } from "./feedback";

@@ -3,6 +3,7 @@ import { StatusModal } from "./StatusModal";
 
 const subscribeStatusStreamMock = vi.fn();
 const setBackgroundTasksEnabledMock = vi.fn();
+const fetchFeedbackItemsMock = vi.fn();
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
@@ -11,6 +12,7 @@ vi.mock("../api", async () => {
     subscribeStatusStream: (...args: unknown[]) => subscribeStatusStreamMock(...args),
     setBackgroundTasksEnabled: (...args: unknown[]) =>
       setBackgroundTasksEnabledMock(...args),
+    fetchFeedbackItems: (...args: unknown[]) => fetchFeedbackItemsMock(...args),
   };
 });
 
@@ -35,6 +37,8 @@ describe("StatusModal", () => {
   beforeEach(() => {
     subscribeStatusStreamMock.mockReset();
     setBackgroundTasksEnabledMock.mockReset();
+    fetchFeedbackItemsMock.mockReset();
+    fetchFeedbackItemsMock.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -58,7 +62,7 @@ describe("StatusModal", () => {
       onUpdate?.(makeStatus());
     });
 
-    expect(await screen.findByText(/Background tasks/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/Background tasks/)).length).toBeGreaterThan(0);
     expect(screen.getByText("File system scan")).toBeInTheDocument();
     expect(screen.getByText("25%")).toBeInTheDocument();
     expect(screen.getByText(/25 \/ 100 items/)).toBeInTheDocument();
@@ -155,7 +159,7 @@ describe("StatusModal", () => {
       );
     });
 
-    expect(await screen.findByText(/Background tasks/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/Background tasks/)).length).toBeGreaterThan(0);
     expect(screen.getByText("42%")).toBeInTheDocument();
   });
 

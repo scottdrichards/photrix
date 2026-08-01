@@ -4,9 +4,13 @@ import {
   setBackgroundTasksEnabled,
   subscribeStatusStream,
   type ServerStatus,
+  type FeedbackItem,
+  fetchFeedbackItems,
 } from "../api";
 import { ProgressItem } from "./ProgressItem";
 import css from "./StatusModal.module.css";
+
+type ActiveTab = "tasks" | "devtracker";
 
 type StatusModalProps = {
   isOpen: boolean;
@@ -283,10 +287,79 @@ const buildTaskDetail = (task: BackgroundTaskStatus) => {
   return detailParts.length > 0 ? detailParts.join(" • ") : undefined;
 };
 
+const STATUS_COLORS: Record<string, string> = {
+  open: "#6b7280",
+  active: "#f97316",
+  completed: "#22c55e",
+};
+
+const DevTracker = () => {
+  const [items, setItems] = useState<FeedbackItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setItems(null);
+    setError(null);
+    fetchFeedbackItems()
+      .then((data) => {
+        if (!cancelled) setItems(data);
+      })
+      .catch((err) => {
+        if (!cancelled)
+          setError(err instanceof Error ? err.message : "Failed to load feedback items");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error) return <span className={css.errorText}>{error}</span>;
+  if (!items) return <progress />;
+  if (items.length === 0)
+    return <span className={css.emptyText}>No feedback items yet.</span>;
+
+  const groups: { label: string; status: string; items: FeedbackItem[] }[] = [
+    { label: "Active", status: "active", items: items.filter((i) => i.status === "active") },
+    { label: "Open", status: "open", items: items.filter((i) => i.status === "open") },
+    {
+      label: "Completed",
+      status: "completed",
+      items: items.filter((i) => i.status === "completed"),
+    },
+  ];
+
+  return (
+    <div className={css.devTracker}>
+      {groups.map((group) => {
+        if (group.items.length === 0) return null;
+        return (
+          <div key={group.status} className={css.devTrackerGroup}>
+            <span className={css.label}>
+              <span
+                className={css.statusDot}
+                style={{ backgroundColor: STATUS_COLORS[group.status] ?? "#6b7280" }}
+              />
+              {group.label}
+            </span>
+            {group.items.map((item) => (
+              <div key={item.id} className={css.feedbackRow}>
+                <span className={css.feedbackId}>#{item.id}</span>
+                <span className={css.feedbackText}>{item.text}</span>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   const [status, setStatus] = useState<ServerStatus | undefined>(undefined);
   const [isTogglingBackgroundTasks, setIsTogglingBackgroundTasks] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<ActiveTab>("tasks");
   const dialogRef = useRef<HTMLDialogElement>(null);
   const progressHistoryRef = useRef<Map<string, ProgressSample[]>>(new Map());
 
@@ -358,9 +431,28 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
   return (
     <dialog ref={dialogRef} onClose={onDismiss} className={css.dialog}>
       <div className={css.dialogBody}>
-        <h2>Server Status</h2>
-        {!status && <progress />}
-        {status && (
+        <div className={css.tabBar}>
+          <h2>Server Status</h2>
+          <div className={css.tabButtons}>
+            <button
+              className={`btn ${activeTab === "tasks" ? "btn-primary" : "btn-ghost"} ${css.tabBtn}`}
+              onClick={() => setActiveTab("tasks")}
+            >
+              Background tasks
+            </button>
+            <button
+              className={`btn ${activeTab === "devtracker" ? "btn-primary" : "btn-ghost"} ${css.tabBtn}`}
+              onClick={() => setActiveTab("devtracker")}
+            >
+              Dev tracker
+            </button>
+          </div>
+        </div>
+
+        {activeTab === "devtracker" && <DevTracker />}
+
+        {activeTab === "tasks" && !status && <progress />}
+        {activeTab === "tasks" && status && (
           <div className={css.container}>
             {status.system && (
               <div className={css.metricsList}>

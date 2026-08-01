@@ -208,3 +208,73 @@
   border-color: var(--danger, #c62828);
   color: #fff;
 }
+
+/* Tab bar */
+.tabBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-s);
+}
+
+.tabBar h2 {
+  margin: 0;
+}
+
+.tabButtons {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.tabBtn {
+  font-size: 0.85rem;
+  padding: 4px 12px;
+}
+
+/* Dev tracker */
+.devTracker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-m);
+}
+
+.devTrackerGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.statusDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: var(--space-xs);
+  vertical-align: middle;
+  flex: 0 0 auto;
+}
+
+.feedbackRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-s);
+  border: 1px solid var(--stroke1);
+  border-radius: var(--radius-md);
+  background-color: var(--bg2);
+  padding: var(--space-s) var(--space-m);
+  font-size: 0.9rem;
+}
+
+.feedbackId {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg3);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.feedbackText {
+  flex: 1;
+  line-height: 1.4;
+}
