@@ -298,6 +298,7 @@ export function FullscreenViewer() {
   const [exportMode, setExportMode] = useState<"share" | "download" | null>(null);
   const [showCaptions, setShowCaptions] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [cropActive, setCropActive] = useState(false);
   const [canvasAdj, setCanvasAdj] = useState<EditAdj>(DEFAULT_ADJ);
   const [previewImgLoaded, setPreviewImgLoaded] = useState(false);
   const previewImgRef = useRef<HTMLImageElement | null>(null);
@@ -964,7 +965,13 @@ export function FullscreenViewer() {
     selectPrevious();
   };
 
+  const handleCropActiveChange = useCallback((active: boolean) => {
+    setCropActive(active);
+    if (active) setPhotoZoom((z) => ({ ...z, isZoomed: false }));
+  }, []);
+
   const handlePhotoClick = (e: React.MouseEvent<HTMLElement>) => {
+    if (cropActive) return;
     if (photoZoom.isZoomed) {
       setPhotoZoom((current) => ({ ...current, isZoomed: false }));
       return;
@@ -987,7 +994,7 @@ export function FullscreenViewer() {
   };
 
   const handlePhotoWheel = (e: React.WheelEvent<HTMLElement>) => {
-    if (!photoZoom.isZoomed) {
+    if (cropActive || !photoZoom.isZoomed) {
       return;
     }
 
@@ -1095,7 +1102,7 @@ export function FullscreenViewer() {
     "--zoom-origin-x": `${photoZoom.originXPercent}%`,
     "--zoom-origin-y": `${photoZoom.originYPercent}%`,
     "--zoom-scale": photoZoom.isZoomed ? photoZoom.scale.toString() : "1",
-    "--zoom-cursor": photoZoom.isZoomed ? "zoom-out" : "zoom-in",
+    "--zoom-cursor": cropActive ? "default" : photoZoom.isZoomed ? "zoom-out" : "zoom-in",
     // Counter-scale for face labels: they must stay a fixed screen size while
     // the photo (and their own anchor position) zooms in, otherwise a crowded
     // photo becomes *harder* to read the more you zoom in on it.
@@ -1462,7 +1469,9 @@ export function FullscreenViewer() {
                 cropContainerEl={cropContainerEl}
                 initialAdj={savedAdj}
                 onAdjChange={(adj) => { latestAdjRef.current = adj; setCanvasAdj(adj); }}
+                onCropActiveChange={handleCropActiveChange}
                 onClose={() => {
+                  setCropActive(false);
                   const adj = latestAdjRef.current;
                   setSavedAdj(adj);
                   setEditMode(false);

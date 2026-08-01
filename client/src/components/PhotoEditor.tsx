@@ -801,6 +801,7 @@ interface PhotoEditorProps {
   initialAdj?: EditAdj;
   onAdjChange: (adj: EditAdj) => void;
   onClose: () => void;
+  onCropActiveChange?: (active: boolean) => void;
 }
 
 export function PhotoEditor({
@@ -811,6 +812,7 @@ export function PhotoEditor({
   initialAdj,
   onAdjChange,
   onClose,
+  onCropActiveChange,
 }: PhotoEditorProps) {
   const [adj, setAdj] = useState<EditAdj>(initialAdj ?? DEFAULT_ADJ);
   const [exporting, setExporting] = useState(false);
@@ -840,6 +842,10 @@ export function PhotoEditor({
   useEffect(() => {
     onAdjChange(hideEdits ? DEFAULT_ADJ : adj);
   }, [adj, onAdjChange, hideEdits]);
+
+  useEffect(() => {
+    onCropActiveChange?.(cropActive);
+  }, [cropActive, onCropActiveChange]);
 
   const handleExport = async () => {
     setExporting(true);
