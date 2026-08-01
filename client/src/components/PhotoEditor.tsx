@@ -874,7 +874,7 @@ export function PhotoEditor({
 
   const dirty = isDirty(adj);
   const hasCrop = adj.cropTop > 0 || adj.cropRight > 0 || adj.cropBottom > 0 || adj.cropLeft > 0;
-  const showCropBox = (cropActive || hasCrop) && !!cropContainerEl;
+  const showCropBox = cropActive && !!cropContainerEl;
 
   const effectiveAR = adj.rotate90 % 2 !== 0 ? 1 / imageAspectRatio : imageAspectRatio;
   const minCrop = computeAlignCrop(adj.rotation, effectiveAR);
