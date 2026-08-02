@@ -460,6 +460,11 @@ export class IndexDatabase {
 
     await prepareTables(this.db);
 
+    // Must run on the critical path (before tasks start) so the EXIF task
+    // sees the re-queued HEIC files on its first iteration rather than
+    // completing with 0 items before this migration fires off-path.
+    await this.backfillHeicEmbeddedVideoDetection();
+
     this.faceClusters = new FaceClusterEngine(this.db);
 
     await this.db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
@@ -493,9 +498,6 @@ export class IndexDatabase {
       // Return faces scored by a superseded attribute derivation to the
       // backfill queue. No-op unless FACE_ATTRIBUTE_VERSION moved.
       await this.resetStaleFaceAttributes();
-      // Re-queue HEIC/HEIF files for EXIF re-scan so embeddedVideoLength
-      // (Samsung motion photos) gets populated for already-indexed files.
-      await this.backfillHeicEmbeddedVideoDetection();
       // Warm the PCA cache from the post-migration state so the first People-tab
       // request is instant.
       this.pcaCache = await this.computePCACache();
