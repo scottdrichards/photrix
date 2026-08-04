@@ -6,7 +6,11 @@ import { bindChildProcessAbort } from "../common/abortableChildProcess.ts";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { type ConversionPriority } from "../common/conversionPriority.ts";
 import { scheduleMediaConversion } from "../common/mediaConversionScheduler.ts";
-import { createAbortError, getRequestAbortSignal } from "../common/requestAbort.ts";
+import {
+  createAbortError,
+  getRequestAbortSignal,
+  runWithoutRequestAbortSignal,
+} from "../common/requestAbort.ts";
 import { getGpuAcceleration } from "./gpuAcceleration.ts";
 
 const MAX_CAPTURED_LOG_CHARS = 64_000;
@@ -152,9 +156,13 @@ export const generateVideoThumbnail = async (
     return cachedPath;
   }
 
-  await scheduleMediaConversion(
-    `video-thumbnail:${cachedPath}`,
-    async (signal) => {
+  // A single cheap frame-extract that populates a cache shared by every future
+  // viewer of this video — let it run to completion even if the requester that
+  // triggered it disconnects (e.g. a grid card scrolling out of view mid-decode
+  // for a large/slow-to-decode file), otherwise the thumbnail can never win the
+  // race and gets regenerated-and-aborted on every subsequent view.
+  await runWithoutRequestAbortSignal(() =>
+    scheduleMediaConversion(`video-thumbnail:${cachedPath}`, async (signal) => {
       if (
         await access(cachedPath).then(
           () => true,
@@ -223,10 +231,7 @@ export const generateVideoThumbnail = async (
       };
 
       await generateWithMode(gpu !== null);
-    },
-    {
-      signal: getRequestAbortSignal(),
-    },
+    }),
   );
   return cachedPath;
 };
