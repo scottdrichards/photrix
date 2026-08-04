@@ -40,6 +40,12 @@ describe("convertEmbeddedThumbnail", () => {
     expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBeLessThanOrEqual(160);
     // Orientation applied: the upright display of this file is portrait.
     expect(meta.height ?? 0).toBeGreaterThan(meta.width ?? 0);
+    // Aspect-ratio crop applied: the embedded thumbnail is 4:3 (160×120) but the
+    // sensor is 3:2 (6960×4640), so the output must be cropped to match 4640:6960
+    // ≈ 0.667 (within 4% tolerance).
+    const outputAspect = (meta.width ?? 0) / (meta.height ?? 0);
+    const sourceAspect = 4640 / 6960;
+    expect(Math.abs(outputAspect - sourceAspect)).toBeLessThan(0.04);
   });
 
   it("is idempotent and serves the cached file on repeat calls", async () => {

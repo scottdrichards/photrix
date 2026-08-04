@@ -50,6 +50,14 @@ type SourceDims = {
  * already rotated to display orientation; to avoid double-rotating those, the
  * rotation is skipped when the thumbnail's stored aspect doesn't match the
  * source sensor's aspect (the "verify aspect + orientation" guard).
+ *
+ * Some cameras (e.g. Canon DSLRs) also embed a 4:3 thumbnail for a 3:2 image,
+ * because the LCD preview uses a 4:3 crop. The thumbnail is cropped to the
+ * source's true aspect ratio so the micro and sharp thumbnails both show the
+ * same framing inside the justified grid.
+ *
+ * Cache key uses "micro2" — files previously generated as "micro" had the wrong
+ * aspect for Canon (and similar) sources and are intentionally orphaned.
  */
 export const convertEmbeddedThumbnail = async (
   filePath: string,
@@ -57,7 +65,7 @@ export const convertEmbeddedThumbnail = async (
 ): Promise<string | null> => {
   const cachedPath = getMirroredCachedFilePath(
     filePath,
-    `${maxHeight}.micro`,
+    `${maxHeight}.micro2`,
     IMAGE_OUTPUT_EXTENSION,
   );
   if (await fileExists(cachedPath)) {
@@ -99,23 +107,74 @@ export const convertEmbeddedThumbnail = async (
       ),
   ]);
 
+  // `appliedRotation` is non-null only when orientation correction was actually
+  // needed, which lets later code use it as both a "did we rotate?" flag and a
+  // source of the dimensionSwapped field without extra null checks.
+  const appliedRotation =
+    rotation && shouldApplyOrientation(rotation, sourceDims, thumbMeta) ? rotation : null;
+
   let pipeline = sharp(thumbBuffer);
-  if (rotation && shouldApplyOrientation(rotation, sourceDims, thumbMeta)) {
-    if (rotation.scaleX === -1) pipeline = pipeline.flop();
-    if (rotation.scaleY === -1) pipeline = pipeline.flip();
-    if (rotation.deg) pipeline = pipeline.rotate(rotation.deg);
+  if (appliedRotation) {
+    if (appliedRotation.scaleX === -1) pipeline = pipeline.flop();
+    if (appliedRotation.scaleY === -1) pipeline = pipeline.flip();
+    if (appliedRotation.deg) pipeline = pipeline.rotate(appliedRotation.deg);
   }
 
-  await mkdir(dirname(cachedPath), { recursive: true });
-  await pipeline
-    .resize({
+  // Compute the source image's display aspect ratio from EXIF dimension tags,
+  // accounting for any dimension swap the orientation rotation introduced.
+  const srcWraw = sourceDims?.ExifImageWidth ?? sourceDims?.ImageWidth;
+  const srcHraw = sourceDims?.ExifImageHeight ?? sourceDims?.ImageHeight;
+  const targetAspect = (() => {
+    if (!srcWraw || !srcHraw) return null;
+    // For orientation 5–8 the display dimensions are the sensor ones transposed.
+    const swapped = appliedRotation?.dimensionSwapped ?? false;
+    const dw = swapped ? srcHraw : srcWraw;
+    const dh = swapped ? srcWraw : srcHraw;
+    return dh > 0 ? dw / dh : null;
+  })();
+
+  // Thumbnail natural aspect after any orientation rotation.
+  const thumbAspect = (() => {
+    if (!thumbMeta?.width || !thumbMeta?.height) return null;
+    return (appliedRotation?.dimensionSwapped ?? false)
+      ? thumbMeta.height / thumbMeta.width
+      : thumbMeta.width / thumbMeta.height;
+  })();
+
+  // When the embedded thumbnail's aspect differs meaningfully from the source
+  // (Canon DSLRs embed 4:3 LCD-crop thumbnails for 3:2 sensor images), use
+  // cover+crop so the micro and sharp thumbnails frame the image identically.
+  // A 4% tolerance avoids unnecessary processing for near-equal ratios.
+  const ASPECT_TOLERANCE = 0.04;
+  const needsCrop =
+    targetAspect !== null &&
+    thumbAspect !== null &&
+    Math.abs(thumbAspect - targetAspect) > ASPECT_TOLERANCE;
+
+  if (needsCrop && targetAspect !== null) {
+    // Cap the long side to maxHeight, derive the short side from targetAspect.
+    // Landscape (aspect ≥ 1): long side = width → width=maxHeight, height=maxHeight/aspect.
+    // Portrait  (aspect < 1): long side = height → height=maxHeight, width=maxHeight*aspect.
+    const resizeW = targetAspect >= 1 ? maxHeight : Math.round(maxHeight * targetAspect);
+    const resizeH = targetAspect >= 1 ? Math.round(maxHeight / targetAspect) : maxHeight;
+    pipeline = pipeline.resize({
+      width: resizeW,
+      height: resizeH,
+      fit: "cover",
+      position: "centre",
+      withoutEnlargement: true,
+    });
+  } else {
+    pipeline = pipeline.resize({
       height: maxHeight,
       width: maxHeight,
       fit: "inside",
       withoutEnlargement: true,
-    })
-    .webp({ quality: 80 })
-    .toFile(cachedPath);
+    });
+  }
+
+  await mkdir(dirname(cachedPath), { recursive: true });
+  await pipeline.webp({ quality: 80 }).toFile(cachedPath);
 
   return cachedPath;
 };
