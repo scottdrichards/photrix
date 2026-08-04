@@ -7,6 +7,7 @@ import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts"
 import { statusBackgroundTasksRequestHandler } from "./requestHandlers/statusBackgroundTasksRequestHandler.ts";
 import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
 import { networkProbeRequestHandler } from "./requestHandlers/networkProbeRequestHandler.ts";
+import { dayPhotoRequestHandler } from "./requestHandlers/dayPhotoRequestHandler.ts";
 import { diagnosticsEventsRequestHandler } from "./requestHandlers/diagnosticsRequestHandler.ts";
 import { videoNegotiationRequestHandler } from "./requestHandlers/video/videoNegotiation.ts";
 import { searchRequestHandler } from "./requestHandlers/searchRequestHandler.ts";
@@ -359,6 +360,14 @@ export const createServer = (
 
           if (req.url?.startsWith("/api/network-probe") && req.method === "GET") {
             networkProbeRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+            );
+            return;
+          }
+
+          if (req.url?.startsWith("/api/day-photo/") && req.method === "GET") {
+            await dayPhotoRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
             );
