@@ -7,6 +7,7 @@ import { __resetHoverIntentForTests } from "./ThumbnailTile.hoverIntent";
 import {
   MAX_CONCURRENT_LOADS,
   resetSharpThumbnailQueue,
+  sharpThumbnailQueueStats,
 } from "./tileMedia/sharpThumbnailQueue";
 
 const useSelectionContextMock = vi.fn();
@@ -389,6 +390,56 @@ describe("ThumbnailTile", () => {
       }
       resetSharpThumbnailQueue();
     }
+  });
+
+  it("spends no sharp-thumbnail queue slot on tiles that render no gated image", () => {
+    // Regression for "many videos never even request a thumbnail". The gated
+    // video-thumbnail URL is only ever rendered by the video branch's <img>, so
+    // only that <img> can settle and release the slot. Photo tiles (and non-image
+    // tiles) used to take a slot for it too — one nothing could ever free, since
+    // no element carried the URL to load or error. Six of those pinned the shared
+    // queue at capacity permanently, after which no tile downstream was admitted
+    // and video tiles issued no request at all. Photos masked it: their micro
+    // thumbnail bypasses the queue entirely.
+    for (let i = 0; i < MAX_CONCURRENT_LOADS; i += 1) {
+      render(
+        <ThumbnailTile
+          photo={createPhoto({
+            path: `a/photo-${i}.jpg`,
+            name: `photo-${i}.jpg`,
+            thumbnailUrl: `http://localhost/a/photo-${i}.jpg`,
+            microThumbnailUrl: `http://localhost/a/photo-${i}.micro`,
+          })}
+        />,
+      );
+    }
+    render(
+      <ThumbnailTile
+        photo={createPhoto({
+          path: "a/document.pdf",
+          name: "document.pdf",
+          metadata: { mimeType: "application/pdf" },
+        })}
+      />,
+    );
+    render(
+      <ThumbnailTile
+        photo={createVideo({
+          path: "a/late.mp4",
+          name: "late.mp4",
+          thumbnailUrl: "http://localhost/a/late.jpg",
+        })}
+      />,
+    );
+
+    triggerPrefetchOnly();
+
+    expect(screen.getByRole("img", { name: "late.mp4" })).toHaveAttribute(
+      "src",
+      "http://localhost/a/late.jpg",
+    );
+    // The video tile is the only thing in the band that owns a gated image.
+    expect(sharpThumbnailQueueStats()).toEqual({ activeLoads: 1, waitingCount: 0 });
   });
 
   it("shows live photo badge for photos with livePhotoUrl", () => {

@@ -423,7 +423,17 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   // a micro URL (and the video branch) load the 320 directly instead. Both URLs
   // are latched — see hasBeenNearRef — so leaving the band never unloads an
   // image the user is about to scroll back to.
-  const thumbnailUrl = shouldLoad ? photo.thumbnailUrl : undefined;
+  //
+  // Gated on isVideo for the same reason sharpUrl is gated on !isVideo: the only
+  // <img> that consumes this URL (and calls its release()) is the one in the
+  // video branch below. Without the guard every *photo* tile also opened a
+  // gatedVideoThumbnail slot for a URL it never rendered, so no load/error event
+  // could ever free it — six photo tiles were enough to pin sharpThumbnailQueue
+  // at capacity for good. After that nothing downstream was ever admitted, so
+  // video tiles never even issued a thumbnail request (the reported "it doesn't
+  // even request a thumbnail"); photos hid it because their micro thumbnail is
+  // ungated and still painted.
+  const videoThumbnailUrl = isVideo && shouldLoad ? photo.thumbnailUrl : undefined;
   const microUrl = shouldLoad ? photo.microThumbnailUrl : undefined;
   // Gated on `!isVideo && isImage`, not just hasMicro/wantSharp: the <img> that
   // would ever consume gatedSharpUrl (and call its release()) only renders in
@@ -449,7 +459,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   // every one of them in the same tick. Routing both through the shared queue
   // (see sharpThumbnailQueue) turns that burst into a steady trickle instead
   // of the reported "hangs like it's loading a bunch of images at once".
-  const gatedVideoThumbnail = useGatedThumbnailUrl(thumbnailUrl);
+  const gatedVideoThumbnail = useGatedThumbnailUrl(videoThumbnailUrl);
   const gatedSharpUrl = useGatedThumbnailUrl(sharpUrl);
 
   // The slot release has to live in onDecoded, not the JSX onLoad handler:
