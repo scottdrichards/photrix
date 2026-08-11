@@ -37,6 +37,21 @@
   overflow: hidden;
 }
 
+/* The crop box's drag handles are 16px squares centered *on* the photo's
+ * edge (see PhotoEditor's CropBox), so half of each handle normally extends
+ * past the photo into this container's own padding/clip area. That's fine on
+ * every edge except the right one, where the editor `<aside>` sits directly
+ * against this container's boundary in the flex row: `overflow: hidden`
+ * clips the handle's overflow right at that shared border, and the editor
+ * panel (a later, unclipped sibling) then owns every pointer event beyond
+ * it. Net effect: the top-right/right/bottom-right crop handles were
+ * unclickable and unclippable at once — "can't click and drag the handles".
+ * Reserving a strip of padding while editing keeps the photo (and its
+ * handles) fully clear of that seam. */
+.containerEditing {
+  padding-right: 20px;
+}
+
 .viewerLayout {
   display: flex;
   width: 100%;
