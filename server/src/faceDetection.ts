@@ -28,6 +28,11 @@ type HumanModule = {
   default?: HumanConstructor;
 };
 
+const toDirectoryFileUrl = (directoryPath: string): string => {
+  const href = pathToFileURL(directoryPath).href;
+  return href.endsWith("/") ? href : `${href}/`;
+};
+
 const require = createRequire(import.meta.url);
 const humanEntryPath = require.resolve("@vladmandic/human");
 const humanDistPath = path.dirname(humanEntryPath);
@@ -35,12 +40,12 @@ const humanRootPath = path.dirname(humanDistPath);
 const humanWasmModuleUrl = pathToFileURL(
   path.join(humanDistPath, "human.node-wasm.js"),
 ).href;
-const modelBasePath = pathToFileURL(path.join(humanRootPath, "models") + path.sep).href;
-const wasmPath = pathToFileURL(
+const modelBasePath = toDirectoryFileUrl(path.join(humanRootPath, "models"));
+const wasmPath = toDirectoryFileUrl(
   path.dirname(
     require.resolve("@tensorflow/tfjs-backend-wasm/dist/tfjs-backend-wasm.wasm"),
-  ) + path.sep,
-).href;
+  ),
+);
 
 let humanPromise: Promise<HumanInstance> | undefined;
 let fileFetchInstalled = false;
@@ -90,7 +95,11 @@ export const detectFaces = async (imagePath: string): Promise<FaceDetectionResul
       return [];
     }
 
-    const tensor = human.tf.tensor3d(data, [info.height, info.width, 3], "int32");
+    const tensor = human.tf.tensor3d(
+      new Uint8Array(data),
+      [info.height, info.width, 3],
+      "int32",
+    );
 
     try {
       const result = await human.detect(tensor);
@@ -179,7 +188,7 @@ const installFileFetch = (): void => {
   globalThis.fetch = async (input, init) => {
     const url = getFetchUrl(input);
 
-    if (url.startsWith("file://")) {
+    if (url.startsWith(modelBasePath) || url.startsWith(wasmPath)) {
       const data = await readFile(fileURLToPath(url));
       return new Response(data as unknown as BodyInit, {
         status: 200,
