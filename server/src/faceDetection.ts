@@ -1,20 +1,10 @@
-import { createHash } from "crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type { Config, FaceResult, Human as HumanInstance } from "@vladmandic/human";
 import sharp from "sharp";
 
-/**
- * Face detection result representing a detected face in an image.
- * 
- * IMPORTANT: This is a PLACEHOLDER implementation using image hashing for consistent
- * face "detection" for testing and demonstration purposes. 
- * 
- * For PRODUCTION use, integrate with a real local face detection library such as:
- * - OpenCV with Haar Cascades (opencv4nodejs) - traditional computer vision
- * - TensorFlow.js with BlazeFace/FaceMesh - modern ML models
- * - mediapipe - Google's ML solution with face detection
- * - dlib face recognition - C++ library with Node.js bindings
- * 
- * All of these can run LOCALLY without external API calls.
- */
 export type FaceDetectionResult = {
   boundingBox: {
     originX: number;
@@ -28,171 +18,100 @@ export type FaceDetectionResult = {
     label?: string;
   }>;
   score: number;
-  embedding?: number[]; // Simple geometric embedding for clustering
+  embedding?: number[];
 };
 
-/**
- * Placeholder face detection using image content hashing.
- * 
- * This implementation analyzes the image content and uses hashing to generate
- * consistent "face" detections for testing purposes. It does NOT perform actual
- * face detection.
- * 
- * To use real face detection:
- * 1. Install a face detection library (see options in type comments above)
- * 2. Replace this function with actual face detection logic
- * 3. The rest of the codebase will work without changes
- */
-export const detectFaces = async (
-  imagePath: string
-): Promise<FaceDetectionResult[]> => {
-  try {
-    // Load image to get dimensions and content
-    const image = sharp(imagePath);
-    const metadata = await image.metadata();
+type HumanConstructor = new (config?: Partial<Config>) => HumanInstance;
 
-    if (!metadata.width || !metadata.height) {
+type HumanModule = {
+  Human?: HumanConstructor;
+  default?: HumanConstructor;
+};
+
+const require = createRequire(import.meta.url);
+const humanEntryPath = require.resolve("@vladmandic/human");
+const humanDistPath = path.dirname(humanEntryPath);
+const humanRootPath = path.dirname(humanDistPath);
+const humanWasmModuleUrl = pathToFileURL(
+  path.join(humanDistPath, "human.node-wasm.js"),
+).href;
+const modelBasePath = pathToFileURL(path.join(humanRootPath, "models") + path.sep).href;
+const wasmPath = pathToFileURL(
+  path.dirname(
+    require.resolve("@tensorflow/tfjs-backend-wasm/dist/tfjs-backend-wasm.wasm"),
+  ) + path.sep,
+).href;
+
+let humanPromise: Promise<HumanInstance> | undefined;
+let fileFetchInstalled = false;
+
+const humanConfig: Partial<Config> = {
+  backend: "wasm",
+  debug: false,
+  async: false,
+  warmup: "none",
+  modelBasePath,
+  wasmPath,
+  body: { enabled: false },
+  hand: { enabled: false },
+  object: { enabled: false },
+  gesture: { enabled: false },
+  face: {
+    enabled: true,
+    detector: {
+      enabled: true,
+      rotation: false,
+      maxDetected: 20,
+      minConfidence: 0.5,
+    },
+    mesh: { enabled: true },
+    description: {
+      enabled: true,
+      minConfidence: 0.5,
+    },
+    iris: { enabled: false },
+    emotion: { enabled: false },
+    antispoof: { enabled: false },
+    liveness: { enabled: false },
+  },
+};
+
+export const detectFaces = async (imagePath: string): Promise<FaceDetectionResult[]> => {
+  try {
+    const human = await getHuman();
+    const { data, info } = await sharp(imagePath)
+      .rotate()
+      .removeAlpha()
+      .toColorspace("srgb")
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    if (info.width <= 0 || info.height <= 0 || info.channels !== 3) {
       return [];
     }
 
-    // Get image statistics for content-based hashing
-    const stats = await image.stats();
-    
-    // Create a hash based on image content (not just path)
-    const buffer = await image.toBuffer();
-    const contentHash = createHash("md5").update(buffer).digest("hex");
-    const seed = parseInt(contentHash.substring(0, 8), 16);
-    
-    // Pseudo-random number generator with seed (deterministic for same image)
-    const seededRandom = (index: number): number => {
-      const x = Math.sin(seed + index) * 10000;
-      return x - Math.floor(x);
-    };
+    const tensor = human.tf.tensor3d(data, [info.height, info.width, 3], "int32");
 
-    // Use image statistics to influence detection
-    const avgBrightness = (stats.channels[0].mean + stats.channels[1].mean + stats.channels[2].mean) / 3;
-    const normalizedBrightness = avgBrightness / 255;
-    
-    // Generate 0-3 face detections based on image content
-    // Brighter images tend to have more faces detected (simulates better lighting)
-    const baseFaceCount = Math.floor(seededRandom(0) * 4);
-    const faceCount = normalizedBrightness > 0.4 ? baseFaceCount : Math.max(0, baseFaceCount - 1);
-    
-    const faces: FaceDetectionResult[] = [];
-
-    for (let i = 0; i < faceCount; i++) {
-      const x = seededRandom(i * 4 + 1);
-      const y = seededRandom(i * 4 + 2);
-      const size = 0.1 + seededRandom(i * 4 + 3) * 0.2; // 10-30% of image
-
-      const bbox = {
-        originX: Math.floor(x * metadata.width * 0.7),
-        originY: Math.floor(y * metadata.height * 0.7),
-        width: Math.floor(size * metadata.width),
-        height: Math.floor(size * metadata.height),
-      };
-
-      // Generate embedding based on position and image statistics
-      const embedding = generateEmbedding(bbox, metadata.width, metadata.height, stats, i);
-
-      faces.push({
-        boundingBox: bbox,
-        score: 0.85 + seededRandom(i * 4 + 4) * 0.1,
-        embedding,
-      });
+    try {
+      const result = await human.detect(tensor);
+      return result.face.map((face: FaceResult) =>
+        toFaceDetectionResult(face, info.width, info.height),
+      );
+    } finally {
+      human.tf.dispose(tensor);
     }
-
-    return faces;
   } catch (error) {
     console.error(`[faceDetection] Failed to detect faces in ${imagePath}:`, error);
     return [];
   }
 };
 
-/**
- * Generate a simple embedding for face clustering based on position and image features.
- */
-const generateEmbedding = (
-  bbox: { originX: number; originY: number; width: number; height: number },
-  imgWidth: number,
-  imgHeight: number,
-  stats: sharp.Stats,
-  faceIndex: number
-): number[] => {
-  const features: number[] = [];
+export const computeFaceEmbedding = (face: FaceDetectionResult): number[] | undefined =>
+  face.embedding;
 
-  // Normalized position features
-  features.push(bbox.originX / imgWidth);
-  features.push(bbox.originY / imgHeight);
-  features.push(bbox.width / imgWidth);
-  features.push(bbox.height / imgHeight);
-  features.push(bbox.width / bbox.height); // Aspect ratio
-
-  // Image color features (averaged across channels)
-  for (const channel of stats.channels) {
-    features.push(channel.mean / 255);
-    features.push(channel.stdev / 255);
-  }
-
-  // Face index as a feature (helps distinguish multiple faces in same image)
-  features.push(faceIndex / 10);
-
-  // Pad to fixed length
-  while (features.length < 16) {
-    features.push(0);
-  }
-
-  return features.slice(0, 16);
-};
-
-/**
- * Computes face embedding/descriptor for face clustering and recognition.
- * Uses the actual face embeddings from the Human library if available,
- * otherwise falls back to geometric features.
- */
-export const computeFaceEmbedding = (
-  face: FaceDetectionResult,
-  imageDimensions: { width: number; height: number }
-): number[] => {
-  // If we have a real embedding from the face recognition model, use it
-  if (face.embedding && face.embedding.length > 0) {
-    return face.embedding;
-  }
-
-  // Fallback: use geometric features if no embedding available
-  const features: number[] = [];
-
-  // Normalize bounding box by image dimensions
-  features.push(face.boundingBox.originX / imageDimensions.width);
-  features.push(face.boundingBox.originY / imageDimensions.height);
-  features.push(face.boundingBox.width / imageDimensions.width);
-  features.push(face.boundingBox.height / imageDimensions.height);
-
-  // Add aspect ratio (guard against division by zero)
-  if (face.boundingBox.height > 0) {
-    features.push(face.boundingBox.width / face.boundingBox.height);
-  } else {
-    features.push(0);
-  }
-
-  // Add detection score
-  features.push(face.score);
-
-  // Pad to fixed length
-  while (features.length < 16) {
-    features.push(0);
-  }
-
-  return features.slice(0, 16);
-};
-
-/**
- * Clusters faces using cosine similarity on face embeddings.
- * Uses a similarity threshold to group faces of the same person.
- */
 export const clusterFaces = (
   faces: Array<{ embedding: number[]; faceId: string; imagePath: string }>,
-  threshold = 0.6 // Cosine similarity threshold (higher = more similar)
+  threshold = 0.8,
 ): Map<string, Array<{ faceId: string; imagePath: string }>> => {
   const clusters = new Map<string, Array<{ faceId: string; imagePath: string }>>();
   const assigned = new Set<string>();
@@ -204,11 +123,10 @@ export const clusterFaces = (
 
     const clusterId = `person_${clusters.size}`;
     const cluster: Array<{ faceId: string; imagePath: string }> = [
-      { faceId: faces[i].faceId, imagePath: faces[i].imagePath }
+      { faceId: faces[i].faceId, imagePath: faces[i].imagePath },
     ];
     assigned.add(faces[i].faceId);
 
-    // Find similar faces
     for (let j = i + 1; j < faces.length; j++) {
       if (assigned.has(faces[j].faceId)) {
         continue;
@@ -227,22 +145,119 @@ export const clusterFaces = (
   return clusters;
 };
 
-// Calculate cosine similarity between two vectors (better for face embeddings than Euclidean distance)
+const getHuman = async (): Promise<HumanInstance> => {
+  humanPromise ??= loadHuman();
+  return humanPromise;
+};
+
+const loadHuman = async (): Promise<HumanInstance> => {
+  installFileFetch();
+
+  const humanModule = (await import(humanWasmModuleUrl)) as HumanModule;
+  const HumanConstructor = humanModule.Human ?? humanModule.default;
+
+  if (!HumanConstructor) {
+    throw new Error("Unable to load local Human face detection runtime");
+  }
+
+  const human = new HumanConstructor(humanConfig);
+  await human.tf.ready();
+  await human.load();
+  return human;
+};
+
+const installFileFetch = (): void => {
+  if (fileFetchInstalled) {
+    return;
+  }
+
+  const nativeFetch = globalThis.fetch;
+
+  globalThis.fetch = async (input, init) => {
+    const url = getFetchUrl(input);
+
+    if (url.startsWith("file://")) {
+      const data = await readFile(fileURLToPath(url));
+      return new Response(data as unknown as BodyInit, { status: 200 });
+    }
+
+    return nativeFetch(input, init);
+  };
+
+  fileFetchInstalled = true;
+};
+
+const getFetchUrl = (input: Parameters<typeof fetch>[0]): string => {
+  if (typeof input === "string") {
+    return input;
+  }
+
+  if (input instanceof URL) {
+    return input.href;
+  }
+
+  return input.url;
+};
+
+const toFaceDetectionResult = (
+  face: FaceResult,
+  imageWidth: number,
+  imageHeight: number,
+): FaceDetectionResult => ({
+  boundingBox: toBoundingBox(face.box, imageWidth, imageHeight),
+  keypoints: toKeypoints(face),
+  score: face.score,
+  embedding: face.embedding,
+});
+
+const toBoundingBox = (
+  [x, y, width, height]: [number, number, number, number],
+  imageWidth: number,
+  imageHeight: number,
+): FaceDetectionResult["boundingBox"] => {
+  const originX = clamp(Math.round(x), 0, imageWidth);
+  const originY = clamp(Math.round(y), 0, imageHeight);
+  const maxWidth = imageWidth - originX;
+  const maxHeight = imageHeight - originY;
+
+  return {
+    originX,
+    originY,
+    width: clamp(Math.round(width), 0, maxWidth),
+    height: clamp(Math.round(height), 0, maxHeight),
+  };
+};
+
+const toKeypoints = (face: FaceResult): FaceDetectionResult["keypoints"] => {
+  const labels = ["leftEye", "rightEye", "nose", "mouth"] as const;
+
+  return labels.flatMap((label) => {
+    const point = face.annotations[label]?.[0];
+
+    if (!point) {
+      return [];
+    }
+
+    return [{ x: point[0], y: point[1], label }];
+  });
+};
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max);
+
 const cosineSimilarity = (a: number[], b: number[]): number => {
   if (a.length !== b.length) {
-    // If lengths don't match, fall back to Euclidean distance normalized
-    return 1 - euclideanDistance(a, b) / Math.sqrt(a.length);
+    return 0;
   }
 
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
+  const { dotProduct, normA, normB } = a.reduce(
+    (acc, value, index) => ({
+      dotProduct: acc.dotProduct + value * b[index],
+      normA: acc.normA + value * value,
+      normB: acc.normB + b[index] * b[index],
+    }),
+    { dotProduct: 0, normA: 0, normB: 0 },
+  );
 
   const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
   if (magnitude === 0) {
@@ -250,13 +265,4 @@ const cosineSimilarity = (a: number[], b: number[]): number => {
   }
 
   return dotProduct / magnitude;
-};
-
-const euclideanDistance = (a: number[], b: number[]): number => {
-  let sum = 0;
-  for (let i = 0; i < Math.min(a.length, b.length); i++) {
-    const diff = a[i] - b[i];
-    sum += diff * diff;
-  }
-  return Math.sqrt(sum);
 };
