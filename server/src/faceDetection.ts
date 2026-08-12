@@ -90,7 +90,7 @@ export const detectFaces = async (imagePath: string): Promise<FaceDetectionResul
       return [];
     }
 
-    const tensor = human.tf.tensor3d(data, [info.height, info.width, 3]);
+    const tensor = human.tf.tensor3d(data, [info.height, info.width, 3], "int32");
 
     try {
       const result = await human.detect(tensor);
@@ -105,9 +105,6 @@ export const detectFaces = async (imagePath: string): Promise<FaceDetectionResul
     return [];
   }
 };
-
-export const computeFaceEmbedding = (face: FaceDetectionResult): number[] | undefined =>
-  face.embedding;
 
 export const clusterFaces = (
   faces: Array<{ embedding: number[]; faceId: string; imagePath: string }>,
@@ -175,6 +172,7 @@ const installFileFetch = (): void => {
 
   const nativeFetch = globalThis.fetch;
 
+  // TensorFlow.js uses fetch for model files; support bundled local file:// URLs.
   globalThis.fetch = async (input, init) => {
     const url = getFetchUrl(input);
 

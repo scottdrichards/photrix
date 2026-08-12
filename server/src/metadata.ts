@@ -7,7 +7,7 @@ import { imageSize } from "image-size";
 import exifr from "exifr";
 import type { FullFileRecord } from "./models.js";
 import { mimeTypeForFilename } from "./mimeTypes.js";
-import { detectFaces, computeFaceEmbedding } from "./faceDetection.js";
+import { detectFaces } from "./faceDetection.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -304,7 +304,7 @@ const enrichImageMetadata = async (
             .update(`${filePath}:${index}`)
             .digest("hex")
             .substring(0, 16);
-          const embedding = computeFaceEmbedding(face);
+          const embedding = face.embedding;
 
           return {
             faceId,
