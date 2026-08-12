@@ -90,7 +90,7 @@ export const detectFaces = async (imagePath: string): Promise<FaceDetectionResul
       return [];
     }
 
-    const tensor = human.tf.tensor3d(data, [info.height, info.width, 3], "int32");
+    const tensor = human.tf.tensor3d(data, [info.height, info.width, 3]);
 
     try {
       const result = await human.detect(tensor);
@@ -171,6 +171,8 @@ const installFileFetch = (): void => {
     return;
   }
 
+  fileFetchInstalled = true;
+
   const nativeFetch = globalThis.fetch;
 
   globalThis.fetch = async (input, init) => {
@@ -178,13 +180,14 @@ const installFileFetch = (): void => {
 
     if (url.startsWith("file://")) {
       const data = await readFile(fileURLToPath(url));
-      return new Response(data as unknown as BodyInit, { status: 200 });
+      return new Response(data as unknown as BodyInit, {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream" },
+      });
     }
 
     return nativeFetch(input, init);
   };
-
-  fileFetchInstalled = true;
 };
 
 const getFetchUrl = (input: Parameters<typeof fetch>[0]): string => {
