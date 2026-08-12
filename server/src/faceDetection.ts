@@ -251,14 +251,15 @@ const cosineSimilarity = (a: number[], b: number[]): number => {
     return 0;
   }
 
-  const { dotProduct, normA, normB } = a.reduce(
-    (acc, value, index) => ({
-      dotProduct: acc.dotProduct + value * b[index],
-      normA: acc.normA + value * value,
-      normB: acc.normB + b[index] * b[index],
-    }),
-    { dotProduct: 0, normA: 0, normB: 0 },
-  );
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
 
   const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
   if (magnitude === 0) {
