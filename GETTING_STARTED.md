@@ -48,3 +48,6 @@ npm --prefix client run dev
 ```
 
 Open `http://localhost:5173`.
+
+Set `MEDIA_ROOT=./exampleFolder` (instead of a real photo library) for
+local dev/testing — see `TESTING.md` under "Manual/local testing".
