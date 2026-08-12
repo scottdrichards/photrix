@@ -143,7 +143,10 @@ export const clusterFaces = (
 };
 
 const getHuman = async (): Promise<HumanInstance> => {
-  humanPromise ??= loadHuman();
+  humanPromise ??= loadHuman().catch((error: unknown) => {
+    humanPromise = undefined;
+    throw error;
+  });
   return humanPromise;
 };
 
