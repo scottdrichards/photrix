@@ -38,6 +38,7 @@ import { ShareOptionsModal } from "./ShareOptionsModal";
 import { PhotoEditor, type EditStyle, type EditAdj, DEFAULT_ADJ, computeStyle, isDirty, EditSvgDefs, applyPixelAdj } from "./PhotoEditor";
 import { SwipePhotoViewer } from "./SwipePhotoViewer";
 import { isSharedView } from "../hooks/useShareFilter";
+import { cx } from "../cx";
 import css from "./FullscreenViewer.module.css";
 
 // Star ratings and tags persist to the DB via PATCH, which the server rejects
@@ -1139,7 +1140,11 @@ export function FullscreenViewer() {
           <div className={css.viewerLayout}>
             {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
             <div
-              className={css.container}
+              className={
+                editMode && photo.mediaType !== "video"
+                  ? cx(css.container, css.containerEditing)
+                  : css.container
+              }
               onClick={handleContainerClick}
               onTouchStart={usesSwipeViewer ? undefined : handleTouchStart}
               onTouchEnd={usesSwipeViewer ? undefined : handleTouchEnd}

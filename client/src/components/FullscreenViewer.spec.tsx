@@ -270,6 +270,34 @@ describe("FullscreenViewer", () => {
     expect(screen.getByText("A7R V")).toBeInTheDocument();
   });
 
+  // Regression test for feedback #63 ("can't click and drag the [crop]
+  // handles"): the editor <aside> docks flush against the media container's
+  // right edge, and the crop box's handles are centered *on* the photo's
+  // edge — so on a photo wide enough to fill the shrunk container, the
+  // right-side handles were half-clipped by the container's overflow and
+  // half-covered by the editor panel, leaving no clickable pixels. The fix
+  // reserves a clearance strip on that edge while editing.
+  it("reserves clearance from the editor panel so crop handles aren't clipped/covered", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto(),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+
+    const mediaContainer = container.querySelector(`.${css.container}`);
+    expect(mediaContainer?.className).not.toContain(css.containerEditing);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit photo" }));
+
+    expect(screen.getByRole("complementary", { name: "Photo editor" })).toBeInTheDocument();
+    const editingContainer = container.querySelector(`.${css.container}`);
+    expect(editingContainer?.className).toContain(css.containerEditing);
+  });
+
   it("toggles face overlays for photo regions", () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto({
