@@ -378,7 +378,10 @@ const exifFieldMapping = {
   ],
   regions: { exifField: "Regions", conversionFn: extractRegions },
   personInImage: ["PersonInImage", "xmp:PersonInImage"],
-  tags: ["Keywords", "dc:subject", "lr:hierarchicalSubject"],
+  // exifr strips the XMP namespace prefix from tags it doesn't recognize as a
+  // known EXIF/IPTC field, so dc:subject / lr:hierarchicalSubject surface
+  // unprefixed (subject / hierarchicalSubject) in practice — keep both forms.
+  tags: ["Keywords", "dc:subject", "subject", "lr:hierarchicalSubject", "hierarchicalSubject"],
   orientation: {
     exifField: "Orientation",
     conversionFn: (value) => toFiniteNumber(value),
