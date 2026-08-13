@@ -57,6 +57,10 @@ describe("registerBackgroundTasks", () => {
         name: "Face clustering",
         start: () => createRunner(Promise.resolve()),
       },
+      momentClustering: {
+        name: "Moment clustering",
+        start: () => createRunner(Promise.resolve()),
+      },
       audioTranscription: {
         name: "Audio transcription (Whisper)",
         start: () => createRunner(Promise.resolve()),
@@ -106,6 +110,7 @@ describe("registerBackgroundTasks", () => {
       "Audio embedding (CLAP)",
       "Face clustering",
       "Face attributes (photo ready)",
+      "Moment clustering",
     ]);
   });
 
@@ -130,6 +135,7 @@ describe("registerBackgroundTasks", () => {
       imageAnalysis: immediate("Image analysis (faces + CLIP)"),
       faceAttributes: immediate("Face attributes (photo ready)"),
       faceClustering: immediate("Face clustering"),
+      momentClustering: immediate("Moment clustering"),
       audioTranscription: immediate("Audio transcription (Whisper)"),
       audioEmbedding: immediate("Audio embedding (CLAP)"),
     });
@@ -178,6 +184,7 @@ describe("registerBackgroundTasks", () => {
       imageAnalysis: immediate("Image analysis (faces + CLIP)"),
       faceAttributes: immediate("Face attributes (photo ready)"),
       faceClustering: immediate("Face clustering"),
+      momentClustering: immediate("Moment clustering"),
       audioTranscription: immediate("Audio transcription (Whisper)"),
       audioEmbedding: immediate("Audio embedding (CLAP)"),
     });

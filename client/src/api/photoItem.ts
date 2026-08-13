@@ -26,6 +26,10 @@ export const DEFAULT_METADATA_KEYS = [
   "tags",
   "editAdj",
   "photoQualityScore",
+  "momentClusterId",
+  "momentClusterRepresentative",
+  "momentClusterSize",
+  "momentClusterPreviewPaths",
   "locationLatitude",
   "locationLongitude",
   "orientation",
@@ -55,6 +59,16 @@ export const buildFileUrl = (path: string, params: Record<string, string>): stri
   if (token) url.searchParams.set("token", token);
   return url.toString();
 };
+
+/**
+ * Thumbnail URL for one of a moment cluster's "peek" preview photos — the
+ * small slivers a collapsed stack tile shows behind its representative (see
+ * ThumbnailTile's stack rendering). `micro` is the cheapest representation
+ * available (an EXIF-embedded-thumbnail header read, no decode/resize) —
+ * appropriate here since these render at a few px, not a real grid tile.
+ */
+export const buildMomentClusterPreviewUrl = (path: string): string =>
+  buildFileUrl(path, { representation: "micro" });
 
 export const buildFallbackUrl = (path: string): string => {
   const url = new URL(`/api/uploads/${encodePathSegments(path)}`, window.location.origin);

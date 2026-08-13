@@ -42,6 +42,7 @@ import { initPasskeyService } from "./auth/passkeyService.ts";
 import { resolveShareFilter, ShareScopeError } from "./auth/shareScope.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
 import { peopleRequestHandler } from "./requestHandlers/peopleRequestHandler.ts";
+import { momentClustersRequestHandler } from "./requestHandlers/momentClustersRequestHandler.ts";
 import { sharePreviewHandler } from "./requestHandlers/sharePreviewHandler.ts";
 import { decodeRequestPath } from "./common/decodeRequestPath.ts";
 import { extractShareFolderRoots } from "./auth/shareFolderScope.ts";
@@ -490,6 +491,21 @@ export const createServer = (
               return;
             }
             await peopleRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              database,
+            );
+            return;
+          }
+
+          if (req.url?.startsWith("/api/moment-clusters/") && req.method === "POST") {
+            if (shareScope) {
+              // Overriding a representative or dissolving a stack mutates the
+              // index; a read-only share view may never persist changes.
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
+            await momentClustersRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
               database,

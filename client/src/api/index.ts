@@ -38,6 +38,8 @@ export type {
   VideoNegotiationResult,
   TranscriptSegment,
   FaceClusterPCAPoint,
+  MomentClusterMember,
+  MomentClusterDetail,
 } from "./types";
 
 export { buildFullShareFilter, buildShareScope } from "./filters";
@@ -57,7 +59,7 @@ export {
 
 export type { PhotoMetadataPatch } from "./photos";
 
-export { createFallbackPhoto } from "./photoItem";
+export { createFallbackPhoto, buildMomentClusterPreviewUrl } from "./photoItem";
 
 export {
   fetchPeopleClusters,
@@ -69,6 +71,12 @@ export {
   mergeClusters,
   separateCluster,
 } from "./people";
+
+export {
+  fetchMomentClusterDetail,
+  setMomentClusterRepresentative,
+  dissolveMomentCluster,
+} from "./momentClusters";
 
 export { fetchSuggestions, fetchSuggestionsWithCounts } from "./suggestions";
 

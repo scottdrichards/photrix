@@ -4,12 +4,14 @@ import {
   ClosedCaption24Regular,
   Filmstrip24Regular,
   Image24Regular,
+  ImageStackRegular,
+  MoreHorizontalRegular,
   MusicNote224Regular,
   PlayCircle24Regular,
   Star12Filled,
 } from "@fluentui/react-icons";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import type { PhotoItem, SearchSource } from "../api";
+import { buildMomentClusterPreviewUrl, type PhotoItem, type SearchSource } from "../api";
 import { useNearViewport } from "../hooks/useNearViewport";
 import { isHoverSuppressedByScroll } from "./ThumbnailTile.hoverIntent";
 import { useSelectionContext } from "./selection/SelectionContext";
@@ -84,6 +86,55 @@ const isDisplayableImage = (photo: PhotoItem): boolean => {
 
 type Props = {
   photo: PhotoItem;
+  /**
+   * Member count of this photo's moment (burst/near-duplicate) cluster; > 1
+   * means this tile is a collapsed representative and should render the
+   * stack badge. Omit or pass <= 1 for an ordinary tile with no cluster.
+   * Mutually exclusive with `restackCount` — a tile is either the collapsed
+   * stand-in for a stack, or one of that stack's members shown inline.
+   */
+  stackCount?: number;
+  /**
+   * Member count of this photo's cluster when this tile is one of that
+   * cluster's members currently shown inline-unstacked (see
+   * ThumbnailGrid's `openStackClusterIds`). Renders a "restack" badge — same
+   * icon/style as the stack badge, no count shown — instead of the stack
+   * badge. Mutually exclusive with `stackCount`.
+   */
+  restackCount?: number;
+  /**
+   * Toggles this tile's cluster between collapsed and inline-unstacked.
+   * Used by both the stack badge (stackCount case: opens it) and the restack
+   * badge (restackCount case: closes it) — the caller (ThumbnailGrid) owns
+   * which state is current and what this does in each case.
+   */
+  onToggleStack?: () => void;
+  /**
+   * Opens the stack management modal (permanently unstack / pick a different
+   * representative). Present whenever `stackCount` or `restackCount` is, so
+   * those two actions stay reachable regardless of whether the cluster is
+   * currently shown collapsed or inline-unstacked.
+   */
+  onOpenStackActions?: () => void;
+  /**
+   * Extra class appended to the root tile element, on top of the tile's own
+   * state classes (selected). Currently only used by ThumbnailGrid to frame
+   * an inline-unstacked cluster's members with a shared border — a pure
+   * layout/style tweak, not a new concept this component needs to know
+   * about.
+   */
+  className?: string;
+  /**
+   * CSS `view-transition-name` for this tile — lets the browser's View
+   * Transitions API match this element across a stack toggle (the
+   * representative tile becomes one of the unstacked members, or vice
+   * versa) and animate it into its new position/size instead of a hard cut.
+   * Only meaningful when the caller is also wrapping the state update that
+   * changes what's rendered in `document.startViewTransition` (see
+   * ThumbnailGrid's `runWithViewTransition`) — setting this alone does
+   * nothing on its own.
+   */
+  viewTransitionName?: string;
 };
 
 const LONG_PRESS_MS = 500;
@@ -173,7 +224,23 @@ const HOVER_DWELL_MS = 1000;
 const TOUCH_DWELL_MS = 900;
 
 export const ThumbnailTile: React.FC<Props> = (props) => {
-  const { photo } = props;
+  const {
+    photo,
+    stackCount,
+    restackCount,
+    onToggleStack,
+    onOpenStackActions,
+    className,
+    viewTransitionName,
+  } = props;
+  const isStack = (stackCount ?? 0) > 1;
+  const isRestackable = restackCount !== undefined;
+  // Real thumbnails of a couple of the cluster's other members, so a
+  // collapsed stack tile reads as an actual stack of photos rather than an
+  // abstract count badge. Only meaningful (and only sent by the server)
+  // alongside stackCount, never restackCount — an unstacked member is just
+  // an ordinary photo, not itself a stack.
+  const stackPreviewPaths = isStack ? (photo.metadata?.momentClusterPreviewPaths ?? []) : [];
   const searchSources = photo.searchSources;
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTriggeredRef = useRef(false);
@@ -485,8 +552,13 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     <button
       type="button"
       ref={tileRef as React.RefObject<HTMLButtonElement>}
-      className={`${css.tile}${isChecked ? ` ${css.tileSelected}` : ""}`}
-      style={{ "--ratio": ratio.toString() } as React.CSSProperties}
+      className={`${css.tile}${isChecked ? ` ${css.tileSelected}` : ""}${className ? ` ${className}` : ""}`}
+      style={
+        {
+          "--ratio": ratio.toString(),
+          ...(viewTransitionName ? { viewTransitionName } : {}),
+        } as React.CSSProperties
+      }
       onClick={handleClick}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={() => setIsHovered(false)}
@@ -512,6 +584,82 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
         </span>
       )}
       {isChecked && <span className={css.checkedOverlay} aria-hidden="true" />}
+      {stackPreviewPaths.length > 0 ? (
+        // Purely decorative (the badge already carries the accessible
+        // "N photos" label) — a couple of the cluster's other members
+        // peeking out from a corner, fanned/rotated, so the collapsed tile
+        // reads as a physical stack of photos. Rendered before (i.e. below,
+        // in default paint order) the main image content, then lifted above
+        // it with z-index — see .stackPreviewPeek's comment for why that's
+        // necessary rather than actually layering behind.
+        <span className={css.stackPreviewPeeks} aria-hidden="true">
+          {stackPreviewPaths.slice(0, 2).map((path, index) => (
+            <img
+              key={path}
+              src={buildMomentClusterPreviewUrl(path)}
+              alt=""
+              loading="lazy"
+              className={css.stackPreviewPeek}
+              style={
+                {
+                  "--peek-index": index,
+                } as React.CSSProperties
+              }
+            />
+          ))}
+        </span>
+      ) : null}
+      {isStack || isRestackable ? (
+        <span className={css.stackControls}>
+          <span
+            className={css.stackBadge}
+            role="button"
+            tabIndex={0}
+            aria-label={
+              isStack
+                ? `${stackCount} photos of this moment — show separately`
+                : `Restack these ${restackCount} photos`
+            }
+            title={
+              isStack
+                ? `${stackCount} photos of this moment — click to show separately`
+                : "Restack these photos back into one tile"
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleStack?.();
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleStack?.();
+            }}
+          >
+            <ImageStackRegular fontSize={14} />
+            {isStack ? stackCount : null}
+          </span>
+          <span
+            className={css.stackActionsBadge}
+            role="button"
+            tabIndex={0}
+            aria-label="More stack options — unstack permanently or change which photo is shown"
+            title="More stack options"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenStackActions?.();
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              e.stopPropagation();
+              onOpenStackActions?.();
+            }}
+          >
+            <MoreHorizontalRegular fontSize={14} />
+          </span>
+        </span>
+      ) : null}
       {photo.livePhotoUrl ? (
         <span
           className={`${css.livePhotoBadge}${livePhoto.isVisible ? ` ${css.livePhotoBadgeActive}` : ""}`}

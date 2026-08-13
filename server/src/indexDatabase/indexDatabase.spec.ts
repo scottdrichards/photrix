@@ -1591,4 +1591,223 @@ describe("IndexDatabase", () => {
       });
     });
   });
+
+  describe("queryGeoClusters", () => {
+    const CLUSTER_SIZE = 0.01;
+
+    // Three coordinates that genuinely share one CLUSTER_SIZE cell. Points must
+    // sit away from the cell edges: 47.6/-122.3 look adjacent but land on a
+    // boundary, so they bucket apart and quietly turn a grouping test into a
+    // test of nothing.
+    const SAME_CELL = [
+      [47.6005, -122.3005],
+      [47.6006, -122.3006],
+      [47.6007, -122.3007],
+    ] as const satisfies ReadonlyArray<readonly [number, number]>;
+    const SAME_CELL_CENTER = { latitude: 47.605, longitude: -122.305 };
+
+    // exifProcessedAt is what gates the EXIF column block on write, so a record
+    // without it is stored with no coordinates at all.
+    const geoRecord = (
+      relativePath: string,
+      latitude: number,
+      longitude: number,
+      dateTaken?: Date,
+    ) =>
+      createRecord(relativePath, {
+        exifProcessedAt: new Date(),
+        locationLatitude: latitude,
+        locationLongitude: longitude,
+        ...(dateTaken ? { dateTaken } : {}),
+      });
+
+    it("groups nearby items into one bucket and leaves distant ones apart", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(geoRecord("a.jpg", ...SAME_CELL[0]));
+        await db.addFile(geoRecord("b.jpg", ...SAME_CELL[1]));
+        await db.addFile(geoRecord("far.jpg", 34.05, -118.24));
+
+        const { clusters, total } = await db.queryGeoClusters({
+          filter: { operation: "and", conditions: [] },
+          clusterSize: CLUSTER_SIZE,
+        });
+
+        expect(clusters).toHaveLength(2);
+        expect(clusters[0]?.count).toBe(2);
+        expect(clusters[1]?.count).toBe(1);
+        // The pin sits at the bucket's centre, not on any one photo.
+        expect(clusters[0]?.latitude).toBeCloseTo(SAME_CELL_CENTER.latitude, 6);
+        expect(clusters[0]?.longitude).toBeCloseTo(SAME_CELL_CENTER.longitude, 6);
+        expect(total).toBe(3);
+      });
+    });
+
+    it("skips items with no coordinates", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(geoRecord("located.jpg", ...SAME_CELL[0]));
+        await db.addFile(createRecord("no-gps.jpg"));
+
+        const { clusters, total } = await db.queryGeoClusters({
+          filter: { operation: "and", conditions: [] },
+          clusterSize: CLUSTER_SIZE,
+        });
+
+        expect(clusters).toHaveLength(1);
+        expect(total).toBe(1);
+      });
+    });
+
+    it("reports each bucket's date range so pins can be coloured by age", async () => {
+      await withTempDb(async (db) => {
+        const older = new Date("2019-06-01T12:00:00Z");
+        const newer = new Date("2023-09-14T08:30:00Z");
+        await db.addFile(geoRecord("older.jpg", ...SAME_CELL[0], older));
+        await db.addFile(geoRecord("newer.jpg", ...SAME_CELL[1], newer));
+
+        const { clusters } = await db.queryGeoClusters({
+          filter: { operation: "and", conditions: [] },
+          clusterSize: CLUSTER_SIZE,
+        });
+
+        expect(clusters[0]?.minDate).toBe(older.getTime());
+        expect(clusters[0]?.maxDate).toBe(newer.getTime());
+      });
+    });
+
+    it("picks the sample file by folder then name, not by concatenated path", async () => {
+      await withTempDb(async (db) => {
+        // "/IMG.jpg" sorts first by (folder, fileName) because "/" precedes
+        // "/2014/"; concatenating without a separator would instead compare
+        // "/IMG.jpg" against "/2014/a.jpg" and pick the latter.
+        await db.addFile(geoRecord("2014/a.jpg", ...SAME_CELL[0]));
+        await db.addFile(geoRecord("IMG.jpg", ...SAME_CELL[1]));
+
+        const { clusters } = await db.queryGeoClusters({
+          filter: { operation: "and", conditions: [] },
+          clusterSize: CLUSTER_SIZE,
+        });
+
+        expect(clusters[0]?.samplePath).toBe("/IMG.jpg");
+        expect(clusters[0]?.sampleName).toBe("IMG.jpg");
+      });
+    });
+
+    it("keeps the densest buckets when the limit trims the result, and still counts all items", async () => {
+      await withTempDb(async (db) => {
+        // One bucket of three, two of one each; a limit of 1 keeps the dense one.
+        await db.addFile(geoRecord("dense-1.jpg", ...SAME_CELL[0]));
+        await db.addFile(geoRecord("dense-2.jpg", ...SAME_CELL[1]));
+        await db.addFile(geoRecord("dense-3.jpg", ...SAME_CELL[2]));
+        await db.addFile(geoRecord("sparse-1.jpg", 40.7, -74.0));
+        await db.addFile(geoRecord("sparse-2.jpg", 34.05, -118.24));
+
+        const { clusters, total } = await db.queryGeoClusters({
+          filter: { operation: "and", conditions: [] },
+          clusterSize: CLUSTER_SIZE,
+          limit: 1,
+        });
+
+        expect(clusters).toHaveLength(1);
+        expect(clusters[0]?.count).toBe(3);
+        // total covers every matching item, so the caller can tell the map is
+        // showing a trimmed view.
+        expect(total).toBe(5);
+      });
+    });
+
+    it("applies the filter before clustering", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(geoRecord("keep.jpg", ...SAME_CELL[0]));
+        await db.addFile(geoRecord("drop.heic", ...SAME_CELL[1]));
+
+        const { clusters, total } = await db.queryGeoClusters({
+          filter: { mimeType: "image/jpeg" },
+          clusterSize: CLUSTER_SIZE,
+        });
+
+        expect(total).toBe(1);
+        expect(clusters[0]?.sampleName).toBe("keep.jpg");
+      });
+    });
+
+    it("returns nothing for a library with no geotagged items", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("no-gps.jpg"));
+
+        const { clusters, total } = await db.queryGeoClusters({
+          filter: { operation: "and", conditions: [] },
+          clusterSize: CLUSTER_SIZE,
+        });
+
+        expect(clusters).toEqual([]);
+        expect(total).toBe(0);
+      });
+    });
+  });
+
+  describe("moment clustering query support", () => {
+    it("collapses a cluster to its representative by default, exposing size and ranked preview paths only on that row", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("burst/a.jpg"));
+        await db.addFile(createRecord("burst/b.jpg"));
+        await db.addFile(createRecord("burst/c.jpg"));
+
+        const clusterId = await db.createMomentCluster();
+        await db.promoteFileToMomentCluster("/burst/", "a.jpg", clusterId);
+        await db.saveMomentClusteringBatch([
+          { folder: "/burst/", fileName: "b.jpg", momentClusterId: clusterId, sharpnessScore: 10 },
+          { folder: "/burst/", fileName: "c.jpg", momentClusterId: clusterId, sharpnessScore: 20 },
+        ]);
+        const set = await db.setMomentClusterRepresentative(String(clusterId), "/burst/a.jpg");
+        expect(set).toBe(true);
+
+        const collapsed = await db.queryFiles({
+          filter: {},
+          metadata: [
+            "momentClusterId",
+            "momentClusterRepresentative",
+            "momentClusterSize",
+            "momentClusterPreviewPaths",
+          ],
+        });
+
+        // Default collapse: only the representative shows up at all.
+        expect(collapsed.items).toHaveLength(1);
+        const rep = collapsed.items[0]!;
+        expect(rep.fileName).toBe("a.jpg");
+        expect(rep.momentClusterRepresentative).toBe(true);
+        expect(rep.momentClusterSize).toBe(3);
+        // Ranked by sharpnessScore descending (no photoQualityScore set on
+        // either), same signal the representative pick itself uses — c.jpg
+        // (20) ahead of b.jpg (10).
+        expect(rep.momentClusterPreviewPaths).toEqual(["/burst/c.jpg", "/burst/b.jpg"]);
+
+        const expanded = await db.queryFiles({
+          filter: {},
+          metadata: ["momentClusterId", "momentClusterRepresentative"],
+          collapseMomentClusters: false,
+        });
+        expect(expanded.items.map((i) => i.fileName).sort()).toEqual(["a.jpg", "b.jpg", "c.jpg"]);
+      });
+    });
+
+    it("omits momentClusterSize/momentClusterPreviewPaths unless explicitly requested, and both stay null for a non-clustered photo", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("solo.jpg"));
+
+        const withoutRequest = await db.queryFiles({ filter: {}, metadata: [] });
+        expect(withoutRequest.items[0]).not.toHaveProperty("momentClusterSize");
+        expect(withoutRequest.items[0]).not.toHaveProperty("momentClusterPreviewPaths");
+
+        const withRequest = await db.queryFiles({
+          filter: {},
+          metadata: ["momentClusterSize", "momentClusterPreviewPaths"],
+        });
+        // NULL (no signal), not 0/empty-array — a non-clustered photo isn't
+        // "a cluster of zero", it was just never evaluated as one.
+        expect(withRequest.items[0]).not.toHaveProperty("momentClusterSize");
+        expect(withRequest.items[0]).not.toHaveProperty("momentClusterPreviewPaths");
+      });
+    });
+  });
 });

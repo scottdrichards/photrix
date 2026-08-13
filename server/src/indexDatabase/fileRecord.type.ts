@@ -69,6 +69,22 @@ export type AIMetadata = {
    * until at least one detected face has been scored for "photo ready"
    * attributes. */
   photoQualityScore?: number;
+  /** Moment (burst/near-duplicate) cluster id, or absent if this photo isn't
+   * grouped with any other. See momentClusterEngine.ts. */
+  momentClusterId?: number;
+  /** True when this photo is the chosen representative of its momentClusterId
+   * (only meaningful alongside momentClusterId). */
+  momentClusterRepresentative?: boolean;
+  /** Member count of this photo's moment cluster; only populated on the
+   * representative row returned by a collapsed gallery query, so the client
+   * knows how big a badge to draw without a second request. */
+  momentClusterSize?: number;
+  /** Relative paths of up to 2 other members of this photo's moment cluster
+   * (representative excluded), ranked the same way the representative pick
+   * itself is — for rendering a couple of real thumbnails peeking out behind
+   * the collapsed representative. Same opt-in-only-when-requested shape as
+   * momentClusterSize. */
+  momentClusterPreviewPaths?: string[];
 };
 
 export type AllMetaData = FileInfo & ExifMetadata & AIMetadata;
@@ -107,7 +123,15 @@ export const MetadataGroups = {
     "livePhotoVideoFileName",
     "embeddedVideoLength",
   ],
-  aiMetadata: ["aiDescription", "aiTags", "photoQualityScore"],
+  aiMetadata: [
+    "aiDescription",
+    "aiTags",
+    "photoQualityScore",
+    "momentClusterId",
+    "momentClusterRepresentative",
+    "momentClusterSize",
+    "momentClusterPreviewPaths",
+  ],
   faces: [],
 } as const satisfies Record<string, AllMetaData[keyof AllMetaData][]>;
 

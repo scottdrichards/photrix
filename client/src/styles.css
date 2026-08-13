@@ -400,3 +400,17 @@ dialog::backdrop {
   padding: var(--space-m);
   overflow-y: auto;
 }
+
+/* ── View Transitions (photo grid stack toggle) ── */
+/* Global, not a CSS Module rule, because ::view-transition-group() targets a
+   browser-generated pseudo-element tree rooted at the document, not anything
+   in the app's own DOM — CSS Modules' scoping has no meaning here. `*` keeps
+   this scoped to "every named view transition on the page" rather than one
+   specific name, which is fine: nothing else in the app uses this API yet
+   (see ThumbnailGrid.tsx's runWithViewTransition, the only caller). Duration
+   only, no easing override — the platform default already reads as a
+   reasonable "settle into place", and this is meant to be a quick, subtle
+   grid rearrangement, not a slideshow transition. */
+::view-transition-group(*) {
+  animation-duration: var(--dur-normal);
+}

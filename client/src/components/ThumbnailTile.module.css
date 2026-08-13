@@ -325,3 +325,103 @@
   font-size: 0.875rem;
   line-height: 1.4;
 }
+
+/* Real-photo "peeking out" look for a collapsed moment cluster's
+   representative tile — supersedes an earlier abstract box-shadow "fan"
+   (kept the cluster stack instantly recognizable without needing real
+   thumbnail data, but the user explicitly wanted actual photos, not an
+   abstract cue, once that data existed). inset: 0 sizes the layer to the
+   whole tile so each peek can position itself relative to a corner via
+   right/bottom below; z-index: 2 lifts the group above the tile's plain
+   thumbnail image/motion layer (which has no z-index of its own) without
+   touching the badges layer (.stackControls, z-index: 3) above it. */
+.stackPreviewPeeks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Small, bordered, and anchored toward one corner rather than filling the
+   tile — these are meant to read as slivers of other photos peeking out
+   from behind the representative, not competing thumbnails. --peek-index
+   (0 for the nearest/most-visible peek, set inline per element) fans
+   successive peeks further out and rotates them more, and keeps the nearer
+   one painted on top of the further one within this layer's own stacking
+   context (see .stackPreviewPeeks). */
+.stackPreviewPeek {
+  position: absolute;
+  right: var(--space-xs);
+  bottom: var(--space-xs);
+  width: 32%;
+  max-width: 56px;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow-sm);
+  transform: translate(calc(var(--peek-index, 0) * 7px), calc(var(--peek-index, 0) * -6px))
+    rotate(calc((var(--peek-index, 0) + 1) * -7deg));
+  z-index: calc(-1 * var(--peek-index, 0));
+}
+
+/* Groups the stack/restack toggle with its "more options" kebab in the same
+   top-right corner the other single badges (checkbox, live-photo) use. A flex
+   row rather than each badge positioning itself independently, so the two
+   always sit flush together regardless of which combination is showing. */
+.stackControls {
+  position: absolute;
+  top: var(--space-xxs);
+  right: var(--space-xxs);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stackBadge {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background-color: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.stackBadge:hover,
+.stackBadge:focus-visible {
+  background-color: rgba(0, 0, 0, 0.8);
+  outline: none;
+}
+
+/* Secondary entry point to the stack-management modal (permanently unstack /
+   pick a different representative) — deliberately smaller and icon-only so
+   the primary action (the toggle badge) reads as the default, one-click path
+   and this reads as the "more options" escape hatch. Same visual language
+   (dark pill, same hover treatment) as .stackBadge for consistency. */
+.stackActionsBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background-color: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.stackActionsBadge:hover,
+.stackActionsBadge:focus-visible {
+  background-color: rgba(0, 0, 0, 0.8);
+  outline: none;
+}

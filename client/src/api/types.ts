@@ -54,6 +54,18 @@ export interface PhotoItem {
     /** Derived whole-photo quality aggregate, 0..1; see server's
      * photoQuality.ts. Absent until at least one detected face is scored. */
     photoQualityScore?: number;
+    /** Moment (burst/near-duplicate) cluster id; absent if not grouped. */
+    momentClusterId?: number;
+    /** True when this photo is its cluster's chosen representative. */
+    momentClusterRepresentative?: boolean;
+    /** Member count of this photo's moment cluster (only present on the
+     * representative row a collapsed gallery query returns). */
+    momentClusterSize?: number;
+    /** Relative paths of up to 2 other members of this photo's moment
+     * cluster, for rendering real thumbnails peeking out behind the
+     * collapsed representative tile (only present on the representative
+     * row). */
+    momentClusterPreviewPaths?: string[];
     [key: string]: unknown;
   };
 }
@@ -283,6 +295,23 @@ export type VideoNegotiationResult =
   | { mode: "error"; reason: string };
 
 export type TranscriptSegment = { start: number; end: number; text: string };
+
+/**
+ * One photo inside a moment cluster (burst/near-duplicate group) — the
+ * expanded stack view's per-member data. See the server's
+ * indexDatabase.type.ts MomentClusterMember for the source shape.
+ */
+export type MomentClusterMember = {
+  photo: PhotoItem;
+  isRepresentative: boolean;
+  sharpnessScore: number | null;
+  photoQualityScore: number | null;
+};
+
+export type MomentClusterDetail = {
+  id: string;
+  members: MomentClusterMember[];
+};
 
 export type FaceClusterPCAPoint = {
   id: string;

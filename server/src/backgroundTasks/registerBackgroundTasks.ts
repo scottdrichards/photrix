@@ -11,6 +11,7 @@ type BackgroundTaskPlan = {
   imageAnalysis: Task;
   faceAttributes: Task;
   faceClustering: Task;
+  momentClustering: Task;
   audioTranscription: Task;
   audioEmbedding: Task;
 };
@@ -70,9 +71,17 @@ export const registerBackgroundTasks = (
   // than competing with it for the shared Python worker) and re-checks whenever
   // that stage runs again.
   const faceAttributes = reentrant(tasks.faceAttributes);
+  // Needs the CLIP image embedding (from imageAnalysis) to compare photos, so
+  // it cascades the same way faceClustering does. It reads whatever
+  // photoQualityScore each file has *at the time a cluster's representative is
+  // picked* rather than waiting on faceAttributes — a photo whose faces are
+  // scored after its cluster already picked a representative keeps that pick
+  // until something else re-triggers the cluster (e.g. a manual override).
+  const momentClustering = reentrant(tasks.momentClustering);
   const imageAnalysis = reentrant(tasks.imageAnalysis, () => {
     faceClustering.ensure();
     faceAttributes.ensure();
+    momentClustering.ensure();
   });
   const exifMetadata = reentrant(tasks.exifMetadata, () => {
     audioTranscription.ensure();

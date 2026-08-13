@@ -22,6 +22,7 @@ export const queryHandler = async (
   const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
   const expandToFolder = url.searchParams.get("expandToFolder") === "true";
   const cluster = url.searchParams.get("cluster") === "true";
+  const collapseMomentClustersParam = url.searchParams.get("collapseMomentClusters");
   const clusterSizeParam = url.searchParams.get("clusterSize");
   const westParam = url.searchParams.get("west");
   const eastParam = url.searchParams.get("east");
@@ -80,6 +81,7 @@ export const queryHandler = async (
         : {}),
     ...(page && { page: parseInt(page, 10) }),
     ...(expandToFolder && { expandToFolder: true }),
+    ...(collapseMomentClustersParam === "false" && { collapseMomentClusters: false }),
     ...(() => {
       const sort = parseSort(url.searchParams.get("sort"));
       return sort ? { sort } : {};
@@ -139,6 +141,17 @@ export const queryHandler = async (
     }
     const detail = await database.getFaceClusterDetail({ filter, clusterId });
     writeJson(res, 200, detail);
+    return;
+  }
+
+  if (aggregate === "momentClusterDetail") {
+    const clusterId = url.searchParams.get("clusterId");
+    if (!clusterId) {
+      writeJson(res, 400, { error: "Missing clusterId parameter" });
+      return;
+    }
+    const detail = await database.getMomentClusterDetail(clusterId);
+    writeJson(res, 200, { cluster: detail });
     return;
   }
 

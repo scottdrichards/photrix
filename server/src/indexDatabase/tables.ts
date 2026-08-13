@@ -109,12 +109,52 @@ export const tables = {
       { name: "audioTranscribeErrorAt", type: "INTEGER", indexExpression: true },
       { name: "audioEmbeddingProcessedAt", type: "INTEGER", indexExpression: true },
       { name: "audioEmbeddingErrorAt", type: "INTEGER", indexExpression: true },
+      // Persistent "same moment" burst/near-duplicate cluster assignment (see
+      // momentClusterEngine.ts / processMomentClustering.ts). NULL means "not in
+      // a cluster" — either never evaluated, or evaluated and found to stand
+      // alone. Unlike faces.clusterId, a photo with no visually-similar temporal
+      // neighbor simply never gets one; there is no "unclusterable" sentinel.
+      { name: "momentClusterId", type: "INTEGER", indexExpression: true },
+      // 1 when this file is the chosen representative of its momentClusterId
+      // (the one the collapsed gallery view shows). Exactly one member per
+      // cluster should carry this; see indexDatabase.setMomentClusterRepresentative.
+      { name: "momentClusterRepresentative", type: "INTEGER", default: 0 },
+      // Laplacian-variance blur/sharpness score (see imageProcessing/sharpness.ts),
+      // computed once by the moment-clustering task and stored so representative
+      // re-selection (e.g. after a manual override is cleared) never re-decodes
+      // the image. NULL means "not computed" (never treat as blurry). Not scaled
+      // 0..1 — see sharpness.ts for why — so cross-cluster comparison is invalid,
+      // only within-cluster min-max normalization (done at read time) is.
+      { name: "sharpnessScore", type: "REAL" },
+      // Pipeline marker / backlog queue column for the moment-clustering task,
+      // same role as facesProcessedAt. Set once a file's clustering decision
+      // (join an existing chain, start one, or stand alone) has been made and
+      // persisted, regardless of outcome.
+      { name: "momentClusterProcessedAt", type: "INTEGER", indexExpression: true },
     ],
     compositeIndexes: [
       {
         name: "idx_files_path",
         expression: "folder, fileName",
         unique: true,
+      },
+      {
+        // Drives the moment-clustering backfill's "next unprocessed images in
+        // capture-time order" query — the scan has to walk dateTaken order to
+        // chain temporally-adjacent photos, so dateTaken is in the index rather
+        // than just the boolean marker.
+        name: "needing_moment_clustering",
+        expression: "dateTaken, folder, fileName",
+        where:
+          "mimeType LIKE 'image/%' AND momentClusterProcessedAt IS NULL AND dateTaken IS NOT NULL",
+      },
+      {
+        // Serves both the collapse-to-representative default gallery filter
+        // (momentClusterId IS NULL OR momentClusterRepresentative = 1) and the
+        // "members of this cluster" expansion query.
+        name: "by_moment_cluster",
+        expression: "momentClusterId, momentClusterRepresentative",
+        where: "momentClusterId IS NOT NULL",
       },
       {
         name: "idx_images_needing_conversion",
@@ -147,6 +187,20 @@ export const tables = {
         // idx_files_dateTaken, which prepareTables drops automatically.
         name: "dateTaken_range",
         expression: "dateTaken, folder, fileName",
+      },
+      {
+        // Covering index for queryGeoClusters (the map view). Every column the
+        // clustering query touches lives here, so the bucket GROUP BY is an
+        // index-only walk instead of a full `files` scan that drags each row's
+        // image/audio embedding BLOB pages along — the same hazard dateTaken_range
+        // exists to avoid. Measured cold on the 191k-row library: 15.1s -> 0.2s
+        // for an unbounded (root) load, 711ms -> ~1ms for a bounded viewport,
+        // which is what every pan and zoom pays. Partial on the location columns
+        // because only ~27% of rows are geotagged, keeping it at ~5 MB.
+        name: "geo_clusters",
+        expression:
+          "locationLatitude, locationLongitude, dateTaken, created, modified, folder, fileName",
+        where: "locationLatitude IS NOT NULL AND locationLongitude IS NOT NULL",
       },
       {
         // Serves the default library ordering. The folder/fileName tiebreakers are
@@ -361,6 +415,30 @@ export const tables = {
         expression: "targetClusterId, mergedAt DESC",
       },
     ],
+  },
+  /**
+   * One row per moment cluster (burst / near-duplicate group). Mirrors
+   * `faceClusters` in shape — a running centroid + weight so restarting the
+   * background task can resume a chain without re-scanning every prior member
+   * — but far simpler: no name/personId/merge machinery, since these clusters
+   * are never user-named, only shown as a stack.
+   */
+  momentClusters: {
+    columns: [
+      { name: "id", type: "INTEGER", isPrimaryKey: true },
+      // Unnormalized running mean of member photos' unit CLIP image embeddings,
+      // Float32 (see momentClusterEngine.ts's centroidSimilarity/foldIntoCentroid).
+      { name: "centroid", type: "BLOB" },
+      { name: "weight", type: "INTEGER" },
+      { name: "createdAt", type: "INTEGER" },
+      { name: "updatedAt", type: "INTEGER" },
+      // Set once a user manually picks a representative (see
+      // setMomentClusterRepresentative's `pinned` argument) so the automatic
+      // sharpness/quality re-scoring on later joins never overwrites their
+      // choice.
+      { name: "representativePinned", type: "INTEGER", default: 0 },
+    ],
+    compositeIndexes: [],
   },
   audioSegments: {
     columns: [

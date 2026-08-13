@@ -180,6 +180,184 @@ describe("ThumbnailTile", () => {
     expect(setSelected).toHaveBeenCalledWith(photo);
   });
 
+  describe("stack controls", () => {
+    it("renders the stack badge + kebab for a collapsed representative, and neither opens the photo", () => {
+      const setSelected = vi.fn();
+      const onToggleStack = vi.fn();
+      const onOpenStackActions = vi.fn();
+      useSelectionContextMock.mockReturnValue({
+        setSelected,
+        selectionMode: false,
+        checkedPaths: new Set<string>(),
+        enterSelectionMode: vi.fn(),
+        toggleChecked: vi.fn(),
+      });
+
+      render(
+        <ThumbnailTile
+          photo={createPhoto()}
+          stackCount={3}
+          onToggleStack={onToggleStack}
+          onOpenStackActions={onOpenStackActions}
+        />,
+      );
+
+      const badge = screen.getByRole("button", {
+        name: "3 photos of this moment — show separately",
+      });
+      expect(badge).toHaveTextContent("3");
+      fireEvent.click(badge);
+      expect(onToggleStack).toHaveBeenCalledTimes(1);
+
+      const kebab = screen.getByRole("button", { name: /more stack options/i });
+      fireEvent.click(kebab);
+      expect(onOpenStackActions).toHaveBeenCalledTimes(1);
+
+      // Neither control is the tile's own click target — clicking them must
+      // not also open the fullscreen viewer for the photo.
+      expect(setSelected).not.toHaveBeenCalled();
+    });
+
+    it("supports keyboard activation (Enter and Space) on the stack badge", () => {
+      const onToggleStack = vi.fn();
+      useSelectionContextMock.mockReturnValue({
+        setSelected: vi.fn(),
+        selectionMode: false,
+        checkedPaths: new Set<string>(),
+        enterSelectionMode: vi.fn(),
+        toggleChecked: vi.fn(),
+      });
+
+      render(
+        <ThumbnailTile photo={createPhoto()} stackCount={2} onToggleStack={onToggleStack} />,
+      );
+
+      const badge = screen.getByRole("button", {
+        name: "2 photos of this moment — show separately",
+      });
+      fireEvent.keyDown(badge, { key: "Enter" });
+      fireEvent.keyDown(badge, { key: " " });
+      expect(onToggleStack).toHaveBeenCalledTimes(2);
+
+      // An unrelated key must not trigger it.
+      fireEvent.keyDown(badge, { key: "Tab" });
+      expect(onToggleStack).toHaveBeenCalledTimes(2);
+    });
+
+    it("renders a restack badge (no count shown) instead of the stack badge when restackCount is set", () => {
+      const onToggleStack = vi.fn();
+      useSelectionContextMock.mockReturnValue({
+        setSelected: vi.fn(),
+        selectionMode: false,
+        checkedPaths: new Set<string>(),
+        enterSelectionMode: vi.fn(),
+        toggleChecked: vi.fn(),
+      });
+
+      render(
+        <ThumbnailTile
+          photo={createPhoto()}
+          restackCount={3}
+          onToggleStack={onToggleStack}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: /photos of this moment — show separately/ }),
+      ).not.toBeInTheDocument();
+      const restackBadge = screen.getByRole("button", { name: "Restack these 3 photos" });
+      fireEvent.click(restackBadge);
+      expect(onToggleStack).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders no stack controls for an ordinary tile", () => {
+      useSelectionContextMock.mockReturnValue({
+        setSelected: vi.fn(),
+        selectionMode: false,
+        checkedPaths: new Set<string>(),
+        enterSelectionMode: vi.fn(),
+        toggleChecked: vi.fn(),
+      });
+
+      render(<ThumbnailTile photo={createPhoto()} />);
+
+      expect(screen.queryByText(/more stack options/i)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /photos of this moment/ }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("applies view-transition-name to the root tile when provided, for View Transitions matching across a toggle", () => {
+      useSelectionContextMock.mockReturnValue({
+        setSelected: vi.fn(),
+        selectionMode: false,
+        checkedPaths: new Set<string>(),
+        enterSelectionMode: vi.fn(),
+        toggleChecked: vi.fn(),
+      });
+
+      render(
+        <ThumbnailTile
+          photo={createPhoto()}
+          stackCount={2}
+          viewTransitionName="photrix-tile-a-1-jpg"
+        />,
+      );
+
+      const tile = screen.getByRole("button", { name: "1.jpg" });
+      expect(tile.style.viewTransitionName).toBe("photrix-tile-a-1-jpg");
+    });
+
+    it("renders a peek thumbnail per preview path (capped at 2) for a collapsed representative", () => {
+      useSelectionContextMock.mockReturnValue({
+        setSelected: vi.fn(),
+        selectionMode: false,
+        checkedPaths: new Set<string>(),
+        enterSelectionMode: vi.fn(),
+        toggleChecked: vi.fn(),
+      });
+
+      render(
+        <ThumbnailTile
+          photo={createPhoto({
+            metadata: {
+              momentClusterPreviewPaths: ["a/2.jpg", "a/3.jpg", "a/4.jpg"],
+            },
+          })}
+          stackCount={4}
+        />,
+      );
+
+      // alt="" — these are decorative (the badge already carries the
+      // accessible "N photos" label) — so query by src instead of role/name.
+      const peeks = document.querySelectorAll('img[alt=""]');
+      expect(peeks).toHaveLength(2);
+      expect((peeks[0] as HTMLImageElement).src).toContain("a/2.jpg");
+      expect((peeks[1] as HTMLImageElement).src).toContain("a/3.jpg");
+    });
+
+    it("renders no peek thumbnails for an unstacked member, even if the photo carries preview-path metadata", () => {
+      useSelectionContextMock.mockReturnValue({
+        setSelected: vi.fn(),
+        selectionMode: false,
+        checkedPaths: new Set<string>(),
+        enterSelectionMode: vi.fn(),
+        toggleChecked: vi.fn(),
+      });
+
+      render(
+        <ThumbnailTile
+          photo={createPhoto({
+            metadata: { momentClusterPreviewPaths: ["a/2.jpg"] },
+          })}
+          restackCount={3}
+        />,
+      );
+
+      expect(document.querySelectorAll('img[alt=""]')).toHaveLength(0);
+    });
+  });
+
   describe("video hover preview", () => {
     beforeEach(() => {
       vi.useFakeTimers({ shouldAdvanceTime: true });

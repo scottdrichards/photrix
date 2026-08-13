@@ -24,6 +24,7 @@ import { processExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { processFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { processFaceClustering } from "./indexDatabase/processFaceClustering.ts";
+import { processMomentClustering } from "./indexDatabase/processMomentClustering.ts";
 import { initAuthService } from "./auth/authService.ts";
 import { initPasskeyService } from "./auth/passkeyService.ts";
 import { measureOperation } from "./observability/requestTrace.ts";
@@ -235,6 +236,13 @@ const startServer = async () => {
       name: "Face clustering",
       start: () => processFaceClustering(database),
       resources: { cpu: 0.25 },
+    },
+    momentClustering: {
+      name: "Moment clustering (burst/near-duplicate stacks)",
+      start: () => processMomentClustering(database),
+      // Each file also pays for a small sharp() decode + sharpness pass, not
+      // just the in-memory embedding comparison faceClustering does.
+      resources: { cpu: 0.5 },
     },
     audioTranscription: {
       name: "Audio transcription (Whisper)",

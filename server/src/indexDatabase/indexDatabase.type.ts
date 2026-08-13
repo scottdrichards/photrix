@@ -66,6 +66,31 @@ export type QueryOptions = {
    * the caller wants the full folder context alongside matched items.
    */
   expandToFolder?: boolean;
+  /**
+   * When true (the default), a file that belongs to a moment cluster (burst /
+   * near-duplicate group, see momentClusterEngine.ts) is only included when it
+   * is that cluster's representative — the rest of the cluster's members are
+   * dropped from the result. Set false to see every file individually
+   * (e.g. when expanding a stack in the UI, or requesting a specific cluster's
+   * members).
+   */
+  collapseMomentClusters?: boolean;
+};
+
+export type MomentClusterMember = {
+  path: string;
+  fileName: string;
+  mimeType: string | null;
+  dimensionWidth: number | null;
+  dimensionHeight: number | null;
+  isRepresentative: boolean;
+  sharpnessScore: number | null;
+  photoQualityScore: number | null;
+};
+
+export type MomentClusterDetail = {
+  id: string;
+  members: MomentClusterMember[];
 };
 
 export type QueryResultItem<

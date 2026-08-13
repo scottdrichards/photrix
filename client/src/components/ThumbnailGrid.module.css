@@ -13,6 +13,10 @@
   gap: var(--space-m);
   padding-block-end: var(--space-xxl);
   --thumbnail-size: clamp(150px, 20vw, 260px);
+  /* Width of the border .clusterMember draws around an unstacked cluster's
+     members. A single source of truth so the border and the negative margin
+     that closes the gap around it (.clusterMemberTight) can't drift apart. */
+  --cluster-border-width: 2px;
 }
 
 /* Prevents the last tile on a partial row from stretching full width by
@@ -31,6 +35,71 @@
     gap: var(--space-xs);
     --thumbnail-size: clamp(104px, 30vw, 150px);
   }
+}
+
+/* Frames an inline-unstacked cluster's members as one continuous boxed strip
+   using borders only — deliberately NOT a wrapper element around the group.
+   A single .clusterGroup wrapper was tried first and reverted: making the
+   group (rather than each member) the flex item .grid's justified-row layout
+   sees changed how that row's leftover space distributes compared to an
+   ordinary tile (no wrapper flex-grow to match each member's own
+   --ratio-driven share), which the user explicitly didn't want. Every member
+   stays an ordinary flex sibling directly in .grid with its own individual
+   sizing, identical to a non-clustered tile — only its border and immediate
+   left neighbor-margin differ.
+   Trade-off accepted (not solved): because members are ordinary flex-wrap
+   siblings again, not grouped under one wrapper, a cluster landing at a row
+   boundary can still visually split across two rows, same as the very first
+   (pre-wrapper) attempt. Not worth solving for a purely cosmetic framing cue.
+   box-sizing: border-box so the border is drawn *inside* each member's
+   existing --ratio-derived flex-basis box rather than growing it — the
+   requirement this round was that thumbnail sizing/layout stay exactly as
+   normal, and the default content-box would have made every clustered member
+   a few px larger than an equivalent unclustered tile. !important throughout:
+   .clusterMember and ThumbnailTile's own `.tile` (which sets its own
+   `border: none` and `border-radius`) are two different CSS Modules, both
+   single-class selectors of equal specificity — which one wins on a plain
+   cascade-order tie isn't something to rely on for a deliberate override. */
+.clusterMember {
+  box-sizing: border-box !important;
+  border: var(--cluster-border-width) solid var(--brand) !important;
+  border-radius: 0 !important;
+}
+
+/* Pulls every member after the first left by *both* the ambient gap and the
+   border width (not just the gap, as the very first spacing-only attempt
+   did), so this member's left border lands exactly on top of its preceding
+   sibling's right border rather than sitting flush beside it — the two
+   overlap into one shared line instead of doubling up into a visibly
+   thicker seam where the tiles touch. */
+.clusterMemberTight {
+  margin-inline-start: calc(-1 * (var(--space-m) + var(--cluster-border-width)));
+}
+
+@media (max-width: 640px) {
+  .clusterMemberTight {
+    margin-inline-start: calc(-1 * (var(--space-xs) + var(--cluster-border-width)));
+  }
+}
+
+/* Only the run's outer corners read as rounded — the first member's leading
+   (inline-start) corners and the last member's trailing (inline-end)
+   corners; every member in between, and the far side of the first/last, stay
+   square so the shared borders between members read as flush straight
+   lines, not broken up by rounding at each seam. Logical corner properties
+   (start/end, not left/right) to match the codebase's existing use of
+   logical properties (e.g. margin-inline-start above) for bidi-correctness.
+   Declared after .clusterMember so their !important wins the tie on just the
+   two corner properties each touches — .clusterMember's border-radius: 0
+   still governs every corner neither of these overrides. */
+.clusterMemberRoundStart {
+  border-start-start-radius: var(--radius-md) !important;
+  border-end-start-radius: var(--radius-md) !important;
+}
+
+.clusterMemberRoundEnd {
+  border-start-end-radius: var(--radius-md) !important;
+  border-end-end-radius: var(--radius-md) !important;
 }
 
 .sentinel {

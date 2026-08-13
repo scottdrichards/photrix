@@ -17,10 +17,12 @@ import {
   type FaceClusterResult,
   type FilterElement,
   type GeoClusterResult,
+  type MomentClusterDetail,
   type QueryOptions,
   type QueryResult,
   type SortOption,
 } from "./indexDatabase.type.ts";
+import { pickRepresentative } from "./momentClusterEngine.ts";
 import {
   fileRecordToColumnNamesAndValues,
   rowToFileRecord,
@@ -98,6 +100,19 @@ const FILE_QUERY_COLUMNS = tables.files.columns
 // Effective capture date used for date sorting: prefer the EXIF date, fall back
 // to filesystem timestamps. Shared by the ORDER BY builder below.
 const SORT_DATE_EXPR = "COALESCE(dateTaken, created, modified)";
+
+// Ceiling on map pins returned by one queryGeoClusters call. The caller picks a
+// bucket size for the current viewport, so a well-behaved request lands far
+// under this; the limit exists so a pathological bucket size cannot serialize an
+// unbounded result set. Buckets are ordered by count, so the densest — the ones
+// worth seeing — survive the cut, and the response's `total` still reflects
+// every matching item so the client can say the view is limited.
+const GEO_CLUSTER_LIMIT = 10_000;
+
+// Separator joining folder and fileName inside queryGeoClusters' MIN() sample
+// key. Must sort below every character a path can contain and never appear in
+// one; see the query for why both properties matter.
+const SAMPLE_KEY_SEPARATOR = "\u0001";
 
 /**
  * Build the ORDER BY clause for `queryFiles`.
@@ -2077,8 +2092,9 @@ export class IndexDatabase {
     filter: QueryOptions["filter"];
     clusterSize: number;
     bounds?: { west: number; east: number; north: number; south: number } | null;
+    limit?: number;
   }): Promise<GeoClusterResult> {
-    const { filter, clusterSize, bounds } = options;
+    const { filter, clusterSize, bounds, limit = GEO_CLUSTER_LIMIT } = options;
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
     const bucket = Math.max(clusterSize, 0.00000001);
     const latOrigin = Math.floor((bounds?.south ?? 0) / bucket) * bucket;
@@ -2088,85 +2104,94 @@ export class IndexDatabase {
       latitude: number;
       longitude: number;
       count: number;
-      samplePath: string | null;
-      sampleName: string | null;
+      sampleKey: string | null;
       minDate: number | null;
       maxDate: number | null;
+      totalCount: number | null;
     }>(
+      // One pass: bucket, aggregate, done. An earlier version added a second
+      // ROW_NUMBER() pass over every geotagged row and joined it back just to
+      // pick each bucket's sample file; a MIN() over the joined columns picks
+      // the same row directly, for half the time on the 191k-row library.
+      //
+      // The CHAR(1) separator is what makes that substitution exact. Plain
+      // `folder || fileName` compares the two as one string, which disagrees
+      // with ORDER BY folder, fileName whenever one folder is a prefix of
+      // another ("/IMG.JPG" vs "/2014/.../x.jpg"). CHAR(1) sorts below every
+      // character that can appear in a path, so the concatenation orders exactly
+      // as the column pair did — and since no path contains it, splitting on it
+      // recovers folder and fileName unambiguously. They are split here rather
+      // than selected as bare columns because SQLite only pins bare columns to
+      // the min/max row when the query has exactly one min()/max() aggregate;
+      // this one has three.
+      //
       // `sortDate` mirrors the library's default ordering (dateTaken, falling
       // back to created/modified). The typeof(...) = 'integer' guards keep rows
       // whose date was ingested as a TEXT/ISO string out of MIN/MAX — SQLite
       // sorts TEXT above every INTEGER, so one stray string poisons the max
       // (same hazard getDateRange guards against).
-      `WITH buckets AS (
+      //
+      // totalCount is a window function, so it sums every bucket's count before
+      // LIMIT trims the result — that is what lets the caller tell a complete
+      // answer from a truncated one.
+      `SELECT
+         (latBucket + 0.5) * ? + ? AS latitude,
+         (lonBucket + 0.5) * ? + ? AS longitude,
+         count,
+         minDate,
+         maxDate,
+         sampleKey,
+         SUM(count) OVER () AS totalCount
+       FROM (
          SELECT
            CAST(FLOOR((locationLatitude - ?) / ?) AS INTEGER) AS latBucket,
            CAST(FLOOR((locationLongitude - ?) / ?) AS INTEGER) AS lonBucket,
-           locationLatitude,
-           locationLongitude,
-           folder,
-           fileName,
-           CASE
+           COUNT(*) AS count,
+           MIN(CASE
              WHEN typeof(dateTaken) = 'integer' THEN dateTaken
              WHEN typeof(created) = 'integer' THEN created
              WHEN typeof(modified) = 'integer' THEN modified
-           END AS sortDate
+           END) AS minDate,
+           MAX(CASE
+             WHEN typeof(dateTaken) = 'integer' THEN dateTaken
+             WHEN typeof(created) = 'integer' THEN created
+             WHEN typeof(modified) = 'integer' THEN modified
+           END) AS maxDate,
+           MIN(folder || CHAR(1) || fileName) AS sampleKey
          FROM files
          WHERE locationLatitude IS NOT NULL
            AND locationLongitude IS NOT NULL
            ${whereClause ? `AND ${whereClause}` : ""}
-       ),
-       agg AS (
-         SELECT
-           latBucket,
-           lonBucket,
-           COUNT(*) AS count,
-           MIN(sortDate) AS minDate,
-           MAX(sortDate) AS maxDate
-         FROM buckets
          GROUP BY latBucket, lonBucket
-       ),
-       ranked AS (
-         SELECT
-           b.latBucket,
-           b.lonBucket,
-           b.locationLatitude,
-           b.locationLongitude,
-           b.folder,
-           b.fileName,
-           ROW_NUMBER() OVER (PARTITION BY b.latBucket, b.lonBucket ORDER BY b.folder, b.fileName) AS rn
-         FROM buckets b
        )
-       SELECT
-         (a.latBucket + 0.5) * ? + ? AS latitude,
-         (a.lonBucket + 0.5) * ? + ? AS longitude,
-         a.count AS count,
-         a.minDate AS minDate,
-         a.maxDate AS maxDate,
-         MIN(CASE WHEN r.rn = 1 THEN r.folder || r.fileName END) AS samplePath,
-         MIN(CASE WHEN r.rn = 1 THEN r.fileName END) AS sampleName
-       FROM agg a
-       JOIN ranked r ON r.latBucket = a.latBucket AND r.lonBucket = a.lonBucket
-       GROUP BY a.latBucket, a.lonBucket
-       ORDER BY count DESC`,
+       ORDER BY count DESC
+       LIMIT ?`,
+      bucket,
+      latOrigin,
+      bucket,
+      lonOrigin,
       latOrigin,
       bucket,
       lonOrigin,
       bucket,
       ...whereParams,
-      bucket,
-      latOrigin,
-      bucket,
-      lonOrigin,
+      limit,
     );
 
-    const total = rows.reduce((sum, row) => sum + (row.count ?? 0), 0);
+    // Every row carries the same window-function total; with no rows there is
+    // nothing to count.
+    const total = rows[0]?.totalCount ?? 0;
 
     return {
-      // minDate/maxDate are populated by the map-clustering date-color feature
-      // (not part of this change); stubbed here only to satisfy the shared
-      // GeoCluster type.
-      clusters: rows.map((row) => ({ ...row, minDate: null, maxDate: null })),
+      clusters: rows.map(({ totalCount: _totalCount, sampleKey, ...row }) => {
+        const separator = sampleKey?.indexOf(SAMPLE_KEY_SEPARATOR) ?? -1;
+        return {
+          ...row,
+          samplePath:
+            separator === -1 ? null : sampleKey!.replace(SAMPLE_KEY_SEPARATOR, ""),
+          sampleName: separator === -1 ? null : sampleKey!.slice(separator + 1),
+        };
+      }),
       total,
     };
   }
@@ -3438,6 +3463,472 @@ export class IndexDatabase {
     return { assigned: assignedRow?.count ?? 0, pending: pendingRow?.count ?? 0 };
   }
 
+  // ===== Moment clustering (burst / near-duplicate stacks) =====
+  // See momentClusterEngine.ts for the algorithm this backs.
+
+  /**
+   * Next batch of images the moment-clustering task hasn't evaluated yet, in
+   * capture-time order — the scan has to walk dateTaken order to chain
+   * temporally-adjacent photos. Only images with a decodable CLIP embedding are
+   * eligible (a photo with no embedding can never be compared, so it is left
+   * unprocessed rather than force-included with no signal); it is retried
+   * automatically once imageAnalysis embeds it, since that stage's onDrain
+   * re-queues this one (see registerBackgroundTasks.ts).
+   *
+   * Newest-first (2026-08-12): the backlog is large enough (~192k photos)
+   * that an oldest-first sweep left recent photos — the ones users actually
+   * browse — unprocessed for days, even though clusters further back were
+   * already forming correctly. Flipping the order here means the *next*
+   * batch fetched is always the newest still-unprocessed slice, so results
+   * show up in front of normal recent-photos browsing almost immediately.
+   * Already-processed rows (regardless of when they were processed, or in
+   * which direction) are untouched by this — they're simply excluded via
+   * momentClusterProcessedAt IS NOT NULL, same as before. See
+   * getMomentClusteringSweepSeedState for the matching change to how a
+   * resumed run reconstructs chain continuity.
+   */
+  async getMomentClusteringBatch(
+    limit: number,
+  ): Promise<
+    Array<{
+      folder: string;
+      fileName: string;
+      dateTaken: number;
+      embedding: Float32Array;
+    }>
+  > {
+    const rows = await this.db.all<{
+      folder: string;
+      fileName: string;
+      dateTaken: number;
+      imageEmbedding: Buffer | null;
+    }>(
+      `SELECT files.folder, files.fileName, files.dateTaken, fileEmbeddings.imageEmbedding
+       FROM files
+       JOIN fileEmbeddings
+         ON fileEmbeddings.folder = files.folder AND fileEmbeddings.fileName = files.fileName
+       WHERE files.mimeType LIKE 'image/%'
+         AND files.momentClusterProcessedAt IS NULL
+         AND files.dateTaken IS NOT NULL
+         AND fileEmbeddings.imageEmbedding IS NOT NULL
+       ORDER BY files.dateTaken DESC, files.folder DESC, files.fileName DESC
+       LIMIT ?`,
+      limit,
+    );
+
+    const out: Array<{
+      folder: string;
+      fileName: string;
+      dateTaken: number;
+      embedding: Float32Array;
+    }> = [];
+    for (const row of rows) {
+      const embedding = decodeEmbedding(row.imageEmbedding);
+      if (!embedding) {
+        // Undecodable (corrupt/zero) — stamp it processed-with-no-cluster so
+        // the backfill doesn't retry it forever, same treatment as faces'
+        // UNCLUSTERABLE_CLUSTER_ID.
+        await this.db.run(
+          `UPDATE files SET momentClusterProcessedAt = ? WHERE folder = ? AND fileName = ?`,
+          Date.now(),
+          row.folder,
+          row.fileName,
+        );
+        continue;
+      }
+      out.push({
+        folder: row.folder,
+        fileName: row.fileName,
+        dateTaken: row.dateTaken,
+        embedding,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Reconstructs the clustering chain state as of just before the sweep's
+   * next batch starts (`adjacentDateTaken` is that batch's first item's
+   * dateTaken) — the nearest already-*processed* file on the side the sweep
+   * is coming *from*, and, if it belongs to a cluster, that cluster's
+   * persisted running centroid. Lets the task resume correctly after a
+   * restart or across batch boundaries without re-scanning already-processed
+   * files.
+   *
+   * Direction-aware (2026-08-12): the sweep now consumes the backlog
+   * newest-first (see getMomentClusteringBatch), so "just before" in
+   * *processing order* means "immediately newer in *capture time*" — this
+   * looks for the nearest processed file with dateTaken >= the threshold,
+   * not <=. Renamed from getPrecedingMomentClusterState (which searched
+   * dateTaken <= threshold, correct for the old oldest-first sweep) to avoid
+   * a misleading name now that "preceding" means something different.
+   */
+  async getMomentClusteringSweepSeedState(adjacentDateTaken: number): Promise<{
+    clusterId: number | null;
+    centroidSum: Float32Array;
+    weight: number;
+    dateTaken: number;
+    /** Only meaningful when clusterId is null — the standalone predecessor's
+     * own path, so it can be retroactively promoted if the next file joins it. */
+    folder: string;
+    fileName: string;
+  } | null> {
+    const row = await this.db.get<{
+      folder: string;
+      fileName: string;
+      dateTaken: number;
+      momentClusterId: number | null;
+      imageEmbedding: Buffer | null;
+    }>(
+      `SELECT files.folder, files.fileName, files.dateTaken, files.momentClusterId,
+              fileEmbeddings.imageEmbedding
+       FROM files
+       LEFT JOIN fileEmbeddings
+         ON fileEmbeddings.folder = files.folder AND fileEmbeddings.fileName = files.fileName
+       WHERE files.momentClusterProcessedAt IS NOT NULL
+         AND files.dateTaken IS NOT NULL
+         AND files.dateTaken >= ?
+       ORDER BY files.dateTaken ASC, files.folder ASC, files.fileName ASC
+       LIMIT 1`,
+      adjacentDateTaken,
+    );
+    if (!row) return null;
+
+    if (row.momentClusterId) {
+      const cluster = await this.db.get<{ centroid: Buffer | null; weight: number }>(
+        `SELECT centroid, weight FROM momentClusters WHERE id = ?`,
+        row.momentClusterId,
+      );
+      if (cluster?.centroid && cluster.weight > 0) {
+        const decoded = decodeEmbedding(cluster.centroid);
+        if (decoded) {
+          // decodeEmbedding re-normalizes to unit length; scale back up so the
+          // running-sum math in momentClusterEngine (which divides by weight)
+          // reconstructs the same average.
+          const centroidSum = new Float32Array(decoded.length);
+          for (let i = 0; i < decoded.length; i += 1) {
+            centroidSum[i] = decoded[i] * cluster.weight;
+          }
+          return {
+            clusterId: row.momentClusterId,
+            centroidSum,
+            weight: cluster.weight,
+            dateTaken: row.dateTaken,
+            folder: row.folder,
+            fileName: row.fileName,
+          };
+        }
+      }
+    }
+
+    // Standalone predecessor (no cluster, or its embedding/centroid couldn't be
+    // read) — seed a fresh single-file candidate chain from its own embedding.
+    const embedding = decodeEmbedding(row.imageEmbedding);
+    if (!embedding) return null;
+    return {
+      clusterId: null,
+      centroidSum: embedding,
+      weight: 1,
+      dateTaken: row.dateTaken,
+      folder: row.folder,
+      fileName: row.fileName,
+    };
+  }
+
+  /** Creates a new moment cluster row and returns its id. */
+  async createMomentCluster(): Promise<number> {
+    const now = Date.now();
+    const result = await this.db.run(
+      `INSERT INTO momentClusters (weight, createdAt, updatedAt, representativePinned) VALUES (0, ?, ?, 0)`,
+      now,
+      now,
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  /**
+   * Retroactively assigns a already-processed, already-written file to a
+   * moment cluster — used when that file was the sole member of an open chain
+   * (momentClusterId left NULL) and a later file joins it, confirming the
+   * chain is a real cluster after the fact. Leaves sharpnessScore and
+   * momentClusterProcessedAt untouched; only the cluster assignment changes.
+   */
+  async promoteFileToMomentCluster(
+    folder: string,
+    fileName: string,
+    clusterId: number,
+  ): Promise<void> {
+    await this.db.run(
+      `UPDATE files SET momentClusterId = ? WHERE folder = ? AND fileName = ?`,
+      clusterId,
+      folder,
+      fileName,
+    );
+  }
+
+  /** Persists a moment cluster's running centroid (used as new members join). */
+  async saveMomentClusterCentroid(
+    clusterId: number,
+    centroidSum: Float32Array,
+    weight: number,
+  ): Promise<void> {
+    // Store the *normalized average*, not the raw sum: encodeEmbedding
+    // unit-normalizes whatever it's given, and getMomentClusteringSweepSeedState
+    // rescales it back up by `weight` on read, so storing the average (rather
+    // than a sum that keeps growing in magnitude) keeps the encode step's
+    // int8 quantization grid well-used regardless of cluster size.
+    const average = new Float32Array(centroidSum.length);
+    for (let i = 0; i < centroidSum.length; i += 1) average[i] = centroidSum[i] / weight;
+    const encoded = encodeEmbedding(average);
+    await this.db.run(
+      `UPDATE momentClusters SET centroid = ?, weight = ?, updatedAt = ? WHERE id = ?`,
+      encoded,
+      weight,
+      Date.now(),
+      clusterId,
+    );
+  }
+
+  /**
+   * Writes one batch's worth of clustering decisions: each file's assigned
+   * momentClusterId (or null for "stands alone"), its computed sharpness
+   * score, and the processed-marker timestamp.
+   */
+  async saveMomentClusteringBatch(
+    updates: Array<{
+      folder: string;
+      fileName: string;
+      momentClusterId: number | null;
+      sharpnessScore: number | null;
+    }>,
+  ): Promise<void> {
+    const now = Date.now();
+    await this.db.transaction(
+      updates.map((update) => ({
+        sql: `UPDATE files SET momentClusterId = ?, sharpnessScore = ?, momentClusterProcessedAt = ?
+              WHERE folder = ? AND fileName = ?`,
+        params: [
+          update.momentClusterId,
+          update.sharpnessScore,
+          now,
+          update.folder,
+          update.fileName,
+        ],
+      })),
+    );
+  }
+
+  /**
+   * Re-ranks a cluster's members (see momentClusterEngine.pickRepresentative)
+   * and writes the winner's momentClusterRepresentative flag. No-op if the
+   * cluster's representative was manually pinned by a user (see
+   * setMomentClusterRepresentative).
+   */
+  async recomputeMomentClusterRepresentative(clusterId: number): Promise<void> {
+    const cluster = await this.db.get<{ representativePinned: number }>(
+      `SELECT representativePinned FROM momentClusters WHERE id = ?`,
+      clusterId,
+    );
+    if (!cluster || cluster.representativePinned) return;
+
+    const members = await this.db.all<{
+      folder: string;
+      fileName: string;
+      sharpnessScore: number | null;
+      photoQualityScore: number | null;
+    }>(
+      `SELECT folder, fileName, sharpnessScore, photoQualityScore FROM files WHERE momentClusterId = ?`,
+      clusterId,
+    );
+    const winner = pickRepresentative(members);
+    if (!winner) return;
+
+    await this.db.transaction([
+      {
+        sql: `UPDATE files SET momentClusterRepresentative = 0 WHERE momentClusterId = ?`,
+        params: [clusterId],
+      },
+      {
+        sql: `UPDATE files SET momentClusterRepresentative = 1 WHERE folder = ? AND fileName = ?`,
+        params: [winner.folder, winner.fileName],
+      },
+    ]);
+  }
+
+  /** Progress counters for the moment-clustering task's status display. */
+  async getMomentClusteringProgress(): Promise<{ processed: number; pending: number }> {
+    const [processedRow, pendingRow] = await Promise.all([
+      this.db.get<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM files WHERE mimeType LIKE 'image/%' AND momentClusterProcessedAt IS NOT NULL`,
+      ),
+      this.db.get<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM files WHERE mimeType LIKE 'image/%' AND momentClusterProcessedAt IS NULL AND dateTaken IS NOT NULL`,
+      ),
+    ]);
+    return { processed: processedRow?.count ?? 0, pending: pendingRow?.count ?? 0 };
+  }
+
+  /**
+   * Full member listing for one moment cluster — powers the gallery's "expand
+   * this stack" interaction. Ordered representative-first, then by descending
+   * quality score so the next-best pick is easy to find.
+   */
+  async getMomentClusterDetail(clusterId: string): Promise<MomentClusterDetail | null> {
+    const numericId = Number.parseInt(clusterId, 10);
+    if (!Number.isFinite(numericId)) return null;
+
+    const rows = await this.db.all<{
+      folder: string;
+      fileName: string;
+      mimeType: string | null;
+      dimensionsWidth: number | null;
+      dimensionsHeight: number | null;
+      momentClusterRepresentative: number;
+      sharpnessScore: number | null;
+      photoQualityScore: number | null;
+    }>(
+      `SELECT folder, fileName, mimeType, dimensionsWidth, dimensionsHeight,
+              momentClusterRepresentative, sharpnessScore, photoQualityScore
+       FROM files
+       WHERE momentClusterId = ?
+       ORDER BY momentClusterRepresentative DESC, photoQualityScore DESC, sharpnessScore DESC`,
+      numericId,
+    );
+    if (rows.length === 0) return null;
+
+    return {
+      id: clusterId,
+      members: rows.map((row) => ({
+        path: row.folder + row.fileName,
+        fileName: row.fileName,
+        mimeType: row.mimeType,
+        dimensionWidth: row.dimensionsWidth,
+        dimensionHeight: row.dimensionsHeight,
+        isRepresentative: Number(row.momentClusterRepresentative) === 1,
+        sharpnessScore: row.sharpnessScore,
+        photoQualityScore: row.photoQualityScore,
+      })),
+    };
+  }
+
+  /**
+   * User override: makes `relativePath` the cluster's representative and pins
+   * it, so the automatic sharpness/quality re-scoring in
+   * recomputeMomentClusterRepresentative never overwrites the choice again.
+   * Returns false if the cluster or the file (as a member of it) doesn't exist.
+   */
+  async setMomentClusterRepresentative(
+    clusterId: string,
+    relativePath: string,
+  ): Promise<boolean> {
+    const numericId = Number.parseInt(clusterId, 10);
+    if (!Number.isFinite(numericId)) return false;
+    const { folder, fileName } = splitPath(relativePath);
+
+    const member = await this.db.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM files WHERE momentClusterId = ? AND folder = ? AND fileName = ?`,
+      numericId,
+      folder,
+      fileName,
+    );
+    if (!member || member.count === 0) return false;
+
+    await this.db.transaction([
+      {
+        sql: `UPDATE files SET momentClusterRepresentative = 0 WHERE momentClusterId = ?`,
+        params: [numericId],
+      },
+      {
+        sql: `UPDATE files SET momentClusterRepresentative = 1 WHERE folder = ? AND fileName = ?`,
+        params: [folder, fileName],
+      },
+      {
+        sql: `UPDATE momentClusters SET representativePinned = 1, updatedAt = ? WHERE id = ?`,
+        params: [Date.now(), numericId],
+      },
+    ]);
+    return true;
+  }
+
+  /**
+   * Permanently dissolves a moment cluster: every member's momentClusterId and
+   * momentClusterRepresentative are cleared (so they behave like ordinary,
+   * never-clustered photos and each show individually in the gallery from now
+   * on) and the cluster row itself is deleted. This is the "unstack
+   * permanently" action; the temporary/session-only version never reaches the
+   * database at all — it's purely client-side state.
+   *
+   * Members are left with momentClusterProcessedAt already set, so the
+   * background task never re-evaluates or re-clusters them.
+   */
+  async dissolveMomentCluster(clusterId: string): Promise<boolean> {
+    const numericId = Number.parseInt(clusterId, 10);
+    if (!Number.isFinite(numericId)) return false;
+
+    const existing = await this.db.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM files WHERE momentClusterId = ?`,
+      numericId,
+    );
+    if (!existing || existing.count === 0) return false;
+
+    await this.db.transaction([
+      {
+        sql: `UPDATE files SET momentClusterId = NULL, momentClusterRepresentative = 0 WHERE momentClusterId = ?`,
+        params: [numericId],
+      },
+      { sql: `DELETE FROM momentClusters WHERE id = ?`, params: [numericId] },
+    ]);
+    return true;
+  }
+
+  /**
+   * Cleans up "cluster" rows that ended up with only one member and dissolves
+   * them (same effect as dissolveMomentCluster, just automatic). A cluster is
+   * only ever *created* when a second photo joins one — see
+   * processMomentClustering.ts — but the result can still end up a singleton:
+   *
+   *  - A process restart mid-batch can leave a cluster's first member eagerly
+   *    promoted (a direct, unbatched write via promoteFileToMomentCluster)
+   *    while the second member's own join never got committed (it was queued
+   *    in the same batch's still-in-flight transaction).
+   *  - Confirmed live on 2026-08-12: this also happens during perfectly
+   *    ordinary, uninterrupted operation — not just restarts (root cause not
+   *    yet isolated; suspected to involve the in-batch chain-reassignment
+   *    path when a cluster is created and then broken again within the same
+   *    batch). This was found via a direct DB inspection showing thousands of
+   *    singleton clusters with `momentClusterProcessedAt` timestamps from
+   *    hours of continuous runtime, no restart in between.
+   *
+   * Either way the result is harmless to what users see — a stack badge only
+   * ever shows for count > 1, and the collapsed gallery query still returns
+   * the lone "member" as an ordinary photo — but it's DB clutter, and the
+   * member's momentClusterProcessedAt marker is already set so the background
+   * task will never revisit it on its own. Called periodically (every
+   * PRUNE_SINGLETONS_EVERY_N_BATCHES batches, not just once at full backlog
+   * drain — see processMomentClustering.ts's comment for why "once at drain"
+   * turned out to be effectively dead code on a library this size).
+   */
+  async pruneSingletonMomentClusters(): Promise<number> {
+    const orphans = await this.db.all<{ momentClusterId: number }>(
+      `SELECT momentClusterId FROM files
+       WHERE momentClusterId IS NOT NULL
+       GROUP BY momentClusterId
+       HAVING COUNT(*) = 1`,
+    );
+    if (orphans.length === 0) return 0;
+
+    await this.db.transaction(
+      orphans.flatMap(({ momentClusterId }) => [
+        {
+          sql: `UPDATE files SET momentClusterId = NULL, momentClusterRepresentative = 0 WHERE momentClusterId = ?`,
+          params: [momentClusterId],
+        },
+        { sql: `DELETE FROM momentClusters WHERE id = ?`, params: [momentClusterId] },
+      ]),
+    );
+    return orphans.length;
+  }
+
   async getFilesNeedingEmbedding(
     limit = 50,
   ): Promise<Array<{ relativePath: string; mimeType: string | null }>> {
@@ -3877,6 +4368,7 @@ export class IndexDatabase {
       page: rawPage = 1,
       expandToFolder,
       sort,
+      collapseMomentClusters = true,
     } = options;
     const page = Math.max(1, rawPage);
 
@@ -3884,19 +4376,69 @@ export class IndexDatabase {
 
     // When expandToFolder is enabled, wrap the filter in a folder-IN-subquery so
     // all files in a matched folder are returned, not just the matched files.
-    const effectiveWhere =
+    const folderExpandedWhere =
       expandToFolder && whereClause
         ? `folder IN (SELECT DISTINCT folder FROM files WHERE ${whereClause})`
         : whereClause;
+
+    // Default gallery behavior: a moment cluster (burst/near-duplicate group)
+    // collapses to just its representative row. Files with no cluster
+    // (momentClusterId IS NULL) are unaffected. Callers expanding a stack (or
+    // fetching a specific cluster's members) pass collapseMomentClusters: false.
+    const effectiveWhere = collapseMomentClusters
+      ? [
+          folderExpandedWhere,
+          "(momentClusterId IS NULL OR momentClusterRepresentative = 1)",
+        ]
+          .filter(Boolean)
+          .join(" AND ")
+      : folderExpandedWhere;
 
     const countSQL = `SELECT COUNT(*) as count FROM files ${effectiveWhere ? `WHERE ${effectiveWhere}` : ""}`;
     const countResult = await (() =>
       this.db.get<{ count: number }>(countSQL, ...whereParams))();
     const total = countResult?.count ?? 0;
 
+    // The stack badge needs a member count alongside the representative row;
+    // only joined in when asked for, so the common case (no metadata request
+    // for it) pays nothing extra.
+    const extraColumns: string[] = [];
+    if (metadata?.includes("momentClusterSize" as keyof FileRecord)) {
+      extraColumns.push(`(CASE WHEN files.momentClusterId IS NULL THEN NULL ELSE
+             (SELECT COUNT(*) FROM files momentMember WHERE momentMember.momentClusterId = files.momentClusterId)
+           END) AS momentClusterSize`);
+    }
+    // A handful of the *other* members' paths (representative excluded), so
+    // the collapsed tile can render a couple of real thumbnails peeking out
+    // behind the representative — a genuine "stack of photos" look — instead
+    // of an abstract count badge alone. Same opt-in shape as
+    // momentClusterSize (a correlated subquery, not a per-tile extra round
+    // trip, since a gallery page can show many stacks at once), and same
+    // "no signal for a non-clustered row" NULL convention. Capped at 2 and
+    // ranked by the same quality signal the representative pick itself uses
+    // (see momentClusterEngine.pickRepresentative) — the peeking photos are
+    // realistically the ones a user would pick, not arbitrary members.
+    // json_group_array over a LIMIT'd derived table (rather than a bare
+    // GROUP_CONCAT) sidesteps any need to worry about a folder/fileName
+    // containing whatever separator character a naive string join would pick.
+    if (metadata?.includes("momentClusterPreviewPaths" as keyof FileRecord)) {
+      extraColumns.push(`(CASE WHEN files.momentClusterId IS NULL THEN NULL ELSE
+             (SELECT json_group_array(preview.path) FROM (
+               SELECT (other.folder || other.fileName) AS path
+               FROM files AS other
+               WHERE other.momentClusterId = files.momentClusterId
+                 AND NOT (other.folder = files.folder AND other.fileName = files.fileName)
+               ORDER BY COALESCE(other.photoQualityScore, 0) DESC, COALESCE(other.sharpnessScore, 0) DESC
+               LIMIT 2
+             ) AS preview)
+           END) AS momentClusterPreviewPaths`);
+    }
+    const columns =
+      extraColumns.length > 0 ? `${FILE_QUERY_COLUMNS}, ${extraColumns.join(", ")}` : FILE_QUERY_COLUMNS;
+
     const offset = (page - 1) * pageSize;
     const mainSQL = `
-      SELECT ${FILE_QUERY_COLUMNS} FROM files
+      SELECT ${columns} FROM files
       ${effectiveWhere ? `WHERE ${effectiveWhere}` : ""}
       ORDER BY ${buildQueryOrderBy(sort)}
       LIMIT ? OFFSET ?
