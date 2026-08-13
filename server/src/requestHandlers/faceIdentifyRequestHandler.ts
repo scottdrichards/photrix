@@ -18,6 +18,11 @@ import {
 } from "../faceDetection/identifyFaces.ts";
 import type { analyzeImage as AnalyzeImageFn } from "../imageAnalysis/imageAnalysisWorker.ts";
 import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
+import {
+  deriveFrigateFrames,
+  DEFAULT_FRIGATE_FRAMES,
+  DEFAULT_FRIGATE_PAD,
+} from "../faceDetection/frigateEventFrames.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../utils.ts";
@@ -175,6 +180,56 @@ const numberParam = (params: URLSearchParams, key: string, fallback: number): nu
   return Number.isFinite(value) ? value : fallback;
 };
 
+/**
+ * Resolves `{"frigateEvent": {...}}` into frames by reading the event record.
+ *
+ * The caller supplies only the event **id** deliberately. Frigate publishes two
+ * different shapes for the same event — MQTT's `frigate/events` payload is flat
+ * while the REST record nests the same fields under `data` — and a caller
+ * templating its way through the wrong one fails silently, which is exactly how
+ * this endpoint's first integration broke. The id is identical in both, so the
+ * fragile part happens here, in code that can be tested.
+ */
+const framesFromFrigateEvent = async (spec: Record<string, unknown>) => {
+  const host = typeof spec.host === "string" ? spec.host : null;
+  const id = typeof spec.id === "string" ? spec.id : null;
+  if (!host || !id) {
+    throw new BadRequest("frigateEvent needs both host and id");
+  }
+  const hostname = host.split(":")[0];
+  if (!isPrivateHost(hostname)) {
+    throw new BadRequest("frigateEvent host must be a private/LAN address");
+  }
+
+  const url = `http://${host}/api/events/${encodeURIComponent(id)}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  if (!response.ok) {
+    throw new BadRequest(`Frigate event lookup returned HTTP ${response.status}`);
+  }
+  const record = (await response.json()) as Record<string, unknown>;
+
+  const maxFrames = Math.min(
+    typeof spec.frames === "number" ? spec.frames : DEFAULT_FRIGATE_FRAMES,
+    MAX_FRAMES,
+  );
+  const frames = deriveFrigateFrames(record, {
+    host,
+    maxFrames,
+    pad: typeof spec.pad === "number" ? spec.pad : DEFAULT_FRIGATE_PAD,
+  });
+  if (frames.length === 0) {
+    throw new BadRequest(
+      `Frigate event ${id} carries no box to crop to — nothing worth analyzing`,
+    );
+  }
+  return frames.map((frame) => ({
+    label: frame.url,
+    load: () => fetchFrame(frame.url),
+    box: frame.box,
+    pad: frame.pad,
+  }));
+};
+
 /** Lazily-resolved frames: raw bytes are already here, URLs are fetched on demand. */
 type FrameSource = {
   label: string;
@@ -244,6 +299,9 @@ const resolveFrames = async (req: http.IncomingMessage): Promise<FrameSource[]> 
   }
   const object = parsed as Record<string, unknown>;
 
+  if (typeof object.frigateEvent === "object" && object.frigateEvent !== null) {
+    return framesFromFrigateEvent(object.frigateEvent as Record<string, unknown>);
+  }
   if (Array.isArray(object.imageUrls)) {
     if (object.imageUrls.length === 0) throw new BadRequest("imageUrls was empty");
     if (object.imageUrls.length > MAX_FRAMES) {
@@ -271,7 +329,9 @@ const resolveFrames = async (req: http.IncomingMessage): Promise<FrameSource[]> 
     if (bytes.length === 0) throw new BadRequest("imageBase64 decoded to nothing");
     return [{ label: "imageBase64", load: () => Promise.resolve(bytes) }];
   }
-  throw new BadRequest("JSON body must contain imageUrl, imageUrls or imageBase64");
+  throw new BadRequest(
+    "JSON body must contain frigateEvent, imageUrl, imageUrls or imageBase64",
+  );
 };
 
 /**
