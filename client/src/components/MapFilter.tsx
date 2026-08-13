@@ -50,6 +50,26 @@ const boundsEqual = (a: GeoBounds | null, b: GeoBounds | null) => {
   );
 };
 
+/**
+ * Bucket size, in degrees, for the clustering the server does.
+ *
+ * Sized off the visible span so a bucket stays a fixed fraction of the view
+ * rather than a fixed distance on the ground: pins then read the same whether
+ * the map shows a city block or a continent.
+ *
+ * With no bounds the whole world is on screen, so the span is the world's. That
+ * case used to send no bucket at all, leaving the server on its ~2 m default —
+ * which turned an unfiltered root load into 18k pins and ~4 MB of JSON for a map
+ * on which they all overlapped anyway.
+ */
+const clusterSizeForBounds = (bounds: GeoBounds | undefined) => {
+  const latSpan = bounds ? Math.abs(bounds.north - bounds.south) : 180;
+  const lonSpan = bounds ? Math.abs(bounds.east - bounds.west) : 360;
+  const targetCells = 400_000;
+  const cellSize = Math.max(latSpan, lonSpan, 1e-9) / Math.sqrt(targetCells);
+  return Math.max(cellSize, 0.00000001);
+};
+
 const maybeBoundsEqual = (
   a: GeoBounds | null | undefined,
   b: GeoBounds | null | undefined,
@@ -96,24 +116,10 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
       setLoading(true);
       setError(null);
       try {
-        let clusterSize = undefined;
-        if (normalizedLocationBounds) {
-          const latSpan = Math.max(
-            Math.abs(normalizedLocationBounds.north - normalizedLocationBounds.south),
-            1e-9,
-          );
-          const lonSpan = Math.max(
-            Math.abs(normalizedLocationBounds.east - normalizedLocationBounds.west),
-            1e-9,
-          );
-          const targetCells = 400_000;
-          const cellSize = Math.max(latSpan, lonSpan) / Math.sqrt(targetCells);
-          clusterSize = Math.max(cellSize, 0.00000001);
-        }
         const result = await fetchGeotaggedPhotos({
           ...filter,
           locationBounds: normalizedLocationBounds,
-          clusterSize,
+          clusterSize: clusterSizeForBounds(normalizedLocationBounds),
           signal: controller.signal,
         });
         setPoints(result.points);
@@ -289,7 +295,13 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
     }
 
     vectorSource.clear();
-    const features = points.map((point) => {
+    // Draw oldest-first so newer pins are added to the source last and paint
+    // on top when pins overlap or sit close together. Undated pins have no
+    // place on the age ramp, so they're treated as oldest and sit on bottom.
+    const orderedPoints = [...points].sort(
+      (a, b) => (pointDate(a) ?? Number.NEGATIVE_INFINITY) - (pointDate(b) ?? Number.NEGATIVE_INFINITY),
+    );
+    const features = orderedPoints.map((point) => {
       const feature = new Feature({
         geometry: new Point(fromLonLat([point.longitude, point.latitude])),
       });
@@ -375,8 +387,18 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
       ];
     });
 
+    const selected = selectRepresentatives(candidates, { width, height });
+    // Render oldest-first: MapPhotoMarkers keeps this array order when it
+    // creates OpenLayers overlays, and overlays added later paint on top, so
+    // the newest thumbnail wins whenever two representative pins overlap.
+    const orderedSelected = [...selected].sort(
+      (a, b) =>
+        (pointDate(a.point) ?? Number.NEGATIVE_INFINITY) -
+        (pointDate(b.point) ?? Number.NEGATIVE_INFINITY),
+    );
+
     setRepresentatives(
-      selectRepresentatives(candidates, { width, height }).map(({ key, point }) => ({
+      orderedSelected.map(({ key, point }) => ({
         key,
         coordinate: fromLonLat([point.longitude, point.latitude]),
         thumbnailUrl: point.path ? buildGeoPointThumbnailUrl(point) : undefined,
