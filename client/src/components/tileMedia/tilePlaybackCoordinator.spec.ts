@@ -130,4 +130,30 @@ describe("tilePlaybackCoordinator", () => {
 
     expect(play).not.toHaveBeenCalled();
   });
+
+  it("never wakes the same ambient candidate on two consecutive ticks (feedback #75)", () => {
+    vi.useFakeTimers();
+    const playA = vi.fn();
+    const playB = vi.fn();
+    registerAmbientCandidate(playA);
+    registerAmbientCandidate(playB);
+
+    const order: (typeof playA)[] = [];
+    playA.mockImplementation(() => order.push(playA));
+    playB.mockImplementation(() => order.push(playB));
+
+    // Ambient pool capacity is 2, so both slots would otherwise fill up and
+    // mask a same-candidate repeat. Simulate real usage: each ambient play
+    // releases its slot again shortly after (a short motion clip finishing),
+    // well within one tick interval, so the pool never gets full on its own.
+    for (let i = 0; i < 12; i++) {
+      vi.advanceTimersByTime(7_500);
+    }
+
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i]).not.toBe(order[i - 1]);
+    }
+    expect(playA).toHaveBeenCalled();
+    expect(playB).toHaveBeenCalled();
+  });
 });

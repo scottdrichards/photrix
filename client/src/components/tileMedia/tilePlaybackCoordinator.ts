@@ -46,6 +46,46 @@ const ambientCandidates = new Set<() => void>();
 let ambientTimer: ReturnType<typeof setTimeout> | null = null;
 let listenersAttached = false;
 
+// A shuffled walk through the current candidate set, rebuilt whenever it's
+// exhausted (or a fresh candidate set makes the old order stale). This is
+// what stops the idle rotation from re-picking the same live photo twice in
+// a row, which plain per-tick Math.random() selection could do.
+let ambientPlaylist: (() => void)[] = [];
+let ambientPlaylistCursor = 0;
+
+const shuffle = <T,>(items: T[]): T[] => {
+  const shuffled = [...items];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+};
+
+/**
+ * Pull the next candidate off the playlist, reshuffling from the live
+ * candidate set once it runs dry. Entries for candidates that unregistered
+ * since the playlist was built are skipped rather than played.
+ */
+const nextAmbientCandidate = (): (() => void) | undefined => {
+  while (ambientPlaylistCursor < ambientPlaylist.length) {
+    const candidate = ambientPlaylist[ambientPlaylistCursor++];
+    if (ambientCandidates.has(candidate)) return candidate;
+  }
+
+  if (ambientCandidates.size === 0) return undefined;
+
+  const previous = ambientPlaylist[ambientPlaylist.length - 1];
+  const shuffled = shuffle([...ambientCandidates]);
+  // Don't let a fresh shuffle immediately replay whatever just finished.
+  if (shuffled.length > 1 && shuffled[0] === previous) {
+    [shuffled[0], shuffled[1]] = [shuffled[1], shuffled[0]];
+  }
+  ambientPlaylist = shuffled;
+  ambientPlaylistCursor = 1;
+  return ambientPlaylist[0];
+};
+
 export const prefersReducedMotion = (): boolean => {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return false;
@@ -168,9 +208,8 @@ const runAmbientTick = (): void => {
   ambientTimer = null;
   if (!isAmbientPlaybackAllowed()) return;
 
-  const candidates = [...ambientCandidates];
-  if (candidates.length > 0 && pools.ambient.length < POOL_CAPACITY.ambient) {
-    candidates[Math.floor(Math.random() * candidates.length)]?.();
+  if (pools.ambient.length < POOL_CAPACITY.ambient) {
+    nextAmbientCandidate()?.();
   }
   scheduleAmbientTick();
 };
@@ -201,4 +240,6 @@ export const __resetTilePlaybackCoordinatorForTests = (): void => {
   ambientCandidates.clear();
   pools.video.length = 0;
   pools.ambient.length = 0;
+  ambientPlaylist = [];
+  ambientPlaylistCursor = 0;
 };
