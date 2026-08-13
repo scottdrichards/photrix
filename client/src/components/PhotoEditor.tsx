@@ -456,11 +456,24 @@ export function deriveAutoAdjFromSample(data: Uint8ClampedArray, count: number):
   // Gray-world white balance (see colorMatrixValues / applyPixelAdj for the
   // forward model this inverts): r' = r*(1+t*0.18), b' = b*(1-t*0.18),
   // g' = g*(1-|t|*0.03)*(1-n*0.12). Solve t so r'==b', then n so g'==avg(r',b').
+  //
+  // A *full* gray-world solve (WB_CORRECTION_STRENGTH = 1) assumes the
+  // average pixel in every photo should be neutral gray, which is false for
+  // a huge fraction of real photos — warm skin tones, sunsets, foliage, etc.
+  // all skew the average color on purpose. Divisors of 0.18/0.12 in the
+  // model above mean even an ordinary, mild color cast (e.g. avgR 150 /
+  // avgB 100) solves to well past +/-100 and gets clamped there, so nearly
+  // every non-neutral photo was getting the maximum-strength correction
+  // slammed on — reported as "auto edit maxes out tint and temperature and
+  // makes it look awful" (feedback #55). Damping the solved correction
+  // before clamping fixes it: still leans the photo toward neutral, but
+  // only partway, so intentional color character survives.
+  const WB_CORRECTION_STRENGTH = 0.4;
   let temperature = 0;
   if (avgR + avgB > 0) {
     temperature = (100 * (avgB - avgR)) / (0.18 * (avgR + avgB));
   }
-  temperature = Math.max(-100, Math.min(100, temperature));
+  temperature = Math.max(-100, Math.min(100, temperature * WB_CORRECTION_STRENGTH));
   const t = temperature / 100;
   const avgRB = (avgR * (1 + t * 0.18) + avgB * (1 - t * 0.18)) / 2;
   const gTempAdjusted = avgG * (1 - Math.abs(t) * 0.03);
@@ -468,7 +481,7 @@ export function deriveAutoAdjFromSample(data: Uint8ClampedArray, count: number):
   if (gTempAdjusted > 0) {
     tint = (100 * (1 - avgRB / gTempAdjusted)) / 0.12;
   }
-  tint = Math.max(-100, Math.min(100, tint));
+  tint = Math.max(-100, Math.min(100, tint * WB_CORRECTION_STRENGTH));
 
   // Auto-levels from the luminance histogram of the sample.
   const sorted = lum.slice().sort();
