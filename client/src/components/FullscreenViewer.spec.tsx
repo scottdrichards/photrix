@@ -50,6 +50,7 @@ vi.mock("../api", () => ({
   negotiateVideoPlayback: (...args: unknown[]) => negotiateVideoPlaybackMock(...args),
   fetchTranscriptSegments: () => Promise.resolve([]),
   fetchPeopleFacesForFile: () => Promise.resolve([]),
+  fetchPhotoCaption: () => Promise.resolve(null),
 }));
 
 vi.mock("../diagnostics", () => ({

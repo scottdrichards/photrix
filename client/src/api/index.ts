@@ -86,3 +86,5 @@ export { interpretSearchQuery } from "./naturalLanguageSearch";
 
 export type { FeedbackItem, FeedbackStatus } from "./feedback";
 export { fetchFeedbackItems } from "./feedback";
+
+export { fetchPhotoCaption } from "./photoCaption";

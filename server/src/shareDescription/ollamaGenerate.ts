@@ -42,6 +42,30 @@ export type OllamaGenerateOptions = {
   timeoutMs?: number;
   /** Constrain decoding to syntactically valid JSON (Ollama `format: "json"`). */
   json?: boolean;
+  /**
+   * Base64-encoded image bytes (no `data:` prefix) to attach to the prompt.
+   * Requires a vision-capable model — see `model` below.
+   */
+  images?: string[];
+  /** Overrides the module-default PHOTRIX_OLLAMA_MODEL for this call, e.g. a
+   * vision model for image-conditioned generations. */
+  model?: string;
+  /**
+   * Overrides the model's default context window (Ollama `options.num_ctx`).
+   * An attached image alone can cost ~1000+ tokens once tokenized, so a
+   * vision call with a real system prompt easily exceeds the default 4096
+   * and gets rejected with `exceed_context_size_error` — bump this for any
+   * `images` call rather than relying on the model default.
+   */
+  numCtx?: number;
+  /** Sampling temperature. Default 0.2 (share-title behaviour: terse,
+   * low-variance). Some models (e.g. moondream) produce empty/gibberish
+   * output at very low temperature when given a tight instruction-style
+   * prompt — bump this per-call rather than changing the module default. */
+  temperature?: number;
+  /** Aborts the call early (e.g. the triggering HTTP request disconnected).
+   * Combined with the timeout, not a replacement for it. */
+  signal?: AbortSignal;
 };
 
 /**
@@ -59,24 +83,33 @@ export const ollamaGenerate = async (
 ): Promise<string | null> => {
   if (!ollamaUrl) return null;
 
+  const effectiveModel = options.model ?? model;
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? timeoutMs);
+  const signal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
+
   try {
     const res = await fetch(`${ollamaUrl}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model,
+        model: effectiveModel,
         system,
         prompt,
         stream: false,
         think: false,
         keep_alive: keepAlive,
         ...(options.json ? { format: "json" } : {}),
-        options: { temperature: 0.2, num_predict: options.numPredict ?? 40 },
+        ...(options.images ? { images: options.images } : {}),
+        options: {
+          temperature: options.temperature ?? 0.2,
+          num_predict: options.numPredict ?? 40,
+          ...(options.numCtx ? { num_ctx: options.numCtx } : {}),
+        },
       }),
-      signal: AbortSignal.timeout(options.timeoutMs ?? timeoutMs),
+      signal,
     });
     if (!res.ok) {
-      log.warn({ status: res.status, model }, "Ollama request failed");
+      log.warn({ status: res.status, model: effectiveModel }, "Ollama request failed");
       return null;
     }
     const { response } = (await res.json()) as { response?: string };
@@ -85,7 +118,7 @@ export const ollamaGenerate = async (
     const text = response?.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     return text || null;
   } catch (error) {
-    log.warn({ err: error, model }, "Ollama unreachable");
+    log.warn({ err: error, model: effectiveModel }, "Ollama unreachable");
     return null;
   }
 };

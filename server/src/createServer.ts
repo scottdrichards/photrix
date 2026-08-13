@@ -50,6 +50,7 @@ import type { FilterElement } from "./indexDatabase/indexDatabase.type.ts";
 import { pageTitleHandler } from "./requestHandlers/pageTitleHandler.ts";
 import { feedbackHandler } from "./requestHandlers/feedbackHandler.ts";
 import { faceIdentifyRequestHandler } from "./requestHandlers/faceIdentifyRequestHandler.ts";
+import { photoCaptionRequestHandler } from "./requestHandlers/photoCaptionRequestHandler.ts";
 import { analyzeImage } from "./imageAnalysis/imageAnalysisWorker.ts";
 import { killAllSessions } from "./videoProcessing/hlsSession.ts";
 
@@ -232,7 +233,16 @@ export const createServer = (
             req.method === "GET" &&
             pathname.startsWith("/api/files/") &&
             !pathname.endsWith("/");
-          if (tracksActivity && isAssetServe) {
+          // Photo captions call out to Ollama and take ~90-100s on the current
+          // host — a real "heavy request" by cost, but bracketing it with
+          // beginUserRequest/endUserRequest would pin every background task
+          // (including moment clustering) stopped for that whole span on every
+          // single photo open. Treat it like asset serving instead: it still
+          // counts as activity (so background yields briefly), just not a full
+          // stop-the-world bracket for the entire call.
+          const isPhotoCaption =
+            req.method === "GET" && pathname.startsWith("/api/photos/caption");
+          if (tracksActivity && (isAssetServe || isPhotoCaption)) {
             taskOrchestrator.noteUserActivity();
           } else if (tracksActivity) {
             taskOrchestrator.beginUserRequest();
@@ -400,6 +410,23 @@ export const createServer = (
 
           if (req.url === "/api/page-title" && req.method === "POST") {
             await pageTitleHandler(req, res, database);
+            return;
+          }
+
+          // Fullscreen-viewer AI caption (<=6 words, vision model via Ollama).
+          // Read-only and best-effort, but calls out to a local model and
+          // reveals which people/dates are in the library, so — like
+          // /api/faces/ — a scoped share link may not call it.
+          if (req.url?.startsWith("/api/photos/caption") && req.method === "GET") {
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
+            await photoCaptionRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              { database, storageRoot: storagePath },
+            );
             return;
           }
 

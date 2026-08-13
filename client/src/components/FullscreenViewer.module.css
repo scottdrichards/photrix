@@ -503,3 +503,39 @@
     border-top: 1px solid rgba(255, 255, 255, 0.15);
   }
 }
+
+/* AI caption toast: slides down from the top of the viewer's media
+   container, holds briefly, then the component unmounts it (see the
+   auto-dismiss timer in FullscreenViewer.tsx) — no exit animation needed
+   since it's simply removed from the DOM. */
+@keyframes aiCaptionSlideDown {
+  from {
+    transform: translate(-50%, -100%);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+
+.aiCaptionToast {
+  position: absolute;
+  top: var(--space-md, 16px);
+  left: 50%;
+  z-index: 20;
+  max-width: min(80%, 32rem);
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  background: var(--viewer-overlay-bg, rgba(12, 14, 18, 0.72));
+  color: var(--viewer-overlay-fg, rgba(255, 255, 255, 0.96));
+  border: 1px solid var(--viewer-overlay-border, rgba(255, 255, 255, 0.18));
+  backdrop-filter: blur(8px);
+  font-size: 0.9rem;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  animation: aiCaptionSlideDown 0.35s ease-out;
+}
