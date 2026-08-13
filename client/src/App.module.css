@@ -24,6 +24,16 @@
   background-color: var(--surface-glass);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--stroke2);
+  /* backdrop-filter alone makes .header a (static, unpositioned) stacking
+     context, which traps its filter-popover descendants (z-index: 50) inside
+     that context's own in-flow paint layer. .viewToggleDock is a sibling with
+     an explicit positive z-index (1), which *always* paints after in-flow
+     content regardless of any z-index used deeper inside .header — so a
+     popover could never appear above the view-toggle pill no matter how high
+     its z-index was set. Making .header itself a positioned stacking-context
+     root with z-index above the dock's fixes that (feedback #72). */
+  position: relative;
+  z-index: 2;
   .title {
     h2 {
       margin: 0;
