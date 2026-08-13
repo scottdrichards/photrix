@@ -173,7 +173,7 @@
 .livePhotoBadge {
   position: absolute;
   top: var(--space-xxs);
-  left: var(--space-xxs);
+  right: var(--space-xxs);
   background-color: var(--bg1);
   color: var(--fg2);
   border-radius: var(--radius-full);
