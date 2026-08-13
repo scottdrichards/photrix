@@ -18,8 +18,13 @@ bun run bootstrap
 This runs `bun install` and then restores better-sqlite3's compiled native
 addon from a shared cache (`~/.cache/photrix/native`, override with
 `PHOTRIX_NATIVE_CACHE`), instead of rebuilding it from source (~85s) in every
-fresh checkout/worktree. Plain `bun install` also works if you just need
-dependencies and already have (or don't need) the native addon.
+fresh checkout/worktree.
+
+Prefer `bun run bootstrap` over a bare `bun install`: on a fresh checkout,
+`bun install` alone leaves the native addon unbuilt and the server will fail
+to start. It does self-heal -- the server's `predev`/`prebuild`/`pretest`
+hooks run the same step -- so such a checkout repairs itself the first time
+you build, dev, or test it. Bootstrap is simply the direct path.
 
 Bun is used only as the package manager here — the app still runs on Node
 (the server runs under `node`/`tsx`, tests run under Jest/Vitest on Node, not
