@@ -35,3 +35,26 @@ agents) testing against the same real library at once will step on each
 other's analysis state. Only point at a real library when the task
 specifically needs real-world data that doesn't reproduce against the
 fixture.
+
+### Adding fixtures
+
+Everything in `exampleFolder` is synthetic, and it needs to stay that way —
+this folder ships in a public repository, so a file dropped in straight off a
+phone or camera publishes whatever EXIF that device wrote (GPS coordinates,
+serial numbers, owner name). Author fixture metadata by hand: invented
+`Make`/`Model` strings, public-landmark coordinates, and no
+`Artist`/`CameraOwnerName`/`BodySerialNumber`.
+
+The four camera-shaped fixtures — `sewing-threads.heic`,
+`subFolder/soundboard.heic`, `subFolder/20120803_160939.jpg`, and
+`subFolder/grandchildFolder/1V7A4755.JPG` — are generated, and the generator
+documents which structural property each one exists to cover (embedded
+thumbnail present vs. absent, EXIF orientation, HEIC, live-photo pairing):
+
+```
+pip install piexif pillow pillow-heif
+python3 server/scripts/make-example-fixtures.py .
+```
+
+It's deterministic — regenerating produces byte-identical files, so re-running
+it on an unmodified checkout is a no-op.
