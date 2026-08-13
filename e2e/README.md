@@ -21,9 +21,12 @@ index (matches the repo's "rebuild, don't migrate" data policy).
 
 ## First-time setup
 
+Dependencies are installed once for the whole repo via `bun install` (or
+`bun run bootstrap`) from the repo root — see `GETTING_STARTED.md`. The one
+extra step for e2e is downloading Playwright's browser binary:
+
 ```bash
-npm --prefix e2e install
-npm --prefix e2e run install:browsers   # downloads headless Chromium
+bun run test:e2e:install   # from repo root — downloads headless Chromium
 ```
 
 If Chromium fails to launch on a missing system library, install the OS deps
@@ -32,9 +35,9 @@ If Chromium fails to launch on a missing system library, install the OS deps
 ## Running
 
 ```bash
-npm run test:e2e            # from repo root — boots servers, runs headless
-npm --prefix e2e test       # equivalent
-npm --prefix e2e run report # open the last HTML report
+bun run test:e2e                     # from repo root — boots servers, runs headless
+bun run --filter photrix-e2e test    # equivalent
+bun run --filter photrix-e2e report  # open the last HTML report
 ```
 
 On failure, traces, screenshots, and video land in `e2e/test-results/` and the HTML

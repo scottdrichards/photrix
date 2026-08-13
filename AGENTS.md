@@ -7,12 +7,12 @@ Review these files when implicated (relative to root)
 
 # Terminal commands
 
-- Never use `npx` to run tools. Use `npm run <script>` instead, adding scripts to the relevant `package.json` if one doesn't already exist.
+- Never use `npx` to run tools. Use `bun run <script>` instead, adding scripts to the relevant `package.json` if one doesn't already exist.
 
 # Agent interactions
 
 - If a prompt/interaction is testable, create a test before implementation if possible. If not possible, inform the user and create one after implementation.
-- To validate UI/behavior changes end-to-end without a human, run `npm run test:e2e` (Playwright drives an isolated app; see /TESTING.md and /e2e/README.md).
+- To validate UI/behavior changes end-to-end without a human, run `bun run test:e2e` (Playwright drives an isolated app; see /TESTING.md and /e2e/README.md).
 - Default to `MEDIA_ROOT=./exampleFolder` for any manual/local run of the
   dev server, not a real photo library — face clusters, moment stacks, and
   embeddings live in one shared index/DB per `MEDIA_ROOT`, so concurrent

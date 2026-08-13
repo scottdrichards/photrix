@@ -3,13 +3,27 @@
   "version": "1.0.0",
   "description": "A new way to enjoy your memories",
   "main": "index.js",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server",
+    "e2e"
+  ],
+  "trustedDependencies": [
+    "sharp",
+    "esbuild"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build:client": "npm --prefix client run build",
-    "test:e2e": "npm --prefix e2e test",
-    "test:e2e:install": "npm --prefix e2e install && npm --prefix e2e run install:browsers",
-    "deploy:client": "node scripts/deploy-client.mjs",
-    "deploy:client:build": "npm run build:client && npm run deploy:client",
+    "bootstrap": "bun install && node scripts/setup-native.mjs",
+    "build:client": "bun run --filter photrix-client build",
+    "build:server": "bun run --filter server build",
+    "dev:client": "bun run --filter photrix-client dev",
+    "dev:server": "bun run --filter server dev",
+    "test": "bun run --filter server test",
+    "test:e2e": "bun run --filter photrix-e2e test",
+    "test:e2e:install": "bun run --filter photrix-e2e install:browsers",
+    "typecheck": "bun run --filter '*' typecheck",
+    "lint": "bun run --filter '*' lint",
     "trace:jaeger": "powershell -ExecutionPolicy Bypass -File ./scripts/start-jaeger.ps1",
     "tunnel:test": "powershell -ExecutionPolicy Bypass -File ./scripts/start-test-tunnels.ps1"
   },

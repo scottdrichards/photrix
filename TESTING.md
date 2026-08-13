@@ -8,13 +8,16 @@ and the implementation details benefit from testing to manage their complexity.
 - Code coverage is a good smell test to find places that might benefit from more testing - but a certain amount of code coverage should not be a target metric.
 
 ## Layers
-- **Client unit** (`vitest`): `npm --prefix client test`
-- **Server unit** (`jest`): `npm --prefix server test` (integration: `npm --prefix server run test:integration`)
-- **End-to-end** (`Playwright`): `npm run test:e2e` — drives the real app in a
+- **Client unit** (`vitest`): `bun run --filter photrix-client test`
+- **Server unit** (`jest`): `bun run test` (from repo root; integration: `bun run --filter server test:integration`)
+- **End-to-end** (`Playwright`): `bun run test:e2e` — drives the real app in a
   browser against an isolated server+client (throwaway DB, `exampleFolder` library,
   auth disabled), so a UI/behavior change can be validated without a human. First
-  run needs `npm run test:e2e:install`. See `e2e/README.md` for isolation details
+  run needs `bun run test:e2e:install`. See `e2e/README.md` for isolation details
   and how to add tests.
+
+Tests still run under Jest (server) and Vitest (client) on Node, not `bun
+test` — bun is only the package manager here (see `GETTING_STARTED.md`).
 
 ## Manual/local testing
 
@@ -22,7 +25,7 @@ When running the dev server by hand to poke at a feature (not via the e2e
 suite), point it at `server/exampleFolder` instead of a real photo library:
 
 ```
-MEDIA_ROOT=./exampleFolder npm --prefix server run start
+MEDIA_ROOT=./exampleFolder bun run --filter server start
 ```
 
 `exampleFolder` is a small, diverse fixture (Live Photos, an embedded

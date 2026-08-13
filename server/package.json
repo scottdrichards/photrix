@@ -5,7 +5,7 @@
   "main": "dist/server/src/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-build-assets.mjs",
-    "start": "npm run build && npm run start:built",
+    "start": "bun run build && bun run start:built",
     "start:built": "MALLOC_ARENA_MAX=2 node --max-old-space-size=1024 dist/server/src/main.js",
     "dev": "tsx src/main.ts",
     "db:vacuum": "node scripts/vacuum-db.mjs",
@@ -15,16 +15,19 @@
     "clip:python:install": "python -m pip install open_clip_torch",
     "clip:python:install:gpu": "python -m pip install open_clip_torch && python -m pip install torch --index-url https://download.pytorch.org/whl/cu121",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --selectProjects unit",
-    "test:all": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
-    "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js --selectProjects integration --runInBand",
-    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --selectProjects unit --watch",
-    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest --selectProjects unit",
+    "test:all": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --selectProjects integration --runInBand",
+    "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --selectProjects unit --watch",
+    "test:coverage": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
     "test:python": "cd python && ${PHOTRIX_PYTHON:-python3} -m unittest discover -p '*_test.py'",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
     "format": "prettier --write \"{src,tests}/**/*.{ts,tsx,js,jsx,json,md}\"",
-    "format:check": "prettier --check \"{src,tests}/**/*.{ts,tsx,js,jsx,json,md}\""
+    "format:check": "prettier --check \"{src,tests}/**/*.{ts,tsx,js,jsx,json,md}\"",
+    "predev": "node ../scripts/setup-native.mjs",
+    "prebuild": "node ../scripts/setup-native.mjs",
+    "pretest": "node ../scripts/setup-native.mjs"
   },
   "ts-node": {
     "esm": true

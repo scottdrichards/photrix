@@ -5,18 +5,18 @@
 Run tests at any time during development:
 
 ```bash
-npm test                    # Run unit tests (fast)
-npm run test:watch         # Run unit tests in watch mode
-npm run test:all           # Run all tests (unit + integration)
-npm run test:integration   # Run integration tests only
-npm run test:coverage      # Generate coverage report
+bun run test                # Run unit tests (fast)
+bun run test:watch         # Run unit tests in watch mode
+bun run test:all           # Run all tests (unit + integration)
+bun run test:integration   # Run integration tests only
+bun run test:coverage      # Generate coverage report
 ```
 
 ## Architecture
 
 The test framework is split into two projects for fast feedback during development:
 
-### Unit Tests (`npm test`)
+### Unit Tests (`bun run test`)
 - **Location:** `src/**/*.spec.ts` (excluding `main.spec.ts`)
 - **Speed:** Fast (< 1s typically)
 - **Purpose:** Test individual modules in isolation
@@ -26,7 +26,7 @@ The test framework is split into two projects for fast feedback during developme
 - [src/common/standardHeights.spec.ts](src/common/standardHeights.spec.ts)
 - [src/imageProcessing/convertImage.spec.ts](src/imageProcessing/convertImage.spec.ts)
 
-### Integration Tests (`npm run test:integration`)
+### Integration Tests (`bun run test:integration`)
 - **Location:** `src/main.spec.ts`
 - **Speed:** Slower (requires server startup)
 - **Purpose:** Test full HTTP server behavior and cross-module interactions
@@ -97,7 +97,7 @@ Following the project's testing philosophy:
 
 To run all tests in CI/CD pipelines:
 ```bash
-npm run test:coverage
+bun run test:coverage
 ```
 
 This generates a coverage report and ensures all tests pass before deployment.
@@ -106,20 +106,20 @@ This generates a coverage report and ensures all tests pass before deployment.
 
 ### Run a specific test file:
 ```bash
-npm test -- src/common/standardHeights.spec.ts
+bun run test -- src/common/standardHeights.spec.ts
 ```
 
 ### Run a specific test suite/case:
 ```bash
-npm test -- --testNamePattern="myFunction"
+bun run test -- --testNamePattern="myFunction"
 ```
 
 ### Debug with verbose output:
 ```bash
-npm test -- --verbose
+bun run test -- --verbose
 ```
 
 ### Watch mode with focused file:
 ```bash
-npm run test:watch -- src/imageProcessing/convertImage.spec.ts
+bun run test:watch -- src/imageProcessing/convertImage.spec.ts
 ```

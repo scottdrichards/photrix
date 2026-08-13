@@ -10,7 +10,7 @@ host from Photrix itself. It never opens the SQLite index directly.
 
 ## Running
 
-**It starts automatically** in-process alongside the main app (`npm start` /
+**It starts automatically** in-process alongside the main app (`bun run start` /
 `tsx src/main.ts`) — there's nothing extra to run for the common case of
 Photrix and its MCP server living on the same host.
 
@@ -20,7 +20,7 @@ in the main app's env to opt out of the in-process copy, then run it standalone:
 
 ```bash
 # from server/
-npm run mcp
+bun run mcp
 ```
 
 Configuration (env vars, e.g. in `server/.env`):

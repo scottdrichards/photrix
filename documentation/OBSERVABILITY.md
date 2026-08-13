@@ -7,7 +7,7 @@ Photrix can export request traces with nested spans for database work, file I/O,
 Start Jaeger locally:
 
 ```powershell
-npm run trace:jaeger
+bun run trace:jaeger
 ```
 
 This starts Jaeger all-in-one with:
@@ -42,7 +42,7 @@ PHOTRIX_TRACE_TOP_SPANS=8
 
 1. Start Jaeger.
 2. Enable `PHOTRIX_OTEL_ENABLED=true`.
-3. Start the server with `npm --prefix server run start`.
+3. Start the server with `bun run --filter server start`.
 4. Exercise the app in the browser.
 5. Open Jaeger and search for service `photrix-server`.
 6. Inspect the slowest request traces to see the breakdown by span.
