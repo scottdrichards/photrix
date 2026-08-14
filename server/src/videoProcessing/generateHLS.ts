@@ -63,7 +63,16 @@ export const generateHLS = async (
   const maxBitrate =
     height === "original" ? "15M" : `${Math.min(15, Math.ceil(Number(height) / 120))}M`;
 
-  const inputArgs = ["-y", "-i", filePath, "-vf", `scale=${scaleFilter}`];
+  // Encoders that need frames re-uploaded onto a hardware surface (VAAPI) get
+  // their `vfExtra` suffix here; NVENC/AMF accept plain system-memory frames
+  // and leave it empty.
+  const inputArgs = (vfExtra: string) => [
+    "-y",
+    "-i",
+    filePath,
+    "-vf",
+    `scale=${scaleFilter}${vfExtra}`,
+  ];
 
   const outputArgs = [
     "-g",
@@ -92,7 +101,7 @@ export const generateHLS = async (
   if (gpu) {
     const hwArgs = [
       ...gpu.hwaccelArgs,
-      ...inputArgs,
+      ...inputArgs(gpu.vfExtra),
       "-c:v",
       gpu.h264Codec,
       ...gpu.cqArgs(28),
@@ -105,7 +114,7 @@ export const generateHLS = async (
     await generateHLSWithFFMPEG(hwArgs);
   } else {
     const softwareArgs = [
-      ...inputArgs,
+      ...inputArgs(""),
       "-c:v",
       "libx264",
       "-preset",

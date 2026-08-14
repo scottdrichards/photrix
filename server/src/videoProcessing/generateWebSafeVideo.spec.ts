@@ -58,7 +58,7 @@ describe("generateWebSafeVideo", () => {
     const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
-        if (args.includes("-init_hw_device") || args.includes("h264_amf")) {
+        if (args.includes("-init_hw_device") || args.includes("h264_amf") || args.includes("h264_vaapi")) {
           proc.emit("close", 1);
           return;
         }
@@ -73,7 +73,7 @@ describe("generateWebSafeVideo", () => {
     const out = await generateWebSafeVideo(source, 720, { priority: "background" });
 
     expect(out.endsWith(".720.mp4")).toBe(true);
-    const ffmpegArgs = spawnMock.mock.calls[2]?.[1] as string[];
+    const ffmpegArgs = spawnMock.mock.calls[3]?.[1] as string[];
     expect(ffmpegArgs).toContain("scale=-2:720");
     expect(ffmpegArgs).toContain("libx264");
   });
@@ -88,7 +88,7 @@ describe("generateWebSafeVideo", () => {
     const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
-        if (args.includes("-init_hw_device") || args.includes("h264_amf")) {
+        if (args.includes("-init_hw_device") || args.includes("h264_amf") || args.includes("h264_vaapi")) {
           proc.emit("close", 1);
           return;
         }
@@ -117,7 +117,7 @@ describe("generateWebSafeVideo", () => {
     const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
-        if (args.includes("-init_hw_device") || args.includes("h264_amf")) {
+        if (args.includes("-init_hw_device") || args.includes("h264_amf") || args.includes("h264_vaapi")) {
           proc.emit("close", 1);
           return;
         }
