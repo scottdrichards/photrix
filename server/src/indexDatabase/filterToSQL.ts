@@ -343,7 +343,6 @@ const globToLike = (glob: string): string => {
   // Convert glob pattern to SQL LIKE pattern
   // ? -> _ (single char), * -> % (any chars)
   return glob
-    .replace(/\./g, "[.]") // Escape dots
     .replace(/\*/g, "%")
     .replace(/\?/g, "_");
 };

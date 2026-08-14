@@ -65,7 +65,7 @@ describe("filterToSQL", () => {
   it("builds glob search with LIKE", () => {
     const result = filterToSQL({ fileName: { glob: "IMG_*.jpg" } });
     expect(result.where).toBe("fileName LIKE ?");
-    expect(result.params).toEqual(["IMG_%[.]jpg"]);
+    expect(result.params).toEqual(["IMG_%.jpg"]);
   });
 
   it("builds relativePath regex search using folder and fileName", () => {
