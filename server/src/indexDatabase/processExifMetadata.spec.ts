@@ -36,6 +36,7 @@ describe("processExifMetadata", () => {
 
     jest.unstable_mockModule("../fileHandling/fileUtils.ts", () => ({
       getExifMetadataFromFile,
+      getFastMediaDimensions: jest.fn().mockResolvedValue(null),
     }));
 
     const updates: Array<{ relativePath: string; data: Record<string, unknown> }> = [];
@@ -75,6 +76,7 @@ describe("processExifMetadata", () => {
       ) => {
         metadataFaceWrites.push({ relativePath, regions });
       },
+      getImagesMissingDimensions: () => [],
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -105,6 +107,7 @@ describe("processExifMetadata", () => {
 
     jest.unstable_mockModule("../fileHandling/fileUtils.ts", () => ({
       getExifMetadataFromFile,
+      getFastMediaDimensions: jest.fn().mockResolvedValue(null),
     }));
 
     const db = {
@@ -131,6 +134,7 @@ describe("processExifMetadata", () => {
       })(),
       addOrUpdateFileData: async () => undefined,
       saveFacesFromMetadataRegions: async () => undefined,
+      getImagesMissingDimensions: () => [],
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -157,6 +161,7 @@ describe("processExifMetadata", () => {
 
     jest.unstable_mockModule("../fileHandling/fileUtils.ts", () => ({
       getExifMetadataFromFile,
+      getFastMediaDimensions: jest.fn().mockResolvedValue(null),
     }));
 
     const db = {
@@ -176,6 +181,7 @@ describe("processExifMetadata", () => {
       ],
       addOrUpdateFileData: async () => undefined,
       saveFacesFromMetadataRegions: async () => undefined,
+      getImagesMissingDimensions: () => [],
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -192,6 +198,7 @@ describe("processExifMetadata", () => {
 
     jest.unstable_mockModule("../fileHandling/fileUtils.ts", () => ({
       getExifMetadataFromFile,
+      getFastMediaDimensions: jest.fn().mockResolvedValue(null),
     }));
 
     let callCount = 0;
@@ -221,6 +228,7 @@ describe("processExifMetadata", () => {
         missingMediaMetadata = Math.max(0, missingMediaMetadata - 1);
       },
       saveFacesFromMetadataRegions: async () => undefined,
+      getImagesMissingDimensions: () => [],
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");

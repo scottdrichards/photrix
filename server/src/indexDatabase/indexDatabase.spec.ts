@@ -60,11 +60,9 @@ describe("IndexDatabase", () => {
     });
   });
 
-  it("throws when moving a missing file", async () => {
+  it("returns false when moving a missing file", async () => {
     await withTempDb(async (db) => {
-      await expect(db.moveFile("missing.jpg", "new/missing.jpg")).rejects.toThrow(
-        /does not exist/i,
-      );
+      await expect(db.moveFile("missing.jpg", "new/missing.jpg")).resolves.toBe(false);
     });
   });
 
@@ -468,14 +466,15 @@ describe("IndexDatabase", () => {
           },
         ]);
 
-        // Test queryFaceClusters returns summaries without faces
+        // Test queryFaceClusters returns summaries without faces.
+        // Clusters with fewer than MIN_FACE_CLUSTER_SIZE (2) faces are excluded,
+        // so the b-cluster (1 face) is filtered out.
         const result = await db.queryFaceClusters({ filter: {} });
 
-        expect(result.totalFaces).toBe(4);
-        expect(result.totalClusters).toBe(2);
+        expect(result.totalFaces).toBe(3);
+        expect(result.totalClusters).toBe(1);
         expect(result.clusters[0]?.count).toBe(3);
-        expect(result.clusters[1]?.count).toBe(1);
-        expect(result.clusters[0]?.representative.path).toBe("/people/a-2.jpg");
+        expect(result.clusters[0]?.representative.path).toBe("/people/a-1.jpg");
         // Summaries should not have faces
         expect(result.clusters[0]?.faces).toBeUndefined();
 
