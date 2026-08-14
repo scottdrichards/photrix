@@ -251,7 +251,7 @@ const encodeVariant = (
   onSpawn?: (child: ReturnType<typeof spawn>) => void,
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
-    // Three encode pipelines, in order of preference:
+    // Encode pipelines, in order of preference:
     //
     // 1. FULL CUDA (NVIDIA, landscape): decode→CUDA frames→scale_cuda→h264_nvenc.
     //    No CPU roundtrip at all. ~7× realtime for 4K. Requires rotation=0 because
@@ -264,14 +264,20 @@ const encodeVariant = (
     //    re-uploads and encodes on GPU. ~4-6× realtime vs ~0.3× for pure CPU on
     //    4K HEVC — critical for phone portrait videos to avoid buffer starvation.
     //
-    // 3. CPU (no GPU or GPU-only-decode failed): libx264, all filters on CPU.
+    // 3. Intel Quick Sync (VAAPI, server2's iGPU-only box): CPU decode + CPU
+    //    filters (same rotation-safe shape as path 2 — no GPU decode surface to
+    //    fight rotation with) + one `hwupload` back onto the VAAPI device right
+    //    before `h264_vaapi`. No dedicated VRAM, so no ensureGpuHeadroom reclaim.
+    //
+    // 4. CPU (no GPU or GPU-only-decode failed): libx264, all filters on CPU.
     //
     // All paths force 8-bit 4:2:0 output. Sources are frequently 10-bit HEVC
-    // (HDR/HLG — default for iPhone and much GoPro footage). h264_nvenc rejects
-    // 10-bit outright, and browsers can't play 10-bit H.264 anyway. The GPU paths
-    // convert on-chip; the CPU path uses format=yuv420p.
+    // (HDR/HLG — default for iPhone and much GoPro footage). h264_nvenc/h264_vaapi
+    // reject 10-bit outright, and browsers can't play 10-bit H.264 anyway. The GPU
+    // paths convert on-chip; the CPU path uses format=yuv420p.
     const useNvidia = gpu?.vendor === "nvidia";
     const useCudaPipeline = useNvidia && rotation === 0;
+    const useIntel = gpu?.vendor === "intel";
 
     let hwaccelArgs: string[];
     let vf: string;
@@ -288,6 +294,12 @@ const encodeVariant = (
       // NVDEC + CPU filters + NVENC: GPU decode, CPU auto-rotate, GPU encode.
       hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -hwaccel cuda, no output format
       vf = `fps=${HLS_FPS},scale=-2:${variant.height},format=yuv420p`;
+      videoCodec = gpu?.h264Codec ?? "libx264";
+      encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
+    } else if (useIntel) {
+      // CPU decode + CPU auto-rotate + hwupload → VAAPI encode.
+      hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -vaapi_device only, no decode hwaccel
+      vf = `fps=${HLS_FPS},scale=-2:${variant.height}${gpu?.vfExtra ?? ""}`;
       videoCodec = gpu?.h264Codec ?? "libx264";
       encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
     } else {
@@ -370,7 +382,9 @@ const encodeVariant = (
         ? `${gpu?.label ?? "NVIDIA"} (full CUDA)`
         : useNvidia
           ? `${gpu?.label ?? "NVIDIA"} (NVDEC+NVENC)`
-          : "software (libx264)";
+          : useIntel
+            ? `${gpu?.label ?? "Intel Quick Sync"} (hwupload+VAAPI)`
+            : "software (libx264)";
 
       log.info(
         { hlsDir, variant: `${variant.height}p`, encoder: encoderLabel, rotation },
@@ -405,7 +419,11 @@ const encodeVariant = (
           return;
         }
 
-        if ((useCudaPipeline || useNvidia) && gpu && gpu.isHardwareFailure(stderr)) {
+        if (
+          (useCudaPipeline || useNvidia || useIntel) &&
+          gpu &&
+          gpu.isHardwareFailure(stderr)
+        ) {
           log.warn(
             { hlsDir, variant: `${variant.height}p` },
             "GPU encode failed, falling back to software",

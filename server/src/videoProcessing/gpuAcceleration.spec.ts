@@ -98,6 +98,40 @@ describe("gpuAcceleration", () => {
     expect(gpu!.label).toContain("AMD");
   });
 
+  it("returns Intel config when CUDA and AMF probes fail but VAAPI probe succeeds", async () => {
+    const spawnMock = jest.fn((_cmd: string, args: string[]) => {
+      const proc = makeSpawnProcess();
+      queueMicrotask(() => {
+        if (args.includes("-init_hw_device")) {
+          proc.stderr.emit("data", Buffer.from("Could not dynamically load CUDA"));
+          proc.emit("close", 1);
+          return;
+        }
+        if (args.includes("h264_amf")) {
+          proc.emit("close", 1);
+          return;
+        }
+        if (args.includes("h264_vaapi")) {
+          proc.emit("close", 0);
+          return;
+        }
+        proc.emit("close", 1);
+      });
+      return proc;
+    });
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+
+    const { getGpuAcceleration } = await import("./gpuAcceleration.ts");
+    const gpu = await getGpuAcceleration();
+
+    expect(gpu).not.toBeNull();
+    expect(gpu!.vendor).toBe("intel");
+    expect(gpu!.h264Codec).toBe("h264_vaapi");
+    expect(gpu!.hwaccelArgs).toEqual(["-vaapi_device", "/dev/dri/renderD128"]);
+    expect(gpu!.vfExtra).toBe(",format=nv12,hwupload");
+    expect(gpu!.label).toContain("Intel");
+  });
+
   it("returns null when both probes fail", async () => {
     const spawnMock = jest.fn(() => {
       const proc = makeSpawnProcess();
@@ -165,8 +199,16 @@ describe("gpuAcceleration", () => {
     expect(AMD.isHardwareFailure("generic error")).toBe(false);
   });
 
+  it("INTEL.isHardwareFailure detects VAAPI errors", async () => {
+    const { INTEL } = await import("./gpuAcceleration.ts");
+    expect(INTEL.isHardwareFailure("Failed to initialise VAAPI connection")).toBe(true);
+    expect(INTEL.isHardwareFailure("h264_vaapi encoder error")).toBe(true);
+    expect(INTEL.isHardwareFailure("Cannot open /dev/dri/renderD128")).toBe(true);
+    expect(INTEL.isHardwareFailure("generic error")).toBe(false);
+  });
+
   it("cqArgs and vbrArgs produce correct encoder-specific arguments", async () => {
-    const { NVIDIA, AMD } = await import("./gpuAcceleration.ts");
+    const { NVIDIA, AMD, INTEL } = await import("./gpuAcceleration.ts");
 
     const nvCq = NVIDIA.cqArgs(28);
     expect(nvCq).toContain("-cq");
@@ -180,6 +222,12 @@ describe("gpuAcceleration", () => {
     expect(amdCq).toContain("-rc");
     expect(amdCq).toContain("cqp");
 
+    const intelCq = INTEL.cqArgs(26);
+    expect(intelCq).toContain("-qp");
+    expect(intelCq).toContain("26");
+    expect(intelCq).toContain("-rc_mode");
+    expect(intelCq).toContain("CQP");
+
     const nvVbr = NVIDIA.vbrArgs(28);
     expect(nvVbr).toContain("-cq");
     expect(nvVbr).not.toContain("-b:v");
@@ -187,6 +235,10 @@ describe("gpuAcceleration", () => {
     const amdVbr = AMD.vbrArgs(28);
     expect(amdVbr).toContain("-rc");
     expect(amdVbr).toContain("vbr_peak");
+
+    const intelVbr = INTEL.vbrArgs(28);
+    expect(intelVbr).toContain("-rc_mode");
+    expect(intelVbr).toContain("VBR");
   });
 
   it("handles spawn error gracefully", async () => {

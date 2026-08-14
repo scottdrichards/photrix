@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 
-type GpuVendor = "nvidia" | "amd";
+type GpuVendor = "nvidia" | "amd" | "intel";
 
 type GpuAcceleration = {
   vendor: GpuVendor;
@@ -12,10 +12,19 @@ type GpuAcceleration = {
   label: string;
   /** Detect if stderr indicates a hardware-specific failure that warrants software fallback */
   isHardwareFailure: (stderr: string) => boolean;
-  /** Encoder args for constant quality mode. Quality value maps to CQ (NVENC) or QP (AMF). */
+  /** Encoder args for constant quality mode. Quality value maps to CQ (NVENC), QP (AMF/VAAPI). */
   cqArgs: (quality: number) => readonly string[];
   /** Encoder args for VBR mode. Quality is a fallback CQ/QP level. Consumer adds -b:v, -maxrate, -bufsize. */
   vbrArgs: (quality: number) => readonly string[];
+  /**
+   * Filter-chain suffix (comma-joined, appended after `scale`/`fps` filters) needed
+   * before this vendor's encoder can accept the frame. NVENC and AMF accept plain
+   * system-memory frames directly, so this is empty for them. `h264_vaapi` cannot —
+   * it requires a hardware-resident VAAPI surface, so Intel needs an explicit
+   * `format=nv12,hwupload` to push the CPU-filtered frame back onto the GPU
+   * device (see `hwaccelArgs`) right before encoding.
+   */
+  vfExtra: string;
 };
 
 const NVIDIA: GpuAcceleration = {
@@ -40,6 +49,7 @@ const NVIDIA: GpuAcceleration = {
     "0",
   ],
   vbrArgs: (q) => ["-preset", "p1", "-tune", "ll", "-rc", "vbr", "-cq", String(q)],
+  vfExtra: "",
 };
 
 const AMD: GpuAcceleration = {
@@ -71,6 +81,29 @@ const AMD: GpuAcceleration = {
     "-qp_p",
     String(q),
   ],
+  vfExtra: "",
+};
+
+const INTEL_RENDER_DEVICE = "/dev/dri/renderD128";
+
+const INTEL: GpuAcceleration = {
+  vendor: "intel",
+  // Device init only — decode stays on the CPU (simpler and rotation-safe, see
+  // generateMultibitrateHLS's NVDEC+NVENC path for the same tradeoff); the
+  // hwupload in `vfExtra` is what pushes the CPU-filtered frame onto this
+  // device's VAAPI surface right before the encoder.
+  hwaccelArgs: ["-vaapi_device", INTEL_RENDER_DEVICE],
+  h264Codec: "h264_vaapi",
+  label: "Intel Quick Sync (VAAPI)",
+  isHardwareFailure: (stderr) => {
+    const s = stderr.toLowerCase();
+    return (
+      s.includes("vaapi") || s.includes("h264_vaapi") || s.includes("/dev/dri")
+    );
+  },
+  cqArgs: (q) => ["-rc_mode", "CQP", "-qp", String(q)],
+  vbrArgs: (q) => ["-rc_mode", "VBR", "-qp", String(q)],
+  vfExtra: ",format=nv12,hwupload",
 };
 
 /**
@@ -155,6 +188,34 @@ const probeAmd = (): Promise<boolean> =>
     proc.on("error", () => resolve(false));
   });
 
+// Encodes one tiny frame through the exact hwupload→h264_vaapi path used at
+// runtime, so a driver/permissions problem on /dev/dri is caught here rather
+// than surfacing mid-encode later.
+const probeIntel = (): Promise<boolean> =>
+  new Promise<boolean>((resolve) => {
+    const proc = spawn("ffmpeg", [
+      "-hide_banner",
+      "-vaapi_device",
+      INTEL_RENDER_DEVICE,
+      "-f",
+      "lavfi",
+      "-i",
+      "nullsrc=s=64x64",
+      "-vf",
+      "format=nv12,hwupload",
+      "-frames:v",
+      "1",
+      "-c:v",
+      "h264_vaapi",
+      "-f",
+      "null",
+      "-",
+    ]);
+
+    proc.on("close", (code) => resolve(code === 0));
+    proc.on("error", () => resolve(false));
+  });
+
 const detect = async (): Promise<GpuAcceleration | null> => {
   // "present-oom" still means an NVENC-capable card exists — treat it as NVIDIA
   // so negotiation offers HLS and the encoder reclaims VRAM rather than falling
@@ -164,6 +225,9 @@ const detect = async (): Promise<GpuAcceleration | null> => {
   }
   if (await probeAmd()) {
     return AMD;
+  }
+  if (await probeIntel()) {
+    return INTEL;
   }
   return null;
 };
@@ -203,5 +267,5 @@ export const resetGpuAccelerationForTests = (value: GpuAcceleration | null) => {
   lastNullMs = 0;
 };
 
-export { NVIDIA, AMD };
+export { NVIDIA, AMD, INTEL };
 export type { GpuAcceleration, GpuVendor };

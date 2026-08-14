@@ -49,8 +49,8 @@ describe("generateHLS", () => {
     const result = await generateHLS(source, 720);
 
     expect(result).toBe(playlistPath);
-    // 2 calls = GPU probes (NVIDIA + AMD both fail). Existing playlist means no encode.
-    expect(spawnMock).toHaveBeenCalledTimes(2);
+    // 3 calls = GPU probes (NVIDIA + AMD + Intel all fail). Existing playlist means no encode.
+    expect(spawnMock).toHaveBeenCalledTimes(3);
   });
 
   it("enqueues conversion and uses software encoder when CUDA is unavailable", async () => {
@@ -78,6 +78,11 @@ describe("generateHLS", () => {
           return;
         }
 
+        if (args.includes("h264_vaapi")) {
+          proc.emit("close", 1);
+          return;
+        }
+
         const outputPath = args.at(-1);
         if (outputPath) {
           mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -98,9 +103,9 @@ describe("generateHLS", () => {
     });
 
     expect(result).toBe(playlistPath);
-    expect(spawnMock).toHaveBeenCalledTimes(3);
+    expect(spawnMock).toHaveBeenCalledTimes(4);
 
-    const generationArgs = spawnMock.mock.calls[2]?.[1] as string[];
+    const generationArgs = spawnMock.mock.calls[3]?.[1] as string[];
     expect(generationArgs).toContain("libx264");
     expect(generationArgs).toContain("scale=-2:360");
   });
@@ -121,6 +126,10 @@ describe("generateHLS", () => {
           return;
         }
         if (args.includes("h264_amf")) {
+          proc.emit("close", 1);
+          return;
+        }
+        if (args.includes("h264_vaapi")) {
           proc.emit("close", 1);
           return;
         }
