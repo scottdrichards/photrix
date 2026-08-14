@@ -1,17 +1,13 @@
 import { createKeyedWorkScheduler } from "./keyedWorkScheduler.ts";
 
-// 2026-08-14: lowered 2 -> 1 for the LXC 124 (i7-10610U, 4c/8t) host this
-// pool now runs on. This value has been "2" unchanged since it was
-// introduced (2026-07-08), tuned for the old, more powerful dev host — it
-// was never re-tuned during the 2026-08-14 migration. A gallery-scroll burst
-// of thumbnail conversions fills both pool slots and any fullscreen preview
-// request has to wait a full slot's worth of CPU-bound PIL/HEIF work before
-// it can even start, and the ML background workers (CLAP/face embeddings)
-// compete for the same weak CPU on top of that. Serializing to 1 keeps a
-// single conversion's tail latency predictable instead of doubling it.
-// Override with PHOTRIX_MEDIA_CONVERSION_CONCURRENCY if this proves too
-// conservative once VAAPI-accelerated paths take more of the load.
-const DEFAULT_MEDIA_CONVERSION_CONCURRENCY = 1;
+// 2026-08-14: reverted to 2 (original value, unchanged since 2026-07-08).
+// Briefly tried 1 to shorten preview tail latency behind thumbnail bursts,
+// but reverted — the likelier bottleneck on LXC 124 (i7-10610U, 4c/8t) is
+// the ML background workers (CLAP/face embeddings) competing for CPU, not
+// this pool's own concurrency. Investigate background-task CPU usage before
+// re-tuning this again.
+// Override with PHOTRIX_MEDIA_CONVERSION_CONCURRENCY if needed.
+const DEFAULT_MEDIA_CONVERSION_CONCURRENCY = 2;
 
 const configuredConcurrency = Number.parseInt(
   process.env.PHOTRIX_MEDIA_CONVERSION_CONCURRENCY ?? "",
