@@ -60,11 +60,10 @@ describe("IndexDatabase", () => {
     });
   });
 
-  it("throws when moving a missing file", async () => {
+  it("returns false when moving a missing file", async () => {
     await withTempDb(async (db) => {
-      await expect(db.moveFile("missing.jpg", "new/missing.jpg")).rejects.toThrow(
-        /does not exist/i,
-      );
+      const result = await db.moveFile("missing.jpg", "new/missing.jpg");
+      expect(result).toBe(false);
     });
   });
 

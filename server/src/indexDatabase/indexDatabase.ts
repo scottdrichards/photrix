@@ -214,7 +214,15 @@ export class IndexDatabase {
           log: number;
           checkpointed: number;
         }>("PRAGMA wal_checkpoint(TRUNCATE)");
-        if (result && result.busy === 0) return;
+        if (result && result.busy === 0) {
+          // Checkpoint wrote new DB pages that may include freshly indexed
+          // embeddings. Re-warm the scan cache so those new pages stay hot
+          // and the next search doesn't hit a cold page-cache miss.
+          if (result.checkpointed > 0) {
+            void this.warmSemanticSearch().catch(() => {});
+          }
+          return;
+        }
       } catch (err) {
         log.warn({ err }, "WAL checkpoint failed");
         return;
@@ -272,42 +280,28 @@ export class IndexDatabase {
     });
   }
 
-  async moveFile(oldRelativePath: string, newRelativePath: string): Promise<void> {
+  /** Moves a file record (and all related rows) to a new path. Returns false if the source is not in the database. */
+  async moveFile(oldRelativePath: string, newRelativePath: string): Promise<boolean> {
     const { folder: oldFolder, fileName: oldFile } = splitPath(oldRelativePath);
-    const row = await this.db.get<FileRecord>(
-      "SELECT * FROM files WHERE folder = ? AND fileName = ?",
-      oldFolder,
-      oldFile,
-    );
-    if (!row) {
-      throw new Error(
-        `moveFile: File at path "${oldRelativePath}" does not exist in the database.`,
-      );
-    }
-
     const { folder: newFolder, fileName: newFile } = splitPath(newRelativePath);
-    const updated: FileRecord = {
-      ...row,
-      folder: newFolder,
-      fileName: newFile,
-    };
 
-    const columns = fileRecordToColumnNamesAndValues(updated);
-    const placeholders = columns.values.map(() => "?").join(", ");
+    const result = await this.db.run(
+      "UPDATE files SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
+      [newFolder, newFile, oldFolder, oldFile],
+    );
+    if (result.changes === 0) return false;
+
     await this.db.transaction([
-      {
-        sql: "DELETE FROM files WHERE folder = ? AND fileName = ?",
-        params: [oldFolder, oldFile],
-      },
-      {
-        sql: `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`,
-        params: columns.values,
-      },
       {
         sql: "UPDATE faces SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
         params: [newFolder, newFile, oldFolder, oldFile],
       },
+      {
+        sql: "UPDATE audioSegments SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
+        params: [newFolder, newFile, oldFolder, oldFile],
+      },
     ]);
+    return true;
   }
 
   async addOrUpdateFileData(
@@ -690,6 +684,10 @@ export class IndexDatabase {
       folder,
       fileName,
     ]);
+    await this.db.run("DELETE FROM audioSegments WHERE folder = ? AND fileName = ?", [
+      folder,
+      fileName,
+    ]);
     return result.changes === 1;
   }
 
@@ -705,6 +703,10 @@ export class IndexDatabase {
         },
         {
           sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
+          params: [folder, fileName] as unknown[],
+        },
+        {
+          sql: "DELETE FROM audioSegments WHERE folder = ? AND fileName = ?",
           params: [folder, fileName] as unknown[],
         },
       ];
@@ -723,6 +725,10 @@ export class IndexDatabase {
       },
       {
         sql: "DELETE FROM faces WHERE folder LIKE ? ESCAPE '\\'",
+        params: [likePattern],
+      },
+      {
+        sql: "DELETE FROM audioSegments WHERE folder LIKE ? ESCAPE '\\'",
         params: [likePattern],
       },
     ];
@@ -1554,42 +1560,32 @@ export class IndexDatabase {
   ): Promise<Array<FileRecord & { similarity: number }>> {
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
 
+    const queryBuffer = Buffer.from(
+      queryVector.buffer,
+      queryVector.byteOffset,
+      queryVector.byteLength,
+    );
+
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT *
+      `SELECT *, cosine_similarity_f32(audioEmbedding, ?) AS similarity
        FROM files
        WHERE audioEmbedding IS NOT NULL
          AND (
            (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL)
            OR mimeType LIKE 'audio/%'
          )
-         ${whereClause ? `AND (${whereClause})` : ""}`,
+         ${whereClause ? `AND (${whereClause})` : ""}
+       ORDER BY similarity DESC
+       LIMIT ?`,
+      queryBuffer,
       ...whereParams,
+      limit,
     );
 
-    type ScoredRow = { record: FileRecord; similarity: number };
-    const scored: ScoredRow[] = [];
-
-    for (const row of rows) {
-      const rawBuf = row.audioEmbedding as Buffer | null;
-      if (!rawBuf) continue;
-
-      const aligned = new Uint8Array(rawBuf.byteLength);
-      aligned.set(rawBuf);
-      const embedding = new Float32Array(aligned.buffer);
-
-      // CLAP embeddings are L2-normalised so cosine similarity == dot product
-      let dot = 0;
-      const len = Math.min(queryVector.length, embedding.length);
-      for (let i = 0; i < len; i++) {
-        dot += (queryVector[i] ?? 0) * (embedding[i] ?? 0);
-      }
-
-      const record = rowToFileRecord(row as Record<string, string | number>);
-      scored.push({ record, similarity: dot });
-    }
-
-    scored.sort((a, b) => b.similarity - a.similarity);
-    return scored.slice(0, limit).map(({ record, similarity }) => ({ ...record, similarity }));
+    return rows.map((row) => ({
+      ...rowToFileRecord(row as Record<string, string | number>),
+      similarity: typeof row.similarity === "number" ? row.similarity : 0,
+    }));
   }
 
   async audioTranscriptSearch(
@@ -1654,6 +1650,20 @@ export class IndexDatabase {
       ...rowToFileRecord(row as Record<string, string | number>),
       similarity: typeof row.similarity === "number" ? row.similarity : 0,
     }));
+  }
+
+  /**
+   * Running one throwaway scan in the background at boot pulls the embedding
+   * pages into cache so the first real query is warm. Best-effort: the score is
+   * irrelevant (a zero query vector ranks nothing), the point is the read, and
+   * any failure is swallowed so a warmup problem never blocks startup.
+   */
+  async warmSemanticSearch(): Promise<void> {
+    // CLIP ViT-B-32 image-embedding dimension. An exact match is not required —
+    // even a length-mismatched probe forces SQLite to load every embedding BLOB
+    // to hand it to the scoring function — but matching keeps the scan realistic.
+    const probe = new Float32Array(512);
+    await this.semanticSearch(probe, {}, 1);
   }
 
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(
