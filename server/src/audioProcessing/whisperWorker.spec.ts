@@ -312,10 +312,53 @@ describe("whisperWorker", () => {
     const { transcribeWithWhisper } = await import("./whisperWorker.ts");
 
     await expect(transcribeWithWhisper("/tmp/video.mp4")).rejects.toThrow(
-      "since last user activity",
+      "of quiet",
     );
     expect(spawn).not.toHaveBeenCalled();
     expect(markWorkerEvictedError).toHaveBeenCalled();
+  });
+
+  it("keeps refusing while browsing continues, even without new suspend edges", async () => {
+    // Anchoring to the suspend edge was the bug: under continuous browsing the
+    // orchestrator stays suspended, so no further suspend edges arrive and a
+    // suspend-anchored timestamp ages past any threshold. Anchor on resume.
+    process.env.PHOTRIX_WHISPER_START_QUIET_MS = "60000";
+    const child = createFakeChild();
+    spawn.mockReturnValue(child);
+
+    const { transcribeWithWhisper } = await import("./whisperWorker.ts");
+
+    // One suspend edge, then nothing further — the user keeps browsing.
+    suspensionListener?.(true);
+    jest.useFakeTimers();
+    jest.advanceTimersByTime(10 * 60_000); // ten minutes without a resume edge
+    jest.useRealTimers();
+
+    await expect(transcribeWithWhisper("/tmp/video.mp4")).rejects.toThrow(
+      /not started/,
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("starts once a full quiet stretch has elapsed since activity ended", async () => {
+    process.env.PHOTRIX_WHISPER_START_QUIET_MS = "50";
+    const child = createFakeChild();
+    spawn.mockReturnValue(child);
+    child.stdin.write.mockImplementation(() => {
+      child.stdout.write(JSON.stringify({ id: 1, segments: [] }) + "\n");
+      return true;
+    });
+
+    const { transcribeWithWhisper } = await import("./whisperWorker.ts");
+
+    suspensionListener?.(true); // user active
+    suspensionListener?.(false); // window lapsed — quiet begins here
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const transcription = transcribeWithWhisper("/tmp/video.mp4");
+    child.stdout.write(JSON.stringify({ type: "ready", device: "cpu" }) + "\n");
+    await expect(transcription).resolves.toEqual([]);
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it("does not unload on the idle timer while a transcription is in flight", async () => {

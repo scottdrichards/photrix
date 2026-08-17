@@ -84,9 +84,13 @@ const IDLE_UNLOAD_MS = envMs(process.env.PHOTRIX_WHISPER_IDLE_UNLOAD_MS, 60_000)
 // cost of the thing being started.
 const START_QUIET_MS = envMs(process.env.PHOTRIX_WHISPER_START_QUIET_MS, 60_000);
 
-// When the last user-request window began. Seeded to startup so a freshly
-// booted server doesn't immediately load the model while a user is browsing.
-let lastSuspendedAt = Date.now();
+// When the current quiet stretch began, or null while a user-request window is
+// open. Anchored to the *resume* edge (activity ending), not the suspend edge
+// (activity starting): under continuous browsing suspend edges are rare, so a
+// suspend-anchored timestamp goes stale and eventually satisfies any quiet
+// test — which is exactly how 7 spawns still slipped through 90s of steady
+// requests. Seeded to startup so a booted-and-then-idle server can proceed.
+let quietSince: number | null = Date.now();
 const WHISPER_SCRIPT = path.resolve(process.cwd(), "python", "whisper_worker.py");
 
 let nextRequestId = 1;
@@ -157,11 +161,12 @@ const armIdleUnload = (delayMs: number, reason: string) => {
 // it errored. Transcription is idempotent, so the discarded work is just time.
 onComputeWorkerSuspensionChange(COMPUTE_WORKER_IDS.whisper, (isSuspended) => {
   if (isSuspended) {
-    lastSuspendedAt = Date.now();
+    quietSince = null; // a user is active; the quiet stretch is over
     clearIdleUnload();
     unloadWorker("suspended for user request", { force: true });
     return;
   }
+  quietSince = Date.now(); // activity window lapsed — quiet starts now
   armIdleUnload(IDLE_UNLOAD_MS, "idle");
 });
 
@@ -279,11 +284,11 @@ const ensureWorkerReady = async (): Promise<void> => {
     }
     // Not merely "no request right now" — the box must have been quiet long
     // enough that the load has a chance to finish and do real work.
-    const quietMs = Date.now() - lastSuspendedAt;
+    const quietMs = quietSince === null ? 0 : Date.now() - quietSince;
     if (quietMs < START_QUIET_MS) {
       throw markWorkerEvictedError(
         new Error(
-          `Whisper worker not started: only ${quietMs}ms since last user activity ` +
+          `Whisper worker not started: only ${quietMs}ms of quiet ` +
             `(need ${START_QUIET_MS}ms)`,
         ),
       );
