@@ -261,27 +261,40 @@ describe("whisperWorker", () => {
     await expect(transcription).rejects.toThrow("Whisper worker exited");
   });
 
-  it("evicts a worker that spawns inside an already-active suspension window", async () => {
-    // No transition will fire: suspension was already in effect before the
-    // child existed, which is exactly the case an edge-triggered hook misses.
+  it("refuses to start at all inside an active user-request window", async () => {
+    // Loading the model costs ~30s and ~2.2 GB, and a request only enters
+    // `pending` once the load finishes — so spawning here and killing moments
+    // later would discard nothing while paying the full cost, producing a
+    // respawn loop that never completes a transcription.
     workerSuspended = true;
     const child = createFakeChild();
     spawn.mockReturnValue(child);
-    child.stdin.write.mockImplementation(() => true);
+
+    const { transcribeWithWhisper } = await import("./whisperWorker.ts");
+
+    await expect(transcribeWithWhisper("/tmp/video.mp4")).rejects.toThrow(
+      "Whisper worker not started",
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    // Tagged as an eviction so the task runner requeues rather than erroring.
+    expect(markWorkerEvictedError).toHaveBeenCalled();
+  });
+
+  it("starts normally once the user-request window has lapsed", async () => {
+    workerSuspended = false;
+    const child = createFakeChild();
+    spawn.mockReturnValue(child);
+    child.stdin.write.mockImplementation(() => {
+      child.stdout.write(JSON.stringify({ id: 1, segments: [] }) + "\n");
+      return true;
+    });
 
     const { transcribeWithWhisper } = await import("./whisperWorker.ts");
     const transcription = transcribeWithWhisper("/tmp/video.mp4");
-    await flush();
+    child.stdout.write(JSON.stringify({ type: "ready", device: "cpu" }) + "\n");
 
-    expect(markDeliberateKill).toHaveBeenCalledWith(4242);
-    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "spawned during a user-request window" }),
-      "Unloading Whisper worker to release memory",
-    );
-
-    child.emit("exit", null, "SIGKILL");
-    await expect(transcription).rejects.toThrow("Whisper worker exited");
+    await expect(transcription).resolves.toEqual([]);
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it("does not unload on the idle timer while a transcription is in flight", async () => {

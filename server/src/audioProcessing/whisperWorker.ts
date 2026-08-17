@@ -238,6 +238,21 @@ const ensureWorkerReady = async (): Promise<void> => {
   if (readyPromise) return readyPromise;
 
   readyPromise = (async () => {
+    // Refuse to *start* inside a user-request window, rather than starting and
+    // being killed moments later. Loading this model costs ~30s and ~2.2 GB, and
+    // a request only enters `pending` after this function resolves — so a
+    // kill-after-spawn during the load window discards nothing (pending.size is
+    // 0) while paying the full cost. Under steady browsing that becomes a
+    // respawn loop that never completes a single transcription: three
+    // spawn/kill cycles in 11s were observed before this gate existed.
+    //
+    // Evicted-tagged so the task runner requeues the file instead of erroring
+    // it, exactly as for a mid-flight kill.
+    if (isComputeWorkerSuspended(COMPUTE_WORKER_IDS.whisper)) {
+      throw markWorkerEvictedError(
+        new Error("Whisper worker not started: a user request is in flight"),
+      );
+    }
     if (!(await canAccess(WHISPER_SCRIPT))) {
       throw new Error(`Whisper worker script missing at ${WHISPER_SCRIPT}`);
     }
