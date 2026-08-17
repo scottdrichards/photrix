@@ -24,6 +24,8 @@ const acquireGpuInitSlot = jest.fn(async () => () => {});
 const registerComputeWorker = jest.fn();
 const consumeDeliberateKill = jest.fn(() => false);
 const markDeliberateKill = jest.fn();
+let workerSuspended = false;
+const isComputeWorkerSuspended = jest.fn(() => workerSuspended);
 const markWorkerEvictedError = jest.fn((error: Error) => error);
 const timeouts: TimeoutEntry[] = [];
 // Captured so tests can drive the orchestrator's freeze/thaw signal directly.
@@ -60,6 +62,7 @@ jest.unstable_mockModule("../taskOrchestrator/computeWorkers.ts", () => ({
     };
   },
   consumeDeliberateKill,
+  isComputeWorkerSuspended,
   markDeliberateKill,
   markWorkerEvictedError,
   onComputeWorkerSuspensionChange,
@@ -110,6 +113,8 @@ beforeEach(() => {
   markDeliberateKill.mockClear();
   markWorkerEvictedError.mockClear();
   onComputeWorkerSuspensionChange.mockClear();
+  isComputeWorkerSuspended.mockClear();
+  workerSuspended = false;
   suspensionListener = null;
   timeouts.length = 0;
 });
@@ -252,6 +257,29 @@ describe("whisperWorker", () => {
 
     // The abandoned request rejects rather than hanging, so the task runner can
     // requeue it.
+    child.emit("exit", null, "SIGKILL");
+    await expect(transcription).rejects.toThrow("Whisper worker exited");
+  });
+
+  it("evicts a worker that spawns inside an already-active suspension window", async () => {
+    // No transition will fire: suspension was already in effect before the
+    // child existed, which is exactly the case an edge-triggered hook misses.
+    workerSuspended = true;
+    const child = createFakeChild();
+    spawn.mockReturnValue(child);
+    child.stdin.write.mockImplementation(() => true);
+
+    const { transcribeWithWhisper } = await import("./whisperWorker.ts");
+    const transcription = transcribeWithWhisper("/tmp/video.mp4");
+    await flush();
+
+    expect(markDeliberateKill).toHaveBeenCalledWith(4242);
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "spawned during a user-request window" }),
+      "Unloading Whisper worker to release memory",
+    );
+
     child.emit("exit", null, "SIGKILL");
     await expect(transcription).rejects.toThrow("Whisper worker exited");
   });

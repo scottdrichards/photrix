@@ -18,6 +18,7 @@ import {
   acquireGpuInitSlot,
   createSuspensionAwareTimeout,
   consumeDeliberateKill,
+  isComputeWorkerSuspended,
   markDeliberateKill,
   markWorkerEvictedError,
   onComputeWorkerSuspensionChange,
@@ -255,6 +256,17 @@ const ensureWorkerReady = async (): Promise<void> => {
     });
     worker = child;
     noteWhisperWorkerStarting(child.pid);
+
+    // The suspension hook below is edge-triggered, but this child may have
+    // spawned *inside* an already-active user-request window — in which case no
+    // transition fires and nothing else will stop it. (The orchestrator's own
+    // SIGSTOP has the same blind spot for the same reason, so such a child runs
+    // at full speed while a user request is in flight.) Check the level, not the
+    // edge, and evict immediately: the request rejects as an eviction and the
+    // task runner requeues the file once the user goes idle.
+    if (isComputeWorkerSuspended(COMPUTE_WORKER_IDS.whisper)) {
+      unloadWorker("spawned during a user-request window", { force: true });
+    }
 
     // The child's stdin can emit an async 'error' (e.g. EPIPE) if the Python
     // process dies between requests. Without a listener Node escalates it to an

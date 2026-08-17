@@ -146,6 +146,17 @@ export const onComputeWorkerSuspensionChange = (
   };
 };
 
+/**
+ * Whether this worker is inside a suspension window right now.
+ *
+ * Needed because `onComputeWorkerSuspensionChange` only fires on *transitions*,
+ * while a worker's child process spawns and exits independently of them. A
+ * child that starts while suspension is already in effect produces no
+ * transition, so an edge-triggered listener never learns about it.
+ */
+export const isComputeWorkerSuspended = (id: string): boolean =>
+  workers.get(id)?.suspended ?? false;
+
 export const createSuspensionAwareTimeout = (
   id: string,
   timeoutMs: number,
