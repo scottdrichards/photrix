@@ -264,10 +264,11 @@ const encodeVariant = (
     //    re-uploads and encodes on GPU. ~4-6× realtime vs ~0.3× for pure CPU on
     //    4K HEVC — critical for phone portrait videos to avoid buffer starvation.
     //
-    // 3. Intel Quick Sync (VAAPI, server2's iGPU-only box): CPU decode + CPU
-    //    filters (same rotation-safe shape as path 2 — no GPU decode surface to
-    //    fight rotation with) + one `hwupload` back onto the VAAPI device right
-    //    before `h264_vaapi`. No dedicated VRAM, so no ensureGpuHeadroom reclaim.
+    // 3. Intel Quick Sync (VAAPI, server2's iGPU-only box): VAAPI decode with
+    //    frames transferred back to system memory (same rotation-safe shape as
+    //    path 2) + CPU filters + one `hwupload` back onto the VAAPI device right
+    //    before `h264_vaapi`. Scaling must stay on the CPU — this iGPU has no
+    //    VPP entrypoint. No dedicated VRAM, so no ensureGpuHeadroom reclaim.
     //
     // 4. CPU (no GPU or GPU-only-decode failed): libx264, all filters on CPU.
     //
@@ -297,8 +298,9 @@ const encodeVariant = (
       videoCodec = gpu?.h264Codec ?? "libx264";
       encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
     } else if (useIntel) {
-      // CPU decode + CPU auto-rotate + hwupload → VAAPI encode.
-      hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -vaapi_device only, no decode hwaccel
+      // VAAPI decode → system memory → CPU auto-rotate/scale → hwupload → VAAPI
+      // encode. See INTEL.hwaccelArgs for why scaling can't move onto this iGPU.
+      hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -hwaccel vaapi + -vaapi_device
       vf = `fps=${HLS_FPS},scale=-2:${variant.height}${gpu?.vfExtra ?? ""}`;
       videoCodec = gpu?.h264Codec ?? "libx264";
       encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];

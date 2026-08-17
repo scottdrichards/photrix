@@ -23,8 +23,19 @@ const buildPythonProcessEnv = jest.fn(async () => ({}));
 const acquireGpuInitSlot = jest.fn(async () => () => {});
 const registerComputeWorker = jest.fn();
 const consumeDeliberateKill = jest.fn(() => false);
+const markDeliberateKill = jest.fn();
 const markWorkerEvictedError = jest.fn((error: Error) => error);
 const timeouts: TimeoutEntry[] = [];
+// Captured so tests can drive the orchestrator's freeze/thaw signal directly.
+let suspensionListener: ((isSuspended: boolean) => void) | null = null;
+const onComputeWorkerSuspensionChange = jest.fn(
+  (_id: string, listener: (isSuspended: boolean) => void) => {
+    suspensionListener = listener;
+    return () => {
+      suspensionListener = null;
+    };
+  },
+);
 
 jest.unstable_mockModule("node:fs/promises", () => ({ access }));
 jest.unstable_mockModule("node:child_process", () => ({ spawn }));
@@ -49,7 +60,9 @@ jest.unstable_mockModule("../taskOrchestrator/computeWorkers.ts", () => ({
     };
   },
   consumeDeliberateKill,
+  markDeliberateKill,
   markWorkerEvictedError,
+  onComputeWorkerSuspensionChange,
 }));
 
 const flush = async () => {
@@ -94,7 +107,10 @@ beforeEach(() => {
   acquireGpuInitSlot.mockClear();
   registerComputeWorker.mockClear();
   consumeDeliberateKill.mockClear();
+  markDeliberateKill.mockClear();
   markWorkerEvictedError.mockClear();
+  onComputeWorkerSuspensionChange.mockClear();
+  suspensionListener = null;
   timeouts.length = 0;
 });
 
@@ -181,5 +197,76 @@ describe("whisperWorker", () => {
       }),
       "Whisper worker timed out — killing process",
     );
+  });
+
+  it("unloads the idle worker so its resident model is returned to the OS", async () => {
+    jest.useFakeTimers();
+    const child = createFakeChild();
+    spawn.mockReturnValue(child);
+    child.stdin.write.mockImplementation(() => {
+      child.stdout.write(JSON.stringify({ id: 1, segments: [] }) + "\n");
+      return true;
+    });
+
+    const { transcribeWithWhisper } = await import("./whisperWorker.ts");
+    const transcription = transcribeWithWhisper("/tmp/video.mp4");
+    child.stdout.write(JSON.stringify({ type: "ready", device: "cpu" }) + "\n");
+    await expect(transcription).resolves.toEqual([]);
+
+    // Still resident immediately after the request settles.
+    expect(child.kill).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(60_000);
+
+    expect(markDeliberateKill).toHaveBeenCalledWith(4242);
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    jest.useRealTimers();
+  });
+
+  it("unloads far sooner when frozen for an in-flight user request", async () => {
+    jest.useFakeTimers();
+    const child = createFakeChild();
+    spawn.mockReturnValue(child);
+    child.stdin.write.mockImplementation(() => {
+      child.stdout.write(JSON.stringify({ id: 1, segments: [] }) + "\n");
+      return true;
+    });
+
+    const { transcribeWithWhisper } = await import("./whisperWorker.ts");
+    const transcription = transcribeWithWhisper("/tmp/video.mp4");
+    child.stdout.write(JSON.stringify({ type: "ready", device: "cpu" }) + "\n");
+    await expect(transcription).resolves.toEqual([]);
+
+    // The orchestrator freezes us for a user request: collapse to the short horizon.
+    suspensionListener?.(true);
+    jest.advanceTimersByTime(1_500);
+
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ pid: 4242, reason: "suspended for user request" }),
+      "Unloading idle Whisper worker to release memory",
+    );
+    jest.useRealTimers();
+  });
+
+  it("does not unload while a transcription is still in flight", async () => {
+    const child = createFakeChild();
+    spawn.mockReturnValue(child);
+    // Never answers — the request stays pending.
+    child.stdin.write.mockImplementation(() => true);
+
+    const { transcribeWithWhisper } = await import("./whisperWorker.ts");
+    void transcribeWithWhisper("/tmp/slow.mp4");
+    child.stdout.write(JSON.stringify({ type: "ready", device: "cpu" }) + "\n");
+    // flush() drives real setImmediate, so it must run before timers are faked.
+    await flush();
+    expect(child.stdin.write).toHaveBeenCalledTimes(1);
+
+    jest.useFakeTimers();
+    suspensionListener?.(true);
+    jest.advanceTimersByTime(600_000);
+
+    expect(child.kill).not.toHaveBeenCalled();
+    jest.useRealTimers();
   });
 });

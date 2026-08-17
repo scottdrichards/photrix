@@ -127,7 +127,16 @@ describe("gpuAcceleration", () => {
     expect(gpu).not.toBeNull();
     expect(gpu!.vendor).toBe("intel");
     expect(gpu!.h264Codec).toBe("h264_vaapi");
-    expect(gpu!.hwaccelArgs).toEqual(["-vaapi_device", "/dev/dri/renderD128"]);
+    // Hardware decode (-hwaccel vaapi, frames back to system memory so CPU
+    // filters/auto-rotate still run) plus the device the encoder uploads to.
+    expect(gpu!.hwaccelArgs).toEqual([
+      "-hwaccel",
+      "vaapi",
+      "-hwaccel_device",
+      "/dev/dri/renderD128",
+      "-vaapi_device",
+      "/dev/dri/renderD128",
+    ]);
     expect(gpu!.vfExtra).toBe(",format=nv12,hwupload");
     expect(gpu!.label).toContain("Intel");
   });
@@ -236,9 +245,12 @@ describe("gpuAcceleration", () => {
     expect(amdVbr).toContain("-rc");
     expect(amdVbr).toContain("vbr_peak");
 
+    // Intel deliberately reports CQP for both: the only H.264 entrypoint this
+    // hardware exposes (low-power) rejects VBR outright, which failed the encode.
     const intelVbr = INTEL.vbrArgs(28);
     expect(intelVbr).toContain("-rc_mode");
-    expect(intelVbr).toContain("VBR");
+    expect(intelVbr).toContain("CQP");
+    expect(intelVbr).not.toContain("VBR");
   });
 
   it("handles spawn error gracefully", async () => {

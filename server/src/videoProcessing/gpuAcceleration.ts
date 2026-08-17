@@ -88,11 +88,29 @@ const INTEL_RENDER_DEVICE = "/dev/dri/renderD128";
 
 const INTEL: GpuAcceleration = {
   vendor: "intel",
-  // Device init only — decode stays on the CPU (simpler and rotation-safe, see
-  // generateMultibitrateHLS's NVDEC+NVENC path for the same tradeoff); the
-  // hwupload in `vfExtra` is what pushes the CPU-filtered frame onto this
-  // device's VAAPI surface right before the encoder.
-  hwaccelArgs: ["-vaapi_device", INTEL_RENDER_DEVICE],
+  // `-hwaccel vaapi` WITHOUT `-hwaccel_output_format vaapi`: the iGPU decodes,
+  // then frames are transferred back to system memory. That keeps ffmpeg's
+  // auto-rotate (and every other CPU filter) working — the same rotation-safe
+  // shape as the NVDEC+NVENC path — while still getting hardware decode, which
+  // is the expensive half for 4K HEVC phone/GoPro footage. Leaving it off cost
+  // ~7x: a 4K HEVC HLS variant runs at 0.13x realtime with CPU decode vs 0.93x
+  // with VAAPI decode on LXC 124.
+  //
+  // Scaling deliberately stays on the CPU: this iGPU exposes no
+  // VAEntrypointVideoProc at all, so `scale_vaapi` fails outright with
+  // "the requested VAProfile is not supported".
+  //
+  // `-vaapi_device` additionally supplies the upload device for the encoder;
+  // the hwupload in `vfExtra` is what pushes the CPU-filtered frame back onto
+  // that VAAPI surface right before h264_vaapi.
+  hwaccelArgs: [
+    "-hwaccel",
+    "vaapi",
+    "-hwaccel_device",
+    INTEL_RENDER_DEVICE,
+    "-vaapi_device",
+    INTEL_RENDER_DEVICE,
+  ],
   h264Codec: "h264_vaapi",
   label: "Intel Quick Sync (VAAPI)",
   isHardwareFailure: (stderr) => {
@@ -102,7 +120,15 @@ const INTEL: GpuAcceleration = {
     );
   },
   cqArgs: (q) => ["-rc_mode", "CQP", "-qp", String(q)],
-  vbrArgs: (q) => ["-rc_mode", "VBR", "-qp", String(q)],
+  // CQP, not VBR — deliberately identical to cqArgs. Intel's low-power H.264
+  // entrypoint (VAEntrypointEncSliceLP, the only one this iGPU exposes) supports
+  // CQP alone; asking for VBR makes h264_vaapi refuse to open the encoder with
+  // "Driver does not support VBR RC mode (supported modes: CQP)". That killed
+  // every hardware HLS encode ~1.5s after spawn and dropped playback onto a
+  // libx264 fallback running at 0.02-0.14x realtime, which starves the player.
+  // Callers still append -b:v/-maxrate/-bufsize; under CQP they are inert
+  // rather than fatal, so the ABR ladder's shape is unchanged.
+  vbrArgs: (q) => ["-rc_mode", "CQP", "-qp", String(q)],
   vfExtra: ",format=nv12,hwupload",
 };
 
