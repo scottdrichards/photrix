@@ -7,7 +7,11 @@ import { existsSync } from "fs";
 import { getGpuAcceleration, type GpuAcceleration } from "./gpuAcceleration.ts";
 import { HLS_SEGMENT_SECONDS } from "./buildHlsPlaylist.ts";
 import { getLogger } from "../observability/logger.ts";
-import { getVideoRotationDegrees } from "./getVideoMetadata.ts";
+import {
+  getVideoSourceProfile,
+  isHighBitDepthPixelFormat,
+  type VideoSourceProfile,
+} from "./getVideoMetadata.ts";
 import { queryGpuFreeMB } from "../observability/systemMetrics.ts";
 import { reclaimGpuForUser } from "../taskOrchestrator/computeWorkers.ts";
 
@@ -238,18 +242,120 @@ export const clearVariantOutput = async (
 };
 
 /**
+ * Applies `rotation` (clockwise degrees, as reported by getVideoSourceProfile)
+ * to already-scaled system-memory frames.
+ *
+ * Rotation is applied *after* the scale deliberately: rotating commutes with
+ * scaling, and doing it second means the flip/transpose walks a 1280x720 frame
+ * instead of a 3840x2160 one. Measured on a 4K 10-bit source: 0.26x realtime
+ * rotating first vs 0.52x rotating last. For a 90/270 turn the scale target is
+ * given as a *width* (`scale=720:-2`) so that the post-transpose height is the
+ * variant height.
+ *
+ * The mapping is the inverse of ffmpeg's own auto-rotate: getVideoSourceProfile
+ * normalizes the display matrix without ffmpeg's sign flip, so a phone-portrait
+ * clip (display matrix -90) arrives here as 270 and needs transpose=clock.
+ */
+const rotationFilters = (rotation: number): string => {
+  if (rotation === 90) return ",transpose=cclock";
+  if (rotation === 180) return ",hflip,vflip";
+  if (rotation === 270) return ",transpose=clock";
+  return "";
+};
+
+/** Scale filter for a variant, expressed pre-rotation (see rotationFilters). */
+const scaleFilter = (height: number, rotation: number): string =>
+  rotation === 90 || rotation === 270 ? `scale=${height}:-2` : `scale=-2:${height}`;
+
+/**
+ * Builds the Intel filter chain for a driver that can scale on the GPU: the
+ * frames never leave the device at all — decode, fps drop, scale and rotate all
+ * happen there and `h264_vaapi` encodes the surface in place. Measured on LXC
+ * 124 at 720p: 3.1x realtime from a 4K60 8-bit source and 2.0x from 4K 10-bit,
+ * against 1.8x / 0.7x for the same sources when the frames have to come back to
+ * system memory to be scaled.
+ *
+ * Rotation is explicit here for the same reason as in the transfer chain, but
+ * for a sharper failure mode: ffmpeg's auto-rotate silently does *nothing* to
+ * VAAPI-resident frames (verified — a portrait clip comes out landscape, no
+ * warning), so `-noautorotate` plus transpose_vaapi is the only correct shape.
+ */
+const buildIntelVppFilters = (height: number, rotation: number): string => {
+  const turned = rotation === 90 || rotation === 270;
+  const scale = turned
+    ? `scale_vaapi=${height}:-2:format=nv12`
+    : `scale_vaapi=-2:${height}:format=nv12`;
+  const rotate =
+    rotation === 90
+      ? ",transpose_vaapi=cclock"
+      : rotation === 180
+        ? ",transpose_vaapi=reversal"
+        : rotation === 270
+          ? ",transpose_vaapi=clock"
+          : "";
+  // No hwupload tail here (gpu.vfExtra): the frames are already VAAPI surfaces.
+  return `fps=${HLS_FPS},${scale}${rotate}`;
+};
+
+/**
+ * Builds the Intel filter chain that takes GPU-resident decoded frames down to
+ * an encodable NV12 surface at the variant's size.
+ *
+ * The order is load-bearing:
+ *  - `fps` runs first, while frames are still on the GPU, so half of a 60fps
+ *    source's frames are dropped before anything is copied.
+ *  - the copy back to system memory must name the *surface's own* format.
+ *    Downloading a P010 (10-bit) surface as NV12 does not error — it produces
+ *    silent green/purple garbage — so high-bit-depth sources must say p010le
+ *    and convert to 8-bit afterwards, on the CPU, as part of the scale.
+ *  - 8-bit sources use `hwmap` instead of `hwdownload`: on an iGPU the frame
+ *    already lives in memory the CPU can address, so mapping it read-only skips
+ *    the copy entirely (1.24x → 1.77x realtime on a 4K60 source). P010 surfaces
+ *    can't be mapped this way (the encoder's hwupload then fails to write the
+ *    surface), so they keep the copy.
+ */
+const buildIntelGpuFrameFilters = (
+  height: number,
+  rotation: number,
+  highBitDepth: boolean,
+  vfExtra: string,
+): string => {
+  const [transfer, transferFormat] = highBitDepth
+    ? ["hwdownload", "p010le"]
+    : ["hwmap=mode=read+direct", "nv12"];
+  const chain = [
+    `fps=${HLS_FPS}`,
+    transfer,
+    `format=${transferFormat}`,
+    scaleFilter(height, rotation),
+    "format=nv12",
+  ].join(",");
+  // vfExtra is ",format=nv12,hwupload" — the push back onto the VAAPI surface.
+  return `${chain}${rotationFilters(rotation)}${vfExtra}`;
+};
+
+/** Which pipeline an encode attempt uses; retried left to right as each fails. */
+type EncodeTier = "gpu-frames" | "system-frames" | "software";
+
+/** Last few ffmpeg stderr lines, for logs and error messages. */
+const stderrTail = (stderr: string): string =>
+  stderr.trim().split("\n").slice(-3).join(" | ");
+
+/**
  * Runs a single-variant HLS encode for one height, always from segment 0.
- * Writes segments + playlist into `{height}p/`. Falls back to software encoding
- * if GPU acceleration fails.
+ * Writes segments + playlist into `{height}p/`. Falls back down the tiers if
+ * hardware encoding fails.
  */
 const encodeVariant = (
   filePath: string,
   hlsDir: string,
   variant: Variant,
   gpu: GpuAcceleration | null,
-  rotation: number,
+  source: VideoSourceProfile,
   onSpawn?: (child: ReturnType<typeof spawn>) => void,
+  tier: EncodeTier = "gpu-frames",
 ): Promise<void> => {
+  const rotation = source.rotation;
   return new Promise((resolve, reject) => {
     // Encode pipelines, in order of preference:
     //
@@ -264,13 +370,20 @@ const encodeVariant = (
     //    re-uploads and encodes on GPU. ~4-6× realtime vs ~0.3× for pure CPU on
     //    4K HEVC — critical for phone portrait videos to avoid buffer starvation.
     //
-    // 3. Intel Quick Sync (VAAPI, server2's iGPU-only box): VAAPI decode with
-    //    frames transferred back to system memory (same rotation-safe shape as
-    //    path 2) + CPU filters + one `hwupload` back onto the VAAPI device right
-    //    before `h264_vaapi`. Scaling must stay on the CPU — this iGPU has no
-    //    VPP entrypoint. No dedicated VRAM, so no ensureGpuHeadroom reclaim.
+    // 3. Intel Quick Sync, GPU frames (VAAPI, server2's iGPU-only box): VAAPI
+    //    decode with frames left on the device and `fps` dropped there. If the
+    //    driver has VPP, scale and rotation run on the GPU too and nothing ever
+    //    reaches system memory (buildIntelVppFilters); if it doesn't, the frames
+    //    are mapped or copied out for a CPU scale and pushed back with
+    //    `hwupload` (buildIntelGpuFrameFilters). Needs a codec the iGPU can
+    //    decode and explicit rotation handling either way. No dedicated VRAM,
+    //    so no ensureGpuHeadroom reclaim.
     //
-    // 4. CPU (no GPU or GPU-only-decode failed): libx264, all filters on CPU.
+    // 4. Intel Quick Sync, system frames: as above but ffmpeg copies every
+    //    decoded frame back itself and auto-rotates. Slower (a full-resolution
+    //    copy per source frame), but tolerant of any codec — the retry tier.
+    //
+    // 5. CPU (no GPU or GPU-only-decode failed): libx264, all filters on CPU.
     //
     // All paths force 8-bit 4:2:0 output. Sources are frequently 10-bit HEVC
     // (HDR/HLG — default for iPhone and much GoPro footage). h264_nvenc/h264_vaapi
@@ -279,6 +392,10 @@ const encodeVariant = (
     const useNvidia = gpu?.vendor === "nvidia";
     const useCudaPipeline = useNvidia && rotation === 0;
     const useIntel = gpu?.vendor === "intel";
+    const useIntelGpuFrames =
+      useIntel &&
+      tier === "gpu-frames" &&
+      gpu.hardwareDecodableCodecs.includes(source.codec);
 
     let hwaccelArgs: string[];
     let vf: string;
@@ -297,6 +414,21 @@ const encodeVariant = (
       vf = `fps=${HLS_FPS},scale=-2:${variant.height},format=yuv420p`;
       videoCodec = gpu?.h264Codec ?? "libx264";
       encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
+    } else if (useIntelGpuFrames) {
+      // VAAPI decode with frames left on the iGPU. With VPP the whole chain
+      // runs there; without it, frames are mapped/copied out for a CPU scale
+      // and pushed back for the encode.
+      hwaccelArgs = [...gpu.hwaccelArgs, ...gpu.gpuFrameArgs];
+      vf = gpu.supportsVideoProc
+        ? buildIntelVppFilters(variant.height, rotation)
+        : buildIntelGpuFrameFilters(
+            variant.height,
+            rotation,
+            isHighBitDepthPixelFormat(source.pixelFormat),
+            gpu.vfExtra,
+          );
+      videoCodec = gpu.h264Codec;
+      encoderArgs = gpu.vbrArgs(28);
     } else if (useIntel) {
       // VAAPI decode → system memory → CPU auto-rotate/scale → hwupload → VAAPI
       // encode. See INTEL.hwaccelArgs for why scaling can't move onto this iGPU.
@@ -384,9 +516,11 @@ const encodeVariant = (
         ? `${gpu?.label ?? "NVIDIA"} (full CUDA)`
         : useNvidia
           ? `${gpu?.label ?? "NVIDIA"} (NVDEC+NVENC)`
-          : useIntel
-            ? `${gpu?.label ?? "Intel Quick Sync"} (hwupload+VAAPI)`
-            : "software (libx264)";
+          : useIntelGpuFrames
+            ? `${gpu?.label ?? "Intel Quick Sync"} (${gpu?.supportsVideoProc ? "full VAAPI" : "GPU frames+CPU scale"})`
+            : useIntel
+              ? `${gpu?.label ?? "Intel Quick Sync"} (system frames+VAAPI)`
+              : "software (libx264)";
 
       log.info(
         { hlsDir, variant: `${variant.height}p`, encoder: encoderLabel, rotation },
@@ -410,7 +544,7 @@ const encodeVariant = (
         stderr = appendWithLimit(stderr, chunk);
       });
 
-      process.on("close", (code) => {
+      process.on("close", (code, signal) => {
         clearInterval(firstSegmentPoll);
         if (code === 0) {
           log.info(
@@ -421,23 +555,54 @@ const encodeVariant = (
           return;
         }
 
+        // Killed by a signal means *we* killed it — the idle reaper retiring a
+        // variant the player switched away from, a session reap, or a
+        // replacement encode. That is a cancellation, not a failure, and must
+        // not be retried: every hardware encode's stderr mentions "vaapi"
+        // (device init, encoder name), so isHardwareFailure says yes to any
+        // non-zero exit, and an ABR switch would silently respawn the variant
+        // the user just left as libx264 — burning every core at ~0.1x realtime
+        // and starving the variant they switched *to*.
+        if (signal) {
+          log.debug(
+            { hlsDir, variant: `${variant.height}p`, signal },
+            "HLS encode cancelled",
+          );
+          resolve();
+          return;
+        }
+
         if (
           (useCudaPipeline || useNvidia || useIntel) &&
           gpu &&
           gpu.isHardwareFailure(stderr)
         ) {
+          // Step down one tier rather than straight to CPU: on Intel the
+          // GPU-frame pipeline is the fragile one (it needs a decodable codec
+          // and a mappable surface), while the system-frame pipeline still
+          // encodes on the iGPU and is many times faster than libx264.
+          const nextTier: EncodeTier =
+            useIntelGpuFrames ? "system-frames" : "software";
           log.warn(
-            { hlsDir, variant: `${variant.height}p` },
-            "GPU encode failed, falling back to software",
+            { hlsDir, variant: `${variant.height}p`, nextTier, stderr: stderrTail(stderr) },
+            "GPU encode failed, retrying on a lower tier",
           );
-          encodeVariant(filePath, hlsDir, variant, null, rotation, onSpawn)
+          encodeVariant(
+            filePath,
+            hlsDir,
+            variant,
+            nextTier === "software" ? null : gpu,
+            source,
+            onSpawn,
+            nextTier,
+          )
             .then(resolve)
             .catch(reject);
           return;
         }
         // Surface the ffmpeg stderr tail so a failed encode is diagnosable
         // rather than an opaque "generation failed" with no cause.
-        const detail = stderr.trim().split("\n").slice(-3).join(" | ");
+        const detail = stderrTail(stderr);
         reject(
           new Error(
             `HLS ABR generation failed (exit ${code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
@@ -475,9 +640,9 @@ export const generateVariantHLS = async (
   const hlsDir = getMultibitrateHLSDirectory(filePath);
   await mkdir(join(hlsDir, `${variant.height}p`), { recursive: true });
 
-  const [gpu, rotation] = await Promise.all([
+  const [gpu, source] = await Promise.all([
     getGpuAcceleration(),
-    getVideoRotationDegrees(filePath),
+    getVideoSourceProfile(filePath),
   ]);
-  await encodeVariant(filePath, hlsDir, variant, gpu, rotation, opts?.onSpawn);
+  await encodeVariant(filePath, hlsDir, variant, gpu, source, opts?.onSpawn);
 };

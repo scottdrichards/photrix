@@ -141,6 +141,43 @@ describe("gpuAcceleration", () => {
     expect(gpu!.label).toContain("Intel");
   });
 
+  it("reports on-GPU scaling and VBR according to what the driver answers", async () => {
+    // Same silicon, stripped driver: encode works, but scale_vaapi and VBR
+    // both fail. Debian's DFSG-repacked intel-media-va-driver behaves this way.
+    const makeIntelProbes = (accept: (args: string[]) => boolean) =>
+      jest.fn((_cmd: string, args: string[]) => {
+        const proc = makeSpawnProcess();
+        queueMicrotask(() => {
+          if (args.includes("-init_hw_device") || args.includes("h264_amf")) {
+            proc.emit("close", 1);
+            return;
+          }
+          proc.emit("close", accept(args) ? 0 : 1);
+        });
+        return proc;
+      });
+
+    const strippedDriver = makeIntelProbes(
+      (args) => !args.some((a) => a.includes("scale_vaapi")) && !args.includes("VBR"),
+    );
+    jest.unstable_mockModule("child_process", () => ({ spawn: strippedDriver }));
+    const stripped = await (await import("./gpuAcceleration.ts")).getGpuAcceleration();
+
+    expect(stripped!.vendor).toBe("intel");
+    expect(stripped!.supportsVideoProc).toBe(false);
+    // Falls back to the rate-control mode a low-power-only encoder accepts.
+    expect(stripped!.vbrArgs(28)).toEqual(["-rc_mode", "CQP", "-qp", "28"]);
+
+    jest.resetModules();
+
+    const fullDriver = makeIntelProbes(() => true);
+    jest.unstable_mockModule("child_process", () => ({ spawn: fullDriver }));
+    const full = await (await import("./gpuAcceleration.ts")).getGpuAcceleration();
+
+    expect(full!.supportsVideoProc).toBe(true);
+    expect(full!.vbrArgs(28)).toEqual(["-rc_mode", "VBR"]);
+  });
+
   it("returns null when both probes fail", async () => {
     const spawnMock = jest.fn(() => {
       const proc = makeSpawnProcess();

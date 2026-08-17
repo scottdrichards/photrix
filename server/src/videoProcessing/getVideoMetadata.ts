@@ -6,6 +6,7 @@ type FFProbeStream = {
   width?: number;
   height?: number;
   codec_name?: string;
+  pix_fmt?: string;
   r_frame_rate?: string;
   tags?: {
     rotate?: string;
@@ -41,10 +42,39 @@ const extractRotationDegrees = (streams: FFProbeStream[]): number => {
 };
 
 /**
- * Returns the clockwise rotation in degrees (0, 90, 180, or 270) needed to
- * display the video correctly. Returns 0 if no rotation metadata is present.
+ * The properties of a source video that decide which transcode pipeline can be
+ * used for it: how it must be rotated for display, whether the GPU can decode
+ * its codec at all, and — critically for the VAAPI path — how many bits per
+ * component its decoded surfaces carry. A 10-bit surface downloaded as if it
+ * were 8-bit yields silent garbage rather than an error, so the pixel format
+ * has to be known before the filter chain is built.
  */
-export const getVideoRotationDegrees = (filePath: string): Promise<number> =>
+export type VideoSourceProfile = {
+  /** Clockwise rotation in degrees (0, 90, 180, 270) needed to display correctly. */
+  rotation: number;
+  /** ffmpeg codec name of the video stream ("h264", "hevc", …), or "" if unknown. */
+  codec: string;
+  /** ffmpeg pixel format of the video stream ("yuv420p", "yuv420p10le", …), or "". */
+  pixelFormat: string;
+};
+
+/**
+ * True when the source decodes to more than 8 bits per component ("yuv420p10le",
+ * "p010le", …), which VAAPI represents as P010 surfaces rather than NV12. Depth
+ * is spelled as a trailing bit count plus endianness in every such ffmpeg format
+ * name; plain 8-bit names ("yuv420p", "nv12") carry no such suffix.
+ */
+export const isHighBitDepthPixelFormat = (pixelFormat: string): boolean =>
+  /(10|12|16)(le|be)$/.test(pixelFormat);
+
+/**
+ * Probes rotation, codec and pixel format in a single ffprobe call. One probe
+ * rather than one per property: every HLS variant start pays this latency
+ * before ffmpeg can even be spawned.
+ */
+export const getVideoSourceProfile = (
+  filePath: string,
+): Promise<VideoSourceProfile> =>
   new Promise((resolve, reject) => {
     const proc = spawn("ffprobe", [
       "-v",
@@ -65,13 +95,20 @@ export const getVideoRotationDegrees = (filePath: string): Promise<number> =>
       }
       try {
         const data = JSON.parse(stdout) as FFProbeOutput;
-        resolve(extractRotationDegrees(data.streams ?? []));
+        const streams = data.streams ?? [];
+        const video = streams.find((s) => s.codec_type === "video");
+        resolve({
+          rotation: extractRotationDegrees(streams),
+          codec: video?.codec_name ?? "",
+          pixelFormat: video?.pix_fmt ?? "",
+        });
       } catch (e) {
         reject(e);
       }
     });
     proc.on("error", reject);
   });
+
 
 export const getVideoMetadata = async (
   filePath: string,
