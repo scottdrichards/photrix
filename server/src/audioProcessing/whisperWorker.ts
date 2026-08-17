@@ -63,7 +63,30 @@ const SLOW_REQUEST_MS = 5 * 60 * 1_000;
 // outright and immediately — see the suspension hook below. This timer covers
 // only the other case: genuinely idle with no work in flight. Generous enough
 // that a run of queued transcriptions doesn't pay a model reload per file.
-const IDLE_UNLOAD_MS = Number(process.env.PHOTRIX_WHISPER_IDLE_UNLOAD_MS) || 60_000;
+// `Number(x) || fallback` would silently reject a legitimate 0, since 0 is
+// falsy — which makes these knobs impossible to turn off. Parse explicitly.
+const envMs = (raw: string | undefined, fallback: number): number => {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
+const IDLE_UNLOAD_MS = envMs(process.env.PHOTRIX_WHISPER_IDLE_UNLOAD_MS, 60_000);
+
+// How long the box must be quiet before paying for a model load.
+//
+// The orchestrator's ACTIVITY_COOLDOWN_MS is 2s, so background work resumes two
+// seconds after each request. Loading Whisper takes ~30s and ~2.2 GB, so during
+// ordinary browsing it would start in every two-second gap and be killed by the
+// next request, over and over: 16 spawns and 17 unloads in four minutes were
+// measured at one request per two seconds, none of which ever transcribed
+// anything. Requiring a longer quiet period makes the start decision match the
+// cost of the thing being started.
+const START_QUIET_MS = envMs(process.env.PHOTRIX_WHISPER_START_QUIET_MS, 60_000);
+
+// When the last user-request window began. Seeded to startup so a freshly
+// booted server doesn't immediately load the model while a user is browsing.
+let lastSuspendedAt = Date.now();
 const WHISPER_SCRIPT = path.resolve(process.cwd(), "python", "whisper_worker.py");
 
 let nextRequestId = 1;
@@ -134,6 +157,7 @@ const armIdleUnload = (delayMs: number, reason: string) => {
 // it errored. Transcription is idempotent, so the discarded work is just time.
 onComputeWorkerSuspensionChange(COMPUTE_WORKER_IDS.whisper, (isSuspended) => {
   if (isSuspended) {
+    lastSuspendedAt = Date.now();
     clearIdleUnload();
     unloadWorker("suspended for user request", { force: true });
     return;
@@ -251,6 +275,17 @@ const ensureWorkerReady = async (): Promise<void> => {
     if (isComputeWorkerSuspended(COMPUTE_WORKER_IDS.whisper)) {
       throw markWorkerEvictedError(
         new Error("Whisper worker not started: a user request is in flight"),
+      );
+    }
+    // Not merely "no request right now" — the box must have been quiet long
+    // enough that the load has a chance to finish and do real work.
+    const quietMs = Date.now() - lastSuspendedAt;
+    if (quietMs < START_QUIET_MS) {
+      throw markWorkerEvictedError(
+        new Error(
+          `Whisper worker not started: only ${quietMs}ms since last user activity ` +
+            `(need ${START_QUIET_MS}ms)`,
+        ),
       );
     }
     if (!(await canAccess(WHISPER_SCRIPT))) {

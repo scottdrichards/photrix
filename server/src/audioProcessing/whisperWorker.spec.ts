@@ -115,11 +115,15 @@ beforeEach(() => {
   onComputeWorkerSuspensionChange.mockClear();
   isComputeWorkerSuspended.mockClear();
   workerSuspended = false;
+  // Most tests exercise behaviour unrelated to the start-hysteresis gate, so
+  // disable it by default; the test that covers it sets its own value.
+  process.env.PHOTRIX_WHISPER_START_QUIET_MS = "0";
   suspensionListener = null;
   timeouts.length = 0;
 });
 
 afterEach(() => {
+  delete process.env.PHOTRIX_WHISPER_START_QUIET_MS;
   jest.resetModules();
   jest.restoreAllMocks();
 });
@@ -295,6 +299,23 @@ describe("whisperWorker", () => {
 
     await expect(transcription).resolves.toEqual([]);
     expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("will not pay for a model load until the box has been quiet a while", async () => {
+    // A 2s orchestrator cooldown means background resumes between keystrokes;
+    // starting a ~30s / 2.2 GB load in that gap only to be killed by the next
+    // request is pure waste, so the start decision uses a longer horizon.
+    process.env.PHOTRIX_WHISPER_START_QUIET_MS = "60000";
+    const child = createFakeChild();
+    spawn.mockReturnValue(child);
+
+    const { transcribeWithWhisper } = await import("./whisperWorker.ts");
+
+    await expect(transcribeWithWhisper("/tmp/video.mp4")).rejects.toThrow(
+      "since last user activity",
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    expect(markWorkerEvictedError).toHaveBeenCalled();
   });
 
   it("does not unload on the idle timer while a transcription is in flight", async () => {
