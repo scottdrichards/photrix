@@ -223,36 +223,42 @@ describe("whisperWorker", () => {
     jest.useRealTimers();
   });
 
-  it("unloads far sooner when frozen for an in-flight user request", async () => {
-    jest.useFakeTimers();
+  it("kills the worker at once when frozen, discarding in-flight work", async () => {
     const child = createFakeChild();
     spawn.mockReturnValue(child);
-    child.stdin.write.mockImplementation(() => {
-      child.stdout.write(JSON.stringify({ id: 1, segments: [] }) + "\n");
-      return true;
-    });
+    // Never answers — the transcription is still running when the user arrives.
+    child.stdin.write.mockImplementation(() => true);
 
     const { transcribeWithWhisper } = await import("./whisperWorker.ts");
-    const transcription = transcribeWithWhisper("/tmp/video.mp4");
+    const transcription = transcribeWithWhisper("/tmp/slow.mp4");
     child.stdout.write(JSON.stringify({ type: "ready", device: "cpu" }) + "\n");
-    await expect(transcription).resolves.toEqual([]);
+    await flush();
+    expect(child.stdin.write).toHaveBeenCalledTimes(1);
 
-    // The orchestrator freezes us for a user request: collapse to the short horizon.
+    // The orchestrator freezes us for a user request. No grace period: the
+    // in-flight file is abandoned rather than waited on.
     suspensionListener?.(true);
-    jest.advanceTimersByTime(1_500);
 
+    expect(markDeliberateKill).toHaveBeenCalledWith(4242);
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
     expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ pid: 4242, reason: "suspended for user request" }),
-      "Unloading idle Whisper worker to release memory",
+      expect.objectContaining({
+        pid: 4242,
+        reason: "suspended for user request",
+        discardedRequests: 1,
+      }),
+      "Unloading Whisper worker to release memory",
     );
-    jest.useRealTimers();
+
+    // The abandoned request rejects rather than hanging, so the task runner can
+    // requeue it.
+    child.emit("exit", null, "SIGKILL");
+    await expect(transcription).rejects.toThrow("Whisper worker exited");
   });
 
-  it("does not unload while a transcription is still in flight", async () => {
+  it("does not unload on the idle timer while a transcription is in flight", async () => {
     const child = createFakeChild();
     spawn.mockReturnValue(child);
-    // Never answers — the request stays pending.
     child.stdin.write.mockImplementation(() => true);
 
     const { transcribeWithWhisper } = await import("./whisperWorker.ts");
@@ -263,7 +269,6 @@ describe("whisperWorker", () => {
     expect(child.stdin.write).toHaveBeenCalledTimes(1);
 
     jest.useFakeTimers();
-    suspensionListener?.(true);
     jest.advanceTimersByTime(600_000);
 
     expect(child.kill).not.toHaveBeenCalled();

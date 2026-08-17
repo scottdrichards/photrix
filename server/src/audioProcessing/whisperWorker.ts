@@ -58,15 +58,11 @@ const SLOW_REQUEST_MS = 5 * 60 * 1_000;
 // keeps every byte of its resident set, so freezing alone does nothing for the
 // memory pressure that makes image requests slow.
 //
-// Two horizons:
-// - IDLE: no work in flight and the user is idle. Generous enough that a run of
-//   queued transcriptions doesn't pay a model reload between each file.
-// - SUSPENDED: the orchestrator has frozen us for an in-flight user request.
-//   Unload almost immediately — a frozen worker makes no progress anyway, so
-//   holding its RSS only starves the request the freeze was meant to protect.
+// When the orchestrator freezes us for a user request the worker is killed
+// outright and immediately — see the suspension hook below. This timer covers
+// only the other case: genuinely idle with no work in flight. Generous enough
+// that a run of queued transcriptions doesn't pay a model reload per file.
 const IDLE_UNLOAD_MS = Number(process.env.PHOTRIX_WHISPER_IDLE_UNLOAD_MS) || 60_000;
-const SUSPENDED_UNLOAD_MS =
-  Number(process.env.PHOTRIX_WHISPER_SUSPENDED_UNLOAD_MS) || 1_500;
 const WHISPER_SCRIPT = path.resolve(process.cwd(), "python", "whisper_worker.py");
 
 let nextRequestId = 1;
@@ -96,17 +92,23 @@ const clearIdleUnload = () => {
  *
  * The worker respawns lazily on the next transcription via ensureWorkerReady().
  */
-const unloadIdleWorker = (reason: string) => {
+const unloadWorker = (reason: string, { force = false } = {}) => {
   const child = worker;
   const pid = child?.pid;
-  // Re-check under the timer callback: work can arrive between arming and firing.
-  if (!child || pid == null || pending.size > 0) return;
-  log.info({ pid, reason }, "Unloading idle Whisper worker to release memory");
+  if (!child || pid == null) return;
+  // Re-check under the timer callback: work can arrive between arming and
+  // firing. `force` overrides this for the user-request case, where discarding
+  // the in-flight transcription is the whole point.
+  if (!force && pending.size > 0) return;
+  log.info(
+    { pid, reason, discardedRequests: pending.size },
+    "Unloading Whisper worker to release memory",
+  );
   markDeliberateKill(pid);
   try {
     child.kill("SIGKILL");
   } catch (err) {
-    log.debug({ err, pid }, "Whisper idle unload kill failed");
+    log.debug({ err, pid }, "Whisper unload kill failed");
   }
 };
 
@@ -116,19 +118,26 @@ const armIdleUnload = (delayMs: number, reason: string) => {
   if (!worker || pending.size > 0) return;
   idleUnloadTimer = setTimeout(() => {
     idleUnloadTimer = null;
-    unloadIdleWorker(reason);
+    unloadWorker(reason);
   }, delayMs);
   // Never hold the event loop open just to unload something.
   idleUnloadTimer.unref?.();
 };
 
-// A user request freezing us is the strongest signal that this memory is needed
-// elsewhere; collapse to the short horizon. On thaw, fall back to the idle one.
+// A user request has arrived and the orchestrator froze us for it. Kill now,
+// synchronously, without waiting for the in-flight transcription to finish: a
+// frozen worker makes no progress anyway, so every byte it holds is taken
+// straight from the request the freeze was meant to protect. The abandoned file
+// is not lost — the kill is tagged deliberate, so its rejection is an eviction
+// and the task runner leaves it pending for a later retry rather than marking
+// it errored. Transcription is idempotent, so the discarded work is just time.
 onComputeWorkerSuspensionChange(COMPUTE_WORKER_IDS.whisper, (isSuspended) => {
-  armIdleUnload(
-    isSuspended ? SUSPENDED_UNLOAD_MS : IDLE_UNLOAD_MS,
-    isSuspended ? "suspended for user request" : "idle",
-  );
+  if (isSuspended) {
+    clearIdleUnload();
+    unloadWorker("suspended for user request", { force: true });
+    return;
+  }
+  armIdleUnload(IDLE_UNLOAD_MS, "idle");
 });
 
 const canAccess = async (targetPath: string): Promise<boolean> => {
