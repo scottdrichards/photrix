@@ -58,6 +58,40 @@ const makeIntelSpawnMock = (
   });
 };
 
+/**
+ * Spawn mock for a machine with a fully working NVIDIA card: CUDA initialises
+ * and h264_nvenc opens, so detection settles on NVIDIA.
+ */
+const makeNvidiaSpawnMock = (probePayload: string) =>
+  jest.fn((command: string, args: string[]) => {
+    const proc = makeSpawnProcess();
+    queueMicrotask(() => {
+      if (command === "ffprobe") {
+        proc.stdout.emit("data", probePayload);
+        proc.emit("close", 0);
+        return;
+      }
+      // CUDA probe and the NVENC encoder probe both succeed. The NVENC probe
+      // has no -hls_time, so it is not mistaken for an encode below.
+      if (args.includes("-init_hw_device") || !args.includes("-hls_time")) {
+        proc.emit("close", 0);
+        return;
+      }
+      // Encode call — last arg is the variant playlist path.
+      const playlistPath = args.at(-1);
+      if (playlistPath) writeFileSync(playlistPath, "#EXTM3U");
+      proc.emit("close", 0);
+    });
+    return proc;
+  });
+
+/** Args of the last real HLS encode (not a capability probe) a mock recorded. */
+const lastEncodeArgs = (spawnMock: { mock: { calls: unknown[][] } }): string[] =>
+  spawnMock.mock.calls
+    .map((call) => call[1] as string[])
+    .filter((args) => Array.isArray(args) && args.includes("-hls_time"))
+    .at(-1) as string[];
+
 /** The -vf argument of the last ffmpeg call a mock recorded. */
 const lastFilterChain = (spawnMock: { mock: { calls: unknown[][] } }): string => {
   const args = spawnMock.mock.calls.at(-1)?.[1] as string[];
@@ -112,27 +146,7 @@ describe("generateVariantHLS", () => {
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
-    const spawnMock = jest.fn((command: string, args: string[]) => {
-      const proc = makeSpawnProcess();
-      queueMicrotask(() => {
-        // Rotation probe — return no rotation so full CUDA pipeline is used.
-        if (command === "ffprobe") {
-          proc.stdout.emit("data", JSON.stringify({ streams: [] }));
-          proc.emit("close", 0);
-          return;
-        }
-        // GPU detection probe resolves to NVIDIA.
-        if (args.includes("-init_hw_device")) {
-          proc.emit("close", 0);
-          return;
-        }
-        // Encode call — last arg is the variant playlist path.
-        const playlistPath = args.at(-1);
-        if (playlistPath) writeFileSync(playlistPath, "#EXTM3U");
-        proc.emit("close", 0);
-      });
-      return proc;
-    });
+    const spawnMock = makeNvidiaSpawnMock(JSON.stringify({ streams: [] }));
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
 
@@ -140,10 +154,7 @@ describe("generateVariantHLS", () => {
 
     await generateVariantHLS(source, 720);
 
-    // 1 rotation probe (ffprobe) + 1 GPU detection + 1 encode call.
-    expect(spawnMock).toHaveBeenCalledTimes(3);
-
-    const encodeArgs = spawnMock.mock.calls[2]?.[1] as string[];
+    const encodeArgs = lastEncodeArgs(spawnMock);
     // Full CUDA pipeline: frames stay on GPU via hwaccel_output_format cuda.
     expect(encodeArgs).toContain("-hwaccel_output_format");
     expect(encodeArgs).toContain("cuda");
@@ -164,30 +175,10 @@ describe("generateVariantHLS", () => {
     const source = path.join(root, "portrait.mp4");
     writeFileSync(source, "video");
 
-    const spawnMock = jest.fn((command: string, args: string[]) => {
-      const proc = makeSpawnProcess();
-      queueMicrotask(() => {
-        if (command === "ffprobe") {
-          // Report 90° rotation (portrait phone video). codec_type required for detection.
-          proc.stdout.emit(
-            "data",
-            JSON.stringify({
-              streams: [{ codec_type: "video", tags: { rotate: "90" } }],
-            }),
-          );
-          proc.emit("close", 0);
-          return;
-        }
-        if (args.includes("-init_hw_device")) {
-          proc.emit("close", 0);
-          return;
-        }
-        const playlistPath = args.at(-1);
-        if (playlistPath) writeFileSync(playlistPath, "#EXTM3U");
-        proc.emit("close", 0);
-      });
-      return proc;
-    });
+    // Report 90° rotation (portrait phone video). codec_type required for detection.
+    const spawnMock = makeNvidiaSpawnMock(
+      JSON.stringify({ streams: [{ codec_type: "video", tags: { rotate: "90" } }] }),
+    );
 
     jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
 
@@ -195,7 +186,7 @@ describe("generateVariantHLS", () => {
 
     await generateVariantHLS(source, 720);
 
-    const encodeArgs = spawnMock.mock.calls[2]?.[1] as string[];
+    const encodeArgs = lastEncodeArgs(spawnMock);
     // NVDEC: use -hwaccel cuda for GPU decode, but WITHOUT -hwaccel_output_format cuda
     // so decoded frames land on CPU where ffmpeg's auto-rotate (transpose) can run.
     expect(encodeArgs).toContain("-hwaccel");
@@ -226,11 +217,12 @@ describe("generateVariantHLS", () => {
           proc.emit("close", 0);
           return;
         }
-        if (args.includes("-init_hw_device")) {
+        // Detection probes (CUDA, then the tiny NVENC encode) both succeed.
+        if (args.includes("-init_hw_device") || !args.includes("-hls_time")) {
           proc.emit("close", 0);
           return;
         }
-        // Hardware encode attempt fails with a CUDA error.
+        // The real hardware encode then fails with a CUDA error.
         if (args.includes("h264_nvenc")) {
           proc.stderr.emit("data", Buffer.from("h264_nvenc failed: Could not load CUDA"));
           proc.emit("close", 1);
@@ -250,9 +242,7 @@ describe("generateVariantHLS", () => {
 
     await generateVariantHLS(source, 720);
 
-    // 1 rotation probe (ffprobe) + 1 GPU detection + 1 hardware attempt (fails) + 1 software retry.
-    expect(spawnMock).toHaveBeenCalledTimes(4);
-    const retryArgs = spawnMock.mock.calls[3]?.[1] as string[];
+    const retryArgs = lastEncodeArgs(spawnMock);
     expect(retryArgs).toContain("libx264");
   });
 

@@ -185,7 +185,7 @@ const INTEL: GpuAcceleration = {
 };
 
 /**
- * Result of the NVIDIA probe:
+ * Result of an NVIDIA probe:
  * - "available": CUDA initialized and a context allocated cleanly.
  * - "present-oom": CUDA loaded far enough to report the card, but couldn't
  *   allocate a context because VRAM is currently exhausted. The GPU exists and
@@ -240,6 +240,51 @@ const probeNvidia = (): Promise<NvidiaProbeResult> =>
         return;
       }
       resolve("absent");
+    });
+
+    proc.on("error", () => resolve("absent"));
+  });
+
+/**
+ * Whether the card can actually *encode*. A CUDA context is not evidence of an
+ * encoder: several NVIDIA GPUs ship with NVDEC but no NVENC silicon at all
+ * (GP108 — the Quadro P520 in server2, and the GT 1030 — is one), and on those
+ * `-init_hw_device cuda` succeeds while every h264_nvenc session fails with
+ * "OpenEncodeSessionEx failed: unsupported device / No capable devices found".
+ * Selecting NVIDIA on such a card sends every HLS encode down the software
+ * fallback, which is far worse than simply using the Intel iGPU.
+ *
+ * An out-of-memory failure is *not* absence: the encoder exists, VRAM is merely
+ * full right now, and ensureGpuHeadroom reclaims it at encode time.
+ */
+const probeNvenc = (): Promise<NvidiaProbeResult> =>
+  new Promise<NvidiaProbeResult>((resolve) => {
+    const proc = spawn("ffmpeg", [
+      "-hide_banner",
+      "-f",
+      "lavfi",
+      "-i",
+      "nullsrc=s=64x64",
+      "-frames:v",
+      "1",
+      "-c:v",
+      "h264_nvenc",
+      "-f",
+      "null",
+      "-",
+    ]);
+
+    let stderr = "";
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve("available");
+        return;
+      }
+      resolve(stderr.toLowerCase().includes("out of memory") ? "present-oom" : "absent");
     });
 
     proc.on("error", () => resolve("absent"));
@@ -346,7 +391,11 @@ const detect = async (): Promise<GpuAcceleration | null> => {
   // "present-oom" still means an NVENC-capable card exists — treat it as NVIDIA
   // so negotiation offers HLS and the encoder reclaims VRAM rather than falling
   // back to raw direct playback on a momentarily-full card.
-  if ((await probeNvidia()) !== "absent") {
+  //
+  // Both probes must pass: CUDA proves the driver stack works, NVENC proves
+  // there is an encoder behind it. A card with CUDA but no NVENC (GP108) would
+  // otherwise be selected and then fail every single encode into software.
+  if ((await probeNvidia()) !== "absent" && (await probeNvenc()) !== "absent") {
     return NVIDIA;
   }
   if (await probeAmd()) {

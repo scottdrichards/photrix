@@ -17,11 +17,12 @@ afterEach(() => {
 });
 
 describe("gpuAcceleration", () => {
-  it("returns NVIDIA config when CUDA probe succeeds", async () => {
+  it("returns NVIDIA config when the CUDA and NVENC probes both succeed", async () => {
     const spawnMock = jest.fn((_cmd: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
-        if (args.includes("-init_hw_device")) {
+        // CUDA initialises and the card has a working encoder behind it.
+        if (args.includes("-init_hw_device") || args.includes("h264_nvenc")) {
           proc.emit("close", 0);
           return;
         }
@@ -45,7 +46,8 @@ describe("gpuAcceleration", () => {
     const spawnMock = jest.fn((_cmd: string, args: string[]) => {
       const proc = makeSpawnProcess();
       queueMicrotask(() => {
-        if (args.includes("-init_hw_device")) {
+        // A full card fails both probes the same way: out of memory, not absent.
+        if (args.includes("-init_hw_device") || args.includes("h264_nvenc")) {
           proc.stderr.emit(
             "data",
             Buffer.from("cuCtxCreate failed -> CUDA_ERROR_OUT_OF_MEMORY: out of memory"),
@@ -66,7 +68,8 @@ describe("gpuAcceleration", () => {
     // and the encoder reclaims VRAM. AMF is never probed.
     expect(gpu).not.toBeNull();
     expect(gpu!.vendor).toBe("nvidia");
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    // Only the two NVIDIA probes ran — AMD and Intel are never reached.
+    expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
   it("returns AMD config when CUDA fails but AMF probe succeeds", async () => {
@@ -141,6 +144,70 @@ describe("gpuAcceleration", () => {
     expect(gpu!.label).toContain("Intel");
   });
 
+  it("skips a CUDA-capable card that has no NVENC, falling through to Intel", async () => {
+    // server2's Quadro P520 (GP108): CUDA initialises fine, but the silicon has
+    // no encoder, so h264_nvenc fails with "No capable devices found".
+    // Selecting NVIDIA here would send every encode into the software fallback.
+    const spawnMock = jest.fn((_cmd: string, args: string[]) => {
+      const proc = makeSpawnProcess();
+      queueMicrotask(() => {
+        if (args.includes("-init_hw_device")) {
+          proc.emit("close", 0); // CUDA works
+          return;
+        }
+        if (args.includes("h264_nvenc")) {
+          proc.stderr.emit(
+            "data",
+            Buffer.from("OpenEncodeSessionEx failed: unsupported device (2)\nNo capable devices found"),
+          );
+          proc.emit("close", 1);
+          return;
+        }
+        if (args.includes("h264_amf")) {
+          proc.emit("close", 1);
+          return;
+        }
+        proc.emit("close", 0); // VAAPI probes succeed
+      });
+      return proc;
+    });
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+
+    const { getGpuAcceleration } = await import("./gpuAcceleration.ts");
+    const gpu = await getGpuAcceleration();
+
+    expect(gpu!.vendor).toBe("intel");
+    expect(gpu!.h264Codec).toBe("h264_vaapi");
+  });
+
+  it("keeps NVIDIA when the encoder is merely out of VRAM", async () => {
+    // Distinct from the no-encoder case: the encoder exists, VRAM is full right
+    // now, and ensureGpuHeadroom reclaims it from background workers at encode
+    // time. Treating this as "no GPU" would drop playback to the iGPU or worse.
+    const spawnMock = jest.fn((_cmd: string, args: string[]) => {
+      const proc = makeSpawnProcess();
+      queueMicrotask(() => {
+        if (args.includes("-init_hw_device")) {
+          proc.emit("close", 0);
+          return;
+        }
+        if (args.includes("h264_nvenc")) {
+          proc.stderr.emit("data", Buffer.from("OpenEncodeSessionEx failed: out of memory"));
+          proc.emit("close", 1);
+          return;
+        }
+        proc.emit("close", 0);
+      });
+      return proc;
+    });
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+
+    const { getGpuAcceleration } = await import("./gpuAcceleration.ts");
+    const gpu = await getGpuAcceleration();
+
+    expect(gpu!.vendor).toBe("nvidia");
+  });
+
   it("reports on-GPU scaling and VBR according to what the driver answers", async () => {
     // Same silicon, stripped driver: encode works, but scale_vaapi and VBR
     // both fail. Debian's DFSG-repacked intel-media-va-driver behaves this way.
@@ -205,7 +272,9 @@ describe("gpuAcceleration", () => {
     const second = await getGpuAcceleration();
 
     expect(first).toBe(second);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    // Probed once (CUDA, then NVENC to confirm an encoder exists) and cached:
+    // the second call spawns nothing.
+    expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
   it("resetGpuAccelerationForTests overrides the cached value", async () => {
