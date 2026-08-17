@@ -45,9 +45,9 @@ const isPathInsideStorage = (storageRoot: string, targetPath: string): boolean =
  * call takes ~90-100s on the current Ollama host, so this must never be the
  * hot path twice for the same photo.
  *
- * Best-effort: any failure (missing file, Ollama down/slow/unusable reply)
- * yields `{ caption: null }` with a 200, never a 500 — a caption is a
- * non-essential enhancement and must not break photo viewing.
+ * Generation retries once with a simple grounded prompt. If both attempts
+ * fail, return an explicit error so the UI and diagnostics distinguish a
+ * failed caption from a photo that simply has no caption yet.
  */
 export const photoCaptionRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
@@ -105,7 +105,7 @@ export const photoCaptionRequestHandler = async (
     );
 
     if (!caption) {
-      writeJson(res, 200, { caption: null });
+      writeJson(res, 502, { error: "Caption generation returned no usable description" });
       return;
     }
 
@@ -115,6 +115,6 @@ export const photoCaptionRequestHandler = async (
     writeJson(res, 200, { caption });
   } catch (error) {
     log.warn({ err: error, subPath }, "Photo caption generation failed");
-    writeJson(res, 200, { caption: null });
+    writeJson(res, 502, { error: "Caption generation failed; retry the photo" });
   }
 };

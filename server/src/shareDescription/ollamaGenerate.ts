@@ -7,7 +7,8 @@ const log = getLogger("ollamaGenerate");
  * Unset means "no local model available" — callers fall back to their own
  * deterministic text rather than failing the request.
  */
-export const ollamaUrl = process.env.PHOTRIX_OLLAMA_URL?.replace(/\/$/, "");
+export const getOllamaUrl = (): string | undefined =>
+  process.env.PHOTRIX_OLLAMA_URL?.replace(/\/$/, "");
 
 // Small instruct model: a share title is a one-line generation, so the 3B model
 // answers in well under a second on the shared GPU and leaves VRAM for Frigate.
@@ -81,6 +82,7 @@ export const ollamaGenerate = async (
   prompt: string,
   options: OllamaGenerateOptions = {},
 ): Promise<string | null> => {
+  const ollamaUrl = getOllamaUrl();
   if (!ollamaUrl) return null;
 
   const effectiveModel = options.model ?? model;

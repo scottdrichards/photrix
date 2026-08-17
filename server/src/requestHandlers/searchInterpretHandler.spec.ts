@@ -7,7 +7,7 @@ import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 // A configured-but-stubbed Ollama: the handler's "no model configured"
 // short-circuit keys off this export.
 jest.unstable_mockModule("../shareDescription/ollamaGenerate.ts", () => ({
-  ollamaUrl: "http://ollama.test:11434",
+  getOllamaUrl: () => "http://ollama.test:11434",
   ollamaGenerate: jest.fn(),
 }));
 

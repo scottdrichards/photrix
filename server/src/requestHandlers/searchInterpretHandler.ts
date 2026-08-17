@@ -3,7 +3,7 @@ import type { SearchInterpretation } from "../../../shared/filter-contract/src/i
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { interpretSearchQuery } from "../naturalLanguageSearch/interpretSearchQuery.ts";
 import { loadSearchVocabulary } from "../naturalLanguageSearch/searchVocabulary.ts";
-import { ollamaUrl } from "../shareDescription/ollamaGenerate.ts";
+import { getOllamaUrl } from "../shareDescription/ollamaGenerate.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../utils.ts";
 
@@ -72,7 +72,7 @@ export const searchInterpretHandler = async (
 
   // No local model configured: answer immediately rather than making every
   // search wait out a connection attempt to nothing.
-  if (!ollamaUrl) {
+  if (!getOllamaUrl()) {
     writeJson(res, 200, { interpreted: false, reason: "disabled" });
     return;
   }

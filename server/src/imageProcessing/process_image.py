@@ -53,76 +53,78 @@ def _open_heic_via_pyav(input_path):
     import pillow_heif
 
     container = av.open(input_path)
+    try:
+        # Identify tile streams: multiple HEVC streams of identical dimensions.
+        stream_sizes: dict[tuple[int, int], int] = {}
+        for s in container.streams.video:
+            key = (s.width, s.height)
+            stream_sizes[key] = stream_sizes.get(key, 0) + 1
 
-    # Identify tile streams: multiple HEVC streams of identical dimensions.
-    stream_sizes: dict[tuple[int, int], int] = {}
-    for s in container.streams.video:
-        key = (s.width, s.height)
-        stream_sizes[key] = stream_sizes.get(key, 0) + 1
+        candidates = [(sz, cnt) for sz, cnt in stream_sizes.items() if cnt >= 4]
+        if not candidates:
+            return None  # Not a tiled HEIC
 
-    candidates = [(sz, cnt) for sz, cnt in stream_sizes.items() if cnt >= 4]
-    if not candidates:
-        return None  # Not a tiled HEIC
+        tile_w, tile_h = max(candidates, key=lambda x: x[1])[0]
+        tile_streams = [s for s in container.streams.video if (s.width, s.height) == (tile_w, tile_h)]
+        n_tiles = len(tile_streams)
 
-    tile_w, tile_h = max(candidates, key=lambda x: x[1])[0]
-    tile_streams = [s for s in container.streams.video if (s.width, s.height) == (tile_w, tile_h)]
-    n_tiles = len(tile_streams)
+        # Get image dimensions and EXIF orientation from pillow_heif metadata
+        # (no pixel decode happens here — pillow_heif is lazy).
+        pillow_heif.options.THUMBNAILS = False
+        hf = pillow_heif.open_heif(input_path)
+        heif_img = hf[0]
+        displayed_w, displayed_h = heif_img.size
+        orientation = _get_exif_orientation(heif_img.info.get('exif', b''))
 
-    # Get image dimensions and EXIF orientation from pillow_heif metadata
-    # (no pixel decode happens here — pillow_heif is lazy).
-    pillow_heif.options.THUMBNAILS = False
-    hf = pillow_heif.open_heif(input_path)
-    heif_img = hf[0]
-    displayed_w, displayed_h = heif_img.size
-    orientation = _get_exif_orientation(heif_img.info.get('exif', b''))
+        # Derive native HEVC canvas size (before EXIF rotation is applied).
+        # Orientations 5–8 transpose width and height.
+        if orientation in (5, 6, 7, 8):
+            native_w, native_h = displayed_h, displayed_w
+        else:
+            native_w, native_h = displayed_w, displayed_h
 
-    # Derive native HEVC canvas size (before EXIF rotation is applied).
-    # Orientations 5–8 transpose width and height.
-    if orientation in (5, 6, 7, 8):
-        native_w, native_h = displayed_h, displayed_w
-    else:
-        native_w, native_h = displayed_w, displayed_h
+        grid_cols = math.ceil(native_w / tile_w)
+        grid_rows = math.ceil(native_h / tile_h)
 
-    grid_cols = math.ceil(native_w / tile_w)
-    grid_rows = math.ceil(native_h / tile_h)
+        if grid_cols * grid_rows != n_tiles:
+            return None  # Tile count doesn't match expected grid layout
 
-    if grid_cols * grid_rows != n_tiles:
-        return None  # Tile count doesn't match expected grid layout
+        canvas = __import__('numpy').zeros((native_h, native_w, 3), dtype='uint8')
 
-    canvas = __import__('numpy').zeros((native_h, native_w, 3), dtype='uint8')
+        for i, stream in enumerate(tile_streams):
+            col = i % grid_cols
+            row = i // grid_cols
+            x, y = col * tile_w, row * tile_h
+            try:
+                for packet in container.demux(stream):
+                    frames = list(packet.decode())
+                    if frames:
+                        arr = frames[0].to_ndarray(format='rgb24')
+                        h = min(tile_h, native_h - y)
+                        w = min(tile_w, native_w - x)
+                        canvas[y:y+h, x:x+w] = arr[:h, :w]
+                        break
+            except Exception:
+                pass  # Leave failed tiles black (far better than solid green)
 
-    for i, stream in enumerate(tile_streams):
-        col = i % grid_cols
-        row = i // grid_cols
-        x, y = col * tile_w, row * tile_h
-        try:
-            for packet in container.demux(stream):
-                frames = list(packet.decode())
-                if frames:
-                    arr = frames[0].to_ndarray(format='rgb24')
-                    h = min(tile_h, native_h - y)
-                    w = min(tile_w, native_w - x)
-                    canvas[y:y+h, x:x+w] = arr[:h, :w]
-                    break
-        except Exception:
-            pass  # Leave failed tiles black (far better than solid green)
+        img = Image.fromarray(canvas)
 
-    img = Image.fromarray(canvas)
+        # Apply EXIF orientation using the same mapping as PIL's exif_transpose.
+        _TRANSPOSE = {
+            2: Image.FLIP_LEFT_RIGHT,
+            3: Image.ROTATE_180,
+            4: Image.FLIP_TOP_BOTTOM,
+            5: Image.TRANSPOSE,
+            6: Image.ROTATE_270,
+            7: Image.TRANSVERSE,
+            8: Image.ROTATE_90,
+        }
+        if orientation in _TRANSPOSE:
+            img = img.transpose(_TRANSPOSE[orientation])
 
-    # Apply EXIF orientation using the same mapping as PIL's exif_transpose.
-    _TRANSPOSE = {
-        2: Image.FLIP_LEFT_RIGHT,
-        3: Image.ROTATE_180,
-        4: Image.FLIP_TOP_BOTTOM,
-        5: Image.TRANSPOSE,
-        6: Image.ROTATE_270,
-        7: Image.TRANSVERSE,
-        8: Image.ROTATE_90,
-    }
-    if orientation in _TRANSPOSE:
-        img = img.transpose(_TRANSPOSE[orientation])
-
-    return img
+        return img
+    finally:
+        container.close()
 
 
 def open_image(input_path):

@@ -416,6 +416,28 @@ export class IndexDatabase {
   // and centroids in the faceClusters table, so People queries are plain
   // indexed reads. See faceClusterEngine.ts.
   private faceClusters!: FaceClusterEngine;
+  // Set when a root file-system scan can't confirm the media root is actually
+  // mounted (missing directory, or a scan that found zero files while the
+  // index already has entries — the empty-mount-masquerading-as-real-library
+  // failure mode). While true, fileSystemScanFolder refuses to prune missing
+  // paths, so a transient unmount can't wipe the index. Cleared by the next
+  // scan that finds files (or confirms a genuinely-empty, previously-empty
+  // library). See docs/host-migration.md "Incident: DB got zeroed out".
+  private _mediaRootUnavailable = false;
+  get mediaRootUnavailable(): boolean {
+    return this._mediaRootUnavailable;
+  }
+  setMediaRootUnavailable(value: boolean): void {
+    if (value !== this._mediaRootUnavailable) {
+      log.warn(
+        { mediaRootUnavailable: value },
+        value
+          ? "Media root appears unavailable — index left unloaded, not pruned"
+          : "Media root available again — resuming normal indexing",
+      );
+    }
+    this._mediaRootUnavailable = value;
+  }
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;

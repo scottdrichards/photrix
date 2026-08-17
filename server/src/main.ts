@@ -20,6 +20,7 @@ import { processImageAnalysis } from "./imageAnalysis/processImageAnalysis.ts";
 import { processFaceAttributes } from "./imageAnalysis/processFaceAttributes.ts";
 import { fileSystemScanFolder } from "./indexDatabase/fileSystemScanFolder.ts";
 import { fileSystemMonitorFolder } from "./indexDatabase/fileSystemMonitorFolder.ts";
+import { startPeriodicRescan } from "./indexDatabase/fileSystemRescanRecent.ts";
 import { processExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { processFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
@@ -265,6 +266,12 @@ const startServer = async () => {
     onChange: notifyFilesChanged,
   });
 
+  // Complements the watcher above: inotify never sees writes made directly to
+  // the NAS over CIFS from another client, so a periodic scoped rescan (dir
+  // mtimes only, not a full recursive file scan) catches what the watcher
+  // misses. See fileSystemRescanRecent.ts.
+  const stopPeriodicRescan = startPeriodicRescan(database, notifyFilesChanged);
+
   // Graceful shutdown: stop accepting new connections and let in-flight requests
   // drain, then exit. A hard timeout guards against connections that never close.
   let shuttingDown = false;
@@ -280,6 +287,7 @@ const startServer = async () => {
     forceExit.unref();
 
     stopFileSystemMonitor();
+    stopPeriodicRescan();
     // Free the GPU on the way out so the next instance isn't starved by our
     // orphaned, still-VRAM-resident workers.
     shutdownComputeWorkers();

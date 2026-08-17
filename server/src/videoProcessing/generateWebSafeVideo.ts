@@ -35,7 +35,7 @@ export const generateWebSafeVideo = async (
       "-i",
       filePath,
       "-vf",
-      `scale=${scaleFilter}`,
+      `scale=${scaleFilter}${gpu ? gpu.vfExtra : ""}`,
       "-c:v",
       gpu ? gpu.h264Codec : "libx264",
       ...(gpu ? gpu.cqArgs(23) : ["-preset", "fast", "-crf", "23"]),

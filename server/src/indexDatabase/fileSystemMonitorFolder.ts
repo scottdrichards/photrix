@@ -229,7 +229,7 @@ export const fileSystemMonitorFolder = (
       } else if (stats.isDirectory()) {
         // A new/renamed directory can drop in many files at once; scan it so they
         // are all registered, then wake the pipeline.
-        await fileSystemScanFolder(db, absolutePath).onComplete();
+        await fileSystemScanFolder(db, relativePath).onComplete();
         onChange?.();
       }
     } catch {

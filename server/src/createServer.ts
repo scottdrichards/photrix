@@ -309,12 +309,18 @@ export const createServer = (
           }
 
           if (req.url === "/api/health" && req.method === "GET") {
-            const payload = {
-              status: "ok",
-              message: "Server is running",
-            };
+            const payload = database.mediaRootUnavailable
+              ? {
+                  status: "unloaded",
+                  message:
+                    "Media root unavailable — index left untouched, not serving live library state",
+                }
+              : {
+                  status: "ok",
+                  message: "Server is running",
+                };
 
-            writeJson(res, 200, payload);
+            writeJson(res, database.mediaRootUnavailable ? 503 : 200, payload);
             return;
           }
 
