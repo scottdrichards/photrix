@@ -232,7 +232,7 @@ export const resumeComputeWorkers = (): void => {
 // are consumed by the exit handler; worker pids are few, so the set stays tiny.
 const deliberatelyKilledPids = new Set<number>();
 
-const markDeliberateKill = (pid: number): void => {
+export const markDeliberateKill = (pid: number): void => {
   deliberatelyKilledPids.add(pid);
 };
 

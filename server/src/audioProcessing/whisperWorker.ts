@@ -18,7 +18,9 @@ import {
   acquireGpuInitSlot,
   createSuspensionAwareTimeout,
   consumeDeliberateKill,
+  markDeliberateKill,
   markWorkerEvictedError,
+  onComputeWorkerSuspensionChange,
 } from "../taskOrchestrator/computeWorkers.ts";
 
 const log = getLogger("whisperWorker");
@@ -48,6 +50,19 @@ type PendingRequest = {
 // Long timeout: transcription on CPU can be slow for long videos
 const REQUEST_TIMEOUT_MS = 30 * 60 * 1_000;
 const SLOW_REQUEST_MS = 5 * 60 * 1_000;
+
+// A loaded Whisper model sits at ~3.5 GB RSS. On a 12 GB box that is the
+// difference between serving thumbnails out of page cache and swapping, so the
+// worker is unloaded rather than left resident between jobs. SIGSTOP (the
+// orchestrator's compute throttle) only stops it burning CPU — a frozen process
+// keeps every byte of its resident set, so freezing alone does nothing for the
+// memory pressure that makes image requests slow.
+//
+// When the orchestrator freezes us for a user request the worker is killed
+// outright and immediately — see the suspension hook below. This timer covers
+// only the other case: genuinely idle with no work in flight. Generous enough
+// that a run of queued transcriptions doesn't pay a model reload per file.
+const IDLE_UNLOAD_MS = Number(process.env.PHOTRIX_WHISPER_IDLE_UNLOAD_MS) || 60_000;
 const WHISPER_SCRIPT = path.resolve(process.cwd(), "python", "whisper_worker.py");
 
 let nextRequestId = 1;
@@ -58,6 +73,72 @@ const pending = new Map<number, PendingRequest>();
 // Whisper is background-only (transcription), so it can be frozen wholesale
 // while a user request is in flight.
 registerComputeWorker(COMPUTE_WORKER_IDS.whisper, () => worker?.pid ?? null);
+
+let idleUnloadTimer: NodeJS.Timeout | null = null;
+
+const clearIdleUnload = () => {
+  if (!idleUnloadTimer) return;
+  clearTimeout(idleUnloadTimer);
+  idleUnloadTimer = null;
+};
+
+/**
+ * Kill the worker so its resident model is returned to the OS. SIGKILL (not
+ * SIGTERM) for the same reason the GPU reclaim uses it: it lands even on a
+ * process that is currently SIGSTOP'd, whereas SIGTERM would queue behind the
+ * freeze and never run. Tagged as a deliberate kill so the exit handler reports
+ * an eviction rather than a crash, and any in-flight file is left pending for
+ * retry instead of being marked errored.
+ *
+ * The worker respawns lazily on the next transcription via ensureWorkerReady().
+ */
+const unloadWorker = (reason: string, { force = false } = {}) => {
+  const child = worker;
+  const pid = child?.pid;
+  if (!child || pid == null) return;
+  // Re-check under the timer callback: work can arrive between arming and
+  // firing. `force` overrides this for the user-request case, where discarding
+  // the in-flight transcription is the whole point.
+  if (!force && pending.size > 0) return;
+  log.info(
+    { pid, reason, discardedRequests: pending.size },
+    "Unloading Whisper worker to release memory",
+  );
+  markDeliberateKill(pid);
+  try {
+    child.kill("SIGKILL");
+  } catch (err) {
+    log.debug({ err, pid }, "Whisper unload kill failed");
+  }
+};
+
+const armIdleUnload = (delayMs: number, reason: string) => {
+  clearIdleUnload();
+  // Nothing loaded, or still working — the completion path re-arms.
+  if (!worker || pending.size > 0) return;
+  idleUnloadTimer = setTimeout(() => {
+    idleUnloadTimer = null;
+    unloadWorker(reason);
+  }, delayMs);
+  // Never hold the event loop open just to unload something.
+  idleUnloadTimer.unref?.();
+};
+
+// A user request has arrived and the orchestrator froze us for it. Kill now,
+// synchronously, without waiting for the in-flight transcription to finish: a
+// frozen worker makes no progress anyway, so every byte it holds is taken
+// straight from the request the freeze was meant to protect. The abandoned file
+// is not lost — the kill is tagged deliberate, so its rejection is an eviction
+// and the task runner leaves it pending for a later retry rather than marking
+// it errored. Transcription is idempotent, so the discarded work is just time.
+onComputeWorkerSuspensionChange(COMPUTE_WORKER_IDS.whisper, (isSuspended) => {
+  if (isSuspended) {
+    clearIdleUnload();
+    unloadWorker("suspended for user request", { force: true });
+    return;
+  }
+  armIdleUnload(IDLE_UNLOAD_MS, "idle");
+});
 
 const canAccess = async (targetPath: string): Promise<boolean> => {
   try {
@@ -115,6 +196,9 @@ const onWorkerLine = (
 
   pending.delete(message.id);
   request.timeout.clear();
+  // Queue went empty — start counting down to unload. If the resolve/reject
+  // below feeds another file straight back in, sendRequest cancels this.
+  armIdleUnload(IDLE_UNLOAD_MS, "idle");
 
   const elapsedMs = Date.now() - request.startedAt;
 
@@ -264,6 +348,7 @@ const ensureWorkerReady = async (): Promise<void> => {
         const pendingCount = pending.size;
         worker = null;
         readyPromise = null;
+        clearIdleUnload(); // nothing left to unload; don't kill the next worker
         // A kill we issued ourselves (GPU reclaim for playback, shutdown) is
         // not a failure of the in-flight files: tag the rejection so the task
         // runner leaves them pending for retry instead of marking them errored.
@@ -312,7 +397,16 @@ const ensureWorkerReady = async (): Promise<void> => {
 const sendRequest = async (
   payload: Record<string, unknown>,
 ): Promise<TranscriptSegment[]> => {
-  await ensureWorkerReady();
+  // Hold off the unload across the (possibly slow) spawn/model-load too, so a
+  // worker can't be reaped in the window between becoming ready and being fed.
+  clearIdleUnload();
+  try {
+    await ensureWorkerReady();
+  } catch (error) {
+    // Re-arm: a failed start may still have left a child behind.
+    armIdleUnload(IDLE_UNLOAD_MS, "idle");
+    throw error;
+  }
   if (!worker) throw new Error("Whisper worker is not available");
 
   const id = nextRequestId++;
@@ -360,6 +454,7 @@ const sendRequest = async (
     } catch (error) {
       timeout.clear();
       pending.delete(id);
+      armIdleUnload(IDLE_UNLOAD_MS, "idle");
       reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
