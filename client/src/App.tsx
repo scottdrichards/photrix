@@ -232,7 +232,9 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
         <div className={cx(css.topRail, isStatusOpen ? css.topRailStatusOpen : undefined)}>
           <header className={css.header}>
             <div className={css.title}>
-              <h2>Photrix</h2>
+              <h2>
+                {sharedView ? "Photrix" : <a className={css.homeLink} href="/">Photrix</a>}
+              </h2>
               <small>{sharedView ? "Shared view" : "A better way to view photos."}</small>
             </div>
 

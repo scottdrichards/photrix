@@ -46,6 +46,15 @@
   }
 }
 
+.homeLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.homeLink:hover {
+  text-decoration: underline;
+}
+
 .topRailStatusOpen {
   z-index: 2000;
   pointer-events: none;

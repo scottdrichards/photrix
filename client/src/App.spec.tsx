@@ -202,6 +202,14 @@ describe("App", () => {
     );
   });
 
+  it("links the header brand to the home screen", async () => {
+    await act(async () => {
+      render(<App />);
+    });
+
+    expect(screen.getByRole("link", { name: "Photrix" })).toHaveAttribute("href", "/");
+  });
+
   it("opens status modal from Status button", async () => {
     await act(async () => {
       render(<App />);
