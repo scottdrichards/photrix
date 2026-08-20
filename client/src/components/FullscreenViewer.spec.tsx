@@ -203,10 +203,13 @@ describe("FullscreenViewer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Share item" }));
 
+    const previewDialog = document.querySelector("dialog[open]");
+
     expect(screen.getByRole("heading", { name: "Share 1 item" })).toBeInTheDocument();
     expect(screen.getByText("Original")).toBeInTheDocument();
     expect(screen.getByText("Web-safe, original size")).toBeInTheDocument();
     expect(screen.getByText("Smaller size")).toBeInTheDocument();
+    expect(previewDialog?.querySelector('[role="dialog"][aria-label="Share 1 item"]')).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 

@@ -1208,6 +1208,7 @@ export function FullscreenViewer() {
             <ShareOptionsModal
               photos={[photo]}
               mode={exportMode}
+              portalRoot={dialogRef.current}
               onClose={() => setExportMode(null)}
             />
           )}

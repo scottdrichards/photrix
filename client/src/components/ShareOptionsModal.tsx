@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { PhotoItem } from "../api";
 import css from "./ShareOptionsModal.module.css";
 
@@ -61,17 +62,20 @@ type Props = {
   photos: PhotoItem[];
   mode?: ShareAction;
   onClose: () => void;
+  portalRoot?: Element | DocumentFragment | null;
 };
 
 export const ShareOptionsModal: React.FC<Props> = ({
   photos,
   mode = "share",
   onClose,
+  portalRoot,
 }) => {
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preparedShare, setPreparedShare] = useState<PreparedShare | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const portalTarget = portalRoot ?? document.body;
 
   const images = photos.filter((p) => p.mediaType !== "video");
   const videos = photos.filter((p) => p.mediaType === "video");
@@ -237,7 +241,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
     return q.imageDesc;
   };
 
-  return (
+  return createPortal(
     <div
       className={css.backdrop}
       onClick={(e) => {
@@ -320,6 +324,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
           Cancel
         </button>
       </div>
-    </div>
+    </div>,
+    portalTarget,
   );
 };

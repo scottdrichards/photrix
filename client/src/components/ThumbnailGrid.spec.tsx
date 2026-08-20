@@ -136,6 +136,17 @@ describe("ThumbnailGrid", () => {
     observers.length = 0;
   });
 
+  it("renders the initial loading spinner inside the grid", () => {
+    fetchPhotosMock.mockImplementation(() => new Promise(() => {}));
+
+    renderGrid();
+
+    const grid = screen.getByTestId("thumbnail-grid");
+    const loading = screen.getByTestId("thumbnail-grid-loading");
+    expect(grid.contains(loading)).toBe(true);
+    expect(loading).toHaveClass(gridCss.initialLoading);
+  });
+
   it("renders initial photos and then loads additional page with dedupe", async () => {
     fetchPhotosMock
       .mockResolvedValueOnce({

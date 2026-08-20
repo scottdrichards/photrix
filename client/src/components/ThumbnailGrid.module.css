@@ -19,6 +19,15 @@
   --cluster-border-width: 2px;
 }
 
+.initialLoading {
+  flex-basis: 100%;
+  min-height: min(50vh, calc(var(--thumbnail-size) * 2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg3);
+}
+
 /* Prevents the last tile on a partial row from stretching full width by
    injecting a massively-flexible invisible spacer that absorbs leftover space. */
 .grid::after {
