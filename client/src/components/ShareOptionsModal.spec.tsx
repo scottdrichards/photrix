@@ -76,4 +76,37 @@ describe("ShareOptionsModal", () => {
     expect(shareArgs.files[0]).toBeInstanceOf(File);
     expect(shareArgs.files[0]?.name).toBe("1.jpg");
   });
+
+  it("renders into document.body by default so app-level stacking cannot cover it", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+
+    try {
+      render(<ShareOptionsModal photos={[createPhoto()]} onClose={() => {}} />, { container: host });
+
+      expect(host.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.body.querySelector('[role="dialog"]')).toBeTruthy();
+    } finally {
+      host.remove();
+    }
+  });
+
+  it("renders into a provided portal root when one is supplied", () => {
+    const host = document.createElement("div");
+    const portalRoot = document.createElement("div");
+    document.body.append(host, portalRoot);
+
+    try {
+      render(
+        <ShareOptionsModal photos={[createPhoto()]} onClose={() => {}} portalRoot={portalRoot} />,
+        { container: host },
+      );
+
+      expect(host.querySelector('[role="dialog"]')).toBeNull();
+      expect(portalRoot.querySelector('[role="dialog"]')).toBeTruthy();
+    } finally {
+      host.remove();
+      portalRoot.remove();
+    }
+  });
 });

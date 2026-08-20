@@ -259,6 +259,7 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   const resultCountLabel = data
     ? `${numberFormatter.format(data.total)} result${data.total === 1 ? "" : "s"}`
     : null;
+  const showInitialLoading = loading && !data;
 
   return (
     <>
@@ -272,16 +273,17 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
           {isStale && <Spinner size="extra-tiny" />}
           <SortControl />
         </div>
-      ) : loading && !data ? (
-        <div className={css.statusRow}>
-          <Spinner size="extra-tiny" />
-        </div>
       ) : null}
       <div
         data-testid="thumbnail-grid"
         className={css.grid}
         style={isStale ? { opacity: 0.5, pointerEvents: "none" } : undefined}
       >
+        {showInitialLoading ? (
+          <div className={css.initialLoading} data-testid="thumbnail-grid-loading">
+            <Spinner size="extra-tiny" />
+          </div>
+        ) : null}
         {data?.items.map((item) => {
           const clusterId = item.metadata?.momentClusterId;
           const clusterIdKey = clusterId != null ? String(clusterId) : null;
