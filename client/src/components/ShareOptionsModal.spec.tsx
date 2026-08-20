@@ -77,6 +77,52 @@ describe("ShareOptionsModal", () => {
     expect(shareArgs.files[0]?.name).toBe("1.jpg");
   });
 
+  it("prepares files before triggering the download fallback", async () => {
+    const onClose = vi.fn();
+    const shareMock = vi.fn();
+    const createObjectUrlSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:prepared-file");
+    const revokeObjectUrlSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    Object.defineProperty(navigator, "canShare", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => false),
+    });
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      writable: true,
+      value: shareMock,
+    });
+
+    try {
+      render(<ShareOptionsModal photos={[createPhoto()]} onClose={onClose} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /Smaller size/i }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+      });
+
+      expect(shareMock).not.toHaveBeenCalled();
+      expect(clickSpy).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Download" }));
+
+      await waitFor(() => {
+        expect(clickSpy).toHaveBeenCalledTimes(1);
+        expect(onClose).toHaveBeenCalledTimes(1);
+      });
+
+      expect(createObjectUrlSpy).toHaveBeenCalledTimes(1);
+      expect(revokeObjectUrlSpy).toHaveBeenCalledWith("blob:prepared-file");
+    } finally {
+      createObjectUrlSpy.mockRestore();
+      revokeObjectUrlSpy.mockRestore();
+      clickSpy.mockRestore();
+    }
+  });
+
   it("renders into document.body by default so app-level stacking cannot cover it", () => {
     const host = document.createElement("div");
     document.body.appendChild(host);
