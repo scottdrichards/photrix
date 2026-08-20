@@ -6,7 +6,9 @@ import css from "./ShareOptionsModal.module.css";
 type ShareQuality = "original" | "websafe-full" | "websafe-small";
 type ShareAction = "share" | "download";
 type DownloadItem = { url: string; filename: string };
-type PreparedShare = { files: File[]; videoDownloads: DownloadItem[] };
+type PreparedAction =
+  | { kind: "share"; files: File[]; videoDownloads: DownloadItem[] }
+  | { kind: "download"; imageFiles: File[]; videoDownloads: DownloadItem[] };
 
 type QualityDef = {
   id: ShareQuality;
@@ -73,7 +75,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
 }) => {
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [preparedShare, setPreparedShare] = useState<PreparedShare | null>(null);
+  const [preparedAction, setPreparedAction] = useState<PreparedAction | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const portalTarget = portalRoot ?? document.body;
 
@@ -89,17 +91,35 @@ export const ShareOptionsModal: React.FC<Props> = ({
     }
   };
 
-  const handlePreparedShare = async () => {
-    if (!preparedShare || typeof navigator.share !== "function") return;
+  const handlePreparedAction = async () => {
+    if (!preparedAction) return;
 
     setError(null);
+
+    if (preparedAction.kind === "download") {
+      for (const file of preparedAction.imageFiles) {
+        const objectUrl = URL.createObjectURL(file);
+        triggerDownload(objectUrl, file.name);
+        URL.revokeObjectURL(objectUrl);
+      }
+
+      if (preparedAction.videoDownloads.length > 0) {
+        triggerDownloads(preparedAction.videoDownloads);
+      }
+
+      onClose();
+      return;
+    }
+
+    if (typeof navigator.share !== "function") return;
+
     setProgress("Opening share sheet…");
 
     try {
-      await navigator.share({ files: preparedShare.files });
+      await navigator.share({ files: preparedAction.files });
 
-      if (preparedShare.videoDownloads.length > 0) {
-        triggerDownloads(preparedShare.videoDownloads);
+      if (preparedAction.videoDownloads.length > 0) {
+        triggerDownloads(preparedAction.videoDownloads);
       }
 
       onClose();
@@ -115,7 +135,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
 
   const handleAction = async (quality: ShareQuality) => {
     setError(null);
-    setPreparedShare(null);
+    setPreparedAction(null);
     const abort = new AbortController();
     abortRef.current = abort;
 
@@ -181,19 +201,18 @@ export const ShareOptionsModal: React.FC<Props> = ({
         typeof navigator.canShare === "function" &&
         navigator.canShare({ files: imageFiles });
 
-      // Share or download images
+      // Native file share is gesture-sensitive, so after any async prepare
+      // step we defer the real browser action to a second explicit tap. Use the
+      // same flow for the download fallback so a long conversion cannot sever
+      // the eventual save action from user intent.
       if (imageFiles.length > 0) {
-        if (canUseNativeFileShare) {
-          setPreparedShare({ files: imageFiles, videoDownloads });
-          setProgress(null);
-          return;
-        } else {
-          for (const file of imageFiles) {
-            const objectUrl = URL.createObjectURL(file);
-            triggerDownload(objectUrl, file.name);
-            URL.revokeObjectURL(objectUrl);
-          }
-        }
+        setPreparedAction(
+          canUseNativeFileShare
+            ? { kind: "share", files: imageFiles, videoDownloads }
+            : { kind: "download", imageFiles, videoDownloads },
+        );
+        setProgress(null);
+        return;
       }
 
       // Videos: never blob-load — trigger browser downloads directly via URL
@@ -218,7 +237,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
 
   const handleClose = () => {
     abortRef.current?.abort();
-    setPreparedShare(null);
+    setPreparedAction(null);
     onClose();
   };
 
@@ -277,14 +296,18 @@ export const ShareOptionsModal: React.FC<Props> = ({
             <div className={css.spinner} />
             {progress}
           </div>
-        ) : preparedShare ? (
+        ) : preparedAction ? (
           <div className={css.readyState}>
             <p className={css.readyMessage}>
-              Files are ready. Tap Share to open the system share sheet.
+              {preparedAction.kind === "share"
+                ? "Files are ready. Tap Share to open the system share sheet."
+                : "Files are ready. Tap Download to save them."}
             </p>
-            {preparedShare.videoDownloads.length > 0 && (
+            {preparedAction.videoDownloads.length > 0 && (
               <p className={css.readyNote}>
-                Videos will still download as original files after sharing.
+                {preparedAction.kind === "share"
+                  ? "Videos will still download as original files after sharing."
+                  : "Videos will download as original files."}
               </p>
             )}
             <div className={css.readyActions}>
@@ -292,14 +315,14 @@ export const ShareOptionsModal: React.FC<Props> = ({
                 type="button"
                 className="btn btn-subtle"
                 onClick={() => {
-                  setPreparedShare(null);
+                  setPreparedAction(null);
                   setError(null);
                 }}
               >
                 Back
               </button>
-              <button type="button" className="btn" onClick={() => void handlePreparedShare()}>
-                Share
+              <button type="button" className="btn" onClick={() => void handlePreparedAction()}>
+                {preparedAction.kind === "share" ? "Share" : "Download"}
               </button>
             </div>
           </div>
