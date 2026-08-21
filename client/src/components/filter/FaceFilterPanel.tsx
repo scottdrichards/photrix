@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   FACE_ATTRIBUTE_KEYS,
   type FaceAttributeKey,
+  type FaceClusterMatchMode,
 } from "../../../../shared/filter-contract/src";
 import type { PersonCluster } from "../../api";
 import { buildFaceCropUrl, fetchPeopleClusters, fetchStatus } from "../../api";
@@ -44,6 +45,7 @@ const ATTRIBUTE_HINTS: Record<FaceAttributeKey, string> = {
 export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
   const { filter, setFilter } = useFilter();
   const selected = filter.faceClusterFilter ?? [];
+  const clusterMatchMode = filter.faceClusterMatchMode ?? "all";
   const attributeFilter = filter.faceAttributeFilter ?? null;
   const activeAttributes = attributeFilter?.attributes ?? [];
   // Absent means the default: unscored faces still match.
@@ -99,11 +101,13 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
 
   const getClusterLabel = (cluster: PersonCluster) => cluster.name ?? `${cluster.count} faces`;
 
-  // Scope the pick list to everything in the current filter — including any
-  // already-selected faces. With AND semantics that narrows the choices to
-  // faces that co-occur with the current selection (people photographed
-  // together), so each pick refines toward the intended set.
-  const queryKey = JSON.stringify(filter);
+  // In OR mode the picker must stay broad: the current face selection should
+  // not prune away other candidate people the user might want to add.
+  const clusterQueryFilter =
+    clusterMatchMode === "any"
+      ? { ...filter, faceClusterFilter: undefined, faceClusterMatchMode: undefined }
+      : filter;
+  const queryKey = JSON.stringify(clusterQueryFilter);
 
   useEffect(() => {
     if (!isActive) return;
@@ -111,7 +115,7 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
     setLoading(true);
     setError(null);
 
-    fetchPeopleClusters({ signal: abortController.signal, ...filter })
+    fetchPeopleClusters({ signal: abortController.signal, ...clusterQueryFilter })
       .then((result) => {
         const sorted = [...result.clusters].sort(
           (a, b) => (b.name != null ? 1 : 0) - (a.name != null ? 1 : 0) || b.count - a.count,
@@ -167,21 +171,49 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
     setFilter({ faceClusterFilter: next.length > 0 ? next : null });
   };
 
+  const setClusterMode = (nextMode: FaceClusterMatchMode) => {
+    setFilter({ faceClusterMatchMode: nextMode === "all" ? undefined : nextMode });
+  };
+
   return (
     <div className={css.panelSection}>
       <div className={css.header}>
         <h3>People face</h3>
-        {hasAnyFilter ? (
-          <button
-            type="button"
-            className="btn btn-sm btn-subtle"
-            onClick={() =>
-              setFilter({ faceClusterFilter: null, faceAttributeFilter: null })
-            }
-          >
-            Clear
-          </button>
-        ) : null}
+        <div className={css.headerActions}>
+          <div className={css.modeToggle} role="group" aria-label="Match selected faces">
+            <button
+              type="button"
+              className={`${css.modeButton} ${clusterMatchMode === "all" ? css.modeButtonSelected : ""}`}
+              onClick={() => setClusterMode("all")}
+              aria-pressed={clusterMatchMode === "all"}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              className={`${css.modeButton} ${clusterMatchMode === "any" ? css.modeButtonSelected : ""}`}
+              onClick={() => setClusterMode("any")}
+              aria-pressed={clusterMatchMode === "any"}
+            >
+              Any
+            </button>
+          </div>
+          {hasAnyFilter ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-subtle"
+              onClick={() =>
+                setFilter({
+                  faceClusterFilter: null,
+                  faceClusterMatchMode: undefined,
+                  faceAttributeFilter: null,
+                })
+              }
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {loading ? <Spinner size="small" label="Loading faces..." /> : null}

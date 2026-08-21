@@ -42,6 +42,7 @@ export const Filter = () => {
     path,
     peopleInImageFilter,
     faceClusterFilter,
+    faceClusterMatchMode,
     faceAttributeFilter,
     cameraModelFilter,
     lensFilter,
@@ -269,6 +270,7 @@ export const Filter = () => {
           dateRange,
           peopleInImageFilter: selectedPeople,
           faceClusterFilter,
+          faceClusterMatchMode,
           cameraModelFilter: selectedCameraModels,
           lensFilter: selectedLensModels,
         });
@@ -292,6 +294,7 @@ export const Filter = () => {
     dateRange,
     selectedPeople,
     faceClusterFilter,
+    faceClusterMatchMode,
     selectedCameraModels,
     selectedLensModels,
   ]);

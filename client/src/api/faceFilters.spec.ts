@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { buildFilters, buildFullShareFilter, toFaceAttributeKeys } from "./filters";
 
 const faceCondition = (filters: Record<string, unknown>[]) =>
-  filters.find((filter) => "faceCluster" in filter || "faceMatch" in filter);
+  filters.find(
+    (filter) => "faceCluster" in filter || "faceMatch" in filter || "operation" in filter,
+  );
 
 describe("toFaceAttributeKeys", () => {
   it("returns nothing for an absent or empty selection", () => {
@@ -53,6 +55,22 @@ describe("buildFilters — face conditions", () => {
     expect(filters.filter((filter) => "faceCluster" in filter)).toHaveLength(0);
   });
 
+  it("ORs selected people in 'any' mode when attributes are present", () => {
+    const filters = buildFilters({
+      faceClusterFilter: ["person-3", "person-12"],
+      faceClusterMatchMode: "any",
+      faceAttributeFilter: { attributes: ["smiling"] },
+    });
+
+    expect(faceCondition(filters)).toEqual({
+      operation: "or",
+      conditions: [
+        { faceMatch: { clusterIds: [3], attributes: ["smiling"] } },
+        { faceMatch: { clusterIds: [12], attributes: ["smiling"] } },
+      ],
+    });
+  });
+
   it("allows attributes with no person selected", () => {
     const filters = buildFilters({
       faceAttributeFilter: { attributes: ["inFocus"] },
@@ -93,6 +111,18 @@ describe("buildFilters — face conditions", () => {
     expect(
       faceCondition(buildFilters({ faceAttributeFilter: { attributes: [] } })),
     ).toBeUndefined();
+  });
+
+  it("ORs plain person filters in 'any' mode without attributes", () => {
+    const filters = buildFilters({
+      faceClusterFilter: ["person-3", "person-12"],
+      faceClusterMatchMode: "any",
+    });
+
+    expect(faceCondition(filters)).toEqual({
+      operation: "or",
+      conditions: [{ faceCluster: 3 }, { faceCluster: 12 }],
+    });
   });
 });
 

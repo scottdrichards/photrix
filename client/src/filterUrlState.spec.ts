@@ -66,10 +66,14 @@ describe("app URL state", () => {
           filter: {
             includeSubfolders: true,
             path: "",
+            faceClusterFilter: ["person-3", "person-7"],
+            faceClusterMatchMode: "any",
             faceAttributeFilter: { attributes: ["smiling", "eyesOpen"] },
           },
         }),
       );
+      expect(restored.filter.faceClusterFilter).toEqual(["person-3", "person-7"]);
+      expect(restored.filter.faceClusterMatchMode).toBe("any");
       expect(restored.filter.faceAttributeFilter).toEqual({
         attributes: ["smiling", "eyesOpen"],
       });
@@ -96,6 +100,7 @@ describe("app URL state", () => {
 
     it("omits the param entirely when nothing is selected", () => {
       expect(buildAppUrl(baseState())).not.toContain("attr=");
+      expect(buildAppUrl(baseState())).not.toContain("faceMode=");
       expect(
         buildAppUrl(
           baseState({
@@ -107,6 +112,17 @@ describe("app URL state", () => {
           }),
         ),
       ).not.toContain("attr=");
+      expect(
+        buildAppUrl(
+          baseState({
+            filter: {
+              includeSubfolders: true,
+              path: "",
+              faceClusterMatchMode: "any",
+            },
+          }),
+        ),
+      ).not.toContain("faceMode=");
     });
 
     it("drops unknown keys rather than returning an impossible filter", () => {

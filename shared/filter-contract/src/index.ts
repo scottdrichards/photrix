@@ -72,6 +72,8 @@ export const FACE_ATTRIBUTE_KEYS = [
 
 export type FaceAttributeKey = (typeof FACE_ATTRIBUTE_KEYS)[number];
 
+export type FaceClusterMatchMode = "all" | "any";
+
 /**
  * Face filter carrying both *who* and *how they look*.
  *
@@ -239,6 +241,11 @@ export type ClientFilterState = Partial<{
   peopleInImageFilter: string[] | null;
   /** Face-cluster ids (People-tab clusters, e.g. `person-3`) to match faces against. */
   faceClusterFilter: string[] | null;
+  /**
+   * How multiple selected people combine: every selected person must match
+   * (`all`, default) or any selected person may match (`any`).
+   */
+  faceClusterMatchMode: FaceClusterMatchMode;
   /**
    * Per-face "photo ready" requirements, applied to the same face that matched
    * `faceClusterFilter` (or to any face when no person is selected).

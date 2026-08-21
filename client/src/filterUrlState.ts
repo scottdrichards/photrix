@@ -8,6 +8,7 @@ import {
   type DateRangeSelection,
   type FaceAttributeFilter,
   type FaceAttributeKey,
+  type FaceClusterMatchMode,
   type GeoBoundsLike,
   type MediaTypeFilter,
   type RatingFilter,
@@ -35,6 +36,7 @@ import {
  *   expand=1            expandToFolder
  *   people=Ann&people=Bo        repeated param, one value per person
  *   faces=person-3              repeated param, face-cluster ids
+ *   faceMode=any                multiple selected face clusters use OR instead of AND
  *   camera=Pixel 8&camera=X-T5  repeated param
  *   lens=XF 35mm                repeated param
  *   rating=min3 | exact3        star rating
@@ -180,6 +182,10 @@ const parseFaceAttributes = (
   return strict ? { attributes, includeUnknown: false } : { attributes };
 };
 
+const parseFaceClusterMatchMode = (
+  raw: string | null,
+): FaceClusterMatchMode | undefined => (raw === "any" ? "any" : undefined);
+
 const serializeRating = (
   rating: RatingFilter | null | undefined,
 ): string | undefined => {
@@ -286,6 +292,7 @@ export const createFilterStateFromUrl = (location: {
     expandToFolder: params.get("expand") === "1",
     peopleInImageFilter: parseListParam(params, "people"),
     faceClusterFilter: parseListParam(params, "faces"),
+    faceClusterMatchMode: parseFaceClusterMatchMode(params.get("faceMode")),
     faceAttributeFilter: parseFaceAttributes(params),
     cameraModelFilter: parseListParam(params, "camera"),
     lensFilter: parseListParam(params, "lens"),
@@ -345,6 +352,9 @@ export const buildAppSearchParams = (
 
   appendListParam(params, "people", filter.peopleInImageFilter);
   appendListParam(params, "faces", filter.faceClusterFilter);
+  if (filter.faceClusterMatchMode === "any" && (filter.faceClusterFilter?.length ?? 0) > 0) {
+    params.set("faceMode", "any");
+  }
   for (const attr of serializeFaceAttributes(filter.faceAttributeFilter) ?? []) {
     params.append("attr", attr);
   }

@@ -2,6 +2,7 @@ import type {
   BackgroundTaskStatus,
   DateRangeFilter,
   FaceAttributeFilter,
+  FaceClusterMatchMode,
   GeoBoundsLike as GeoBounds,
   MediaTypeFilter,
   RatingFilter,
@@ -11,7 +12,7 @@ import type {
   ApiFilterOptions,
   SortOption,
 } from "../../../shared/filter-contract/src";
-export type { BackgroundTaskStatus, DateRangeFilter, FaceAttributeFilter, GeoBounds, MediaTypeFilter, RatingFilter, ShareScope, SearchSource, ApiFilterOptions, SortOption };
+export type { BackgroundTaskStatus, DateRangeFilter, FaceAttributeFilter, FaceClusterMatchMode, GeoBounds, MediaTypeFilter, RatingFilter, ShareScope, SearchSource, ApiFilterOptions, SortOption };
 
 export interface ApiPhotoItem {
   folder: string;
@@ -175,6 +176,7 @@ export interface FetchPhotosOptions {
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
   faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
+  faceClusterMatchMode?: FaceClusterMatchMode;
   faceAttributeFilter?: FaceAttributeFilter | null;
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
@@ -211,6 +213,7 @@ export type FetchSuggestionsOptions = {
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
   faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
+  faceClusterMatchMode?: FaceClusterMatchMode;
   faceAttributeFilter?: FaceAttributeFilter | null;
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
