@@ -2,6 +2,7 @@ import {
   FACE_ATTRIBUTE_KEYS,
   SEARCH_SOURCES,
   type FaceAttributeKey,
+  type FaceClusterMatchMode,
 } from "../../../shared/filter-contract/src";
 import type {
   ApiFilterOptions,
@@ -84,6 +85,7 @@ export type BuildFiltersInput = {
   dateRange?: DateRangeFilter | null;
   peopleInImageFilter?: ApiFilterOptions["peopleInImageFilter"];
   faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
+  faceClusterMatchMode?: FaceClusterMatchMode;
   faceAttributeFilter?: FaceAttributeFilter | null;
   cameraModelFilter?: ApiFilterOptions["cameraModelFilter"];
   lensFilter?: ApiFilterOptions["lensFilter"];
@@ -164,6 +166,7 @@ export const buildFilters = ({
   dateRange,
   peopleInImageFilter,
   faceClusterFilter,
+  faceClusterMatchMode = "all",
   faceAttributeFilter,
   cameraModelFilter,
   lensFilter,
@@ -204,21 +207,38 @@ export const buildFilters = ({
     // One combined condition, because the attributes must hold for the selected
     // person's *own* face — emitting them as a sibling filter would instead
     // match photos containing that person plus anyone who happens to be smiling.
-    filters.push({
-      faceMatch: {
-        ...(clusterIds ? { clusterIds } : {}),
-        attributes: faceAttributes,
-        // Only sent when it differs from the server default, so the common case
-        // keeps producing the smallest possible filter JSON.
-        ...(faceAttributeFilter?.includeUnknown === false
-          ? { includeUnknown: false }
-          : {}),
-      },
-    });
+    const faceMatch = {
+      attributes: faceAttributes,
+      // Only sent when it differs from the server default, so the common case
+      // keeps producing the smallest possible filter JSON.
+      ...(faceAttributeFilter?.includeUnknown === false ? { includeUnknown: false } : {}),
+    };
+    if (clusterIds && faceClusterMatchMode === "any" && clusterIds.length > 1) {
+      filters.push({
+        operation: "or",
+        conditions: clusterIds.map((clusterId) => ({
+          faceMatch: { clusterIds: [clusterId], ...faceMatch },
+        })),
+      });
+    } else {
+      filters.push({
+        faceMatch: {
+          ...(clusterIds ? { clusterIds } : {}),
+          ...faceMatch,
+        },
+      });
+    }
   } else if (clusterIds) {
-    // No attribute constraints: keep emitting exactly the filter shape this
-    // always produced, so existing share links and cached queries are unchanged.
-    filters.push({ faceCluster: clusterIds });
+    if (faceClusterMatchMode === "any" && clusterIds.length > 1) {
+      filters.push({
+        operation: "or",
+        conditions: clusterIds.map((clusterId) => ({ faceCluster: clusterId })),
+      });
+    } else {
+      // No attribute constraints: keep emitting exactly the filter shape this
+      // always produced, so existing share links and cached queries are unchanged.
+      filters.push({ faceCluster: clusterIds });
+    }
   }
 
   if (locationBounds) {
@@ -260,6 +280,7 @@ export const buildFullShareFilter = (
   filter: ApiFilterOptions & {
     path?: string;
     includeSubfolders?: boolean;
+    faceClusterMatchMode?: FaceClusterMatchMode;
     // Not part of ApiFilterOptions (which derives from FIELD_METADATA and only
     // covers the array/nullable primitive fields), but shares must carry the
     // attribute constraints or a shared "photo ready" view would silently widen
@@ -286,6 +307,7 @@ export const buildFullShareFilter = (
       dateRange: filter.dateRange,
       peopleInImageFilter: filter.peopleInImageFilter,
       faceClusterFilter: filter.faceClusterFilter,
+      faceClusterMatchMode: filter.faceClusterMatchMode,
       faceAttributeFilter: filter.faceAttributeFilter,
       cameraModelFilter: filter.cameraModelFilter,
       lensFilter: filter.lensFilter,
@@ -301,6 +323,7 @@ export const buildShareScope = (
   filter: ApiFilterOptions & {
     path?: string;
     includeSubfolders?: boolean;
+    faceClusterMatchMode?: FaceClusterMatchMode;
     faceAttributeFilter?: FaceAttributeFilter | null;
     semanticQuery?: string;
     searchSources?: SearchSource[];

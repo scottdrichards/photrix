@@ -12,6 +12,12 @@
   gap: var(--space-s);
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+}
+
 .header h3 {
   margin: 0;
 }
@@ -22,6 +28,30 @@
   gap: var(--space-s);
   max-height: 320px;
   overflow-y: auto;
+}
+
+.modeToggle {
+  display: inline-flex;
+  border: 1px solid var(--stroke2);
+  border-radius: 999px;
+  background: var(--bg2);
+  padding: 2px;
+}
+
+.modeButton {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg2);
+  padding: 0.2rem 0.7rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.modeButtonSelected {
+  background: var(--bg1);
+  color: var(--fg1);
+  box-shadow: 0 0 0 1px var(--stroke2);
 }
 
 .faceButton {

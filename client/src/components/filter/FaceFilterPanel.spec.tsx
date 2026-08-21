@@ -8,7 +8,32 @@ import { FilterProvider, useFilter } from "./FilterContext";
 // vi.mock factories are hoisted above top-level const declarations, so the
 // mock fn has to be created inside vi.hoisted rather than referenced from a
 // plain module-scope const.
-const { fetchStatusMock } = vi.hoisted(() => ({
+const { fetchPeopleClustersMock, fetchStatusMock } = vi.hoisted(() => ({
+  fetchPeopleClustersMock: vi.fn(async () => ({
+    clusters: [
+      {
+        id: "person-3",
+        count: 7,
+        representative: {
+          photo: { path: "trip/a.jpg", name: "a.jpg" },
+          box: { x: 0.25, y: 0.2, width: 0.3, height: 0.3 },
+        },
+        name: null,
+      },
+      {
+        id: "person-12",
+        count: 5,
+        representative: {
+          photo: { path: "trip/b.jpg", name: "b.jpg" },
+          box: { x: 0.2, y: 0.2, width: 0.25, height: 0.25 },
+        },
+        name: "Scott",
+      },
+    ],
+    totalFaces: 12,
+    totalClusters: 2,
+    pendingFaces: 0,
+  })),
   fetchStatusMock: vi.fn(async () => ({
     backgroundTasks: [] as Array<{
       id: string;
@@ -28,12 +53,7 @@ vi.mock("../../api", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("../../api");
   return {
     ...actual,
-    fetchPeopleClusters: vi.fn(async () => ({
-      clusters: [],
-      totalFaces: 0,
-      totalClusters: 0,
-      pendingFaces: 0,
-    })),
+    fetchPeopleClusters: fetchPeopleClustersMock,
     buildFaceCropUrl: () => "/crop.jpg",
     fetchStatus: fetchStatusMock,
   };
@@ -41,11 +61,13 @@ vi.mock("../../api", async () => {
 
 let lastAttributeFilter: FaceAttributeFilter | null | undefined;
 let lastClusterFilter: string[] | null | undefined;
+let lastClusterMatchMode: string | undefined;
 
 const FilterSpy = () => {
   const { filter } = useFilter();
   lastAttributeFilter = filter.faceAttributeFilter;
   lastClusterFilter = filter.faceClusterFilter;
+  lastClusterMatchMode = filter.faceClusterMatchMode;
   return null;
 };
 
@@ -65,6 +87,8 @@ describe("FaceFilterPanel attribute controls", () => {
     window.history.pushState(null, "", "/");
     lastAttributeFilter = undefined;
     lastClusterFilter = undefined;
+    lastClusterMatchMode = undefined;
+    fetchPeopleClustersMock.mockClear();
     fetchStatusMock.mockClear();
     fetchStatusMock.mockResolvedValue({
       backgroundTasks: [],
@@ -196,11 +220,13 @@ describe("FaceFilterPanel attribute controls", () => {
     renderPanel();
     await waitFor(() => expect(chip("Smiling")).toBeTruthy());
 
+    fireEvent.click(screen.getByRole("button", { name: "Any" }));
     fireEvent.click(chip("Photo ready"));
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
 
     expect(lastAttributeFilter).toBeNull();
     expect(lastClusterFilter).toBeNull();
+    expect(lastClusterMatchMode).toBeUndefined();
   });
 
   it("offers no Clear button when nothing is selected", async () => {
@@ -253,5 +279,28 @@ describe("FaceFilterPanel attribute controls", () => {
 
     expect(await screen.findByText(/60,511 older faces/i)).toBeTruthy();
     expect(screen.getByText(/still need scoring in the background/i)).toBeTruthy();
+  });
+
+  it("stores the selected face match mode", async () => {
+    renderPanel();
+    await waitFor(() => expect(chip("Smiling")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Any" }));
+    expect(lastClusterMatchMode).toBe("any");
+
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(lastClusterMatchMode).toBeUndefined();
+  });
+
+  it("does not narrow the face picker by the current face selection in 'any' mode", async () => {
+    renderPanel();
+    const firstFace = await screen.findByRole("button", { name: "7 faces" });
+    expect(fetchPeopleClustersMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Any" }));
+    fireEvent.click(firstFace);
+
+    await waitFor(() => expect(lastClusterFilter).toEqual(["person-3"]));
+    expect(fetchPeopleClustersMock).toHaveBeenCalledTimes(1);
   });
 });
