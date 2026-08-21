@@ -15,6 +15,7 @@ const logClientEventMock = vi.fn();
 const createClientOperationIdMock = vi.fn(() => "client-op-1");
 
 const {
+  fetchPhotoCaptionMock,
   hlsIsSupportedMock,
   hlsLoadSourceMock,
   hlsAttachMediaMock,
@@ -25,6 +26,7 @@ const {
   hlsRecoverMediaErrorMock,
   hlsEventHandlers,
 } = vi.hoisted(() => ({
+  fetchPhotoCaptionMock: vi.fn(() => Promise.resolve(null)),
   hlsIsSupportedMock: vi.fn(() => false),
   hlsLoadSourceMock: vi.fn(),
   hlsAttachMediaMock: vi.fn(),
@@ -50,7 +52,7 @@ vi.mock("../api", () => ({
   negotiateVideoPlayback: (...args: unknown[]) => negotiateVideoPlaybackMock(...args),
   fetchTranscriptSegments: () => Promise.resolve([]),
   fetchPeopleFacesForFile: () => Promise.resolve([]),
-  fetchPhotoCaption: () => Promise.resolve(null),
+  fetchPhotoCaption: (...args: unknown[]) => fetchPhotoCaptionMock(...args),
 }));
 
 vi.mock("../diagnostics", () => ({
@@ -124,6 +126,8 @@ describe("FullscreenViewer", () => {
   beforeEach(() => {
     useSelectionContextMock.mockReset();
     vi.restoreAllMocks();
+    fetchPhotoCaptionMock.mockReset();
+    fetchPhotoCaptionMock.mockResolvedValue(null);
     probeVideoPlaybackProfileMock.mockReset();
     probeVideoPlaybackProfileMock.mockResolvedValue({
       bandwidthMbps: 20,
@@ -220,6 +224,26 @@ describe("FullscreenViewer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Download item" }));
 
     expect(screen.getByRole("heading", { name: "Download 1 item" })).toBeInTheDocument();
+  });
+
+  it("renders the AI caption toast inside the photo frame instead of the full viewer container", async () => {
+    fetchPhotoCaptionMock.mockResolvedValue("Sunset at the beach");
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto(),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const { container } = render(<FullscreenViewer />);
+
+    const toast = await screen.findByRole("status");
+    const swipeBox = container.querySelector(`.${swipeCss.box}`);
+
+    expect(swipeBox).not.toBeNull();
+    expect(toast.parentElement).toBe(swipeBox);
+    expect(toast.closest(`.${css.container}`)).not.toBe(toast.parentElement);
   });
 
   it("shows file info and keeps the info panel open across close/open", () => {

@@ -1,4 +1,4 @@
-import { Dismiss24Regular, Share24Regular } from "@fluentui/react-icons";
+import { ArrowDownload24Regular, Dismiss24Regular, Share24Regular } from "@fluentui/react-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ShareOptionsModal } from "./ShareOptionsModal";
 import { useSelectionContext } from "./selection/SelectionContext";
@@ -15,7 +15,7 @@ const NEAR_TOP_THRESHOLD_PX = 24;
 
 export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
   const [hidden, setHidden] = useState(false);
-  const [showShareModal, setShowShareModal] = useState(false);
+  const [exportMode, setExportMode] = useState<"share" | "download" | null>(null);
   const lastScrollYRef = useRef(0);
   const { selectionMode, checkedPaths, exitSelectionMode, items } = useSelectionContext();
 
@@ -57,10 +57,11 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
 
   return (
     <>
-      {showShareModal && (
+      {exportMode && (
         <ShareOptionsModal
           photos={selectedPhotos}
-          onClose={() => setShowShareModal(false)}
+          mode={exportMode}
+          onClose={() => setExportMode(null)}
         />
       )}
       <div
@@ -72,12 +73,21 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
             <span className={css.selectionCount}>{checkedPaths.size} selected</span>
             <button
               className="btn btn-subtle"
-              onClick={() => setShowShareModal(true)}
+              onClick={() => setExportMode("share")}
               disabled={checkedPaths.size === 0}
               tabIndex={hidden ? -1 : 0}
             >
               <Share24Regular fontSize={18} />
               Share
+            </button>
+            <button
+              className="btn btn-subtle"
+              onClick={() => setExportMode("download")}
+              disabled={checkedPaths.size === 0}
+              tabIndex={hidden ? -1 : 0}
+            >
+              <ArrowDownload24Regular fontSize={18} />
+              Download
             </button>
             <button
               className="btn btn-subtle"
