@@ -51,6 +51,9 @@ const getImageFilename = (photo: PhotoItem, quality: ShareQuality): string => {
   return quality === "original" ? photo.name : `${base}.jpg`;
 };
 
+const isHeicLikeOriginal = (photo: PhotoItem, quality: ShareQuality): boolean =>
+  quality === "original" && /\.(heic|heif)$/i.test(photo.name);
+
 const triggerDownload = (url: string, filename: string) => {
   const a = document.createElement("a");
   a.href = url;
@@ -128,7 +131,12 @@ export const ShareOptionsModal: React.FC<Props> = ({
         setProgress(null);
         return;
       }
-      setError("Something went wrong. Please try again.");
+      setPreparedAction({
+        kind: "download",
+        imageFiles: preparedAction.files,
+        videoDownloads: preparedAction.videoDownloads,
+      });
+      setError("Sharing failed on this browser. The files are ready to download instead.");
       setProgress(null);
     }
   };
@@ -196,10 +204,12 @@ export const ShareOptionsModal: React.FC<Props> = ({
         url: video.originalUrl,
         filename: video.name,
       }));
+      const hasNativeShare = typeof navigator.share === "function";
       const canUseNativeFileShare =
-        typeof navigator.share === "function" &&
-        typeof navigator.canShare === "function" &&
-        navigator.canShare({ files: imageFiles });
+        hasNativeShare &&
+        (typeof navigator.canShare !== "function" || navigator.canShare({ files: imageFiles }));
+      const shouldTryOriginalHeicShare =
+        hasNativeShare && images.some((photo) => isHeicLikeOriginal(photo, quality));
 
       // Native file share is gesture-sensitive, so after any async prepare
       // step we defer the real browser action to a second explicit tap. Use the
@@ -207,7 +217,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
       // the eventual save action from user intent.
       if (imageFiles.length > 0) {
         setPreparedAction(
-          canUseNativeFileShare
+          canUseNativeFileShare || shouldTryOriginalHeicShare
             ? { kind: "share", files: imageFiles, videoDownloads }
             : { kind: "download", imageFiles, videoDownloads },
         );

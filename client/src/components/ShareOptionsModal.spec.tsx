@@ -123,6 +123,100 @@ describe("ShareOptionsModal", () => {
     }
   });
 
+  it("still offers native share for original HEIC files when canShare says no", async () => {
+    const onClose = vi.fn();
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(["heic"], { type: "image/heic" }),
+    } as Response);
+
+    Object.defineProperty(navigator, "canShare", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => false),
+    });
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      writable: true,
+      value: shareMock,
+    });
+
+    render(<ShareOptionsModal photos={[createPhoto()]} onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Original/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Share" }));
+
+    await waitFor(() => {
+      expect(shareMock).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    const [shareArgs] = shareMock.mock.calls[0] as [{ files: File[] }];
+    expect(shareArgs.files[0]?.name).toBe("1.heic");
+  });
+
+  it("falls back to download if sharing an original HEIC file still fails", async () => {
+    const onClose = vi.fn();
+    const shareMock = vi.fn().mockRejectedValue(new Error("share failed"));
+    const createObjectUrlSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:prepared-heic");
+    const revokeObjectUrlSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(["heic"], { type: "image/heic" }),
+    } as Response);
+
+    Object.defineProperty(navigator, "canShare", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => false),
+    });
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      writable: true,
+      value: shareMock,
+    });
+
+    try {
+      render(<ShareOptionsModal photos={[createPhoto()]} onClose={onClose} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /^Original/i }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Share" }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/ready to download instead/i)).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Download" }));
+
+      await waitFor(() => {
+        expect(clickSpy).toHaveBeenCalledTimes(1);
+        expect(onClose).toHaveBeenCalledTimes(1);
+      });
+
+      expect(createObjectUrlSpy).toHaveBeenCalledTimes(1);
+      expect(revokeObjectUrlSpy).toHaveBeenCalledWith("blob:prepared-heic");
+    } finally {
+      createObjectUrlSpy.mockRestore();
+      revokeObjectUrlSpy.mockRestore();
+      clickSpy.mockRestore();
+    }
+  });
+
   it("renders into document.body by default so app-level stacking cannot cover it", () => {
     const host = document.createElement("div");
     document.body.appendChild(host);
