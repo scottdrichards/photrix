@@ -1172,6 +1172,11 @@ export function FullscreenViewer() {
 
   const faceToggleDisabled =
     photo?.mediaType === "video" || (!hasFaceOverlayData && peopleFaces.length === 0);
+  const aiCaptionToast = aiCaption ? (
+    <div key={aiCaption.toastKey} className={css.aiCaptionToast} role="status">
+      {aiCaption.text}
+    </div>
+  ) : null;
 
   const zoomStyle = {
     "--zoom-origin-x": `${photoZoom.originXPercent}%`,
@@ -1224,11 +1229,6 @@ export function FullscreenViewer() {
               onTouchStart={usesSwipeViewer ? undefined : handleTouchStart}
               onTouchEnd={usesSwipeViewer ? undefined : handleTouchEnd}
             >
-              {aiCaption && (
-                <div key={aiCaption.toastKey} className={css.aiCaptionToast} role="status">
-                  {aiCaption.text}
-                </div>
-              )}
               <div className={css.topRightActions}>
                 {photo.mediaType === "video" &&
                   videoStatus === "hls" &&
@@ -1441,6 +1441,7 @@ export function FullscreenViewer() {
                     } as React.CSSProperties
                   }
                 >
+                  {aiCaptionToast}
                   {/* Thumbnail shown until canvas is ready */}
                   <div
                     className={css.thumbnailClip}
@@ -1517,6 +1518,7 @@ export function FullscreenViewer() {
                   onPrev={selectPrevious}
                   onClose={() => setSelected(null)}
                 >
+                  {aiCaptionToast}
                   {showFaces && (
                     <FaceOverlay
                       regionsRaw={photo.metadata?.regions}
