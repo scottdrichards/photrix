@@ -55,6 +55,15 @@ type SwipePhotoViewerProps = {
   photoAspectRatio: number;
   fullImageLoaded: boolean;
   editStyle?: EditStyle;
+  /**
+   * CSS `view-transition-name` for the letterboxed photo box — lets the
+   * browser match this element with the originating grid tile (see
+   * ThumbnailGrid/ThumbnailTile) so opening/closing the viewer morphs the
+   * tile into place instead of a hard cut. Only meaningful when the caller
+   * also wraps the state change that mounts/unmounts this component in
+   * `document.startViewTransition` (see SelectionContext's `setSelected`).
+   */
+  viewTransitionName?: string;
   onImageLoad: (e: React.SyntheticEvent<HTMLImageElement>) => void;
   onNext: () => void;
   onPrev: () => void;
@@ -69,6 +78,7 @@ export function SwipePhotoViewer({
   photoAspectRatio,
   fullImageLoaded,
   editStyle,
+  viewTransitionName,
   onImageLoad,
   onNext,
   onPrev,
@@ -357,6 +367,7 @@ export function SwipePhotoViewer({
     // it, including the face label layer) is being scaled up by `zoom.scale`,
     // so without this the labels would grow right along with the photo.
     "--label-counter-scale": (1 / zoom.scale).toString(),
+    ...(viewTransitionName ? { viewTransitionName } : {}),
   } as React.CSSProperties;
 
   const renderNeighbor = (item: PhotoItem | null, key: string) => (

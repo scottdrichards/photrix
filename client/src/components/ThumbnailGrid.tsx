@@ -1,5 +1,4 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
 import type { MomentClusterMember, PhotoItem } from "../api";
 import { fetchMomentClusterDetail, fetchPhotos, fetchSemanticSearch } from "../api";
 import { Spinner } from "../Spinner";
@@ -11,6 +10,7 @@ import { SelectionActionBar } from "./SelectionActionBar";
 import { SortControl } from "./SortControl";
 import { TopRailPortal } from "./TopRailPortal";
 import { ViewToggle } from "./ViewToggle";
+import { photoViewTransitionName, runWithViewTransition } from "./viewTransition";
 import css from "./ThumbnailGrid.module.css";
 
 const PAGE_SIZE = 200;
@@ -24,34 +24,6 @@ const PAGE_SIZE = 200;
  */
 const LOAD_MORE_MARGIN_PX = 2000;
 const numberFormatter = new Intl.NumberFormat();
-
-/**
- * Stable per-photo identity for the View Transitions API (see
- * handleToggleStack) — a valid CSS custom-ident derived from the photo's
- * path, so the browser can match a tile before/after a toggle (the
- * representative tile becomes one of the unstacked member tiles, or vice
- * versa) and animate it moving/resizing into place instead of just cutting
- * over. Not guaranteed globally unique across pathologically-similar paths
- * (e.g. two different real characters both collapsing to the same `-`), but
- * collisions are only possible *within one moment cluster's own members*
- * (the only tiles ever given a name at the same time) — negligible for real
- * photo filenames.
- */
-const photoViewTransitionName = (path: string): string =>
-  `photrix-tile-${path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-
-/** Feature-detects the View Transitions API and runs `update` through it when
- * available, falling back to a plain (unanimated) update otherwise. Safari
- * added support in 18.2 (late 2024); older Safari/Firefox silently get the
- * plain path with no error. */
-const runWithViewTransition = (update: () => void): void => {
-  const startViewTransition = document.startViewTransition?.bind(document);
-  if (!startViewTransition) {
-    update();
-    return;
-  }
-  startViewTransition(() => flushSync(update));
-};
 
 type ThumbnailGridProps = {
   view: "library" | "people";
@@ -350,9 +322,12 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
               onOpenStackActions={
                 clusterIdKey ? () => setExpandedStackClusterId(clusterIdKey) : undefined
               }
-              viewTransitionName={
-                clusterIdKey ? photoViewTransitionName(item.path) : undefined
-              }
+              // Named unconditionally (not just for cluster tiles): the
+              // fullscreen viewer opens with this same name on its main
+              // media element (see FullscreenViewer), so any tile — not
+              // only ones involved in a stack toggle — can morph into the
+              // fullscreen view instead of a hard cut.
+              viewTransitionName={photoViewTransitionName(item.path)}
             />
           );
         })}
