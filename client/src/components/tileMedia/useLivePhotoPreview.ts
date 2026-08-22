@@ -3,6 +3,7 @@ import {
   acquirePlaybackSlot,
   isAmbientPlaybackAllowed,
   registerAmbientCandidate,
+  suppressAmbientPlayback,
 } from "./tilePlaybackCoordinator";
 
 /** How long an unattended live photo is allowed to run before fading back out. */
@@ -46,6 +47,9 @@ export const useLivePhotoPreview = ({
   const [mode, setMode] = useState<"hover" | "ambient" | null>(null);
   const [isMounted, setIsMounted] = useState(false);
   const releaseRef = useRef<(() => void) | null>(null);
+  // Only held while playing because the user deliberately hovered (not for
+  // the unattended idle rotation) — see suppressAmbientPlayback's contract.
+  const deliberateReleaseRef = useRef<(() => void) | null>(null);
   const autoStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -64,6 +68,8 @@ export const useLivePhotoPreview = ({
     clearTimers();
     releaseRef.current?.();
     releaseRef.current = null;
+    deliberateReleaseRef.current?.();
+    deliberateReleaseRef.current = null;
 
     // Halt decoding immediately; the element lingers only long enough to fade.
     const element = videoRef.current;
@@ -95,18 +101,33 @@ export const useLivePhotoPreview = ({
         if (next === "hover") {
           clearTimers();
           setMode("hover");
+          // The rotation started this one unattended, so it never claimed the
+          // deliberate-preview slot. The hover takeover means it must now,
+          // so any other ambient clip elsewhere stops too.
+          if (!deliberateReleaseRef.current) {
+            deliberateReleaseRef.current = suppressAmbientPlayback();
+          }
         }
         return;
       }
+      // A deliberate hover claims the "one thing being looked at" slot before
+      // asking for its own playback slot below — see suppressAmbientPlayback,
+      // which immediately stops any other ambient clip already running
+      // elsewhere in the grid (not just blocks new ones).
+      const deliberateRelease = next === "hover" ? suppressAmbientPlayback() : null;
       const release = acquirePlaybackSlot("ambient", stop, {
         // Deliberate hover may bump an idle clip; the rotation may not.
         preempt: next === "hover",
       });
-      if (!release) return;
+      if (!release) {
+        deliberateRelease?.();
+        return;
+      }
       // Cancel a pending fade-out unmount: without this, a clip started right
       // after another one ended would have its element torn out from under it.
       clearTimers();
       releaseRef.current = release;
+      deliberateReleaseRef.current = deliberateRelease;
       setIsMounted(true);
       setMode(next);
       if (next === "ambient") {

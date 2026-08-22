@@ -42,6 +42,7 @@ import { SwipePhotoViewer } from "./SwipePhotoViewer";
 import { isSharedView } from "../hooks/useShareFilter";
 import { cx } from "../cx";
 import { photoViewTransitionName } from "./viewTransition";
+import { suppressAmbientPlayback } from "./tileMedia/tilePlaybackCoordinator";
 import css from "./FullscreenViewer.module.css";
 
 // Star ratings and tags persist to the DB via PATCH, which the server rejects
@@ -242,6 +243,19 @@ export function FullscreenViewer() {
     applyMetadataOverride,
   } = useSelectionContext();
   const photo = selectedPhoto;
+
+  // While the viewer is open, the grid behind it must not keep animating a
+  // live photo the user isn't looking at — see feedback #80. Reuses the same
+  // suppression the tile hover previews claim, so opening the viewer stops
+  // any ambient clip already running and blocks new ones until it closes.
+  useEffect(() => {
+    if (!photo) return undefined;
+    return suppressAmbientPlayback();
+    // Only whether a photo is open matters here, not which one — re-running
+    // per photo-to-photo navigation would needlessly flicker the suppression
+    // off and back on between two photos that are both "the viewer is open".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Boolean(photo)]);
 
   // Prefetch adjacent images so arrow-key navigation feels instant.
   useEffect(() => {
