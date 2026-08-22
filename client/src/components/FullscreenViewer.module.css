@@ -539,3 +539,51 @@
   pointer-events: none;
   animation: aiCaptionSlideDown 0.35s ease-out;
 }
+
+@media print {
+  .dialog {
+    position: static;
+    inset: auto;
+    width: auto;
+    height: auto;
+    max-width: none;
+    max-height: none;
+    overflow: visible;
+    background: #fff;
+  }
+
+  .dialog::backdrop {
+    background: transparent;
+  }
+
+  .viewerLayout {
+    display: block;
+    height: auto;
+  }
+
+  .container {
+    overflow: visible;
+    min-height: auto;
+  }
+
+  .topRightActions,
+  .livePhotoButton,
+  .navButton,
+  .taggingBar,
+  .infoSidebar,
+  .aiCaptionToast,
+  .cropOverlayContainer,
+  .faceBackdropLayer,
+  .faceFrameLayer {
+    display: none !important;
+  }
+
+  .media,
+  .videoWrapper,
+  .photoFrame {
+    width: 100%;
+    max-width: 100%;
+    max-height: none;
+    margin: 0 auto;
+  }
+}

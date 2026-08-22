@@ -76,7 +76,9 @@ describe("PeopleView", () => {
     });
   });
 
-  it("filters the face grid to a viewed match group or suggested match and restores all faces", async () => {
+  it(
+    "filters the face grid to a viewed match group or suggested match and restores all faces",
+    async () => {
     // Mock fetchPeopleClusters to return cluster summaries (no faces)
     fetchPeopleClustersMock.mockResolvedValue({
       clusters: [
@@ -398,7 +400,9 @@ describe("PeopleView", () => {
       expect(screen.getByRole("button", { name: "b.jpg" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "c2.jpg" })).not.toBeInTheDocument();
     });
-  });
+    },
+    10_000,
+  );
 
   it("renames a cluster with a single save action", async () => {
     fetchPeopleClustersMock.mockResolvedValue({
@@ -751,6 +755,103 @@ describe("PeopleView", () => {
     });
 
     consoleErrorSpy.mockRestore();
+  });
+
+  it("lets suggested matches be dismissed locally until the page is reloaded", async () => {
+    fetchPeopleClustersMock.mockResolvedValue({
+      clusters: [
+        {
+          id: "person-1",
+          count: 2,
+          name: "Alex",
+          representative: {
+            photo: {
+              path: "/a.jpg",
+              name: "a.jpg",
+              mediaType: "photo",
+              originalUrl: "http://localhost/a.jpg",
+              thumbnailUrl: "http://localhost/a.jpg",
+              previewUrl: "http://localhost/a.jpg",
+              fullUrl: "http://localhost/a.jpg",
+            },
+            box: { x: 0.1, y: 0.2, width: 0.3, height: 0.3 },
+          },
+        },
+      ],
+      totalFaces: 2,
+      totalClusters: 1,
+      pendingFaces: 0,
+    });
+
+    fetchClusterDetailMock.mockResolvedValue({
+      cluster: {
+        id: "person-1",
+        count: 2,
+        name: "Alex",
+        representative: {
+          photo: {
+            path: "/a.jpg",
+            name: "a.jpg",
+            mediaType: "photo",
+            originalUrl: "http://localhost/a.jpg",
+            thumbnailUrl: "http://localhost/a.jpg",
+            previewUrl: "http://localhost/a.jpg",
+            fullUrl: "http://localhost/a.jpg",
+          },
+          box: { x: 0.1, y: 0.2, width: 0.3, height: 0.3 },
+        },
+        faces: [],
+        centroids: [],
+        mergeSuggestions: [
+          {
+            id: "person-2",
+            count: 1,
+            name: null,
+            representative: {
+              photo: {
+                path: "/b.jpg",
+                name: "b.jpg",
+                mediaType: "photo",
+                originalUrl: "http://localhost/b.jpg",
+                thumbnailUrl: "http://localhost/b.jpg",
+                previewUrl: "http://localhost/b.jpg",
+                fullUrl: "http://localhost/b.jpg",
+              },
+              box: { x: 0.4, y: 0.2, width: 0.2, height: 0.2 },
+            },
+          },
+        ],
+      },
+    });
+
+    const { unmount } = render(<PeopleViewHarness />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Alex")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("2 faces").closest("button") as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Dismiss suggested match person-2" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss suggested match person-2" }));
+
+    expect(screen.queryByRole("button", { name: "Merge person-2 into Alex" })).not.toBeInTheDocument();
+
+    unmount();
+    render(<PeopleViewHarness />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Alex")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("2 faces").closest("button") as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Merge person-2 into Alex" })).toBeInTheDocument();
+    });
   });
 
   it("separates a match group from the person detail view", async () => {

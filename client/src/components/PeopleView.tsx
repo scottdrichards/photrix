@@ -160,6 +160,7 @@ type PersonDetailProps = {
   selectedFaceGroupLabel: string;
   selectedFaceGroupLoading: boolean;
   onMergeSuggestion: (cluster: PersonCluster) => void;
+  onDismissSuggestion: (clusterId: string) => void;
   mergingSuggestionId: string | null;
   onSeparateCentroid: (centroid: PersonCentroid) => void;
   separatingCentroidId: string | null;
@@ -181,6 +182,7 @@ const PersonDetail = ({
   selectedFaceGroupLabel,
   selectedFaceGroupLoading,
   onMergeSuggestion,
+  onDismissSuggestion,
   mergingSuggestionId,
   onSeparateCentroid,
   separatingCentroidId,
@@ -287,10 +289,21 @@ const PersonDetail = ({
                       />
                     </div>
                     <div className={css.relatedPersonBody}>
-                      <div className={css.relatedPersonTitleRow}>
-                        {suggestion.name ? <strong>{suggestion.name}</strong> : null}
-                        <span>{suggestion.count} faces</span>
-                        {suggestion.yearRangeLabel ? <span>{suggestion.yearRangeLabel}</span> : null}
+                      <div className={css.relatedPersonHeaderRow}>
+                        <div className={css.relatedPersonTitleRow}>
+                          {suggestion.name ? <strong>{suggestion.name}</strong> : null}
+                          <span>{suggestion.count} faces</span>
+                          {suggestion.yearRangeLabel ? <span>{suggestion.yearRangeLabel}</span> : null}
+                        </div>
+                        <button
+                          type="button"
+                          className={css.dismissSuggestionButton}
+                          onClick={() => onDismissSuggestion(suggestion.id)}
+                          aria-label={`Dismiss suggested match ${suggestion.name ?? suggestion.id}`}
+                          title="Dismiss suggestion"
+                        >
+                          ×
+                        </button>
                       </div>
                       <div className={css.relatedPersonActions}>
                         <button
@@ -455,6 +468,7 @@ const PeopleViewComponent = ({
   const [merging, setMerging] = useState(false);
   const [mergingSuggestionId, setMergingSuggestionId] = useState<string | null>(null);
   const [separatingCentroidId, setSeparatingCentroidId] = useState<string | null>(null);
+  const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState<Set<string>>(new Set());
   const [selectedFaceGroup, setSelectedFaceGroup] = useState<SelectedFaceGroup | null>(null);
   const [selectedFaceGroupLoading, setSelectedFaceGroupLoading] = useState(false);
   const [vizPoints, setVizPoints] = useState<FaceClusterPCAPoint[] | null>(null);
@@ -554,6 +568,10 @@ const PeopleViewComponent = ({
   useEffect(() => () => {
     mergeSuggestionRefreshRef.current?.abort();
   }, []);
+
+  useEffect(() => {
+    setDismissedSuggestionIds(new Set());
+  }, [personId]);
 
   // Load the person named by the URL. This is the *only* path that opens a
   // person, so a fresh page load, a click and a back button all behave the same.
@@ -843,6 +861,16 @@ const PeopleViewComponent = ({
     }
   };
 
+  const handleDismissSuggestion = (suggestionId: string) => {
+    if (selectedFaceGroup?.id === suggestionId) clearSelectedFaceGroup();
+    setDismissedSuggestionIds((prev) => {
+      if (prev.has(suggestionId)) return prev;
+      const next = new Set(prev);
+      next.add(suggestionId);
+      return next;
+    });
+  };
+
   const loadViz = (clusterId?: string) => {
     vizRequestRef.current?.abort();
     const abortController = new AbortController();
@@ -894,15 +922,23 @@ const PeopleViewComponent = ({
       : null;
 
   const shownDetail = personDetail ?? seededDetail;
+  const visibleDetail = shownDetail
+    ? {
+        ...shownDetail,
+        mergeSuggestions: shownDetail.mergeSuggestions.filter(
+          (suggestion) => !dismissedSuggestionIds.has(suggestion.id),
+        ),
+      }
+    : null;
 
-  if (shownDetail) {
+  if (visibleDetail) {
     return (
       <section className={css.peopleView}>
         <TopRailPortal>
           <ViewToggle view={view} onViewChange={onViewChange} />
         </TopRailPortal>
         <PersonDetail
-          cluster={shownDetail}
+          cluster={visibleDetail}
           loadingFaces={!personDetail}
           onBack={handleBack}
           onViewRelatedGroup={handleViewRelatedGroup}
@@ -911,6 +947,7 @@ const PeopleViewComponent = ({
           selectedFaceGroupLabel={selectedFaceGroupLabel}
           selectedFaceGroupLoading={selectedFaceGroupLoading}
           onMergeSuggestion={handleMergeSuggestion}
+          onDismissSuggestion={handleDismissSuggestion}
           mergingSuggestionId={mergingSuggestionId}
           onSeparateCentroid={handleSeparateCentroid}
           separatingCentroidId={separatingCentroidId}
