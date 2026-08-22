@@ -609,36 +609,61 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           ))}
         </span>
       ) : null}
+      {isStack ? (
+        // Primary expand action, bottom-right — clicking the stack itself
+        // (where the peeking preview photos are) opens it, rather than a
+        // small top-right icon (see feedback #81). Always rendered when this
+        // tile is a stack, even without preview-peek images to sit over, so
+        // the click/keyboard target exists unconditionally. The count is
+        // only shown once it's actually informative — two peeking photos
+        // already reads as "a stack" on its own.
+        <span
+          className={css.stackExpandControl}
+          role="button"
+          tabIndex={0}
+          aria-label={`${stackCount} photos of this moment — show separately`}
+          title={`${stackCount} photos of this moment — click to show separately`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleStack?.();
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            e.stopPropagation();
+            onToggleStack?.();
+          }}
+        >
+          <ImageStackRegular fontSize={14} />
+          {stackCount && stackCount > 2 ? stackCount : null}
+        </span>
+      ) : null}
       {isStack || isRestackable ? (
         <span className={css.stackControls}>
-          <span
-            className={css.stackBadge}
-            role="button"
-            tabIndex={0}
-            aria-label={
-              isStack
-                ? `${stackCount} photos of this moment — show separately`
-                : `Restack these ${restackCount} photos`
-            }
-            title={
-              isStack
-                ? `${stackCount} photos of this moment — click to show separately`
-                : "Restack these photos back into one tile"
-            }
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleStack?.();
-            }}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" && e.key !== " ") return;
-              e.preventDefault();
-              e.stopPropagation();
-              onToggleStack?.();
-            }}
-          >
-            <ImageStackRegular fontSize={14} />
-            {isStack ? stackCount : null}
-          </span>
+          {isRestackable ? (
+            // Collapsing a stack keeps its previous top-right icon-only
+            // affordance ("as before" — feedback #81 only asked to move the
+            // *expand* trigger, not this one).
+            <span
+              className={css.stackBadge}
+              role="button"
+              tabIndex={0}
+              aria-label={`Restack these ${restackCount} photos`}
+              title="Restack these photos back into one tile"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleStack?.();
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                e.stopPropagation();
+                onToggleStack?.();
+              }}
+            >
+              <ImageStackRegular fontSize={14} />
+            </span>
+          ) : null}
           <span
             className={css.stackActionsBadge}
             role="button"

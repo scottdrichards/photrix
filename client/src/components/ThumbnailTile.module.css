@@ -425,3 +425,34 @@
   background-color: rgba(0, 0, 0, 0.8);
   outline: none;
 }
+
+/* Primary "expand this stack" target — bottom-right, over/near the peeking
+   preview photos (see .stackPreviewPeek), so clicking the stack itself opens
+   it (feedback #81) instead of the small top-right icon that used to be the
+   only way in. z-index above .stackPreviewPeeks so it's always clickable
+   even though the peeks visually sit in the same corner. */
+.stackExpandControl {
+  position: absolute;
+  bottom: var(--space-xs);
+  right: var(--space-xs);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  background-color: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.stackExpandControl:hover,
+.stackExpandControl:focus-visible {
+  background-color: rgba(0, 0, 0, 0.8);
+  outline: none;
+}
