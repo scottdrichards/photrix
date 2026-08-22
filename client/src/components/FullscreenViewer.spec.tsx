@@ -26,7 +26,7 @@ const {
   hlsRecoverMediaErrorMock,
   hlsEventHandlers,
 } = vi.hoisted(() => ({
-  fetchPhotoCaptionMock: vi.fn(() => Promise.resolve(null)),
+  fetchPhotoCaptionMock: vi.fn(() => Promise.resolve(null as string | null)),
   hlsIsSupportedMock: vi.fn(() => false),
   hlsLoadSourceMock: vi.fn(),
   hlsAttachMediaMock: vi.fn(),
@@ -49,10 +49,12 @@ vi.mock("../videoPlaybackProfile", () => ({
 }));
 
 vi.mock("../api", () => ({
-  negotiateVideoPlayback: (...args: unknown[]) => negotiateVideoPlaybackMock(...args),
+  negotiateVideoPlayback: (...args: unknown[]) =>
+    (negotiateVideoPlaybackMock as (...a: unknown[]) => unknown)(...args),
   fetchTranscriptSegments: () => Promise.resolve([]),
   fetchPeopleFacesForFile: () => Promise.resolve([]),
-  fetchPhotoCaption: (...args: unknown[]) => fetchPhotoCaptionMock(...args),
+  fetchPhotoCaption: (...args: unknown[]) =>
+    (fetchPhotoCaptionMock as (...a: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../diagnostics", () => ({
