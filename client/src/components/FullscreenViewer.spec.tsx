@@ -226,6 +226,38 @@ describe("FullscreenViewer", () => {
     expect(screen.getByRole("heading", { name: "Download 1 item" })).toBeInTheDocument();
   });
 
+  it("prints from the preview actions", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto(),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const originalPrint = window.print;
+    const printMock = vi.fn();
+    Object.defineProperty(window, "print", {
+      configurable: true,
+      writable: true,
+      value: printMock,
+    });
+
+    try {
+      render(<FullscreenViewer />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Print item" }));
+
+      expect(printMock).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(window, "print", {
+        configurable: true,
+        writable: true,
+        value: originalPrint,
+      });
+    }
+  });
+
   it("renders the AI caption toast inside the photo frame instead of the full viewer container", async () => {
     fetchPhotoCaptionMock.mockResolvedValue("Sunset at the beach");
     useSelectionContextMock.mockReturnValue({

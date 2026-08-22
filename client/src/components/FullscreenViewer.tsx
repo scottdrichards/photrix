@@ -6,9 +6,10 @@ import {
   ClosedCaption24Regular,
   ClosedCaptionOff24Regular,
   Dismiss24Regular,
-  Filmstrip24Regular,
   ImageEdit24Regular,
   Info24Regular,
+  Live24Regular,
+  Print24Regular,
   ScanPerson24Regular,
   Share24Regular,
 } from "@fluentui/react-icons";
@@ -1274,6 +1275,15 @@ export function FullscreenViewer() {
                 >
                   <ArrowDownload24Regular />
                 </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className={css.infoButton}
+                  aria-label="Print item"
+                  title="Print item"
+                >
+                  <Print24Regular />
+                </button>
                 {photo.mediaType === "video" && transcriptTrackUrl && (
                   <button
                     type="button"
@@ -1339,7 +1349,7 @@ export function FullscreenViewer() {
                   aria-label={showLiveVideo ? "Show photo" : "Play live photo"}
                   title={showLiveVideo ? "Show photo" : "Play live photo"}
                 >
-                  <Filmstrip24Regular />
+                  <Live24Regular />
                 </button>
               )}
               {!editMode && currentIndex > 0 && (
