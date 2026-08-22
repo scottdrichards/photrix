@@ -244,6 +244,49 @@ describe("ThumbnailTile", () => {
       expect(onToggleStack).toHaveBeenCalledTimes(2);
     });
 
+    it("shows the stack count only once it's greater than 2", () => {
+      useSelectionContextMock.mockReturnValue({
+        setSelected: vi.fn(),
+        selectionMode: false,
+        checkedPaths: new Set<string>(),
+        enterSelectionMode: vi.fn(),
+        toggleChecked: vi.fn(),
+      });
+
+      const { rerender } = render(<ThumbnailTile photo={createPhoto()} stackCount={2} />);
+      const twoStackBadge = screen.getByRole("button", {
+        name: "2 photos of this moment — show separately",
+      });
+      expect(twoStackBadge).not.toHaveTextContent("2");
+
+      rerender(<ThumbnailTile photo={createPhoto()} stackCount={3} />);
+      const threeStackBadge = screen.getByRole("button", {
+        name: "3 photos of this moment — show separately",
+      });
+      expect(threeStackBadge).toHaveTextContent("3");
+    });
+
+    it("puts the expand trigger at the bottom-right of the tile, not the top-right kebab corner", () => {
+      useSelectionContextMock.mockReturnValue({
+        setSelected: vi.fn(),
+        selectionMode: false,
+        checkedPaths: new Set<string>(),
+        enterSelectionMode: vi.fn(),
+        toggleChecked: vi.fn(),
+      });
+
+      render(<ThumbnailTile photo={createPhoto()} stackCount={3} onOpenStackActions={vi.fn()} />);
+
+      const badge = screen.getByRole("button", {
+        name: "3 photos of this moment — show separately",
+      });
+      const kebab = screen.getByRole("button", { name: /more stack options/i });
+      // The expand badge must not share the kebab's top-right container — see
+      // feedback #81, which specifically asked to stop overloading that
+      // corner with the primary action.
+      expect(badge.parentElement).not.toBe(kebab.parentElement);
+    });
+
     it("renders a restack badge (no count shown) instead of the stack badge when restackCount is set", () => {
       const onToggleStack = vi.fn();
       useSelectionContextMock.mockReturnValue({
