@@ -7,6 +7,7 @@ import {
   acquirePlaybackSlot,
   isAmbientPlaybackAllowed,
   isPlaybackAllowed,
+  suppressAmbientPlayback,
 } from "./tilePlaybackCoordinator";
 
 type Options = {
@@ -94,14 +95,27 @@ export const useTileVideoPreview = ({ photo, active, deliberate }: Options) => {
       handle = null;
       release?.();
       release = null;
+      deliberateRelease?.();
+      deliberateRelease = null;
       setIsPlaying(false);
       setIsLeaving(false);
     };
 
+    // A deliberate (hover, not touch-dwell) video preview is exactly the kind
+    // of "user is looking at one specific thing" moment feedback #80 asked
+    // about — it should quiet any live photo already animating elsewhere in
+    // the grid, the same as hovering a live-photo badge does. Claimed before
+    // the video's own slot below so this tile itself isn't swept.
+    let deliberateRelease: (() => void) | null = deliberate ? suppressAmbientPlayback() : null;
+
     // Reserved before any await so a second hover immediately evicts this tile
     // rather than both of them racing to open a stream.
     release = acquirePlaybackSlot("video", hardStop);
-    if (!release) return;
+    if (!release) {
+      deliberateRelease?.();
+      deliberateRelease = null;
+      return;
+    }
 
     void (async () => {
       try {
@@ -154,6 +168,8 @@ export const useTileVideoPreview = ({ photo, active, deliberate }: Options) => {
       abortController.abort();
       release?.();
       release = null;
+      deliberateRelease?.();
+      deliberateRelease = null;
 
       if (!handle) {
         setIsPlaying(false);

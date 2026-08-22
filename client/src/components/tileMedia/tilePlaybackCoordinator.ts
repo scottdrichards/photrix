@@ -46,6 +46,15 @@ const ambientCandidates = new Set<() => void>();
 let ambientTimer: ReturnType<typeof setTimeout> | null = null;
 let listenersAttached = false;
 
+// Reference count of "the user is deliberately looking at one specific piece
+// of motion right now" — a hovered live-photo badge, a hovered video tile, or
+// the fullscreen viewer being open. While this is above zero the idle
+// ambient rotation must not start (or keep running) anything else: a second
+// live photo animating elsewhere in the grid, or behind the fullscreen
+// viewer, competes for the user's attention with the one thing they actually
+// asked to see. See feedback #80.
+let deliberatePreviewCount = 0;
+
 // A shuffled walk through the current candidate set, rebuilt whenever it's
 // exhausted (or a fresh candidate set makes the old order stale). This is
 // what stops the idle rotation from re-picking the same live photo twice in
@@ -116,7 +125,10 @@ export const isPlaybackAllowed = (): boolean => !isTabHidden();
  * so they are not gated on these.
  */
 export const isAmbientPlaybackAllowed = (): boolean =>
-  isPlaybackAllowed() && !prefersReducedMotion() && !prefersReducedData();
+  isPlaybackAllowed() &&
+  !prefersReducedMotion() &&
+  !prefersReducedData() &&
+  deliberatePreviewCount === 0;
 
 const removeHolder = (pool: PlaybackPool, holder: Holder): void => {
   const index = pools[pool].indexOf(holder);
@@ -188,6 +200,33 @@ export const registerAmbientCandidate = (play: () => void): (() => void) => {
   return () => {
     ambientCandidates.delete(play);
     if (ambientCandidates.size === 0) cancelAmbientTick();
+  };
+};
+
+/**
+ * Register that the user is deliberately previewing one specific thing right
+ * now (a hovered live-photo badge, a hovered video tile, or the fullscreen
+ * viewer being open) — call this *before* acquiring that thing's own
+ * playback slot, so its own tile isn't caught in the sweep below. While any
+ * caller holds this, the ambient rotation is paused and every *currently
+ * running* ambient clip is stopped immediately, not just blocked from
+ * starting — so hovering one live photo (or opening the viewer) instantly
+ * quiets any other one already animating elsewhere in the grid.
+ *
+ * Safe to call more than once concurrently (reference-counted); returns a
+ * release function which is safe to call more than once.
+ */
+export const suppressAmbientPlayback = (): (() => void) => {
+  deliberatePreviewCount++;
+  cancelAmbientTick();
+  for (const holder of [...pools.ambient]) evict("ambient", holder);
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    deliberatePreviewCount = Math.max(0, deliberatePreviewCount - 1);
+    if (deliberatePreviewCount === 0) scheduleAmbientTick();
   };
 };
 
