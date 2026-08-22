@@ -41,6 +41,7 @@ import { PhotoEditor, type EditStyle, type EditAdj, DEFAULT_ADJ, computeStyle, i
 import { SwipePhotoViewer } from "./SwipePhotoViewer";
 import { isSharedView } from "../hooks/useShareFilter";
 import { cx } from "../cx";
+import { photoViewTransitionName } from "./viewTransition";
 import css from "./FullscreenViewer.module.css";
 
 // Star ratings and tags persist to the DB via PATCH, which the server rejects
@@ -1384,13 +1385,20 @@ export function FullscreenViewer() {
                 <>
                   <div
                     className={css.videoWrapper}
+                    // Same name as this photo's grid tile (see
+                    // ThumbnailGrid) so the View Transitions API morphs the
+                    // clicked thumbnail into this wrapper instead of a hard
+                    // cut — the "expand in place" open feedback #77 asked for.
                     style={
-                      videoAspectRatio
-                        ? ({
-                            aspectRatio: videoAspectRatio,
-                            "--video-ar": videoAspectRatio,
-                          } as React.CSSProperties)
-                        : undefined
+                      {
+                        ...(videoAspectRatio
+                          ? {
+                              aspectRatio: videoAspectRatio,
+                              "--video-ar": videoAspectRatio,
+                            }
+                          : {}),
+                        viewTransitionName: photoViewTransitionName(photo.path),
+                      } as React.CSSProperties
                     }
                   >
                     <video
@@ -1516,6 +1524,7 @@ export function FullscreenViewer() {
                   nextPhoto={nextPhoto}
                   photoAspectRatio={photoAspectRatio}
                   fullImageLoaded={fullImageLoaded}
+                  viewTransitionName={photoViewTransitionName(photo.path)}
                   editStyle={isDirty(savedAdj) ? computeStyle(savedAdj, savedSvgId) : undefined}
                   onImageLoad={(e) => {
                     setFullImageLoaded(true);

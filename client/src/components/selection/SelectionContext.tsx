@@ -7,6 +7,7 @@ import {
   ReactNode,
 } from "react";
 import type { PhotoItem } from "../../api";
+import { runWithViewTransition } from "../viewTransition";
 
 export type PhotoMetadataOverride = {
   rating?: number | null;
@@ -85,8 +86,13 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
     return items.find((item) => item.path === selectedPath) ?? null;
   }, [items, selectedPath]);
 
+  // Wrapped in a View Transition so opening a photo/video (a tile becoming
+  // the fullscreen viewer's media) or closing it (the reverse) animates the
+  // shared element expanding/collapsing into place instead of a hard cut —
+  // see components/viewTransition.ts and FullscreenViewer's use of the same
+  // per-photo name on its media element.
   const setSelected = useCallback((photo: PhotoItem | null) => {
-    setSelectedPath(photo?.path ?? null);
+    runWithViewTransition(() => setSelectedPath(photo?.path ?? null));
   }, []);
 
   const selectNext = useCallback(() => {
