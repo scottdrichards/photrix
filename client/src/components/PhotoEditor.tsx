@@ -808,6 +808,8 @@ function CropBox({ top, right, bottom, left, rotationDeg, minCrop, onChange }: C
 
 interface PhotoEditorProps {
   photoName: string;
+  /** Relative library path — needed for the auto-straighten suggestion call (feedback #66). */
+  photoPath?: string;
   photoFullUrl: string;
   imageAspectRatio?: number;
   cropContainerEl?: HTMLElement | null;
@@ -819,6 +821,7 @@ interface PhotoEditorProps {
 
 export function PhotoEditor({
   photoName,
+  photoPath,
   photoFullUrl,
   imageAspectRatio = 1,
   cropContainerEl,
@@ -834,6 +837,14 @@ export function PhotoEditor({
   const [cropActive, setCropActive] = useState(false);
   const [autoApplying, setAutoApplying] = useState(false);
   const [autoError, setAutoError] = useState<string | null>(null);
+  // Feedback #66: bounded auto-straighten. Three states rather than two —
+  // "nothing tried yet" is silent (no button clutter until asked), "tried,
+  // no confident suggestion" gets an explicit message so a click doesn't
+  // look like it silently did nothing, and "applying" mirrors the Auto
+  // enhance button's own loading state.
+  const [straightenState, setStraightenState] = useState<
+    "idle" | "loading" | "none-found" | "error"
+  >("idle");
 
   const update = useCallback(<K extends keyof EditAdj>(key: K, val: EditAdj[K]) => {
     setAdj((prev) => ({ ...prev, [key]: val }));
@@ -882,6 +893,29 @@ export function PhotoEditor({
       setAutoError(e instanceof Error ? e.message : "Auto enhance failed");
     } finally {
       setAutoApplying(false);
+    }
+  };
+
+  const handleAutoStraighten = async () => {
+    if (!photoPath) return;
+    setStraightenState("loading");
+    try {
+      const response = await fetch(
+        `/api/photos/suggest-rotation?path=${encodeURIComponent(photoPath)}`,
+        { headers: getAuthHeaders() },
+      );
+      const data = (await response.json()) as { angle: number | null };
+      if (typeof data.angle === "number") {
+        // Prefills the *existing* manual straighten slider — never applied
+        // without this explicit click, and the user can still nudge or
+        // undo it exactly like a manual straighten.
+        setAdj((prev) => ({ ...prev, rotation: data.angle as number }));
+        setStraightenState("idle");
+      } else {
+        setStraightenState("none-found");
+      }
+    } catch {
+      setStraightenState("error");
     }
   };
 
@@ -977,6 +1011,24 @@ export function PhotoEditor({
               {autoApplying ? "Analyzing…" : "Auto"}
             </button>
             {autoError && <p className={css.autoError}>{autoError}</p>}
+            {photoPath && (
+              <button
+                type="button"
+                className={css.autoBtn}
+                onClick={handleAutoStraighten}
+                disabled={straightenState === "loading"}
+                title="Suggest a level rotation, only when a strong horizon/structural line is detected (feedback #66) — never forced"
+              >
+                <RotateRight24Regular />
+                {straightenState === "loading" ? "Checking…" : "Auto Straighten"}
+              </button>
+            )}
+            {straightenState === "none-found" && (
+              <p className={css.autoError}>No confident horizon line found — nothing changed.</p>
+            )}
+            {straightenState === "error" && (
+              <p className={css.autoError}>Couldn't check for a horizon line.</p>
+            )}
           </div>
 
           <section className={css.section}>
