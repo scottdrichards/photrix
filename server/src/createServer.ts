@@ -437,7 +437,15 @@ export const createServer = (
           }
 
           if (req.url?.startsWith("/api/feedback")) {
-            if (shareScope) {
+            // A share-link viewer may submit new feedback — the global
+            // "Comments" button (feedback #99) has to work from a shared
+            // link, which is exactly the case shareScope identifies — but
+            // may not list or manage (claim/complete) the internal triage
+            // queue, which is everything else this handler does.
+            const feedbackUrl = new URL(req.url, "http://localhost");
+            const isPublicSubmission =
+              req.method === "POST" && feedbackUrl.pathname === "/api/feedback";
+            if (shareScope && !isPublicSubmission) {
               writeJson(res, 403, { error: "Forbidden" });
               return;
             }
@@ -445,6 +453,7 @@ export const createServer = (
               req as http.IncomingMessage & { url: string },
               res,
               database,
+              { markExternal: Boolean(shareScope) },
             );
             return;
           }

@@ -12,6 +12,7 @@ type FeedbackRow = {
   claimedAt: number | null;
   claimedBy: string | null;
   completedAt: number | null;
+  source: string | null;
 };
 
 type FeedbackStatus = "open" | "active" | "completed";
@@ -34,6 +35,7 @@ export const feedbackHandler = async (
   req: http.IncomingMessage & { url: string },
   res: http.ServerResponse,
   database: IndexDatabase,
+  options: { markExternal?: boolean } = {},
 ): Promise<void> => {
   const url = new URL(req.url, "http://localhost");
   const pathParts = url.pathname.split("/").filter(Boolean);
@@ -44,7 +46,7 @@ export const feedbackHandler = async (
   if (req.method === "GET" && !idParam) {
     const statusFilter = url.searchParams.get("status");
     const rows = await database.asyncSqlite.all<FeedbackRow>(
-      "SELECT id, text, createdAt, claimedAt, claimedBy, completedAt FROM feedback ORDER BY createdAt ASC",
+      "SELECT id, text, createdAt, claimedAt, claimedBy, completedAt, source FROM feedback ORDER BY createdAt ASC",
     );
     const now = Date.now();
     const feedback = rows
@@ -54,7 +56,10 @@ export const feedbackHandler = async (
     return;
   }
 
-  // POST /api/feedback — submit a new suggestion
+  // POST /api/feedback — submit a new suggestion. Reachable from a share-link
+  // session too (see createServer.ts) — markExternal is set whenever this
+  // submission came through one, so triage can be appropriately skeptical of
+  // it without having to trust free-text content alone.
   if (req.method === "POST" && !idParam) {
     let body: { text?: unknown };
     try {
@@ -70,9 +75,10 @@ export const feedbackHandler = async (
     }
 
     const text = body.text.trim().slice(0, 2000);
+    const source = options.markExternal ? "external" : null;
     await database.asyncSqlite.run(
-      "INSERT INTO feedback (text, createdAt) VALUES (?, ?)",
-      [text, Date.now()],
+      "INSERT INTO feedback (text, createdAt, source) VALUES (?, ?, ?)",
+      [text, Date.now(), source],
     );
 
     writeJson(res, 200, { ok: true });

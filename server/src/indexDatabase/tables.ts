@@ -518,6 +518,11 @@ export const tables = {
       { name: "claimedAt", type: "INTEGER" },
       { name: "claimedBy", type: "TEXT" },
       { name: "completedAt", type: "INTEGER" },
+      // "external" for submissions made through a share-link session (an
+      // unauthenticated viewer of a shared album, not the logged-in owner) —
+      // null otherwise. Lets triage treat those with appropriate skepticism
+      // without having to trust free-text content alone. See feedback #99.
+      { name: "source", type: "TEXT" },
     ],
     compositeIndexes: [],
   },
