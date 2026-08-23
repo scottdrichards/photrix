@@ -31,6 +31,40 @@ vi.mock("./selection/SelectionContext", () => ({
   useSelectionContext: () => useSelectionContextMock(),
 }));
 
+type MockObserver = {
+  trigger: (isIntersecting: boolean) => void;
+};
+
+const faceGridObservers: MockObserver[] = [];
+
+beforeAll(() => {
+  class FakeIntersectionObserver {
+    private callback: IntersectionObserverCallback;
+    private live = true;
+
+    constructor(callback: IntersectionObserverCallback) {
+      this.callback = callback;
+      faceGridObservers.push({
+        trigger: (isIntersecting: boolean) => {
+          if (!this.live) return;
+          this.callback(
+            [{ isIntersecting } as IntersectionObserverEntry],
+            this as unknown as IntersectionObserver,
+          );
+        },
+      });
+    }
+
+    observe = vi.fn();
+    disconnect = vi.fn(() => {
+      this.live = false;
+    });
+  }
+
+  // @ts-expect-error test override
+  globalThis.IntersectionObserver = FakeIntersectionObserver;
+});
+
 /**
  * PeopleView is controlled: the person/group selection lives in App so it can
  * round-trip through the URL. This stands in for that owner, so navigating
@@ -60,6 +94,7 @@ describe("PeopleView", () => {
     mergeClustersMock.mockReset();
     renameClusterMock.mockReset();
     separateClusterMock.mockReset();
+    faceGridObservers.length = 0;
     mergeClustersMock.mockResolvedValue(undefined);
     renameClusterMock.mockResolvedValue(undefined);
     separateClusterMock.mockResolvedValue(undefined);
@@ -1105,6 +1140,70 @@ describe("PeopleView", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "a.jpg" })).toBeInTheDocument();
+    });
+  });
+
+  it("paginates a large cluster's face grid instead of mounting every face crop at once (feedback #89)", async () => {
+    const photo = (path: string) => ({
+      path,
+      name: path,
+      mediaType: "photo" as const,
+      originalUrl: `http://localhost/${path}`,
+      thumbnailUrl: `http://localhost/${path}`,
+      previewUrl: `http://localhost/${path}`,
+      fullUrl: `http://localhost/${path}`,
+    });
+    const box = { x: 0.1, y: 0.2, width: 0.3, height: 0.3 };
+    const manyFaces = Array.from({ length: 150 }, (_, i) => ({
+      photo: photo(`face-${i}.jpg`),
+      box,
+    }));
+
+    fetchPeopleClustersMock.mockResolvedValue({
+      clusters: [
+        {
+          id: "person-1",
+          count: manyFaces.length,
+          name: "Alex",
+          representative: { photo: photo("face-0.jpg"), box },
+        },
+      ],
+      totalFaces: manyFaces.length,
+      totalClusters: 1,
+      pendingFaces: 0,
+    });
+
+    fetchClusterDetailMock.mockResolvedValue({
+      cluster: {
+        id: "person-1",
+        count: manyFaces.length,
+        name: "Alex",
+        representative: { photo: photo("face-0.jpg"), box },
+        faces: manyFaces,
+        centroids: [],
+        mergeSuggestions: [],
+      },
+    });
+
+    render(<PeopleViewHarness />);
+    fireEvent.click(await screen.findByRole("button", { name: /^face-0\.jpg/ }));
+
+    // Only the first page mounts up front — the rest of a 150-face cluster
+    // must not all become real <img> elements before the user scrolls.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "face-0.jpg" })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "face-149.jpg" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^face-\d+\.jpg$/ }).length).toBeLessThan(
+      manyFaces.length,
+    );
+
+    // Scrolling the sentinel into view reveals more.
+    expect(faceGridObservers.length).toBeGreaterThan(0);
+    faceGridObservers[faceGridObservers.length - 1].trigger(true);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "face-149.jpg" })).toBeInTheDocument();
     });
   });
 });

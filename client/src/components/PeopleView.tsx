@@ -36,6 +36,20 @@ type SelectedFaceGroup = {
   faces: ClusterFace[];
 };
 
+// How many face crops to mount up front, and grow by per scroll page. A
+// popular person's cluster can carry up to a few thousand matches (server
+// caps at MAX_FACES_IN_CLUSTER_DETAIL), and each face crop is its own HTTP
+// round trip plus an on-demand server-side image decode — mounting all of
+// them at once (even behind `loading="lazy"`) was the actual "slow to load
+// all matches" reported in feedback #89: hundreds/thousands of <img> tags
+// enter the DOM and a large fraction still end up within the browser's own
+// lazy-load prefetch margin. Client-side pagination keeps the same API
+// response (one request, whole list) but bounds how much of it gets a real
+// <img> element before the user has scrolled to see it — the same pattern
+// ThumbnailGrid already uses for the main grid.
+const FACE_PAGE_SIZE = 120;
+const FACE_LOAD_MORE_MARGIN_PX = 1200;
+
 type FaceImageProps = {
   face: ClusterFace;
   className: string;
@@ -201,6 +215,33 @@ const PersonDetail = ({
     setSelected(face.photo);
   };
 
+  // How many of visibleFaces actually get an <img> — see FACE_PAGE_SIZE.
+  // Reset whenever the underlying list changes identity (a different person,
+  // switching into/out of a match-group filter) rather than growing forever.
+  const [faceRenderCount, setFaceRenderCount] = useState(FACE_PAGE_SIZE);
+  useEffect(() => {
+    setFaceRenderCount(FACE_PAGE_SIZE);
+  }, [visibleFaces]);
+  const renderedFaces = visibleFaces.slice(0, faceRenderCount);
+  const hasMoreFaces = faceRenderCount < visibleFaces.length;
+
+  const faceLoadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const sentinel = faceLoadMoreSentinelRef.current;
+    if (!sentinel || !hasMoreFaces) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          observer.disconnect();
+          setFaceRenderCount((prev) => prev + FACE_PAGE_SIZE);
+        }
+      },
+      { rootMargin: `${FACE_LOAD_MORE_MARGIN_PX}px 0px` },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMoreFaces, faceRenderCount]);
+
   return (
     <div className={css.personDetail}>
       <div className={css.personDetailHeader}>
@@ -354,16 +395,23 @@ const PersonDetail = ({
             <Spinner size="small" />
           </div>
         ) : (
-          <div className={css.faceGrid}>
-            {visibleFaces.map((face, index) => (
-              <FaceThumb
-                key={`${face.photo.path}-${index}`}
-                face={face}
-                label={face.photo.name}
-                onClick={() => handleFaceClick(face)}
-              />
-            ))}
-          </div>
+          <>
+            <div className={css.faceGrid}>
+              {renderedFaces.map((face, index) => (
+                <FaceThumb
+                  key={`${face.photo.path}-${index}`}
+                  face={face}
+                  label={face.photo.name}
+                  onClick={() => handleFaceClick(face)}
+                />
+              ))}
+            </div>
+            {hasMoreFaces && (
+              <div ref={faceLoadMoreSentinelRef} className={css.faceGridSentinel}>
+                <Spinner size="extra-tiny" />
+              </div>
+            )}
+          </>
         )}
       </section>
     </div>

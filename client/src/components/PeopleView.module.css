@@ -523,6 +523,15 @@
   gap: var(--space-s);
 }
 
+/* Load-more trigger for the face grid's client-side pagination — see
+   FACE_PAGE_SIZE in PeopleView.tsx. Just tall enough to be a reliable
+   IntersectionObserver target. */
+.faceGridSentinel {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-md) 0;
+}
+
 .faceThumbButton {
   border: 1px solid var(--stroke2);
   background: var(--bg1);
