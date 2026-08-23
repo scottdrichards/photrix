@@ -243,6 +243,58 @@
   color: var(--fg1);
 }
 
+/* Person tags (feedback #78) */
+.tagList {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.tagChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  color: var(--fg2);
+  background: var(--bg3);
+  border: 1px solid var(--stroke2);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.tagChipRemove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.65rem;
+  color: var(--fg3);
+  line-height: 1;
+}
+
+.tagChipRemove:hover {
+  color: var(--fg1);
+}
+
+.tagInput {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border: 1px dashed var(--stroke2);
+  border-radius: 999px;
+  background: var(--bg1);
+  color: var(--fg1);
+  outline: none;
+  width: 90px;
+  min-width: 60px;
+}
+
+.tagInput:focus {
+  border-color: var(--brand);
+}
+
 .personDetail {
   display: flex;
   flex-direction: column;

@@ -398,6 +398,12 @@ export const tables = {
       // When set, this centroid belongs to the named/merged person rooted at
       // `personId`. Unadopted centroids keep this NULL.
       { name: "personId", type: "INTEGER", indexExpression: true },
+      // JSON array of user-assigned tag strings (e.g. ["Richards Family"]),
+      // same encoding as `files.tags`/`files.aiTags` — see filterToSQL.ts's
+      // `stringArrayJsonFields`. Stored only on the person root row (the same
+      // row `name` lives on, id = COALESCE(personId, id)); non-root member
+      // clusters keep this NULL. NULL and "[]" both mean "no tags".
+      { name: "tags", type: "TEXT" },
     ],
     compositeIndexes: [],
   },

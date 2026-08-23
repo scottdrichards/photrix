@@ -37,6 +37,8 @@ export type FilterCondition = BaseFilterCondition & {
    * URLs that only name people.
    */
   faceMatch?: FaceMatchFilter | null;
+  /** Match files containing a face whose person has this tag (e.g. "Richards Family"). */
+  personTag?: string | null;
   semanticImage?: RuntimeSemanticSimilarityFilter | null;
   semanticAudio?: RuntimeSemanticSimilarityFilter | null;
   transcriptSearch?: StringSearch | null;
@@ -148,6 +150,7 @@ export type FaceClusterSummary = {
   representative: FaceClusterFace;
   name: string | null;
   yearRangeLabel?: string | null;
+  tags: string[];
 };
 
 export type FaceCluster = FaceClusterSummary & {

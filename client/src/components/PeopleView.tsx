@@ -16,6 +16,7 @@ import {
   mergeClusters,
   renameCluster,
   separateCluster,
+  setPersonTags,
 } from "../api";
 import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
@@ -164,6 +165,81 @@ const InlineNameEditorControl = ({ name, onSave }: InlineNameEditorProps) => {
   );
 };
 
+type TagEditorProps = {
+  tags: string[];
+  onSave: (tags: string[]) => void;
+};
+
+/**
+ * Free-text tag chips for a person (feedback #78) — "Richards Family" etc.
+ * Mirrors InlineNameEditor's edit-in-place pattern rather than a modal: type
+ * a tag, Enter/comma commits it as a chip, click a chip's × to remove.
+ * Read-only in a shared view, same guard as the name editor.
+ */
+const TagEditor = ({ tags, onSave }: TagEditorProps) => {
+  const [draft, setDraft] = useState("");
+
+  if (READ_ONLY) {
+    return tags.length > 0 ? (
+      <div className={css.tagList}>
+        {tags.map((tag) => (
+          <span key={tag} className={css.tagChip}>
+            {tag}
+          </span>
+        ))}
+      </div>
+    ) : null;
+  }
+
+  const commitDraft = () => {
+    const trimmed = draft.trim();
+    if (trimmed && !tags.includes(trimmed)) {
+      onSave([...tags, trimmed]);
+    }
+    setDraft("");
+  };
+
+  const removeTag = (tag: string) => onSave(tags.filter((t) => t !== tag));
+
+  return (
+    <div className={css.tagList}>
+      {tags.map((tag) => (
+        <span key={tag} className={css.tagChip}>
+          {tag}
+          <button
+            type="button"
+            className={css.tagChipRemove}
+            aria-label={`Remove tag ${tag}`}
+            onClick={() => removeTag(tag)}
+          >
+            ✕
+          </button>
+        </span>
+      ))}
+      <input
+        className={css.tagInput}
+        value={draft}
+        placeholder="Add tag…"
+        onChange={(e) => {
+          if (e.target.value.endsWith(",")) {
+            setDraft(e.target.value.slice(0, -1));
+            commitDraft();
+            return;
+          }
+          setDraft(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commitDraft();
+          }
+        }}
+        onBlur={commitDraft}
+      />
+    </div>
+  );
+};
+
 type PersonDetailProps = {
   cluster: PersonClusterWithFaces;
   onBack: () => void;
@@ -179,6 +255,7 @@ type PersonDetailProps = {
   onSeparateCentroid: (centroid: PersonCentroid) => void;
   separatingCentroidId: string | null;
   onRename: (name: string | null) => void;
+  onSetTags: (tags: string[]) => void;
   /**
    * The person opened from a card we already had, with their faces still in
    * flight. The header is fully real (name, count and face all come from the
@@ -201,6 +278,7 @@ const PersonDetail = ({
   onSeparateCentroid,
   separatingCentroidId,
   onRename,
+  onSetTags,
   loadingFaces = false,
 }: PersonDetailProps) => {
   const { setItems, setSelected } = useSelectionContext();
@@ -258,6 +336,7 @@ const PersonDetail = ({
           <div className={css.personIdentityText}>
             <InlineNameEditor name={cluster.name} onSave={onRename} />
             <span className={css.personDetailCount}>{cluster.count} faces</span>
+            <TagEditor tags={cluster.tags} onSave={onSetTags} />
           </div>
         </div>
       </div>
@@ -476,6 +555,7 @@ const applyOptimisticDetailMerge = (
     count: detail.count,
     representative: detail.representative,
     name: detail.name,
+    tags: detail.tags,
   };
   const canonicalTarget = chooseCanonicalMergeTarget(currentCluster, sourceCluster);
   const movedCluster = canonicalTarget.id === currentCluster.id ? sourceCluster : currentCluster;
@@ -805,6 +885,26 @@ const PeopleViewComponent = ({
     }
   };
 
+  const handleSetTagsInDetail = async (tags: string[]) => {
+    if (!personDetail) return;
+    try {
+      await setPersonTags(personDetail.id, tags);
+      setPersonDetail({ ...personDetail, tags });
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              clusters: prev.clusters.map((c) =>
+                c.id === personDetail.id ? { ...c, tags } : c,
+              ),
+            }
+          : prev,
+      );
+    } catch (err) {
+      console.error("Failed to set person tags:", err);
+    }
+  };
+
   const handleRenameInGrid = async (cluster: PersonCluster, name: string | null) => {
     try {
       await renameCluster(cluster.id, name);
@@ -859,6 +959,7 @@ const PeopleViewComponent = ({
       count: personDetail.count,
       representative: personDetail.representative,
       name: personDetail.name,
+      tags: personDetail.tags,
     };
     const canonicalTarget = chooseCanonicalMergeTarget(currentCluster, suggestion);
     const mergedAwayCluster = canonicalTarget.id === currentCluster.id ? suggestion : currentCluster;
@@ -1000,6 +1101,7 @@ const PeopleViewComponent = ({
           onSeparateCentroid={handleSeparateCentroid}
           separatingCentroidId={separatingCentroidId}
           onRename={handleRenameInDetail}
+          onSetTags={handleSetTagsInDetail}
         />
       </section>
     );

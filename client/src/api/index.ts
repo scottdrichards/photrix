@@ -70,6 +70,8 @@ export {
   renameCluster,
   mergeClusters,
   separateCluster,
+  setPersonTags,
+  fetchAllPersonTags,
 } from "./people";
 
 export {

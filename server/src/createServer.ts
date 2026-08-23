@@ -525,10 +525,14 @@ export const createServer = (
             return;
           }
 
-          if (req.url?.startsWith("/api/people/") && req.method === "POST") {
+          if (
+            req.url?.startsWith("/api/people/") &&
+            (req.method === "POST" || req.url === "/api/people/tags")
+          ) {
             if (shareScope) {
-              // People management (rename/merge/separate) mutates face clusters;
-              // a read-only share view may never persist changes.
+              // People management (rename/merge/separate/tags) mutates or
+              // reads owner-only face-cluster state; a read-only share view
+              // may never see or persist it.
               writeJson(res, 403, { error: "Forbidden" });
               return;
             }

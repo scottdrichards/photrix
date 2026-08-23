@@ -81,6 +81,37 @@ export const peopleRequestHandler = async (
     return;
   }
 
+  // GET /api/people/tags — distinct tags across every person, for suggestions
+  if (url.pathname === "/api/people/tags" && req.method === "GET") {
+    const tags = await database.getAllPersonTags();
+    writeJson(res, 200, { tags });
+    return;
+  }
+
+  // POST /api/people/tags — replace a person's tag list
+  if (url.pathname === "/api/people/tags" && req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      writeJson(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const b = body as Record<string, unknown>;
+    if (typeof b.clusterId !== "string" || !Array.isArray(b.tags)) {
+      writeJson(res, 400, { error: "Missing clusterId or tags" });
+      return;
+    }
+    const tags = b.tags.filter((t): t is string => typeof t === "string");
+    const ok = await database.setClusterTags(b.clusterId, tags);
+    if (!ok) {
+      writeJson(res, 404, { error: "Cluster not found" });
+      return;
+    }
+    writeJson(res, 200, { ok: true });
+    return;
+  }
+
   // POST /api/people/separate — detach one centroid from a named person
   if (url.pathname === "/api/people/separate" && req.method === "POST") {
     let body: unknown;

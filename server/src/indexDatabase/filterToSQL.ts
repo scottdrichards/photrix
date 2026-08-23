@@ -184,6 +184,24 @@ const constraintToSQL = (
     return faceMatchConstraintToSQL(constraint);
   }
 
+  if (fieldName === "personTag") {
+    if (typeof constraint !== "string" || !constraint) return null;
+    // Tags live on the person root row (faceClusters.tags, JSON array — see
+    // tables.ts), so this walks the same personId-resolution join as
+    // faceMatchToSQL/personInImage rather than reading faces.clusterId's own
+    // row directly.
+    return {
+      where: `EXISTS (
+        SELECT 1 FROM faces
+        JOIN faceClusters AS cluster ON cluster.id = faces.clusterId
+        JOIN faceClusters AS person ON person.id = COALESCE(cluster.personId, faces.clusterId)
+        WHERE faces.folder = files.folder AND faces.fileName = files.fileName
+          AND EXISTS (SELECT 1 FROM json_each(person.tags) WHERE value = ?)
+      )`,
+      params: [constraint],
+    };
+  }
+
   if (fieldName === "semanticImage") {
     if (
       !constraint ||

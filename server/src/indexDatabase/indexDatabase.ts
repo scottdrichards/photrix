@@ -289,6 +289,17 @@ const MAX_MERGE_SUGGESTIONS = 6;
 // Face rows are stored per file; cluster ids are exposed to the client as
 // opaque strings. Keep the "person-" prefix stable — it's part of the API.
 const faceClusterIdToString = (clusterId: number) => `person-${clusterId}`;
+
+/** Parses a `faceClusters.tags` JSON-array column; NULL/malformed -> []. */
+const parsePersonTags = (raw: string | null): string[] => {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+};
 const faceClusterIdFromString = (clusterId: string): number | null => {
   const match = /^person-(\d+)$/.exec(clusterId);
   if (!match) return null;
@@ -2339,6 +2350,7 @@ export class IndexDatabase {
     const listed = aggregateRows.slice(0, MAX_FACE_CLUSTERS_LISTED);
     const representatives = new Map<number, FaceClusterFace>();
     const clusterNames = new Map<number, string | null>();
+    const clusterTags = new Map<number, string | null>();
     if (listed.length) {
       const representativeRows = await this.db.all<{
         id: number;
@@ -2376,12 +2388,17 @@ export class IndexDatabase {
         representatives.set(row.id, faceRowToClusterFace(row));
       }
 
-      const nameRows = await this.db.all<{ id: number; name: string | null }>(
-        `SELECT id, name FROM faceClusters WHERE id IN (${listed.map(() => "?").join(", ")})`,
+      const nameRows = await this.db.all<{
+        id: number;
+        name: string | null;
+        tags: string | null;
+      }>(
+        `SELECT id, name, tags FROM faceClusters WHERE id IN (${listed.map(() => "?").join(", ")})`,
         ...listed.map((row) => row.personId),
       );
       for (const row of nameRows) {
         clusterNames.set(row.id, row.name);
+        clusterTags.set(row.id, row.tags);
       }
     }
 
@@ -2394,6 +2411,7 @@ export class IndexDatabase {
           count: row.count,
           representative,
           name: clusterNames.get(row.personId) ?? null,
+          tags: parsePersonTags(clusterTags.get(row.personId) ?? null),
         },
       ];
     });
@@ -2555,8 +2573,8 @@ export class IndexDatabase {
           );
 
     const faces = rows.map(faceRowToClusterFace);
-    const nameRow = await this.db.get<{ name: string | null }>(
-      "SELECT name FROM faceClusters WHERE id = ?",
+    const nameRow = await this.db.get<{ name: string | null; tags: string | null }>(
+      "SELECT name, tags FROM faceClusters WHERE id = ?",
       effectivePersonId,
     );
 
@@ -2668,6 +2686,7 @@ export class IndexDatabase {
         representative: faces[0],
         faces,
         name: nameRow?.name ?? null,
+        tags: parsePersonTags(nameRow?.tags ?? null),
         centroids,
         mergeSuggestions,
       },
@@ -2809,6 +2828,11 @@ export class IndexDatabase {
       name: seed.name,
       representative: seed.representative,
       yearRangeLabel: yearRangeLabels.get(seed.clusterId) ?? null,
+      // Suggestions are always unmerged single clusters (seed.personId ===
+      // null, filtered above), and tags only ever live on a person root —
+      // not worth a per-suggestion lookup for a candidate that isn't the
+      // real person yet.
+      tags: [],
     }));
   }
 
@@ -3438,6 +3462,53 @@ export class IndexDatabase {
 
     this.invalidateFaceClusterPCACache();
     return true;
+  }
+
+  /**
+   * Sets (replacing) the tag list for the person a cluster resolves to.
+   * Mirrors renameCluster's root-resolution: tags always live on the person
+   * root row (id = COALESCE(personId, id)), never on a merged-in member, so
+   * they survive future merges/separations the same way `name` does.
+   */
+  async setClusterTags(clusterId: string, tags: string[]): Promise<boolean> {
+    const numericId = faceClusterIdFromString(clusterId);
+    if (numericId === null || numericId <= 0) return false;
+
+    const clusterRow = await this.db.get<{ id: number; personId: number | null }>(
+      "SELECT id, personId FROM faceClusters WHERE id = ?",
+      numericId,
+    );
+    if (!clusterRow) return false;
+
+    const effectivePersonId = clusterRow.personId ?? clusterRow.id;
+    const normalized = [
+      ...new Set(tags.map((t) => t.trim()).filter((t) => t.length > 0)),
+    ];
+    await this.db.run(
+      "UPDATE faceClusters SET tags = ? WHERE id = ?",
+      normalized.length > 0 ? JSON.stringify(normalized) : null,
+      effectivePersonId,
+    );
+    return true;
+  }
+
+  /** Distinct tags across every named/tagged person, for filter-panel suggestions. */
+  async getAllPersonTags(): Promise<string[]> {
+    const rows = await this.db.all<{ tags: string }>(
+      "SELECT tags FROM faceClusters WHERE tags IS NOT NULL",
+    );
+    const all = new Set<string>();
+    for (const row of rows) {
+      try {
+        for (const tag of JSON.parse(row.tags) as unknown[]) {
+          if (typeof tag === "string") all.add(tag);
+        }
+      } catch {
+        // Malformed JSON shouldn't happen (only written via setClusterTags),
+        // but skip rather than throw on a suggestions query.
+      }
+    }
+    return [...all].sort();
   }
 
   /**
