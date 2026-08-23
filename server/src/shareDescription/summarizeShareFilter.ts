@@ -3,6 +3,7 @@ import type {
   FilterCondition,
   FilterElement,
 } from "../indexDatabase/indexDatabase.type.ts";
+import { findNearbyCity } from "./majorCities.ts";
 
 /**
  * One facet of a share filter, in plain English.
@@ -63,6 +64,33 @@ export const summarizeShareFilter = async (
   const named = (text: string) => facts.push({ text, nameable: true });
 
   for (const condition of leafConditions(filter)) {
+    // Feedback #86: when a condition carries a full lat/long bounding box
+    // (the map view's pan/zoom filter), name the nearest major city rather
+    // than leaving it as the deliberately vague "an area on the map" below.
+    // This is a real nearest-neighbor lookup against a static list
+    // (majorCities.ts), never coordinates handed to the model — see that
+    // file's doc comment and the locationLatitude case below for why raw
+    // lat/long reliably makes a small model hallucinate a city.
+    let namedNearbyCity = false;
+    const latRange = (condition as Record<string, unknown>).locationLatitude;
+    const lonRange = (condition as Record<string, unknown>).locationLongitude;
+    if (isRange(latRange) && isRange(lonRange)) {
+      const { min: latMin, max: latMax } = latRange;
+      const { min: lonMin, max: lonMax } = lonRange;
+      if (
+        typeof latMin === "number" &&
+        typeof latMax === "number" &&
+        typeof lonMin === "number" &&
+        typeof lonMax === "number"
+      ) {
+        const city = findNearbyCity((latMin + latMax) / 2, (lonMin + lonMax) / 2);
+        if (city) {
+          named(`Near ${city.name}, ${city.region}`);
+          namedNearbyCity = true;
+        }
+      }
+    }
+
     for (const [field, value] of Object.entries(condition)) {
       if (value == null && field !== "mimeType") continue;
 
@@ -143,9 +171,11 @@ export const summarizeShareFilter = async (
 
         // Deliberately coordinate-free: a small model reads latitude/longitude
         // as an invitation to name a city, and gets it wrong (47.61/-122.33 is
-        // Seattle; it answered "Portland Oregon Photos").
+        // Seattle; it answered "Portland Oregon Photos"). The nearby-city
+        // lookup above is the grounded alternative — this stays as the
+        // fallback for when that lookup found nothing within range.
         case "locationLatitude":
-          if (isRange(value))
+          if (isRange(value) && !namedNearbyCity)
             facts.push({ text: "Limited to one area on the map", nameable: false });
           break;
       }
