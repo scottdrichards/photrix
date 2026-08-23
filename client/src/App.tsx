@@ -1,4 +1,9 @@
-import { Info24Regular, Person24Regular, Share24Regular } from "@fluentui/react-icons";
+import {
+  CommentAddRegular,
+  Info24Regular,
+  Person24Regular,
+  Share24Regular,
+} from "@fluentui/react-icons";
 import { useCallback, useEffect, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
@@ -245,6 +250,19 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
               </div>
               <ThemeToggle theme={theme} followsSystem={followsSystem} onToggle={onThemeToggle} />
               <ShareButton />
+              {/* Global entry point, deliberately rendered in every view
+                  including a shared link — the previous entry point was a
+                  Ctrl/Cmd+P keyboard shortcut explicitly disabled in shared
+                  view, so shared-link visitors had no way at all to leave
+                  feedback (feedback #99). */}
+              <button
+                title="Send a comment or suggestion"
+                className="btn btn-subtle"
+                onClick={() => setIsSuggestionOpen(true)}
+              >
+                <CommentAddRegular fontSize={20} />
+                <span className={css.btnLabel}>Comments</span>
+              </button>
               {sharedView && ownsAccountSession && (
                 // A signed-in owner viewing their own share link is not trapped in it:
                 // the account session is still there, and dropping the ?token= URL
@@ -289,9 +307,11 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
               isOpen={isAccountOpen}
               onDismiss={() => setIsAccountOpen(false)}
             />
-            {isSuggestionOpen && <SuggestionModal onClose={() => setIsSuggestionOpen(false)} />}
           </>
         )}
+        {/* Not gated on !sharedView, unlike the panels above — the whole point
+            of feedback #99 is that this has to work from a shared link too. */}
+        {isSuggestionOpen && <SuggestionModal onClose={() => setIsSuggestionOpen(false)} />}
 
         {view === "library" ? (
           <ThumbnailGrid view={view} onViewChange={handleViewChange} />

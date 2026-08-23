@@ -140,6 +140,16 @@ vi.mock("./components/StatusModal", () => ({
   ),
 }));
 
+vi.mock("./components/SuggestionModal", () => ({
+  SuggestionModal: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="suggestion-modal">
+      <button type="button" onClick={onClose}>
+        close suggestion modal
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock("./videoPlaybackProfile", () => ({
   probeVideoPlaybackProfile: () => probeVideoPlaybackProfileMock(),
 }));
@@ -200,6 +210,19 @@ describe("App", () => {
       }),
       expect.any(Function),
     );
+  });
+
+  it("opens the global comments/suggestion modal from the Comments button (feedback #99)", async () => {
+    await act(async () => {
+      render(<App />);
+    });
+
+    expect(screen.queryByTestId("suggestion-modal")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Comments" }));
+    expect(screen.getByTestId("suggestion-modal")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "close suggestion modal" }));
+    expect(screen.queryByTestId("suggestion-modal")).not.toBeInTheDocument();
   });
 
   it("links the header brand to the home screen", async () => {
