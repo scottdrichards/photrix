@@ -44,6 +44,19 @@ export const filterToSQL = (filter: FilterElement): SQLPart => {
 
 const buildFilterSQL = (filter: FilterElement, results: SQLPart[]): void => {
   if ("operation" in filter) {
+    if (filter.operation === "not") {
+      // Only conditions[0] is meaningful — see the LogicalFilter doc comment.
+      const [target] = filter.conditions;
+      if (!target) return;
+      const subParts: SQLPart[] = [];
+      buildFilterSQL(target, subParts);
+      if (subParts.length === 0) return;
+      const where = subParts.map((p) => `(${p.where})`).join(" AND ");
+      const params = subParts.flatMap((p) => p.params);
+      results.push({ where: `NOT (${where})`, params });
+      return;
+    }
+
     // Logical filter (AND/OR)
     const subParts: SQLPart[] = [];
     for (const condition of filter.conditions) {

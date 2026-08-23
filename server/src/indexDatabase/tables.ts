@@ -530,6 +530,19 @@ export const tables = {
     ],
     compositeIndexes: [],
   },
+  /**
+   * Single-user key/value app settings (feedback #95's default exclusion
+   * filter and future preferences). One row per key; `value` is a JSON
+   * string, decoded by whichever getter reads it — this table doesn't know
+   * the shape of any individual setting.
+   */
+  settings: {
+    columns: [
+      { name: "key", type: "TEXT", isPrimaryKey: true },
+      { name: "value", type: "TEXT" },
+    ],
+    compositeIndexes: [],
+  },
   feedback: {
     columns: [
       { name: "id", type: "INTEGER", isPrimaryKey: true },

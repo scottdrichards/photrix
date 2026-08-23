@@ -50,7 +50,13 @@ export type FilterCondition<TField extends string = string> = {
 };
 
 export type LogicalFilter<TCondition> = {
-  operation: "and" | "or";
+  /**
+   * "not" negates a single sub-filter — used to express a default exclusion
+   * (feedback #95) without a bespoke "exclude" field on every condition
+   * type. Only `conditions[0]` is meaningful for "not"; callers should pass
+   * exactly one element.
+   */
+  operation: "and" | "or" | "not";
   conditions: FilterElement<TCondition>[];
 };
 

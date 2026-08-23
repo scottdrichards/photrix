@@ -91,3 +91,6 @@ export type { FeedbackItem, FeedbackStatus } from "./feedback";
 export { fetchFeedbackItems } from "./feedback";
 
 export { fetchPhotoCaption } from "./photoCaption";
+
+export type { DefaultExclusionFilter } from "./settings";
+export { fetchDefaultExclusionFilter, setDefaultExclusionFilter } from "./settings";

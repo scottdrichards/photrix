@@ -29,6 +29,15 @@ export const queryHandler = async (
   const northParam = url.searchParams.get("north");
   const southParam = url.searchParams.get("south");
   const aggregate = url.searchParams.get("aggregate");
+  // Feedback #95: a standing "hide these by default" filter the user sets
+  // once (see peopleRequestHandler's /api/settings/default-exclusion) and
+  // that then applies to every view funneling through this one handler —
+  // grid, map, people, date histograms — without being re-selected each
+  // time. `includeExcluded=true` is the per-request opt-out.
+  const includeExcluded = url.searchParams.get("includeExcluded") === "true";
+  const defaultExclusionFilter = includeExcluded
+    ? null
+    : await database.getDefaultExclusionFilter();
 
   const filter = {
     operation: "and" as const,
@@ -45,6 +54,9 @@ export const queryHandler = async (
           ]
         : []),
       ...(filterParam ? [JSON.parse(filterParam) as QueryOptions["filter"]] : []),
+      ...(defaultExclusionFilter
+        ? [{ operation: "not" as const, conditions: [defaultExclusionFilter] }]
+        : []),
     ],
   };
 

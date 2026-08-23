@@ -425,6 +425,13 @@ export class IndexDatabase {
   startupMaintenance: Promise<void> = Promise.resolve();
   private seedsCache: FaceClusterPCASeed[] | null = null;
   private seedsCacheInflight: Promise<FaceClusterPCASeed[]> | null = null;
+  // Cached decode of the `settings` row for the default exclusion filter
+  // (feedback #95) — read on nearly every /api/files request, so this avoids
+  // a DB round trip + JSON.parse per request. `undefined` means "not loaded
+  // yet"; `null` means "loaded, no filter set". Invalidated by
+  // setDefaultExclusionFilter.
+  private defaultExclusionFilterCache: QueryOptions["filter"] | null | undefined =
+    undefined;
   // Incremental face clustering: assignments are persisted on the faces rows
   // and centroids in the faceClusters table, so People queries are plain
   // indexed reads. See faceClusterEngine.ts.
@@ -3541,6 +3548,47 @@ export class IndexDatabase {
     });
     this.invalidateFaceClusterPCACache();
     return true;
+  }
+
+  /**
+   * The user's standing "hide these by default" filter (feedback #95) —
+   * e.g. a specific face cluster or folder they want excluded from the main
+   * gallery/grid/map/people views unless explicitly overridden per-request.
+   * Cached in memory (see `defaultExclusionFilterCache`) so the common path
+   * — every /api/files request — costs no DB round trip; only
+   * `setDefaultExclusionFilter` invalidates it.
+   */
+  async getDefaultExclusionFilter(): Promise<QueryOptions["filter"] | null> {
+    if (this.defaultExclusionFilterCache !== undefined) {
+      return this.defaultExclusionFilterCache;
+    }
+    const row = await this.db.get<{ value: string }>(
+      "SELECT value FROM settings WHERE key = 'defaultExclusionFilter'",
+    );
+    let parsed: QueryOptions["filter"] | null = null;
+    if (row?.value) {
+      try {
+        parsed = JSON.parse(row.value) as QueryOptions["filter"];
+      } catch {
+        parsed = null;
+      }
+    }
+    this.defaultExclusionFilterCache = parsed;
+    return parsed;
+  }
+
+  /** Sets (or, with `null`, clears) the default exclusion filter and drops the cache. */
+  async setDefaultExclusionFilter(filter: QueryOptions["filter"] | null): Promise<void> {
+    if (filter === null) {
+      await this.db.run("DELETE FROM settings WHERE key = 'defaultExclusionFilter'");
+    } else {
+      await this.db.run(
+        "INSERT INTO settings (key, value) VALUES ('defaultExclusionFilter', ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        JSON.stringify(filter),
+      );
+    }
+    this.defaultExclusionFilterCache = filter;
   }
 
   /**
