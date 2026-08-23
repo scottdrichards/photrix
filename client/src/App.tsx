@@ -212,7 +212,7 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   );
 
   const { filter } = useFilter();
-  usePageTitle(filter);
+  const { description: viewDescription } = usePageTitle(filter);
 
   useEffect(() => {
     if (sharedView) return;
@@ -240,7 +240,17 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
               <h2>
                 {sharedView ? "Photrix" : <a className={css.homeLink} href="/">Photrix</a>}
               </h2>
-              <small>{sharedView ? "Shared view" : "A better way to view photos."}</small>
+              <small>
+                {sharedView
+                  ? "Shared view"
+                  : // Feedback #85: append the current view's generated
+                    // description ("...of your trip to Mexico") when one
+                    // exists — usePageTitle already fetches/debounces this
+                    // for document.title, so this is free reuse, not an
+                    // extra request. Kept short/subtle per the original
+                    // ask's own tone, not a full sentence.
+                    `A better way to view photos.${viewDescription ? ` …${viewDescription}` : ""}`}
+              </small>
             </div>
 
             <div className={css.headerActions}>
