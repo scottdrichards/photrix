@@ -338,6 +338,7 @@ const dotFaceClusterVectors = (
 };
 
 const faceRowToClusterFace = (row: {
+  id: number;
   folder: string;
   fileName: string;
   boxX: number;
@@ -361,6 +362,7 @@ const faceRowToClusterFace = (row: {
   dimensionWidth: row.dimensionWidth,
   dimensionHeight: row.dimensionHeight,
   regions: row.regions,
+  faceId: row.id,
 });
 
 const formatYearRangeLabel = (
@@ -2498,6 +2500,7 @@ export class IndexDatabase {
            )`;
 
     const rows = await this.db.all<{
+      id: number;
       folder: string;
       fileName: string;
       boxX: number;
@@ -2511,6 +2514,7 @@ export class IndexDatabase {
     }>(
       `${limitedCTE}
        SELECT
+         faces.id,
          faces.folder,
          faces.fileName,
          faces.boxX,
@@ -3509,6 +3513,34 @@ export class IndexDatabase {
       }
     }
     return [...all].sort();
+  }
+
+  /**
+   * Feedback #90: pulls one outlier detection out of the cluster it's
+   * currently in. `faceId` must still belong to a real cluster (`clusterId >
+   * 0`) — a face already excluded, low-confidence, or unclusterable is a
+   * no-op (`false`). See FaceClusterEngine.excludeFace for the centroid math
+   * and the sentinel/exclusion-record write.
+   */
+  async excludeFaceFromCluster(faceId: number): Promise<boolean> {
+    const row = await this.db.get<{ clusterId: number | null; embedding: Buffer | null }>(
+      `SELECT f.clusterId AS clusterId, fe.embedding AS embedding
+       FROM faces f
+       LEFT JOIN faceEmbeddings fe ON fe.faceId = f.id
+       WHERE f.id = ?`,
+      faceId,
+    );
+    if (!row || row.clusterId === null || row.clusterId <= 0 || !row.embedding) {
+      return false;
+    }
+
+    await this.faceClusters.excludeFace({
+      id: faceId,
+      clusterId: row.clusterId,
+      embedding: row.embedding,
+    });
+    this.invalidateFaceClusterPCACache();
+    return true;
   }
 
   /**

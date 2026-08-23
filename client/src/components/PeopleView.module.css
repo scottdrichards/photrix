@@ -602,6 +602,7 @@
 }
 
 .faceThumbViewport {
+  position: relative;
   width: 100%;
   aspect-ratio: 1;
   border-radius: var(--radius-sm);
@@ -613,6 +614,38 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* Feedback #90: per-face "remove from this group" control */
+.faceThumbExclude {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.65rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.faceThumbViewport:hover .faceThumbExclude {
+  opacity: 1;
+}
+
+.faceThumbExclude:hover {
+  background: rgba(200, 40, 40, 0.85);
+}
+
+.faceThumbExclude:disabled {
+  opacity: 1;
+  cursor: default;
 }
 
 .vizButton {

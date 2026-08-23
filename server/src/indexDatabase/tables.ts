@@ -423,6 +423,22 @@ export const tables = {
     ],
   },
   /**
+   * One row per face manually excluded from a cluster (feedback #90). Written
+   * by FaceClusterEngine.excludeFace alongside the `faces.clusterId` sentinel
+   * write; kept as its own table (rather than just the sentinel) so an
+   * excluded face's original cluster is recoverable/inspectable later, and so
+   * a future "undo" or "reconcile after threshold change" pass has something
+   * to read.
+   */
+  faceExclusions: {
+    columns: [
+      { name: "faceId", type: "INTEGER", isPrimaryKey: true },
+      { name: "excludedFromClusterId", type: "INTEGER" },
+      { name: "excludedAt", type: "INTEGER" },
+    ],
+    compositeIndexes: [],
+  },
+  /**
    * One row per moment cluster (burst / near-duplicate group). Mirrors
    * `faceClusters` in shape — a running centroid + weight so restarting the
    * background task can resume a chain without re-scanning every prior member

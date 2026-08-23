@@ -72,6 +72,7 @@ export {
   separateCluster,
   setPersonTags,
   fetchAllPersonTags,
+  excludeFaceFromCluster,
 } from "./people";
 
 export {

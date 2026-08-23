@@ -142,6 +142,12 @@ export type FaceClusterFace = {
   dimensionWidth: number | null;
   dimensionHeight: number | null;
   regions: string | null;
+  /**
+   * The `faces.id` row this crop came from — needed to target a specific
+   * detection for exclusion (feedback #90); previously unexposed since
+   * nothing before #90 needed to address one face independent of its photo.
+   */
+  faceId: number;
 };
 
 export type FaceClusterSummary = {

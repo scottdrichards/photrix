@@ -112,6 +112,29 @@ export const peopleRequestHandler = async (
     return;
   }
 
+  // POST /api/people/exclude-face — remove one outlier detection from its cluster (feedback #90)
+  if (url.pathname === "/api/people/exclude-face" && req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      writeJson(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const faceId = (body as Record<string, unknown>).faceId;
+    if (typeof faceId !== "number" || !Number.isFinite(faceId)) {
+      writeJson(res, 400, { error: "Missing faceId" });
+      return;
+    }
+    const ok = await database.excludeFaceFromCluster(faceId);
+    if (!ok) {
+      writeJson(res, 404, { error: "Face not found or not currently clustered" });
+      return;
+    }
+    writeJson(res, 200, { ok: true });
+    return;
+  }
+
   // POST /api/people/separate — detach one centroid from a named person
   if (url.pathname === "/api/people/separate" && req.method === "POST") {
     let body: unknown;
