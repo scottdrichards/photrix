@@ -1,6 +1,10 @@
 insightface==1.0.1
 onnxruntime==1.27.0
 # Face detection on GPU: replace `onnxruntime` with `onnxruntime-gpu==1.27.0`.
+# Was already present transitively (insightface depends on it) — pinned
+# explicitly since detect_horizon.py (feedback #66's auto-straighten
+# suggestion) now imports it directly.
+opencv-python-headless>=4.9
 numpy==2.4.6
 Pillow==12.2.0
 pillow-heif==1.4.0

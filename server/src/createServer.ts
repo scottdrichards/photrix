@@ -52,6 +52,7 @@ import { pageTitleHandler } from "./requestHandlers/pageTitleHandler.ts";
 import { feedbackHandler } from "./requestHandlers/feedbackHandler.ts";
 import { faceIdentifyRequestHandler } from "./requestHandlers/faceIdentifyRequestHandler.ts";
 import { photoCaptionRequestHandler } from "./requestHandlers/photoCaptionRequestHandler.ts";
+import { suggestRotationRequestHandler } from "./requestHandlers/suggestRotationRequestHandler.ts";
 import { analyzeImage } from "./imageAnalysis/imageAnalysisWorker.ts";
 import { killAllSessions } from "./videoProcessing/hlsSession.ts";
 
@@ -243,7 +244,12 @@ export const createServer = (
           // stop-the-world bracket for the entire call.
           const isPhotoCaption =
             req.method === "GET" && pathname.startsWith("/api/photos/caption");
-          if (tracksActivity && (isAssetServe || isPhotoCaption)) {
+          // Same reasoning as isPhotoCaption above: a real cost (~1-4s of
+          // Canny+Hough), but short enough that a full stop-the-world
+          // request bracket isn't warranted.
+          const isSuggestRotation =
+            req.method === "GET" && pathname.startsWith("/api/photos/suggest-rotation");
+          if (tracksActivity && (isAssetServe || isPhotoCaption || isSuggestRotation)) {
             taskOrchestrator.noteUserActivity();
           } else if (tracksActivity) {
             taskOrchestrator.beginUserRequest();
@@ -430,6 +436,22 @@ export const createServer = (
               return;
             }
             await photoCaptionRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              { database, storageRoot: storagePath },
+            );
+            return;
+          }
+
+          // Feedback #66's bounded auto-straighten suggestion. Same
+          // share-scope treatment as the caption endpoint above — read-only,
+          // but not something a scoped share link needs.
+          if (req.url?.startsWith("/api/photos/suggest-rotation") && req.method === "GET") {
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
+            await suggestRotationRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
               { database, storageRoot: storagePath },

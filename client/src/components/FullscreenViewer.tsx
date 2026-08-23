@@ -1584,6 +1584,7 @@ export function FullscreenViewer() {
             {editMode && photo.mediaType !== "video" && (
               <PhotoEditor
                 photoName={photo.name}
+                photoPath={photo.path}
                 photoFullUrl={photo.fullUrl}
                 imageAspectRatio={photoAspectRatio}
                 cropContainerEl={cropContainerEl}
