@@ -21,6 +21,7 @@ import { requestLiveOpen } from "./tileMedia/liveOpenIntent";
 import { useGatedThumbnailUrl } from "./tileMedia/useGatedThumbnailUrl";
 import { useLivePhotoPreview } from "./tileMedia/useLivePhotoPreview";
 import { useTileVideoPreview } from "./tileMedia/useTileVideoPreview";
+import { useTileScrubPreview } from "./tileMedia/useTileScrubPreview";
 import {
   useCoarsePointer,
   useDelayedFlag,
@@ -316,6 +317,17 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     // scrolls out of range must stop playing even if the pointer never moved.
     active: isDwelt && isClose,
     deliberate: !isCoarsePointer,
+  });
+
+  // Feedback #76: hover-scrub through a handful of cached still frames,
+  // driven by pointer X position. Only while dwelling on a video tile with a
+  // real mouse (coarse/touch pointers have no meaningful "position along the
+  // strip" gesture) and before the ambient video preview has taken over —
+  // once that's playing, scrubbing would fight it for the same pixels.
+  const { scrubUrl } = useTileScrubPreview({
+    photo,
+    active: isVideo && isDwelt && isClose && !isCoarsePointer && !isPreviewPlaying,
+    tileElement: tileRef.current,
   });
 
   const livePhoto = useLivePhotoPreview({
@@ -765,6 +777,20 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
             onLoad={videoFade.onLoad}
             onError={gatedVideoThumbnail.release}
           />
+          {scrubUrl && (
+            // Feedback #76: swapped in over the poster while the pointer is
+            // over the tile, before the ambient preview (below) takes over.
+            // No fade — scrubbing is meant to feel immediate, matching the
+            // pointer, not animate a beat behind it.
+            <img
+              key={scrubUrl}
+              src={scrubUrl}
+              alt=""
+              aria-hidden="true"
+              decoding="async"
+              className={css.image}
+            />
+          )}
           {(isDwelt || isPreviewPlaying || isPreviewLeaving) && isNear && (
             // Mounted for the whole dwell, and for the coast-to-a-stop-then-fade
             // tail after the hover ends, so the hook always has an element to
