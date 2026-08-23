@@ -130,6 +130,7 @@ export type PersonCluster = {
   representative: ClusterFace;
   name: string | null;
   yearRangeLabel?: string | null;
+  tags: string[];
 };
 
 export type PersonClusterWithFaces = PersonCluster & {

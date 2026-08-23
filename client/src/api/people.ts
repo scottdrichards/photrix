@@ -76,6 +76,7 @@ export const fetchPeopleClusters = async ({
       id: string;
       count: number;
       representative: ApiFaceRep;
+      tags?: string[];
     }>;
     totalFaces: number;
     totalClusters: number;
@@ -88,6 +89,7 @@ export const fetchPeopleClusters = async ({
       count: cluster.count,
       representative: toClusterFace(cluster.representative),
       name: (cluster as Record<string, unknown>).name as string | null ?? null,
+      tags: cluster.tags ?? [],
     })),
     totalFaces: payload.totalFaces,
     totalClusters: payload.totalClusters,
@@ -146,6 +148,7 @@ export const fetchClusterDetail = async (
         name: string | null;
         representative: ApiFaceRep;
       }>;
+      tags?: string[];
     } | null;
   }>(url, "fetch cluster detail", { signal });
 
@@ -158,6 +161,7 @@ export const fetchClusterDetail = async (
       representative: toClusterFace(payload.cluster.representative),
       faces: payload.cluster.faces.map(toClusterFace),
       name: (payload.cluster as Record<string, unknown>).name as string | null ?? null,
+      tags: payload.cluster.tags ?? [],
       centroids: (payload.cluster.centroids ?? []).map((centroid) => ({
         id: centroid.id,
         count: centroid.count,
@@ -170,6 +174,7 @@ export const fetchClusterDetail = async (
         yearRangeLabel:
           (cluster as Record<string, unknown>).yearRangeLabel as string | null | undefined,
         representative: toClusterFace(cluster.representative),
+        tags: [],
       })),
     },
   };
@@ -295,4 +300,23 @@ export const separateCluster = async (clusterId: string): Promise<void> => {
     body: JSON.stringify({ clusterId }),
   });
   if (!response.ok) throw new Error(`Failed to separate cluster (status ${response.status})`);
+};
+
+export const setPersonTags = async (clusterId: string, tags: string[]): Promise<void> => {
+  const response = await fetchWithDiagnostics("/api/people/tags", "set person tags", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clusterId, tags }),
+  });
+  if (!response.ok) throw new Error(`Failed to set person tags (status ${response.status})`);
+};
+
+/** Distinct tags across every person, for a tag-input's autocomplete. */
+export const fetchAllPersonTags = async (): Promise<string[]> => {
+  const response = await fetchWithDiagnostics("/api/people/tags", "list person tags", {
+    method: "GET",
+  });
+  if (!response.ok) return [];
+  const data = (await response.json()) as { tags?: string[] };
+  return data.tags ?? [];
 };
