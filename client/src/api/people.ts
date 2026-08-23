@@ -19,10 +19,11 @@ type ApiFaceRep = {
   dimensionWidth: number | null;
   dimensionHeight: number | null;
   regions: string | null;
+  faceId: number;
 };
 
 const toClusterFace = (face: ApiFaceRep): ClusterFace => {
-  const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions } = face;
+  const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions, faceId } = face;
   return {
     photo: createPhotoItem({
       folder: relativePath.slice(0, relativePath.length - fileName.length),
@@ -34,6 +35,7 @@ const toClusterFace = (face: ApiFaceRep): ClusterFace => {
       faceTableBoxes: [box],
     }),
     box,
+    faceId,
   };
 };
 
@@ -238,6 +240,7 @@ export const fetchFaceClustersPCA = async ({
         dimensionHeight: p.representative.dimensionHeight ?? undefined,
       }),
       box: p.representative.box,
+      faceId: p.representative.faceId,
     },
     x: p.x,
     y: p.y,
@@ -295,4 +298,20 @@ export const separateCluster = async (clusterId: string): Promise<void> => {
     body: JSON.stringify({ clusterId }),
   });
   if (!response.ok) throw new Error(`Failed to separate cluster (status ${response.status})`);
+};
+
+/** Removes one outlier detection from its cluster (feedback #90). */
+export const excludeFaceFromCluster = async (faceId: number): Promise<void> => {
+  const response = await fetchWithDiagnostics(
+    "/api/people/exclude-face",
+    "exclude face from cluster",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ faceId }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to exclude face (status ${response.status})`);
+  }
 };

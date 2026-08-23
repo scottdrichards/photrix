@@ -42,6 +42,17 @@ export const MIN_FACE_CONFIDENCE_FOR_CLUSTERING = 0.7;
 export const LOW_CONFIDENCE_CLUSTER_ID = -1;
 
 /**
+ * Sentinel clusterId for a face manually excluded from a cluster (feedback
+ * #90 — "this face doesn't belong in this person's group"). Distinct from
+ * the other two so `getFaceClusterDetail`/callers that care can tell "the
+ * pipeline rejected this" from "a person rejected this" if ever needed;
+ * People and the backfill treat it the same as the other <= 0 sentinels
+ * (`clusterId > 0` / `clusterId IS NULL`). See `excludeFace` for how a face
+ * gets here.
+ */
+export const MANUALLY_EXCLUDED_CLUSTER_ID = -2;
+
+/**
  * A cluster's stored per-face `clusterSimilarity` is written once, against the
  * centroid as it was when each face joined — the seed is stored as 1.0 and
  * early joiners keep inflated scores as the running mean drifts. Left alone,
@@ -314,6 +325,78 @@ export class FaceClusterEngine {
         dirty.add(cluster);
         this.mutationsSinceSort += 1;
       }
+
+      await this.persist(statements, dirty, now);
+    });
+  }
+
+  /**
+   * Feedback #90: manually removes one outlier face from a cluster it was
+   * (correctly or not) auto-assigned to. Subtracts its vector from the
+   * cluster's running centroid — same math as `removeFaces` — so the outlier
+   * stops pulling the centroid, then stamps the face row with
+   * MANUALLY_EXCLUDED_CLUSTER_ID (excluding it from every People query, same
+   * as the other <= 0 sentinels) and records the exclusion so it's visible/
+   * reversible later. Unlike `removeFaces`, this face is *never* re-clustered
+   * automatically — it isn't set back to NULL, so the backfill's "clusterId
+   * IS NULL" scan never picks it up again.
+   *
+   * Known gap: a full re-cluster triggered by changing
+   * FACE_CLUSTER_SIMILARITY_THRESHOLD resets every non-NULL `faces.clusterId`
+   * to NULL (see `load()`), which would un-exclude this face too. That's a
+   * rare, code-level event (not a normal user action), so it's accepted
+   * rather than special-cased — the `faceExclusions` row remains as a record
+   * if a future migration wants to re-apply exclusions after a threshold
+   * change.
+   */
+  excludeFace(face: {
+    id: number;
+    clusterId: number;
+    embedding: Buffer | Uint8Array;
+  }): Promise<void> {
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+
+      const now = Date.now();
+      const statements: Array<{ sql: string; params: unknown[] }> = [];
+      const dirty = new Set<FaceClusterEngine["clusters"][number]>();
+
+      const cluster = this.clustersById.get(face.clusterId);
+      const unit = cluster ? toUnitFloat32(face.embedding) : null;
+      if (cluster && unit) {
+        if (cluster.weight <= 1) {
+          this.clustersById.delete(cluster.id);
+          this.clusters.splice(this.clusters.indexOf(cluster), 1);
+          statements.push({
+            sql: "DELETE FROM faceClusters WHERE id = ?",
+            params: [cluster.id],
+          });
+        } else {
+          const { mean, weight } = cluster;
+          for (let i = 0; i < mean.length; i += 1) {
+            mean[i] = (mean[i] * weight - unit[i]) / (weight - 1);
+          }
+          cluster.weight = weight - 1;
+          cluster.magnitude = magnitudeOf(mean);
+          dirty.add(cluster);
+          this.mutationsSinceSort += 1;
+        }
+      }
+
+      statements.push(
+        {
+          sql: "UPDATE faces SET clusterId = ?, clusterSimilarity = NULL WHERE id = ?",
+          params: [MANUALLY_EXCLUDED_CLUSTER_ID, face.id],
+        },
+        {
+          sql: `INSERT INTO faceExclusions (faceId, excludedFromClusterId, excludedAt)
+                VALUES (?, ?, ?)
+                ON CONFLICT(faceId) DO UPDATE SET
+                  excludedFromClusterId = excluded.excludedFromClusterId,
+                  excludedAt = excluded.excludedAt`,
+          params: [face.id, face.clusterId, now],
+        },
+      );
 
       await this.persist(statements, dirty, now);
     });

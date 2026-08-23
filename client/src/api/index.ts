@@ -70,6 +70,7 @@ export {
   renameCluster,
   mergeClusters,
   separateCluster,
+  excludeFaceFromCluster,
 } from "./people";
 
 export {

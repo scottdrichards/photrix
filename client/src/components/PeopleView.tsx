@@ -16,6 +16,7 @@ import {
   mergeClusters,
   renameCluster,
   separateCluster,
+  excludeFaceFromCluster,
 } from "../api";
 import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
@@ -68,19 +69,48 @@ type FaceThumbProps = {
   face: ClusterFace;
   label: string;
   onClick: () => void;
+  /** feedback #90 — omitted (e.g. in a shared view) hides the exclude affordance. */
+  onExclude?: () => void;
+  excluding?: boolean;
 };
 
-const FaceThumb = ({ face, label, onClick }: FaceThumbProps) => (
-  <button
-    type="button"
+// Not a <button> at the root: the exclude control below has to be a real
+// nested <button>, and interactive content can't nest inside <button> (some
+// browsers silently break the click). A div with the same role/keyboard
+// handling stays accessible without that trap.
+const FaceThumb = ({ face, label, onClick, onExclude, excluding }: FaceThumbProps) => (
+  <div
+    role="button"
+    tabIndex={0}
     className={css.faceThumbButton}
     onClick={onClick}
+    onKeyDown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onClick();
+      }
+    }}
     aria-label={label}
   >
     <div className={css.faceThumbViewport}>
       <FaceImage face={face} className={css.faceThumbImage} />
+      {onExclude && (
+        <button
+          type="button"
+          className={css.faceThumbExclude}
+          aria-label="This isn't the right person — remove from this group"
+          title="This isn't the right person — remove from this group"
+          disabled={excluding}
+          onClick={(e) => {
+            e.stopPropagation();
+            onExclude();
+          }}
+        >
+          {excluding ? "…" : "✕"}
+        </button>
+      )}
     </div>
-  </button>
+  </div>
 );
 
 type InlineNameEditorProps = {
@@ -204,7 +234,14 @@ const PersonDetail = ({
   loadingFaces = false,
 }: PersonDetailProps) => {
   const { setItems, setSelected } = useSelectionContext();
-  const visibleFaces = selectedFaceGroup?.faces ?? cluster.faces;
+  // Feedback #90: faces excluded this session are hidden immediately
+  // (optimistic) rather than waiting on a full detail refetch; the server
+  // write is what makes it stick across future clustering passes.
+  const [excludedFaceIds, setExcludedFaceIds] = useState<Set<number>>(new Set());
+  const [excludingFaceId, setExcludingFaceId] = useState<number | null>(null);
+  const visibleFaces = (selectedFaceGroup?.faces ?? cluster.faces).filter(
+    (face) => !excludedFaceIds.has(face.faceId),
+  );
 
   useEffect(() => {
     setItems(visibleFaces.map((face) => face.photo));
@@ -213,6 +250,18 @@ const PersonDetail = ({
 
   const handleFaceClick = (face: ClusterFace) => {
     setSelected(face.photo);
+  };
+
+  const handleExcludeFace = async (face: ClusterFace) => {
+    setExcludingFaceId(face.faceId);
+    try {
+      await excludeFaceFromCluster(face.faceId);
+      setExcludedFaceIds((prev) => new Set(prev).add(face.faceId));
+    } catch (err) {
+      console.error("Failed to exclude face from cluster:", err);
+    } finally {
+      setExcludingFaceId(null);
+    }
   };
 
   // How many of visibleFaces actually get an <img> — see FACE_PAGE_SIZE.
@@ -403,6 +452,8 @@ const PersonDetail = ({
                   face={face}
                   label={face.photo.name}
                   onClick={() => handleFaceClick(face)}
+                  onExclude={READ_ONLY ? undefined : () => handleExcludeFace(face)}
+                  excluding={excludingFaceId === face.faceId}
                 />
               ))}
             </div>

@@ -110,6 +110,8 @@ export type FaceBox = {
 export type ClusterFace = {
   photo: PhotoItem;
   box: FaceBox;
+  /** feedback #90 — targets this exact detection for exclude-from-cluster. */
+  faceId: number;
 };
 
 /**
