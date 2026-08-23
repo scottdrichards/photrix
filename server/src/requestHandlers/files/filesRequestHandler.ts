@@ -15,7 +15,11 @@ import {
   type ImageOutputFormat,
 } from "../../imageProcessing/convertImage.ts";
 import { convertEmbeddedThumbnail } from "../../imageProcessing/embeddedThumbnail.ts";
-import { generateVideoThumbnail } from "../../videoProcessing/videoUtils.ts";
+import {
+  generateVideoThumbnail,
+  generateVideoScrubFrame,
+  VIDEO_SCRUB_FRAME_COUNT,
+} from "../../videoProcessing/videoUtils.ts";
 import { markCacheAccess } from "../../common/cacheEviction.ts";
 import {
   clampToSupportedHeight,
@@ -789,6 +793,50 @@ const fileHandler = async (
     const fileEnd = videoStart + (range?.end ?? videoLength - 1);
     createReadStream(normalizedPath, { start: fileStart, end: fileEnd }).pipe(res);
     return;
+  }
+
+  // Feedback #76: a handful of cached low-res frames for the hover/scrub
+  // preview strip — see generateVideoScrubFrame's doc comment for why this
+  // is a scoped-down "cycle through N stills" rather than true per-frame
+  // scrubbing. `index` selects which of VIDEO_SCRUB_FRAME_COUNT frames.
+  if (representation === "scrub") {
+    if (!isVideo) {
+      return writeJson(res, 415, {
+        error: "Unsupported Media Type",
+        message: "Scrub frames are only available for video files",
+      });
+    }
+    const indexParam = url.searchParams.get("index");
+    const index = indexParam ? Number.parseInt(indexParam, 10) : NaN;
+    if (!Number.isInteger(index) || index < 0 || index >= VIDEO_SCRUB_FRAME_COUNT) {
+      return writeJson(res, 400, {
+        error: `index must be an integer in [0, ${VIDEO_SCRUB_FRAME_COUNT})`,
+      });
+    }
+    const fileRecord = await database.getFileRecord(subPath);
+    const duration = fileRecord?.duration;
+    if (!duration) {
+      return writeJson(res, 404, { error: "Video duration unknown" });
+    }
+    try {
+      const cachedPath = await generateVideoScrubFrame(normalizedPath, index, duration, {
+        priority: "userBlocked",
+      });
+      if (!cachedPath) {
+        return writeJson(res, 404, { error: "Could not generate scrub frame" });
+      }
+      const cachedStats = await stat(cachedPath);
+      streamCachedFile(res, cachedPath, {
+        contentType: "image/jpeg",
+        size: cachedStats.size,
+      });
+      return;
+    } catch (error) {
+      return writeJson(res, 500, {
+        error: "Failed to generate scrub frame",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   // HLS handler needs URL for segment parameter

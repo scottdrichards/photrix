@@ -235,3 +235,133 @@ export const generateVideoThumbnail = async (
   );
   return cachedPath;
 };
+
+/**
+ * How many still frames make up the hover/scrub preview strip (feedback
+ * #76). The original ask was true 15fps scrubbing, which would mean
+ * decoding the whole video on every hover — not worth it on this host's
+ * weak CPU (see AGENTS.md's HLS-transcode notes on LXC 124's iGPU-only
+ * headroom). This ships the scoped-down version the feedback itself
+ * flagged as acceptable: a handful of low-res frames extracted and cached
+ * once at generation time (same pattern as generateVideoThumbnail's single
+ * frame), then cycled client-side as the pointer moves across the tile —
+ * "coarse scrubbing", not true per-frame decode.
+ */
+export const VIDEO_SCRUB_FRAME_COUNT: number = 5;
+
+/** Resolution for scrub frames — matches the feedback's own "160p" suggestion. */
+export const VIDEO_SCRUB_HEIGHT = 160;
+
+/**
+ * Generates (or returns already-cached) the scrub-preview frame at `index`
+ * (0-based, < VIDEO_SCRUB_FRAME_COUNT). Each frame is a fast `-ss` seek, as
+ * cheap as the existing single-frame thumbnail, and cached individually so a
+ * repeat request for any one frame is free. Frames are spread across the
+ * middle 80% of the video's duration (10%..90%) to skip black lead-in/
+ * fade-out. `durationSeconds` comes from the caller (the `files.duration`
+ * column, already populated by the EXIF scan) rather than an extra ffprobe
+ * call here — this file stays a pure "run ffmpeg, cache the result" layer.
+ */
+export const generateVideoScrubFrame = async (
+  filePath: string,
+  index: number,
+  durationSeconds: number,
+  _opts?: { priority?: ConversionPriority },
+): Promise<string | null> => {
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return null;
+  await stat(filePath);
+  const cachedPath = getMirroredCachedFilePath(
+    filePath,
+    `scrub.${index}.${VIDEO_SCRUB_HEIGHT}`,
+    "jpg",
+  );
+
+  if (
+    await access(cachedPath).then(
+      () => true,
+      () => false,
+    )
+  ) {
+    return cachedPath;
+  }
+
+  const duration = durationSeconds;
+  const offsetSeconds =
+    VIDEO_SCRUB_FRAME_COUNT === 1
+      ? duration / 2
+      : duration * (0.1 + (0.8 * index) / (VIDEO_SCRUB_FRAME_COUNT - 1));
+
+  await runWithoutRequestAbortSignal(() =>
+    scheduleMediaConversion(`video-scrub:${cachedPath}`, async (signal) => {
+      if (
+        await access(cachedPath).then(
+          () => true,
+          () => false,
+        )
+      ) {
+        return;
+      }
+
+      const gpu = await getGpuAcceleration();
+
+      const generateWithMode = async (useHardware: boolean): Promise<void> => {
+        await mkdir(dirname(cachedPath), { recursive: true });
+        await new Promise<void>((resolve, reject) => {
+          const args = [
+            "-y",
+            ...(useHardware && gpu ? gpu.hwaccelArgs : []),
+            "-ss",
+            offsetSeconds.toFixed(2),
+            "-i",
+            filePath,
+            "-vframes",
+            "1",
+            "-vf",
+            `scale=-2:${VIDEO_SCRUB_HEIGHT}`,
+            cachedPath,
+          ];
+
+          const process = spawn("ffmpeg", args);
+          const abortBinding = bindChildProcessAbort(process, signal);
+
+          let stderr = "";
+
+          pipeChildProcessLogs(process, (chunk) => {
+            stderr = appendWithLimit(stderr, chunk);
+          });
+
+          process.on("close", (code) => {
+            abortBinding.cleanup();
+            if (abortBinding.wasAborted()) {
+              reject(createAbortError());
+              return;
+            }
+            if (code === 0) {
+              resolve();
+              return;
+            }
+
+            if (useHardware && gpu?.isHardwareFailure(stderr)) {
+              generateWithMode(false).then(resolve).catch(reject);
+              return;
+            }
+
+            reject(new Error(`Video scrub frame generation failed: ${stderr}`));
+          });
+
+          process.on("error", (error) => {
+            abortBinding.cleanup();
+            if (abortBinding.wasAborted()) {
+              reject(createAbortError());
+              return;
+            }
+            reject(error);
+          });
+        });
+      };
+
+      await generateWithMode(gpu !== null);
+    }),
+  );
+  return cachedPath;
+};
