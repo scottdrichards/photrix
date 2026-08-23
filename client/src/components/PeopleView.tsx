@@ -16,6 +16,8 @@ import {
   mergeClusters,
   renameCluster,
   separateCluster,
+  fetchDefaultExclusionFilter,
+  setDefaultExclusionFilter,
 } from "../api";
 import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
@@ -179,6 +181,9 @@ type PersonDetailProps = {
   onSeparateCentroid: (centroid: PersonCentroid) => void;
   separatingCentroidId: string | null;
   onRename: (name: string | null) => void;
+  /** Feedback #95: this person is the app-wide default-hidden person. */
+  isDefaultExcluded: boolean;
+  onToggleDefaultExclusion: () => void;
   /**
    * The person opened from a card we already had, with their faces still in
    * flight. The header is fully real (name, count and face all come from the
@@ -201,6 +206,8 @@ const PersonDetail = ({
   onSeparateCentroid,
   separatingCentroidId,
   onRename,
+  isDefaultExcluded,
+  onToggleDefaultExclusion,
   loadingFaces = false,
 }: PersonDetailProps) => {
   const { setItems, setSelected } = useSelectionContext();
@@ -260,6 +267,18 @@ const PersonDetail = ({
             <span className={css.personDetailCount}>{cluster.count} faces</span>
           </div>
         </div>
+        {!READ_ONLY && (
+          <button
+            type="button"
+            className={css.defaultExclusionToggle}
+            onClick={onToggleDefaultExclusion}
+            title="Hide this person's photos across the whole app by default (feedback #95)"
+          >
+            {isDefaultExcluded
+              ? "Hidden by default — click to unhide"
+              : "Hide by default"}
+          </button>
+        )}
       </div>
       {(cluster.centroids.length > 0 ||
         (!READ_ONLY && cluster.mergeSuggestions.length > 0)) && (
@@ -526,6 +545,22 @@ const PeopleViewComponent = ({
   // server-generated face crop; rendering all of them floods the browser with
   // DOM nodes and crop requests. Reveal more on demand instead.
   const [visibleCount, setVisibleCount] = useState(PEOPLE_PAGE_SIZE);
+  // Feedback #95: which person (if any) is currently the standing default
+  // exclusion — `null` means none set, `undefined` means "not loaded yet".
+  // Loaded once; a numeric faceCluster id is the only shape this UI writes,
+  // even though the server-side setting can hold any FilterElement.
+  const [defaultExclusionPersonId, setDefaultExclusionPersonId] = useState<
+    number | null | undefined
+  >(undefined);
+  useEffect(() => {
+    if (READ_ONLY) return;
+    fetchDefaultExclusionFilter()
+      .then((f) => {
+        const id = f && typeof f.faceCluster === "number" ? f.faceCluster : null;
+        setDefaultExclusionPersonId(id);
+      })
+      .catch(() => setDefaultExclusionPersonId(null));
+  }, []);
   const vizRequestRef = useRef<AbortController | null>(null);
   const selectedFaceGroupRequestRef = useRef<AbortController | null>(null);
   // Tracks the post-merge refresh (detail + grid) kicked off by the most
@@ -805,6 +840,22 @@ const PeopleViewComponent = ({
     }
   };
 
+  // Feedback #95: toggle this person as the app-wide default exclusion.
+  // Deliberately single-target for now — setting a new one replaces any
+  // previous one, matching the settings row's one-value-at-a-time shape.
+  const handleToggleDefaultExclusion = async () => {
+    if (!personDetail) return;
+    const numericId = Number(personDetail.id.replace(/^person-/, ""));
+    if (!Number.isFinite(numericId)) return;
+    const currentlyExcluded = defaultExclusionPersonId === numericId;
+    try {
+      await setDefaultExclusionFilter(currentlyExcluded ? null : { faceCluster: numericId });
+      setDefaultExclusionPersonId(currentlyExcluded ? null : numericId);
+    } catch (err) {
+      console.error("Failed to toggle default exclusion:", err);
+    }
+  };
+
   const handleRenameInGrid = async (cluster: PersonCluster, name: string | null) => {
     try {
       await renameCluster(cluster.id, name);
@@ -1000,6 +1051,10 @@ const PeopleViewComponent = ({
           onSeparateCentroid={handleSeparateCentroid}
           separatingCentroidId={separatingCentroidId}
           onRename={handleRenameInDetail}
+          isDefaultExcluded={
+            defaultExclusionPersonId === Number(visibleDetail.id.replace(/^person-/, ""))
+          }
+          onToggleDefaultExclusion={handleToggleDefaultExclusion}
         />
       </section>
     );

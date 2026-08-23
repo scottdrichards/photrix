@@ -584,3 +584,21 @@
   opacity: 0.35;
   cursor: default;
 }
+
+/* Feedback #95: default-exclusion toggle in the person detail header */
+.defaultExclusionToggle {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid var(--stroke2);
+  border-radius: var(--radius-md);
+  padding: 4px 10px;
+  cursor: pointer;
+  color: var(--fg2);
+  font-size: 0.78rem;
+}
+
+.defaultExclusionToggle:hover {
+  border-color: var(--stroke3);
+  background: var(--bg2);
+  color: var(--fg1);
+}

@@ -42,6 +42,7 @@ import { initPasskeyService } from "./auth/passkeyService.ts";
 import { resolveShareFilter, ShareScopeError } from "./auth/shareScope.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
 import { peopleRequestHandler } from "./requestHandlers/peopleRequestHandler.ts";
+import { settingsRequestHandler } from "./requestHandlers/settingsRequestHandler.ts";
 import { momentClustersRequestHandler } from "./requestHandlers/momentClustersRequestHandler.ts";
 import { sharePreviewHandler } from "./requestHandlers/sharePreviewHandler.ts";
 import { decodeRequestPath } from "./common/decodeRequestPath.ts";
@@ -533,6 +534,22 @@ export const createServer = (
               return;
             }
             await peopleRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              database,
+            );
+            return;
+          }
+
+          if (req.url?.startsWith("/api/settings/")) {
+            if (shareScope) {
+              // Default-exclusion is the owner's personal preference; a
+              // share-link viewer never sees or changes it directly (it's
+              // still applied to what they see, via queryHandler.ts).
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
+            await settingsRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
               database,
