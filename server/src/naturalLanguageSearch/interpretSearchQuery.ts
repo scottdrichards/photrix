@@ -14,7 +14,7 @@ import {
   yearsInQuery,
 } from "./queryEvidence.ts";
 import { resolveDateIntent } from "./resolveDateIntent.ts";
-import type { SearchVocabulary, VocabularyPerson } from "./searchVocabulary.ts";
+import type { SearchVocabulary } from "./searchVocabulary.ts";
 
 const log = getLogger("interpretSearchQuery");
 
@@ -187,32 +187,40 @@ export const interpretSearchQuery = async ({
   const peopleByName = new Map(
     vocabulary.people.map((person) => [normalizeForMatch(person.name), person]),
   );
-  // Fallback for a partial name (e.g. "Sarah" against a vocabulary entry
-  // "Sarah Johnson Richards"): the model is told to "copy exactly from the
-  // People list", but a small local model often just echoes back whatever
-  // word the user typed instead of expanding it. Without this, a query that
-  // only names a first/middle/last name never resolves to any person at all
-  // and silently falls back to a plain, person-blind CLIP search — index each
-  // individual word of every vocabulary name, but only trust a word that
-  // picks out exactly one person; an ambiguous word (shared by two people)
-  // must not guess.
-  const peopleByNameWord = new Map<string, VocabularyPerson[]>();
-  for (const person of vocabulary.people) {
-    const words = new Set(person.name.split(/\s+/).map(normalizeForMatch).filter(Boolean));
-    for (const word of words) {
-      const existing = peopleByNameWord.get(word);
-      if (existing) existing.push(person);
-      else peopleByNameWord.set(word, [person]);
-    }
-  }
+  // Fallback for a partial name: the model is told to "copy exactly from the
+  // People list", but a small local model routinely mangles a multi-word name
+  // instead of copying it — observed live against "Sarah Johnson Richards":
+  // "Sarah", and also "Sarah Johnson" (a plausible-looking but wrong
+  // *truncation*, dropping the last word entirely, not just a single missing
+  // word). Without this, either shape resolves to no person at all and the
+  // search silently falls back to a plain, person-blind CLIP query.
+  //
+  // A word-for-word candidate is any vocabulary person whose name contains
+  // *every* word the model returned — i.e. the model's answer is a subset of
+  // theirs, in any order/count. Trust it only when exactly one candidate
+  // qualifies; an ambiguous requested word (e.g. "Johnson" alone, shared by
+  // several people) must not guess.
+  const peopleWithWords = vocabulary.people.map((person) => ({
+    person,
+    words: new Set(person.name.split(/\s+/).map(normalizeForMatch).filter(Boolean)),
+  }));
   const clusterIds: string[] = [];
   const taggedNames: string[] = [];
   for (const requested of dedupe(asStringList(raw.people))) {
     const normalizedRequested = normalizeForMatch(requested);
-    const wordCandidates = peopleByNameWord.get(normalizedRequested);
+    const requestedWords = requested
+      .split(/\s+/)
+      .map(normalizeForMatch)
+      .filter(Boolean);
+    const subsetCandidates =
+      requestedWords.length > 0
+        ? peopleWithWords.filter(({ words }) =>
+            requestedWords.every((word) => words.has(word)),
+          )
+        : [];
     const match =
       peopleByName.get(normalizedRequested) ??
-      (wordCandidates?.length === 1 ? wordCandidates[0] : undefined);
+      (subsetCandidates.length === 1 ? subsetCandidates[0].person : undefined);
     if (!match) {
       // A name with no textual support at all is a pure hallucination — the
       // People list primed the model even though the query never mentioned

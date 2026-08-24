@@ -110,6 +110,35 @@ describe("interpretSearchQuery", () => {
     });
   });
 
+  it("resolves a mangled multi-word name (model truncates rather than copies)", async () => {
+    // Observed live against the real vocabulary/model: for "sarah haircut"
+    // with a "Sarah Johnson Richards" cluster in the People list, the model
+    // answered `{"people": "Sarah Johnson"}` — a plausible-looking two-word
+    // truncation that drops "Richards" entirely, not just a missing single
+    // word. A same-name person elsewhere with only "Johnson" in common must
+    // not match this alone (see the ambiguous case below), but "Sarah
+    // Johnson" together is specific enough to resolve uniquely.
+    const fullNameVocabulary: SearchVocabulary = {
+      people: [
+        { name: "Sarah Johnson Richards", clusterId: "person-99" },
+        { name: "Diane Earl Johnson", clusterId: "person-100" },
+      ],
+      folders: [],
+    };
+    const result = await interpretSearchQuery({
+      query: "sarah haircut",
+      vocabulary: fullNameVocabulary,
+      now: NOW,
+      generate: respondWith({ people: "Sarah Johnson", visual: "haircut" }),
+    });
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: { faceClusterFilter: ["person-99"], semanticQuery: "haircut" },
+      ignored: [],
+    });
+  });
+
   it("does not guess when a partial name is ambiguous between two vocabulary people", async () => {
     const ambiguousVocabulary: SearchVocabulary = {
       people: [
@@ -129,6 +158,24 @@ describe("interpretSearchQuery", () => {
     // so this falls back to `interpreted: false` and the plain CLIP search on
     // the raw query stands, exactly as if the model had answered nothing at
     // all.
+    expect(result).toEqual({ interpreted: false, reason: "no-filters" });
+  });
+
+  it("does not guess a single word shared by two multi-word vocabulary names", async () => {
+    const sharedWordVocabulary: SearchVocabulary = {
+      people: [
+        { name: "Sarah Johnson Richards", clusterId: "person-99" },
+        { name: "Diane Earl Johnson", clusterId: "person-100" },
+      ],
+      folders: [],
+    };
+    const result = await interpretSearchQuery({
+      query: "johnson family reunion",
+      vocabulary: sharedWordVocabulary,
+      now: NOW,
+      generate: respondWith({ people: "Johnson" }),
+    });
+
     expect(result).toEqual({ interpreted: false, reason: "no-filters" });
   });
 
