@@ -48,11 +48,13 @@ const MAX_VISUAL_LENGTH = 120;
 const SYSTEM_PROMPT = `Convert a photo search request into JSON. Reply with one JSON object, nothing else.
 
 Keys, all optional — omit any that do not apply:
-"people": names copied exactly from the People list
+"people": a JSON array of every person named in the request, copied exactly from the People list. A request can name two or more people at once — list all of them, not just the first.
 "folder": one name copied exactly from the Folders list
 "mediaType": "photo" or "video"
 "minRating": 1-5
 "visual": what the picture shows (scene, objects, activity)
+
+Example: "Ben and Aunt May at the lake" -> {"people": ["Ben", "Aunt May"], "visual": "at the lake"}
 
 Never invent a person or folder that is not on the lists. Keep names, dates, folders and media words out of "visual".`;
 
@@ -115,7 +117,16 @@ const normalizeForMatch = (value: string) =>
     .trim();
 
 const asStringList = (value: unknown): string[] => {
-  const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  // The model is asked for an array, but a small model occasionally answers a
+  // multi-person request with one comma-joined string instead (observed live:
+  // `"Scott Douglas Richards,Linda Simmons Richards"`). No vocabulary name
+  // contains a comma, so splitting one is safe and recovers the second
+  // person rather than treating the pair as a single unmatchable string.
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(",")
+      : [];
   return values
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => entry.trim())
