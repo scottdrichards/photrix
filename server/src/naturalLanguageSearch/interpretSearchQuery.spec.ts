@@ -86,6 +86,52 @@ describe("interpretSearchQuery", () => {
     });
   });
 
+  it("resolves a partial name against a longer vocabulary name (model echoes the query word)", async () => {
+    // A small local model is told to copy names "exactly from the People
+    // list", but for "Sarah haircut" against a vocabulary entry "Sarah
+    // Johnson Richards" it often just echoes back the query's own word
+    // instead of expanding it. The filter must still apply — otherwise the
+    // search silently degrades to a person-blind CLIP query on "haircut".
+    const fullNameVocabulary: SearchVocabulary = {
+      people: [{ name: "Sarah Johnson Richards", clusterId: "person-99" }],
+      folders: [],
+    };
+    const result = await interpretSearchQuery({
+      query: "Sarah haircut",
+      vocabulary: fullNameVocabulary,
+      now: NOW,
+      generate: respondWith({ people: ["Sarah"], visual: "haircut" }),
+    });
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: { faceClusterFilter: ["person-99"], semanticQuery: "haircut" },
+      ignored: [],
+    });
+  });
+
+  it("does not guess when a partial name is ambiguous between two vocabulary people", async () => {
+    const ambiguousVocabulary: SearchVocabulary = {
+      people: [
+        { name: "Sarah Johnson Richards", clusterId: "person-99" },
+        { name: "Sarah Connor", clusterId: "person-100" },
+      ],
+      folders: [],
+    };
+    const result = await interpretSearchQuery({
+      query: "Sarah haircut",
+      vocabulary: ambiguousVocabulary,
+      now: NOW,
+      generate: respondWith({ people: ["Sarah"], visual: "haircut" }),
+    });
+
+    // No structured filter survives (the ambiguous name is rightly dropped),
+    // so this falls back to `interpreted: false` and the plain CLIP search on
+    // the raw query stands, exactly as if the model had answered nothing at
+    // all.
+    expect(result).toEqual({ interpreted: false, reason: "no-filters" });
+  });
+
   it("drops hallucinated people and folders instead of filtering on them", async () => {
     const result = await interpret(
       "photos of Gandalf and Sarah in Rivendell last summer",
@@ -329,6 +375,27 @@ describe("interpretSearchQuery", () => {
   it("still works for a library with no named people or folders", async () => {
     const result = await interpretSearchQuery({
       query: "videos from last winter",
+      vocabulary: { people: [], folders: [] },
+      now: NOW,
+      generate: respondWith({
+        people: ["Sarah"],
+        mediaType: "video",
+        date: { kind: "season", season: "winter", yearsAgo: 1 },
+      }),
+    });
+
+    // "Sarah" has zero textual support in this query — a pure hallucination,
+    // not something worth surfacing to the user as "ignored".
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: { mediaTypeFilter: "video" },
+      ignored: [],
+    });
+  });
+
+  it("reports an unmatched name as ignored only when the query actually names it", async () => {
+    const result = await interpretSearchQuery({
+      query: "videos of Sarah from last winter",
       vocabulary: { people: [], folders: [] },
       now: NOW,
       generate: respondWith({

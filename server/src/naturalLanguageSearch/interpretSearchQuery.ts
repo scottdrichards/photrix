@@ -14,7 +14,7 @@ import {
   yearsInQuery,
 } from "./queryEvidence.ts";
 import { resolveDateIntent } from "./resolveDateIntent.ts";
-import type { SearchVocabulary } from "./searchVocabulary.ts";
+import type { SearchVocabulary, VocabularyPerson } from "./searchVocabulary.ts";
 
 const log = getLogger("interpretSearchQuery");
 
@@ -187,17 +187,44 @@ export const interpretSearchQuery = async ({
   const peopleByName = new Map(
     vocabulary.people.map((person) => [normalizeForMatch(person.name), person]),
   );
+  // Fallback for a partial name (e.g. "Sarah" against a vocabulary entry
+  // "Sarah Johnson Richards"): the model is told to "copy exactly from the
+  // People list", but a small local model often just echoes back whatever
+  // word the user typed instead of expanding it. Without this, a query that
+  // only names a first/middle/last name never resolves to any person at all
+  // and silently falls back to a plain, person-blind CLIP search — index each
+  // individual word of every vocabulary name, but only trust a word that
+  // picks out exactly one person; an ambiguous word (shared by two people)
+  // must not guess.
+  const peopleByNameWord = new Map<string, VocabularyPerson[]>();
+  for (const person of vocabulary.people) {
+    const words = new Set(person.name.split(/\s+/).map(normalizeForMatch).filter(Boolean));
+    for (const word of words) {
+      const existing = peopleByNameWord.get(word);
+      if (existing) existing.push(person);
+      else peopleByNameWord.set(word, [person]);
+    }
+  }
   const clusterIds: string[] = [];
   const taggedNames: string[] = [];
   for (const requested of dedupe(asStringList(raw.people))) {
-    const match = peopleByName.get(normalizeForMatch(requested));
+    const normalizedRequested = normalizeForMatch(requested);
+    const wordCandidates = peopleByNameWord.get(normalizedRequested);
+    const match =
+      peopleByName.get(normalizedRequested) ??
+      (wordCandidates?.length === 1 ? wordCandidates[0] : undefined);
     if (!match) {
-      ignored.push(requested);
+      // A name with no textual support at all is a pure hallucination — the
+      // People list primed the model even though the query never mentioned
+      // anyone. Only surface "ignored" for names the query actually names.
+      if (queryMentions(trimmedQuery, requested, { matchAnyWord: true })) {
+        ignored.push(requested);
+      }
       continue;
     }
     // A real person the user never asked for is the worst case: the filter looks
     // legitimate and quietly empties the grid. Require the name in the query.
-    if (!queryMentions(trimmedQuery, match.name)) continue;
+    if (!queryMentions(trimmedQuery, match.name, { matchAnyWord: true })) continue;
     if (match.clusterId) {
       if (!clusterIds.includes(match.clusterId)) {
         clusterIds.push(match.clusterId);
