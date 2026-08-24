@@ -27,13 +27,9 @@ def send(payload: dict) -> None:
     sys.stdout.flush()
 
 
-def load_model(device: str):
+def load_model(device: str, compute_type: str):
     from faster_whisper import WhisperModel
 
-    # int8_float16 keeps compute in fp16 but stores weights as int8, roughly
-    # halving resident VRAM with negligible accuracy loss. Leaves more
-    # headroom for image previews / transcode.
-    compute_type = "int8_float16" if device == "cuda" else "int8"
     # On CPU, cap threads so transcription doesn't starve foreground work.
     # SIGSTOP already freezes the worker during user requests; this keeps
     # background CPU usage bounded while the worker is running.
@@ -41,8 +37,8 @@ def load_model(device: str):
     if device == "cpu":
         kwargs["cpu_threads"] = int(os.environ.get("WHISPER_CPU_THREADS", "2"))
     # "medium" instead of "large-v3": ~1/3 the VRAM and noticeably faster,
-    # with a modest accuracy trade-off. large-v3 kept crowding out image
-    # preview / transcode workers on the shared 8GB card.
+    # with a modest accuracy trade-off. large-v3 kept crowding out other GPU
+    # workers on a shared card.
     return WhisperModel("medium", device=device, compute_type=compute_type, **kwargs)
 
 
@@ -89,20 +85,52 @@ def _is_cuda_lib_error(exc: Exception) -> bool:
     return "cannot be loaded" in msg or "libcublas" in msg or "CUDA error" in msg
 
 
+def _is_unsupported_compute_type_error(exc: Exception) -> bool:
+    # Raised by CTranslate2 when the requested compute type needs hardware the
+    # device doesn't have — e.g. int8_float16's fp16 accumulation needs Tensor
+    # Cores (Turing+, compute capability >= 7.0), so it fails this way on an
+    # older CUDA generation (Pascal, e.g. this box's Quadro P520 at 6.1) even
+    # though CUDA itself and plain int8 both work fine there. Not a "no GPU"
+    # failure, so it should retry the SAME device with a cheaper compute type
+    # rather than falling all the way back to CPU.
+    return "do not support" in str(exc) and "compute" in str(exc)
+
+
 def main():
     device = detect_device()
+    # int8_float16 keeps compute in fp16 but stores weights as int8, roughly
+    # halving resident VRAM with negligible accuracy loss over plain int8 —
+    # preferred when the GPU has the Tensor Cores to run it efficiently.
+    # CPU never gets a choice; int8 is the only compute type it supports.
+    compute_type = "int8_float16" if device == "cuda" else "int8"
     fallback_from = None
     fallback_reason = None
 
     try:
-        model = load_model(device)
+        model = load_model(device, compute_type)
     except Exception as e:
-        if device == "cuda":
+        if device == "cuda" and _is_unsupported_compute_type_error(e):
+            # Stay on the GPU, just ask it for less: plain int8 (via DP4A) is
+            # supported back to compute capability 6.1, one generation before
+            # Tensor Cores existed at all.
+            try:
+                fallback_from = compute_type
+                fallback_reason = str(e)
+                compute_type = "int8"
+                model = load_model(device, compute_type)
+            except Exception as e2:
+                fallback_from = device
+                fallback_reason = str(e2)
+                device = "cpu"
+                compute_type = "int8"
+                model = load_model(device, compute_type)
+        elif device == "cuda":
             try:
                 fallback_from = device
                 fallback_reason = str(e)
                 device = "cpu"
-                model = load_model(device)
+                compute_type = "int8"
+                model = load_model(device, compute_type)
             except Exception as e2:
                 send({
                     "type": "error",
@@ -119,7 +147,7 @@ def main():
     # The weights are on the card now; hand the load buffers back to the OS.
     trim_heap()
 
-    ready = {"type": "ready", "device": device}
+    ready = {"type": "ready", "device": device, "computeType": compute_type}
     if fallback_from is not None:
         ready["fallbackFrom"] = fallback_from
         ready["fallbackReason"] = fallback_reason
