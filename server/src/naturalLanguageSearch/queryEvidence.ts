@@ -41,10 +41,18 @@ const tokenMatches = (token: string, word: string) =>
 /**
  * Did the user actually name this person/place?
  *
- * Multi-word entries ("Aunt May", "Family Archive") need every significant word
- * present, so "family photos" does not select the "Family Archive" folder.
+ * Multi-word folder/place entries ("Family Archive") need every significant
+ * word present, so "family photos" does not select the "Family Archive"
+ * folder. Person names are looser (`matchAnyWord: true`): full names in the
+ * library routinely carry a middle or maiden name ("Sarah Johnson Richards")
+ * that nobody types when searching, so a query only needs to hit one
+ * significant word of the name, not all of them.
  */
-export const queryMentions = (query: string, value: string): boolean => {
+export const queryMentions = (
+  query: string,
+  value: string,
+  { matchAnyWord = false }: { matchAnyWord?: boolean } = {},
+): boolean => {
   const words = tokenize(value);
   if (words.length === 0) return false;
   const tokens = tokenize(query);
@@ -52,9 +60,9 @@ export const queryMentions = (query: string, value: string): boolean => {
     return tokens.some((token) => tokenMatches(token, words[0]));
   }
   if (normalize(query).includes(normalize(value))) return true;
-  return words
-    .filter((word) => word.length >= 4)
-    .every((word) => tokens.some((token) => tokenMatches(token, word)));
+  const significantWords = words.filter((word) => word.length >= 4);
+  const matches = (word: string) => tokens.some((token) => tokenMatches(token, word));
+  return matchAnyWord ? significantWords.some(matches) : significantWords.every(matches);
 };
 
 const PHOTO_WORDS = [
