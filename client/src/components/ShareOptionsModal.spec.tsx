@@ -309,6 +309,81 @@ describe("ShareOptionsModal", () => {
     }
   });
 
+  it("hides the web-safe option for a photo that is already web-safe", () => {
+    const photo = createPhoto({
+      path: "a/1.jpg",
+      name: "1.jpg",
+      originalUrl: "http://localhost/api/files/a/1.jpg",
+      metadata: { mimeType: "image/jpeg", sizeInBytes: 25 * 1024 * 1024 },
+    });
+
+    render(<ShareOptionsModal photos={[photo]} onClose={() => {}} />);
+
+    expect(screen.getByText("Original")).toBeInTheDocument();
+    expect(screen.queryByText("Web-safe, original size")).not.toBeInTheDocument();
+    // Still large enough that a smaller copy is worth offering.
+    expect(screen.getByText("Smaller size")).toBeInTheDocument();
+  });
+
+  it("hides the smaller-size option for a photo already under 20MB", () => {
+    const photo = createPhoto({
+      path: "a/1.heic",
+      name: "1.heic",
+      metadata: { mimeType: "image/heic", sizeInBytes: 5 * 1024 * 1024 },
+    });
+
+    render(<ShareOptionsModal photos={[photo]} onClose={() => {}} />);
+
+    expect(screen.getByText("Original")).toBeInTheDocument();
+    // Still HEIC, so a web-safe copy is still worth offering.
+    expect(screen.getByText("Web-safe, original size")).toBeInTheDocument();
+    expect(screen.queryByText("Smaller size")).not.toBeInTheDocument();
+  });
+
+  it("only shows Original when every photo is already web-safe and small", () => {
+    const photo = createPhoto({
+      path: "a/1.jpg",
+      name: "1.jpg",
+      originalUrl: "http://localhost/api/files/a/1.jpg",
+      metadata: { mimeType: "image/jpeg", sizeInBytes: 2 * 1024 * 1024 },
+    });
+
+    render(<ShareOptionsModal photos={[photo]} onClose={() => {}} />);
+
+    expect(screen.getByText("Original")).toBeInTheDocument();
+    expect(screen.queryByText("Web-safe, original size")).not.toBeInTheDocument();
+    expect(screen.queryByText("Smaller size")).not.toBeInTheDocument();
+  });
+
+  it("keeps both options when a photo's format/size is unknown", () => {
+    const photo = createPhoto({
+      path: "a/1.jpg",
+      name: "1.jpg",
+      originalUrl: "http://localhost/api/files/a/1.jpg",
+    });
+
+    render(<ShareOptionsModal photos={[photo]} onClose={() => {}} />);
+
+    expect(screen.getByText("Original")).toBeInTheDocument();
+    expect(screen.getByText("Web-safe, original size")).toBeInTheDocument();
+    expect(screen.getByText("Smaller size")).toBeInTheDocument();
+  });
+
+  it("keeps both options for a video-only selection regardless of metadata", () => {
+    const video = createPhoto({
+      path: "a/1.mp4",
+      name: "1.mp4",
+      mediaType: "video",
+      originalUrl: "http://localhost/api/files/a/1.mp4",
+    });
+
+    render(<ShareOptionsModal photos={[video]} onClose={() => {}} />);
+
+    expect(screen.getByText("Original")).toBeInTheDocument();
+    expect(screen.getByText("Web-safe, original size")).toBeInTheDocument();
+    expect(screen.getByText("Smaller size")).toBeInTheDocument();
+  });
+
   it("renders into document.body by default so app-level stacking cannot cover it", () => {
     const host = document.createElement("div");
     document.body.appendChild(host);

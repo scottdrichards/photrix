@@ -53,6 +53,33 @@ const QUALITIES: QualityDef[] = [
   },
 ];
 
+// Mirrors filesRequestHandler.ts's `needsFormatChange` check server-side —
+// these are the only source formats that `representation=webSafe` actually
+// re-encodes. Anything else (JPEG/PNG/WebP/GIF/...) is already web-safe, so
+// offering a "web-safe" copy of it would just be a no-op download.
+const NON_WEB_SAFE_MIME_TYPES = new Set([
+  "image/heic",
+  "image/heif",
+  "image/x-canon-cr3",
+]);
+
+// Below this, "smaller size" wouldn't meaningfully help sharing/messaging,
+// so there's no point offering it. Unknown size errs toward still offering
+// it rather than silently hiding a potentially-useful option.
+const SMALL_ENOUGH_BYTES = 20 * 1024 * 1024;
+
+const isAlreadyWebSafe = (photo: PhotoItem): boolean => {
+  const mime = photo.metadata?.mimeType;
+  if (!mime) return false;
+  return !NON_WEB_SAFE_MIME_TYPES.has(mime);
+};
+
+const isSmallEnough = (photo: PhotoItem): boolean => {
+  const size = photo.metadata?.sizeInBytes;
+  if (size == null) return false;
+  return size < SMALL_ENOUGH_BYTES;
+};
+
 const getImageShareUrl = (photo: PhotoItem, quality: ShareQuality): string => {
   if (quality === "original") return photo.originalUrl;
   const url = new URL(photo.originalUrl);
@@ -102,6 +129,21 @@ export const ShareOptionsModal: React.FC<Props> = ({
   const hasVideos = videos.length > 0;
   const hasImages = images.length > 0;
   const actionLabel = mode === "download" ? "Download" : "Share";
+
+  // Only offer a quality tier if it would change at least one selected
+  // image's output — e.g. don't offer "web-safe" for an already-JPEG photo,
+  // and don't offer "smaller size" when every image is already small.
+  // Videos ignore quality entirely (server never transcodes them), so their
+  // presence alongside images always keeps both tiers available.
+  const showWebSafeFull =
+    !hasImages || hasVideos || images.some((p) => !isAlreadyWebSafe(p));
+  const showWebSafeSmall =
+    !hasImages || hasVideos || images.some((p) => !isSmallEnough(p));
+  const visibleQualities = QUALITIES.filter((q) => {
+    if (q.id === "websafe-full") return showWebSafeFull;
+    if (q.id === "websafe-small") return showWebSafeSmall;
+    return true;
+  });
 
   const triggerDownloads = (items: DownloadItem[]) => {
     for (const item of items) {
@@ -378,7 +420,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
           </div>
         ) : (
           <div className={css.options}>
-            {QUALITIES.map((q) => (
+            {visibleQualities.map((q) => (
               <button
                 key={q.id}
                 className={css.option}
