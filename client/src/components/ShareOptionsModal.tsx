@@ -7,8 +7,23 @@ type ShareQuality = "original" | "websafe-full" | "websafe-small";
 type ShareAction = "share" | "download";
 type DownloadItem = { url: string; filename: string };
 type PreparedAction =
-  | { kind: "share"; files: File[]; videoDownloads: DownloadItem[] }
+  | { kind: "share"; files: File[] }
   | { kind: "download"; imageFiles: File[]; videoDownloads: DownloadItem[] };
+
+const VIDEO_MIME_BY_EXT: Record<string, string> = {
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  m4v: "video/x-m4v",
+  webm: "video/webm",
+  mkv: "video/x-matroska",
+  avi: "video/x-msvideo",
+  wmv: "video/x-ms-wmv",
+};
+
+const getVideoMimeType = (photo: PhotoItem): string => {
+  const ext = photo.name.split(".").pop()?.toLowerCase() ?? "";
+  return photo.metadata?.mimeType ?? VIDEO_MIME_BY_EXT[ext] ?? "video/mp4";
+};
 
 type QualityDef = {
   id: ShareQuality;
@@ -120,22 +135,22 @@ export const ShareOptionsModal: React.FC<Props> = ({
 
     try {
       await navigator.share({ files: preparedAction.files });
-
-      if (preparedAction.videoDownloads.length > 0) {
-        triggerDownloads(preparedAction.videoDownloads);
-      }
-
       onClose();
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         setProgress(null);
         return;
       }
-      setPreparedAction({
-        kind: "download",
-        imageFiles: preparedAction.files,
-        videoDownloads: preparedAction.videoDownloads,
-      });
+      // Sharing failed after files were already prepared — fall back to
+      // download using the same already-fetched image bytes; videos go via
+      // their original URL rather than re-using the fetched share blobs, to
+      // keep the download path independent of what sharing happened to fetch.
+      const imageFiles = preparedAction.files.filter((f) => !f.type.startsWith("video/"));
+      const videoDownloads = videos.map((video) => ({
+        url: video.originalUrl,
+        filename: video.name,
+      }));
+      setPreparedAction({ kind: "download", imageFiles, videoDownloads });
       setError("Sharing failed on this browser. The files are ready to download instead.");
       setProgress(null);
     }
@@ -200,63 +215,74 @@ export const ShareOptionsModal: React.FC<Props> = ({
 
       if (abort.signal.aborted) return;
 
-      const videoDownloads = videos.map((video) => ({
-        url: video.originalUrl,
-        filename: video.name,
-      }));
       const hasNativeShare = typeof navigator.share === "function";
-      const canUseNativeFileShare =
-        hasNativeShare &&
-        (typeof navigator.canShare !== "function" || navigator.canShare({ files: imageFiles }));
       const shouldTryOriginalHeicShare =
         hasNativeShare && images.some((photo) => isHeicLikeOriginal(photo, quality));
 
-      // Native file share is gesture-sensitive, so after any async prepare
-      // step we defer the real browser action to a second explicit tap. Use the
-      // same flow for the download fallback so a long conversion cannot sever
-      // the eventual save action from user intent.
-      if (imageFiles.length > 0) {
-        setPreparedAction(
-          canUseNativeFileShare || shouldTryOriginalHeicShare
-            ? { kind: "share", files: imageFiles, videoDownloads }
-            : { kind: "download", imageFiles, videoDownloads },
-        );
-        setProgress(null);
-        return;
-      }
+      // Check whether the OS can share these file types at all *before*
+      // fetching potentially gigabyte-sized video bytes into memory for
+      // nothing — probe with zero-byte placeholder files of the right type.
+      const dummyVideoFiles = videos.map(
+        (video) => new File([""], video.name, { type: getVideoMimeType(video) }),
+      );
+      const probeFiles = [...imageFiles, ...dummyVideoFiles];
+      const canShareFiles =
+        hasNativeShare &&
+        (shouldTryOriginalHeicShare ||
+          typeof navigator.canShare !== "function" ||
+          navigator.canShare({ files: probeFiles }));
 
-      // Videos: never blob-load (they can be gigabytes) — but in share mode,
-      // still try navigator.share with just a URL so the OS share sheet opens
-      // instead of silently downloading. Only fall back to a direct download
-      // when the Web Share API isn't available at all.
-      if (videos.length > 0) {
-        if (mode === "share" && imageFiles.length === 0 && typeof navigator.share === "function") {
-          setProgress("Opening share sheet…");
-          try {
-            if (videos.length === 1) {
-              await navigator.share({ url: videos[0].originalUrl, title: videos[0].name });
-            } else {
-              await navigator.share({
-                text: videos.map((v) => v.originalUrl).join("\n"),
-              });
-            }
-            onClose();
-            return;
-          } catch (err) {
-            if (err instanceof Error && err.name === "AbortError") {
-              setProgress(null);
-              return;
-            }
-            // Web Share failed for a reason other than user cancel — fall back to download.
-          }
+      if (canShareFiles) {
+        // Videos: fetch the real file too, same as images, so the share
+        // sheet gets the actual video — only reached once canShareFiles
+        // confirms the OS can use it, so an unsupported device never pays
+        // for the full download.
+        const videoFiles: File[] = [];
+        for (let i = 0; i < videos.length; i++) {
+          if (abort.signal.aborted) return;
+          const video = videos[i];
+          setProgress(
+            videos.length > 1
+              ? `Preparing video ${i + 1} of ${videos.length}…`
+              : "Preparing video…",
+          );
+          const response = await fetch(video.originalUrl, { signal: abort.signal });
+          if (!response.ok) throw new Error(`Failed to fetch ${video.name}`);
+          const blob = await response.blob();
+          videoFiles.push(
+            new File([blob], video.name, { type: blob.type || getVideoMimeType(video) }),
+          );
         }
 
-        setProgress(
-          videos.length === 1
-            ? "Starting video download…"
-            : `Starting ${videos.length} video downloads…`,
-        );
-        triggerDownloads(videoDownloads);
+        if (abort.signal.aborted) return;
+
+        const allFiles = [...imageFiles, ...videoFiles];
+        if (allFiles.length > 0) {
+          // Native file share is gesture-sensitive, so after any async
+          // prepare step we defer the real browser action to a second
+          // explicit tap.
+          setPreparedAction({ kind: "share", files: allFiles });
+          setProgress(null);
+          return;
+        }
+      }
+
+      // Can't (or don't need to) share files — fall back to the download
+      // flow, still gated behind an explicit second tap so a long prepare
+      // step can't sever the eventual save action from user intent. Videos
+      // never blob-load here (they can be gigabytes); the browser downloads
+      // them directly from their original URL.
+      if (imageFiles.length > 0 || videos.length > 0) {
+        setPreparedAction({
+          kind: "download",
+          imageFiles,
+          videoDownloads: videos.map((video) => ({
+            url: video.originalUrl,
+            filename: video.name,
+          })),
+        });
+        setProgress(null);
+        return;
       }
 
       onClose();
@@ -315,9 +341,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
         {hasVideos && (
           <p className={css.videoNote}>
             {mode === "share"
-              ? hasImages
-                ? "Images will be shared via the system share sheet. Videos will be downloaded directly."
-                : `Video${videos.length > 1 ? "s" : ""} will open the system share sheet as a link (falls back to downloading if sharing isn't supported).`
+              ? "Everything is shared via the system share sheet as the real file (falls back to downloading if your device can't share it directly)."
               : hasImages
                 ? "Image size changes apply to photos. Videos always download as the original file."
                 : `Video${videos.length > 1 ? "s" : ""} will be downloaded as the original file — no server-side transcoding is available.`}
@@ -336,13 +360,6 @@ export const ShareOptionsModal: React.FC<Props> = ({
                 ? "Files are ready. Tap Share to open the system share sheet."
                 : "Files are ready. Tap Download to save them."}
             </p>
-            {preparedAction.videoDownloads.length > 0 && (
-              <p className={css.readyNote}>
-                {preparedAction.kind === "share"
-                  ? "Videos will still download as original files after sharing."
-                  : "Videos will download as original files."}
-              </p>
-            )}
             <div className={css.readyActions}>
               <button
                 type="button"
