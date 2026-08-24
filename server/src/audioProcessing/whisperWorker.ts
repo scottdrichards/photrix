@@ -32,6 +32,7 @@ type WorkerResponse =
   | {
       type: "ready";
       device?: string;
+      computeType?: string;
       fallbackFrom?: string;
       fallbackReason?: string;
     }
@@ -377,6 +378,7 @@ const ensureWorkerReady = async (): Promise<void> => {
         log.info(
           {
             device: readyState.device ?? "unknown",
+            computeType: readyState.computeType ?? "unknown",
             fallbackFrom: readyState.fallbackFrom,
             fallbackReason: readyState.fallbackReason,
           },
