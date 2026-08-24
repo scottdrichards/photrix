@@ -470,4 +470,66 @@ describe("interpretSearchQuery", () => {
     });
     expect(result.interpreted && result.chips).toHaveLength(1);
   });
+
+  it("resolves every person named, not just the first", async () => {
+    const twoPeopleVocabulary: SearchVocabulary = {
+      people: [
+        { name: "Alice Diane Richards", clusterId: "person-969" },
+        { name: "Amelia Jean Richards", clusterId: "person-1182" },
+      ],
+      folders: [],
+    };
+    const result = await interpretSearchQuery({
+      query: "alice holding amelias hand",
+      vocabulary: twoPeopleVocabulary,
+      now: NOW,
+      generate: respondWith({ people: ["Alice", "Amelia"], visual: "holding hands" }),
+    });
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: {
+        faceClusterFilter: expect.arrayContaining(["person-969", "person-1182"]),
+        semanticQuery: "holding hands",
+      },
+      ignored: [],
+    });
+    expect(
+      result.interpreted && (result.filter.faceClusterFilter as string[]),
+    ).toHaveLength(2);
+  });
+
+  it("splits a comma-joined single string into separate people (model answers a scalar instead of an array)", async () => {
+    // Observed live: asked for multiple people, the 3B model sometimes answers
+    // `"people": "Scott Douglas Richards,Linda Simmons Richards"` — one string
+    // instead of an array. No vocabulary name contains a comma, so splitting
+    // recovers both rather than failing to match the combined string at all.
+    const twoPeopleVocabulary: SearchVocabulary = {
+      people: [
+        { name: "Scott Douglas Richards", clusterId: "person-86" },
+        { name: "Linda Simmons Richards", clusterId: "person-7" },
+      ],
+      folders: [],
+    };
+    const result = await interpretSearchQuery({
+      query: "scott and linda at the beach",
+      vocabulary: twoPeopleVocabulary,
+      now: NOW,
+      generate: respondWith({
+        people: "Scott Douglas Richards,Linda Simmons Richards",
+        visual: "beach",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: {
+        faceClusterFilter: expect.arrayContaining(["person-86", "person-7"]),
+      },
+      ignored: [],
+    });
+    expect(
+      result.interpreted && (result.filter.faceClusterFilter as string[]),
+    ).toHaveLength(2);
+  });
 });
