@@ -77,10 +77,20 @@ describe("ShareOptionsModal", () => {
     expect(shareArgs.files[0]?.name).toBe("1.jpg");
   });
 
-  it("shares a video via a URL through the native share sheet instead of downloading it", async () => {
+  it("shares a video as an actual file (not a link) through the native share sheet", async () => {
     const onClose = vi.fn();
     const shareMock = vi.fn().mockResolvedValue(undefined);
 
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(["video-bytes"], { type: "video/mp4" }),
+    } as Response);
+
+    Object.defineProperty(navigator, "canShare", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => true),
+    });
     Object.defineProperty(navigator, "share", {
       configurable: true,
       writable: true,
@@ -99,20 +109,27 @@ describe("ShareOptionsModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /Exact video file as stored/i }));
 
     await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Share" }));
+
+    await waitFor(() => {
       expect(shareMock).toHaveBeenCalledTimes(1);
       expect(onClose).toHaveBeenCalledTimes(1);
     });
 
-    expect(shareMock).toHaveBeenCalledWith({
-      url: video.originalUrl,
-      title: video.name,
-    });
-    // Should not have fallen back to a download trigger.
-    expect(document.querySelectorAll("a[download]")).toHaveLength(0);
+    const [shareArgs] = shareMock.mock.calls[0] as [{ files: File[] }];
+    expect(shareArgs.files).toHaveLength(1);
+    expect(shareArgs.files[0]).toBeInstanceOf(File);
+    expect(shareArgs.files[0]?.name).toBe("1.mov.mp4");
+    expect(shareArgs.files[0]?.type).toBe("video/mp4");
   });
 
-  it("falls back to downloading a video when the Web Share API is unavailable", async () => {
+  it("falls back to downloading a video when the device can't share files", async () => {
     const onClose = vi.fn();
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock;
 
     Object.defineProperty(navigator, "share", {
       configurable: true,
@@ -134,10 +151,21 @@ describe("ShareOptionsModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /Exact video file as stored/i }));
 
     await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+    });
+
+    expect(clickSpy).not.toHaveBeenCalled();
+    // Never fetched the (potentially huge) video bytes for an unsupported device.
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+
+    await waitFor(() => {
+      expect(clickSpy).toHaveBeenCalledTimes(1);
       expect(onClose).toHaveBeenCalledTimes(1);
     });
 
-    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
     clickSpy.mockRestore();
   });
 
