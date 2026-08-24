@@ -225,9 +225,32 @@ export const ShareOptionsModal: React.FC<Props> = ({
         return;
       }
 
-      // Videos: never blob-load — trigger browser downloads directly via URL
-      // (videos can be gigabytes; all quality options serve the original anyway)
+      // Videos: never blob-load (they can be gigabytes) — but in share mode,
+      // still try navigator.share with just a URL so the OS share sheet opens
+      // instead of silently downloading. Only fall back to a direct download
+      // when the Web Share API isn't available at all.
       if (videos.length > 0) {
+        if (mode === "share" && imageFiles.length === 0 && typeof navigator.share === "function") {
+          setProgress("Opening share sheet…");
+          try {
+            if (videos.length === 1) {
+              await navigator.share({ url: videos[0].originalUrl, title: videos[0].name });
+            } else {
+              await navigator.share({
+                text: videos.map((v) => v.originalUrl).join("\n"),
+              });
+            }
+            onClose();
+            return;
+          } catch (err) {
+            if (err instanceof Error && err.name === "AbortError") {
+              setProgress(null);
+              return;
+            }
+            // Web Share failed for a reason other than user cancel — fall back to download.
+          }
+        }
+
         setProgress(
           videos.length === 1
             ? "Starting video download…"
@@ -294,7 +317,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
             {mode === "share"
               ? hasImages
                 ? "Images will be shared via the system share sheet. Videos will be downloaded directly."
-                : `Video${videos.length > 1 ? "s" : ""} will be downloaded directly — no server-side transcoding is available.`
+                : `Video${videos.length > 1 ? "s" : ""} will open the system share sheet as a link (falls back to downloading if sharing isn't supported).`
               : hasImages
                 ? "Image size changes apply to photos. Videos always download as the original file."
                 : `Video${videos.length > 1 ? "s" : ""} will be downloaded as the original file — no server-side transcoding is available.`}

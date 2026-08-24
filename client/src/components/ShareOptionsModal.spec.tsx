@@ -77,6 +77,70 @@ describe("ShareOptionsModal", () => {
     expect(shareArgs.files[0]?.name).toBe("1.jpg");
   });
 
+  it("shares a video via a URL through the native share sheet instead of downloading it", async () => {
+    const onClose = vi.fn();
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      writable: true,
+      value: shareMock,
+    });
+
+    const video = createPhoto({
+      path: "a/1.mov.mp4",
+      name: "1.mov.mp4",
+      mediaType: "video",
+      originalUrl: "http://localhost/api/files/a/1.mov.mp4",
+    });
+
+    render(<ShareOptionsModal photos={[video]} onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Exact video file as stored/i }));
+
+    await waitFor(() => {
+      expect(shareMock).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    expect(shareMock).toHaveBeenCalledWith({
+      url: video.originalUrl,
+      title: video.name,
+    });
+    // Should not have fallen back to a download trigger.
+    expect(document.querySelectorAll("a[download]")).toHaveLength(0);
+  });
+
+  it("falls back to downloading a video when the Web Share API is unavailable", async () => {
+    const onClose = vi.fn();
+
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+
+    const video = createPhoto({
+      path: "a/1.mov.mp4",
+      name: "1.mov.mp4",
+      mediaType: "video",
+      originalUrl: "http://localhost/api/files/a/1.mov.mp4",
+    });
+
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    render(<ShareOptionsModal photos={[video]} onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Exact video file as stored/i }));
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    clickSpy.mockRestore();
+  });
+
   it("prepares files before triggering the download fallback", async () => {
     const onClose = vi.fn();
     const shareMock = vi.fn();
