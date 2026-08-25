@@ -1,6 +1,7 @@
 param(
   [string]$DeployUser = "deploy",
-  [string]$DeployHost = "192.168.1.97",
+  # Placeholder (RFC 5737 TEST-NET-1); pass -DeployHost to point at your actual deploy target.
+  [string]$DeployHost = "192.0.2.1",
   [string]$IdentityFile = "$HOME/.ssh/id_ed25519"
 )
 
