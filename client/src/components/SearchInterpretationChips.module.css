@@ -13,8 +13,8 @@
   padding: var(--space-xs, 6px) var(--space-s, 8px);
   border: 1px solid var(--stroke2, #ddd);
   border-radius: 6px;
-  background: var(--fill1, #fff);
-  box-shadow: 0 4px 12px rgb(0 0 0 / 12%);
+  background: var(--bg1, #fff);
+  box-shadow: var(--shadow-md, 0 4px 12px rgb(0 0 0 / 12%));
   font-size: 0.75rem;
   min-width: 260px;
   max-width: min(560px, 92vw);
