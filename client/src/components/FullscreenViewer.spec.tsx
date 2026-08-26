@@ -260,6 +260,24 @@ describe("FullscreenViewer", () => {
     }
   });
 
+  it("hides the print action for videos", () => {
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/clip.mp4",
+        name: "clip.mp4",
+        mediaType: "video",
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    render(<FullscreenViewer />);
+
+    expect(screen.queryByRole("button", { name: "Print item" })).not.toBeInTheDocument();
+  });
+
   it("renders the AI caption toast inside the photo frame instead of the full viewer container", async () => {
     fetchPhotoCaptionMock.mockResolvedValue("Sunset at the beach");
     useSelectionContextMock.mockReturnValue({

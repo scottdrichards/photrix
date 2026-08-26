@@ -1290,15 +1290,17 @@ export function FullscreenViewer() {
                 >
                   <ArrowDownload24Regular />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className={css.infoButton}
-                  aria-label="Print item"
-                  title="Print item"
-                >
-                  <Print24Regular />
-                </button>
+                {photo.mediaType !== "video" && (
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className={css.infoButton}
+                    aria-label="Print item"
+                    title="Print item"
+                  >
+                    <Print24Regular />
+                  </button>
+                )}
                 {photo.mediaType === "video" && transcriptTrackUrl && (
                   <button
                     type="button"
