@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 
 jest.unstable_mockModule("../observability/logger.ts", () => ({
@@ -23,8 +24,26 @@ const {
   releaseGpuReclaim,
   isGpuReclaimed,
   roleForComputeWorkerId,
+  killAndAwaitExit,
   COMPUTE_WORKER_IDS,
 } = await import("./computeWorkers.ts");
+
+// Minimal fake child process for killAndAwaitExit tests — a real spawned
+// child would work too, but exercising the exit/timeout races is much faster
+// and more deterministic against a plain EventEmitter.
+const createFakeChild = (pid: number | null = 4242) => {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number | null;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    kill: jest.Mock<(signal?: NodeJS.Signals) => boolean>;
+  };
+  child.pid = pid;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = jest.fn(() => true);
+  return child;
+};
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -208,5 +227,58 @@ describe("computeWorkers GPU reclaim", () => {
 
     unregisterComputeWorker(COMPUTE_WORKER_IDS.whisper);
     unregisterComputeWorker("no-pid-worker");
+  });
+});
+
+describe("killAndAwaitExit", () => {
+  it("SIGKILLs a live child and resolves once it actually exits", async () => {
+    const child = createFakeChild(777);
+    const done = killAndAwaitExit(child, { label: "test" });
+
+    // Give kill() a tick to be invoked before asserting.
+    await Promise.resolve();
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+
+    let resolved = false;
+    void done.then(() => {
+      resolved = true;
+    });
+    await tick();
+    // Still holding VRAM, from the caller's point of view, until 'exit' fires.
+    expect(resolved).toBe(false);
+
+    child.emit("exit", null, "SIGKILL");
+    await done;
+    expect(resolved).toBe(true);
+  });
+
+  it("does not re-kill a child that already exited", async () => {
+    const child = createFakeChild(778);
+    child.exitCode = 1;
+
+    await killAndAwaitExit(child, { label: "test" });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("gives up after the grace period if the process never exits (e.g. wedged in a CUDA call)", async () => {
+    jest.useFakeTimers();
+    const child = createFakeChild(779);
+
+    const done = killAndAwaitExit(child, { graceMs: 10_000, label: "test" });
+    let resolved = false;
+    void done.then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+
+    jest.advanceTimersByTime(9_999);
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    jest.advanceTimersByTime(1);
+    await done;
+    expect(resolved).toBe(true);
   });
 });

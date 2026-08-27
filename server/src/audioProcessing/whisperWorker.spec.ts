@@ -27,6 +27,7 @@ const markDeliberateKill = jest.fn();
 let workerSuspended = false;
 const isComputeWorkerSuspended = jest.fn(() => workerSuspended);
 const markWorkerEvictedError = jest.fn((error: Error) => error);
+const killAndAwaitExit = jest.fn(async () => {});
 const timeouts: TimeoutEntry[] = [];
 // Captured so tests can drive the orchestrator's freeze/thaw signal directly.
 let suspensionListener: ((isSuspended: boolean) => void) | null = null;
@@ -63,6 +64,7 @@ jest.unstable_mockModule("../taskOrchestrator/computeWorkers.ts", () => ({
   },
   consumeDeliberateKill,
   isComputeWorkerSuspended,
+  killAndAwaitExit,
   markDeliberateKill,
   markWorkerEvictedError,
   onComputeWorkerSuspensionChange,
@@ -110,6 +112,7 @@ beforeEach(() => {
   acquireGpuInitSlot.mockClear();
   registerComputeWorker.mockClear();
   consumeDeliberateKill.mockClear();
+  killAndAwaitExit.mockClear();
   markDeliberateKill.mockClear();
   markWorkerEvictedError.mockClear();
   onComputeWorkerSuspensionChange.mockClear();

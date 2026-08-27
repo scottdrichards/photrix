@@ -19,6 +19,7 @@ import {
   createSuspensionAwareTimeout,
   consumeDeliberateKill,
   isComputeWorkerSuspended,
+  killAndAwaitExit,
   markDeliberateKill,
   markWorkerEvictedError,
   onComputeWorkerSuspensionChange,
@@ -268,6 +269,12 @@ const ensureWorkerReady = async (): Promise<void> => {
   if (readyPromise) return readyPromise;
 
   readyPromise = (async () => {
+    // Emergency kill switch: see main.ts. Checked at spawn time so this
+    // covers every caller of ensureWorkerReady, not just the background
+    // transcription task.
+    if (process.env.PHOTRIX_DISABLE_AUDIO === "1") {
+      throw new Error("Whisper worker disabled via PHOTRIX_DISABLE_AUDIO=1");
+    }
     // Refuse to *start* inside a user-request window, rather than starting and
     // being killed moments later. Loading this model costs ~30s and ~2.2 GB, and
     // a request only enters `pending` after this function resolves — so a
@@ -360,7 +367,10 @@ const ensureWorkerReady = async (): Promise<void> => {
           rejectReady(
             new Error(`Whisper worker failed to become ready within ${readyTimeoutMs}ms`),
           );
-          child.kill();
+          // The outer `await ready` catch below also force-kills+waits on any
+          // rejection; this call just makes sure the OS-level kill starts
+          // immediately rather than waiting for that catch to run.
+          child.kill("SIGKILL");
         },
       );
 
@@ -449,6 +459,18 @@ const ensureWorkerReady = async (): Promise<void> => {
 
     try {
       await ready;
+    } catch (error) {
+      // The worker's own error handling is *supposed* to exit the process
+      // (see whisper_worker.py's sys.exit(1) paths) whenever init fails, and
+      // the 'exit' handler above already resets `worker`/`readyPromise`. But
+      // that's not guaranteed — a stuck CUDA call can leave the process alive
+      // and still holding VRAM. Force it and wait for confirmation before
+      // releasing the GPU-init slot below, so the next queued worker (CLAP,
+      // image analysis) can't start loading onto the GPU while this one's
+      // memory is still resident — that race is what let failed workers pile
+      // up and exhaust the card's 2 GB in the 2026-08-25/08-27 incidents.
+      await killAndAwaitExit(child, { label: "whisper" });
+      throw error;
     } finally {
       releaseGpuSlot();
     }
