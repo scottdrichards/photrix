@@ -14,6 +14,7 @@ import {
   acquireGpuInitSlot,
   createSuspensionAwareTimeout,
   consumeDeliberateKill,
+  killAndAwaitExit,
   markWorkerEvictedError,
 } from "../taskOrchestrator/computeWorkers.ts";
 
@@ -104,6 +105,13 @@ const ensureWorkerReady = async (): Promise<void> => {
   if (readyPromise) return readyPromise;
 
   readyPromise = (async () => {
+    // Emergency kill switch: see main.ts. Checked at spawn time (not just in
+    // the background-task registration) so a search's foreground CLAP call
+    // is also blocked — "disable audio entirely" should mean no CLAP process
+    // ever spawns, not just that the background embedding backlog stops.
+    if (process.env.PHOTRIX_DISABLE_AUDIO === "1") {
+      throw new Error("CLAP worker disabled via PHOTRIX_DISABLE_AUDIO=1");
+    }
     if (!(await canAccess(CLAP_SCRIPT))) {
       throw new Error(`CLAP worker script missing at ${CLAP_SCRIPT}`);
     }
@@ -169,7 +177,10 @@ const ensureWorkerReady = async (): Promise<void> => {
         rejectReady(
           new Error(`CLAP worker failed to become ready within ${readyTimeoutMs}ms`),
         );
-        child.kill();
+        // The outer `await ready` catch below also force-kills+waits on any
+        // rejection; this call just makes sure the OS-level kill starts
+        // immediately rather than waiting for that catch to run.
+        child.kill("SIGKILL");
       }, readyTimeoutMs);
 
       createInterface({ input: child.stdout }).on("line", (line) => {
@@ -210,6 +221,19 @@ const ensureWorkerReady = async (): Promise<void> => {
 
     try {
       await ready;
+    } catch (error) {
+      // The worker's own error handling is *supposed* to exit the process
+      // (see clap_worker.py's sys.exit(1) path) whenever init fails, and the
+      // 'exit' handler above already resets `worker`/`readyPromise`. But
+      // that's not guaranteed — a stuck CUDA call can leave the process alive
+      // and still holding VRAM. Force it and wait for confirmation before
+      // releasing the GPU-init slot below, so the next queued worker
+      // (Whisper, image analysis) can't start loading onto the GPU while
+      // this one's memory is still resident — that race is what let failed
+      // workers pile up and exhaust the card's 2 GB in the 2026-08-25/08-27
+      // incidents.
+      await killAndAwaitExit(child, { label: "clap" });
+      throw error;
     } finally {
       releaseGpuSlot();
     }

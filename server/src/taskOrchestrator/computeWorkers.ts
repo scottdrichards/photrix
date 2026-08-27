@@ -355,6 +355,69 @@ export const shutdownComputeWorkers = (): void => {
   }
 };
 
+/**
+ * SIGKILL `child` (unless it has already exited) and wait for the OS to
+ * actually reap it before resolving, so a caller doesn't move on — e.g.
+ * releasing the serialized GPU-init slot (`acquireGpuInitSlot`) for the next
+ * worker — while a failed worker's CUDA context may still be resident.
+ *
+ * A worker that fails to initialize CUDA is *supposed* to catch the error and
+ * `sys.exit(1)` on the Python side, but that's not guaranteed: a stuck or
+ * slow-to-unwind CUDA call (e.g. context teardown under memory pressure on a
+ * nearly-full 2 GB card) can leave the process alive — still holding VRAM —
+ * even after the Node side has already given up on it and moved on to retry.
+ * That gap is exactly what caused two real incidents (2026-08-25, 2026-08-27):
+ * zombie clap/whisper workers piled up holding ~1977/2048 MiB permanently, so
+ * every subsequent worker attempt failed immediately and retried every
+ * ~15-30s, each retry re-reading the full source video over the network and
+ * saturating the LAN.
+ *
+ * Resolves once the process actually exits, or after `graceMs` as a last
+ * resort (with a loud warning) so a truly wedged process can't hang the
+ * caller forever — that case needs a human to intervene, not another retry.
+ */
+export const killAndAwaitExit = (
+  child: {
+    pid?: number | null | undefined;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    once: (
+      event: "exit",
+      listener: (code: number | null, signal: NodeJS.Signals | null) => void,
+    ) => unknown;
+    kill: (signal?: NodeJS.Signals) => boolean;
+  },
+  { graceMs = 10_000, label = "worker" }: { graceMs?: number; label?: string } = {},
+): Promise<void> => {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  const pid = child.pid;
+  if (pid != null) markDeliberateKill(pid);
+  try {
+    child.kill("SIGKILL");
+  } catch (err) {
+    log.debug({ err, pid, label }, "kill-and-await-exit: kill failed");
+  }
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      log.error(
+        { pid, label, graceMs },
+        "worker did not exit after SIGKILL within grace period — it may still be holding GPU memory",
+      );
+      resolve();
+    }, graceMs);
+    timer.unref?.();
+    child.once("exit", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+};
+
 /** Clear the reclaim flag once the user is idle; workers respawn on next use. */
 export const releaseGpuReclaim = (): void => {
   if (!gpuReclaimed) return;

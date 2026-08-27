@@ -142,6 +142,20 @@ const startServer = async () => {
     detectOnnxRuntimeCudaProvider(),
   ]);
   logger.info({ cudaAvailable, faceCudaAvailable }, "CUDA detection complete");
+  // Emergency kill switch for the CLAP/Whisper worker class of bug (repeated
+  // CUDA-init-failure/VRAM-exhaustion incidents, 2026-08-25/08-27): flipping
+  // this skips spawning both audio workers entirely — no CLAP text warmup, no
+  // audioTranscription/audioEmbedding background tasks — while still
+  // satisfying `BackgroundTaskPlan`'s required keys (registerBackgroundTasks
+  // gets a no-op runner for each instead of the real one). Meant to be
+  // temporary on hardware with tight VRAM if this class of bug recurs, not a
+  // permanent config knob.
+  const audioDisabled = process.env.PHOTRIX_DISABLE_AUDIO === "1";
+  if (audioDisabled) {
+    logger.warn(
+      "PHOTRIX_DISABLE_AUDIO=1: audio transcription and embedding are disabled for this run",
+    );
+  }
   Object.assign(
     process.env,
     resolveDetectedImageAnalysisEnv(process.env, {
@@ -172,9 +186,11 @@ const startServer = async () => {
   taskOrchestrator.beginUserRequest();
   void Promise.allSettled([
     embedText("warmup").then(() => logger.info("CLIP text-embedding model warmed")),
-    embedTextWithClap("warmup").then(() =>
-      logger.info("CLAP text-embedding model warmed"),
-    ),
+    audioDisabled
+      ? Promise.resolve()
+      : embedTextWithClap("warmup").then(() =>
+          logger.info("CLAP text-embedding model warmed"),
+        ),
   ]).then(async (modelResults) => {
     const scanResult = await Promise.allSettled([
       database
@@ -247,13 +263,20 @@ const startServer = async () => {
     },
     audioTranscription: {
       name: "Audio transcription (Whisper)",
-      start: () => processAudioTranscription(database, transcribeWithWhisper),
+      // `BackgroundTaskPlan` requires this key present even when audio is
+      // disabled (see PHOTRIX_DISABLE_AUDIO above) — swap in an immediately-
+      // resolved no-op runner rather than trying to omit the key.
+      start: audioDisabled
+        ? () => ({ onComplete: () => Promise.resolve() })
+        : () => processAudioTranscription(database, transcribeWithWhisper),
       type: "audioTranscription",
       resources: { ...audioComputeResources, memoryMB: 3500 },
     },
     audioEmbedding: {
       name: "Audio embedding (CLAP)",
-      start: () => processAudioEmbedding(database, embedAudioWithClap),
+      start: audioDisabled
+        ? () => ({ onComplete: () => Promise.resolve() })
+        : () => processAudioEmbedding(database, embedAudioWithClap),
       type: "audioEmbedding",
       resources: { ...audioComputeResources, memoryMB: 2000 },
     },
