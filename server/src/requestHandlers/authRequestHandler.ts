@@ -22,7 +22,11 @@ import {
   verifyPasskeyAuthentication,
   verifyPasskeyRegistration,
 } from "../auth/passkeyService.ts";
-import { normalizeShareSearchSources } from "../auth/shareScope.ts";
+import {
+  normalizeShareSearchSources,
+  resolveShareFilter,
+  ShareScopeError,
+} from "../auth/shareScope.ts";
 import { clientIpFromRequest } from "../auth/ipLocation.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
@@ -111,6 +115,41 @@ export const authShareTokenHandler = async (
     return;
   }
 
+  const scope: ShareScope<unknown> = {
+    filter: body.filter,
+    ...(semanticQuery ? { semanticQuery } : {}),
+    ...(searchSources && searchSources.length < SEARCH_SOURCES.length
+      ? { searchSources }
+      : {}),
+  };
+
+  // Preflight: how many items would this share actually grant?
+  //
+  // Counted through `resolveShareFilter` — the *same* resolution the enforcement
+  // path uses — so a semantic share is measured by what it really matches rather
+  // than by its unresolved base filter (which is frequently `{}` and would read
+  // as the whole library). Returns before minting, so the UI can warn about an
+  // oversized share without leaving an unused token behind, and without paying
+  // for the description model on a share that may never be created.
+  if (parsedUrl.searchParams.get("dryRun") === "1") {
+    try {
+      const resolvedFilter = await resolveShareFilter(scope);
+      const { total } = await database.queryFiles({
+        filter: resolvedFilter,
+        metadata: [],
+        pageSize: 1,
+      });
+      writeJson(res, 200, { count: total });
+    } catch (error) {
+      if (error instanceof ShareScopeError) {
+        writeJson(res, error.statusCode, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+
   // A caller-supplied label wins; otherwise a locally hosted model names the
   // collection from the filter so link previews read like an album title
   // instead of "Filtered view".
@@ -124,14 +163,7 @@ export const authShareTokenHandler = async (
           database,
         });
 
-  const shareToken = issueShareToken({
-    filter: body.filter,
-    ...(semanticQuery ? { semanticQuery } : {}),
-    ...(searchSources && searchSources.length < SEARCH_SOURCES.length
-      ? { searchSources }
-      : {}),
-    description: label,
-  });
+  const shareToken = issueShareToken({ ...scope, description: label });
 
   // Track the link so the owner can list and revoke it from the account panel.
   const username = getSessionUsername(token);
