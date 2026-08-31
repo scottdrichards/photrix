@@ -39,7 +39,16 @@ export const generateShareDescription = async ({
   }
   if (facts.length === 0) return "Shared photos";
 
-  const summary = facts.map(({ text }) => text).join(" · ");
+  // Feedback #108/#109: a `leadIn` fact (near-city, coarse date — see
+  // summarizeShareFilter) glues onto the previous fact with a bare space
+  // instead of the usual " · " separator, so it reads as a modifier on it
+  // ("Sarah, Scott, Alice, and Amelia near Salt Lake City, UT") rather than
+  // an unrelated second sentence.
+  const summary = facts.reduce(
+    (acc, fact, i) =>
+      i === 0 ? fact.text : `${acc}${fact.leadIn ? " " : " · "}${fact.text}`,
+    "",
+  );
   const nameable = facts.filter(({ nameable }) => nameable);
   if (nameable.length === 0) return summary;
 

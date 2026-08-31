@@ -39,15 +39,28 @@ describe("summarizeShareFilter", () => {
     ]);
   });
 
-  it("formats a date-taken range in both bounded and half-open forms", async () => {
+  it("coarsens a date-taken range to one level of depth — a year (feedback #109)", async () => {
+    // Same calendar year: "in {year}".
     expect(
       await textOf({
         dateTaken: { min: Date.UTC(2023, 5, 1), max: Date.UTC(2023, 5, 14) },
       }),
-    ).toEqual(["Taken between June 1, 2023 and June 14, 2023"]);
+    ).toEqual(["in 2023"]);
+
+    // Spans a year boundary: "around" the later (ending) year — matches the
+    // reported example (Dec 2023-Dec 2024 -> "around 2024"), not a midpoint
+    // or the earlier year.
+    expect(
+      await textOf({
+        dateTaken: { min: Date.UTC(2023, 11, 6), max: Date.UTC(2024, 11, 25) },
+      }),
+    ).toEqual(["around 2024"]);
 
     expect(await textOf({ dateTaken: { min: Date.UTC(2023, 5, 1) } })).toEqual([
-      "Taken on or after June 1, 2023",
+      "since 2023",
+    ]);
+    expect(await textOf({ dateTaken: { max: Date.UTC(2023, 5, 1) } })).toEqual([
+      "up to 2023",
     ]);
   });
 
@@ -116,8 +129,31 @@ describe("summarizeShareFilter", () => {
         emptyDatabase,
       ),
     ).toEqual([
-      { text: "Limited to one area on the map", nameable: false },
       { text: "2 specific people (names not set)", nameable: false },
+      { text: "Limited to one area on the map", nameable: false },
+    ]);
+  });
+
+  it("puts the people fact first and marks near-city/date facts as leadIn modifiers (feedback #108/#109)", async () => {
+    const facts = await summarizeShareFilter(
+      {
+        operation: "and",
+        conditions: [
+          { faceCluster: [7, 9] },
+          {
+            locationLatitude: { min: 40.6, max: 40.85 },
+            locationLongitude: { min: -112.0, max: -111.75 },
+          },
+          { dateTaken: { min: Date.UTC(2024, 0, 1), max: Date.UTC(2024, 11, 31) } },
+        ],
+      },
+      databaseWithNames({ 7: "Sarah", 9: "Scott" }),
+    );
+
+    expect(facts).toEqual([
+      { text: "Sarah and Scott", nameable: true },
+      { text: "near Salt Lake City, UT", nameable: true, leadIn: true },
+      { text: "in 2024", nameable: true, leadIn: true },
     ]);
   });
 });
