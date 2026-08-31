@@ -241,18 +241,24 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
                 {sharedView ? "Photrix" : <a className={css.homeLink} href="/">Photrix</a>}
               </h2>
               <small>
-                {sharedView
-                  ? "Shared view"
-                  : // Feedback #85/#103: fold the current view's generated
-                    // description into the sentence itself ("...of your
-                    // trip to Mexico") rather than appending it after a
-                    // period, which read as two unrelated fragments
-                    // ("photos. ...trip to Mexico"). Falls back to the
-                    // plain sentence (with its own period) when there's no
-                    // description yet.
-                    viewDescription
-                      ? `A better way to view photos of ${viewDescription}`
-                      : "A better way to view photos."}
+                {sharedView ? (
+                  "Shared view"
+                ) : viewDescription ? (
+                  // Feedback #85/#103: fold the current view's generated
+                  // description into the sentence itself ("...of your trip
+                  // to Mexico") rather than appending it after a period,
+                  // which read as two unrelated fragments ("photos. ...trip
+                  // to Mexico"). Feedback #107: the generated half reads as
+                  // plain static copy otherwise, so it's set off in its own
+                  // span (same brand-color treatment as the AI-search
+                  // chips) to signal "the app said this, not us".
+                  <>
+                    A better way to view photos of{" "}
+                    <span className={css.taglineGenerated}>{viewDescription}</span>
+                  </>
+                ) : (
+                  "A better way to view photos."
+                )}
               </small>
             </div>
 
