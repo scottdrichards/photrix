@@ -243,13 +243,16 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
               <small>
                 {sharedView
                   ? "Shared view"
-                  : // Feedback #85: append the current view's generated
-                    // description ("...of your trip to Mexico") when one
-                    // exists — usePageTitle already fetches/debounces this
-                    // for document.title, so this is free reuse, not an
-                    // extra request. Kept short/subtle per the original
-                    // ask's own tone, not a full sentence.
-                    `A better way to view photos.${viewDescription ? ` …${viewDescription}` : ""}`}
+                  : // Feedback #85/#103: fold the current view's generated
+                    // description into the sentence itself ("...of your
+                    // trip to Mexico") rather than appending it after a
+                    // period, which read as two unrelated fragments
+                    // ("photos. ...trip to Mexico"). Falls back to the
+                    // plain sentence (with its own period) when there's no
+                    // description yet.
+                    viewDescription
+                      ? `A better way to view photos of ${viewDescription}`
+                      : "A better way to view photos."}
               </small>
             </div>
 
