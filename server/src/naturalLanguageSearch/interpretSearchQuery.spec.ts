@@ -10,7 +10,7 @@ const vocabulary: SearchVocabulary = {
     { name: "Ben", clusterId: "person-30" },
     { name: "Aunt May" },
   ],
-  folders: ["Trips", "Family Archive", "Screenshots"],
+  folders: ["Trips", "Family Archive", "Screenshots", "Trips/Beach Trip 2024"],
 };
 
 /** A model that always answers with the given object (or raw string). */
@@ -71,6 +71,47 @@ describe("interpretSearchQuery", () => {
         semanticQuery: undefined,
       },
     });
+  });
+
+  it("matches a nested folder when the model echoes the full compound path (feedback #111)", async () => {
+    const result = await interpret(
+      "Beach trip 2024 photos",
+      respondWith({ folder: "Trips/Beach Trip 2024", mediaType: "photo" }),
+    );
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: {
+        path: "Trips/Beach Trip 2024/",
+        includeSubfolders: true,
+      },
+    });
+    expect(result.interpreted && result.chips.map((chip) => chip.label)).toContain(
+      "Folder: Trips/Beach Trip 2024",
+    );
+  });
+
+  it("matches a nested folder when the model echoes only the leaf name (feedback #111)", async () => {
+    // Realistic case: the query never mentions the parent category ("Trips")
+    // at all, and the model reasonably doesn't invent it either.
+    const result = await interpret(
+      "Beach trip 2024 photos",
+      respondWith({ folder: "Beach Trip 2024", mediaType: "photo" }),
+    );
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: { path: "Trips/Beach Trip 2024/", includeSubfolders: true },
+    });
+  });
+
+  it("still refuses a nested folder the query never actually names", async () => {
+    const result = await interpret(
+      "photos from last year",
+      respondWith({ folder: "Beach Trip 2024" }),
+    );
+
+    expect(result.interpreted && result.filter.path).toBeUndefined();
   });
 
   it("matches vocabulary case- and punctuation-insensitively", async () => {
