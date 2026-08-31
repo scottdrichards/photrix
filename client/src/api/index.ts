@@ -43,6 +43,7 @@ export type {
 } from "./types";
 
 export { buildFullShareFilter, buildShareScope } from "./filters";
+export { fetchShareScopeCount, LARGE_SHARE_THRESHOLD } from "./share";
 
 export { subscribeStatusStream, fetchStatus, setBackgroundTasksEnabled, clearHlsSessions } from "./status";
 

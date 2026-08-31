@@ -7,13 +7,14 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
-import { buildShareScope } from "./api";
+import { buildShareScope, fetchShareScopeCount, LARGE_SHARE_THRESHOLD } from "./api";
 import { FullscreenViewer } from "./components/FullscreenViewer";
 import { AccountPanel } from "./components/AccountPanel";
 import { LoginScreen } from "./components/LoginScreen";
 import { PeopleView } from "./components/PeopleView";
 import { SearchBar } from "./components/SearchBar";
 import { ShareLinkModal } from "./components/ShareLinkModal";
+import { LargeShareWarningModal } from "./components/LargeShareWarningModal";
 import { StatusModal } from "./components/StatusModal";
 import { SuggestionModal } from "./components/SuggestionModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
@@ -129,6 +130,24 @@ const ShareButton = () => {
   const { filter } = useFilter();
   const [loading, setLoading] = useState(false);
   const [modal, setModal] = useState<ShareModalState>(null);
+  // A share whose size crossed the threshold and is waiting on confirmation.
+  const [pendingLarge, setPendingLarge] = useState<{
+    scope: unknown;
+    count: number;
+  } | null>(null);
+
+  const mintAndShow = async (shareScope: unknown) => {
+    const res = await fetch("/api/auth/share-token", {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(shareScope),
+    });
+    if (!res.ok) throw new Error("Failed to issue share token");
+    const { token } = (await res.json()) as { token: string };
+    const url = buildShareUrl(token);
+    const copied = await copyToClipboard(url);
+    setModal({ url, copied });
+  };
 
   const handleShare = async () => {
     if (loading) return;
@@ -139,16 +158,37 @@ const ShareButton = () => {
         path: filter.path,
         includeSubfolders: filter.includeSubfolders,
       });
-      const res = await fetch("/api/auth/share-token", {
-        method: "POST",
-        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify(shareScope),
-      });
-      if (!res.ok) throw new Error("Failed to issue share token");
-      const { token } = (await res.json()) as { token: string };
-      const url = buildShareUrl(token);
-      const copied = await copyToClipboard(url);
-      setModal({ url, copied });
+
+      // Size the share before minting. A failure here must not block sharing —
+      // the count is a guardrail, not a gate — so fall through to the normal
+      // path if it can't be determined.
+      let count: number | null = null;
+      try {
+        count = await fetchShareScopeCount(shareScope);
+      } catch {
+        count = null;
+      }
+
+      if (count !== null && count > LARGE_SHARE_THRESHOLD) {
+        setPendingLarge({ scope: shareScope, count });
+        return;
+      }
+
+      await mintAndShow(shareScope);
+    } catch {
+      // nothing — button returns to idle
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const confirmLarge = async () => {
+    if (!pendingLarge) return;
+    const { scope } = pendingLarge;
+    setPendingLarge(null);
+    setLoading(true);
+    try {
+      await mintAndShow(scope);
     } catch {
       // nothing — button returns to idle
     } finally {
@@ -167,6 +207,14 @@ const ShareButton = () => {
         <Share24Regular fontSize={20} />
         <span className={css.btnLabel}>{loading ? "Sharing…" : "Share"}</span>
       </button>
+
+      {pendingLarge && (
+        <LargeShareWarningModal
+          count={pendingLarge.count}
+          onConfirm={() => void confirmLarge()}
+          onCancel={() => setPendingLarge(null)}
+        />
+      )}
 
       {modal && (
         <ShareLinkModal
