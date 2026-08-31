@@ -6,6 +6,34 @@
   margin-block-end: var(--space-s);
 }
 
+/* Feedback #112: "why did this match" debug toggle, next to the result
+   count. Same subdued/active styling as SearchBar's per-modality toggles. */
+.matchReasonsToggle {
+  background: none;
+  border: none;
+  padding: var(--space-xxs);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--text3, #999);
+  opacity: 0.55;
+  transition:
+    color var(--dur-fast, 120ms) ease,
+    opacity var(--dur-fast, 120ms) ease;
+}
+
+.matchReasonsToggle:hover {
+  color: var(--text1, #111);
+  opacity: 1;
+}
+
+.matchReasonsToggle[aria-pressed="true"] {
+  color: var(--brand, #2563eb);
+  opacity: 1;
+}
+
 .grid {
   display: flex;
   flex-wrap: wrap;
