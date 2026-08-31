@@ -84,8 +84,7 @@ describe("authShareTokenHandler", () => {
       searchSources: ["image"],
       // No PHOTRIX_OLLAMA_URL in tests, so the deterministic facet summary
       // stands in for the generated title.
-      description:
-        'Photos matching the search "sunset beach" · Only favorites, 4 stars or more',
+      description: '"sunset beach" · Only favorites, 4 stars or more',
     });
 
     authService.revokeToken(authToken);
