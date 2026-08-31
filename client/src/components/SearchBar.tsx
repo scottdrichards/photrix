@@ -5,6 +5,8 @@ import {
   Image24Regular,
   MusicNote224Regular,
   Search24Regular,
+  Sparkle24Filled,
+  Sparkle24Regular,
 } from "@fluentui/react-icons";
 import {
   SEARCH_SOURCES,
@@ -29,6 +31,28 @@ const SEARCH_EXAMPLES = [
 ];
 
 const WIDE_BREAKPOINT = "(min-width: 700px)";
+
+// Feedback #102: AI interpretation is on by default (that's the whole point
+// of the feature — type a sentence, get a filter back) but some searches are
+// better served by the plain per-modality vector search below it, so this is
+// a persistent opt-out rather than a one-off toggle.
+const AI_SEARCH_STORAGE_KEY = "photrix_ai_search_enabled";
+
+const readAiSearchPreference = (): boolean => {
+  try {
+    return window.localStorage.getItem(AI_SEARCH_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+};
+
+const writeAiSearchPreference = (enabled: boolean): void => {
+  try {
+    window.localStorage.setItem(AI_SEARCH_STORAGE_KEY, String(enabled));
+  } catch {
+    // Ignore storage failures — the toggle still works for this session.
+  }
+};
 
 /**
  * Filter fields a query interpretation is allowed to touch. Snapshotting exactly
@@ -76,6 +100,7 @@ export const SearchBar = () => {
   const [exampleVisible, setExampleVisible] = useState(true);
   const [isFocused, setIsFocused] = useState(false);
   const [interpretation, setInterpretation] = useState<ActiveInterpretation | null>(null);
+  const [aiSearchEnabled, setAiSearchEnabled] = useState(readAiSearchPreference);
   // Only the newest submit may apply an interpretation; an older, slower one
   // must never reach in and re-filter results the user has moved on from.
   const submitSeq = useRef(0);
@@ -139,7 +164,7 @@ export const SearchBar = () => {
     if (!value && !isWide) setIsExpanded(false);
 
     const seq = ++submitSeq.current;
-    if (!value) return;
+    if (!value || !aiSearchEnabled) return;
 
     void interpretSearchQuery(value).then((result) => {
       // Discard a response the user has already moved past, and never apply one
@@ -227,6 +252,20 @@ export const SearchBar = () => {
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [showExpanded, hasActiveQuery, isWide]);
 
+  const toggleAiSearch = () => {
+    const next = !aiSearchEnabled;
+    setAiSearchEnabled(next);
+    writeAiSearchPreference(next);
+    // Turning AI off mid-search shouldn't leave a stale AI-derived filter
+    // behind — fall back to the originally-typed query exactly like "Undo"
+    // does (not filter.semanticQuery, which by now holds only the leftover
+    // free text the interpretation didn't consume).
+    if (!next && interpretation) {
+      if (inputRef.current) inputRef.current.value = interpretation.query;
+      revertInterpretation(interpretation, { semanticQuery: interpretation.query });
+    }
+  };
+
   const toggleSource = (source: SearchSource) => {
     const isActive = activeSources.includes(source);
     const next = isActive
@@ -295,7 +334,28 @@ export const SearchBar = () => {
             <Dismiss24Regular />
           </button>
         )}
-        <div className={css.sourceToggles} role="group" aria-label="Search sources">
+        <div className={css.aiToggleGroup}>
+          <button
+            type="button"
+            className={`${css.sourceToggle} ${aiSearchEnabled ? css.sourceToggleActive : ""}`}
+            onClick={toggleAiSearch}
+            aria-pressed={aiSearchEnabled}
+            title={`AI search: ${aiSearchEnabled ? "on" : "off"}`}
+            tabIndex={showExpanded ? 0 : -1}
+          >
+            {aiSearchEnabled ? <Sparkle24Filled /> : <Sparkle24Regular />}
+          </button>
+        </div>
+        <div
+          className={css.sourceToggles}
+          role="group"
+          aria-label="Search sources"
+          title={
+            aiSearchEnabled
+              ? "Modalities the AI interpretation's leftover free text is matched against"
+              : "Modalities searched"
+          }
+        >
           {SOURCE_TOGGLES.map(({ source, label, icon }) => {
             const isActive = activeSources.includes(source);
             return (
