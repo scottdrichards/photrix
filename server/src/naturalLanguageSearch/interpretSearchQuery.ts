@@ -348,7 +348,7 @@ export const interpretSearchQuery = async ({
   }
 
   // Whatever is left describes the picture itself and goes to CLIP unchanged.
-  const visual =
+  let visual =
     typeof raw.visual === "string" ? raw.visual.trim().slice(0, MAX_VISUAL_LENGTH) : "";
 
   // Nothing structured came back: the "interpretation" is just the original
@@ -356,6 +356,18 @@ export const interpretSearchQuery = async ({
   // same results behind an AI badge.
   if (chips.length === 0) {
     return { interpreted: false, reason: "no-filters" };
+  }
+
+  // Feedback #119: "2022" against a folder literally named "2022" matched
+  // the folder (correctly) *and* kept "2022" as the leftover CLIP query —
+  // the whole query was consumed by that one structured match, so nothing
+  // is actually left to describe. The system prompt already tells the model
+  // to keep folders/dates/names out of "visual", but a small model doesn't
+  // reliably comply; this enforces it deterministically whenever `visual`
+  // is just a verbatim echo of the query some other chip already explains,
+  // regardless of which field kept it (folder, date, person, ...).
+  if (visual && normalizeForMatch(visual) === normalizeForMatch(trimmedQuery)) {
+    visual = "";
   }
 
   filter.semanticQuery = visual || undefined;

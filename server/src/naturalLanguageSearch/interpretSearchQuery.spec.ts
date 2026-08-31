@@ -114,6 +114,45 @@ describe("interpretSearchQuery", () => {
     expect(result.interpreted && result.filter.path).toBeUndefined();
   });
 
+  it("drops a leftover CLIP query that's just a verbatim echo of a folder-matched query (feedback #119)", async () => {
+    const yearFolderVocabulary: SearchVocabulary = {
+      people: [],
+      folders: ["2022"],
+    };
+    const result = await interpretSearchQuery({
+      query: "2022",
+      vocabulary: yearFolderVocabulary,
+      now: NOW,
+      generate: respondWith({ folder: "2022", visual: "2022" }),
+    });
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: { path: "2022/", includeSubfolders: true, semanticQuery: undefined },
+    });
+    expect(result.interpreted && result.chips.some((chip) => chip.field === "semanticQuery")).toBe(
+      false,
+    );
+  });
+
+  it("keeps a genuinely different leftover description alongside a folder match", async () => {
+    const yearFolderVocabulary: SearchVocabulary = {
+      people: [],
+      folders: ["2022"],
+    };
+    const result = await interpretSearchQuery({
+      query: "2022 folder sunset photos",
+      vocabulary: yearFolderVocabulary,
+      now: NOW,
+      generate: respondWith({ folder: "2022", visual: "sunset" }),
+    });
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: { path: "2022/", semanticQuery: "sunset" },
+    });
+  });
+
   it("matches vocabulary case- and punctuation-insensitively", async () => {
     const result = await interpret(
       "aunt may in family archive",
