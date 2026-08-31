@@ -830,7 +830,12 @@ const PeopleViewComponent = ({
     setSelectedFaceGroup({ id: groupId, faces: [] });
     setSelectedFaceGroupLoading(true);
 
-    fetchClusterDetail({ clusterId: groupId, signal: abortController.signal, ...filter })
+    fetchClusterDetail({
+      clusterId: groupId,
+      exactCluster: true,
+      signal: abortController.signal,
+      ...filter,
+    })
       .then((result) => {
         if (abortController.signal.aborted) return;
         if (!result.cluster) {

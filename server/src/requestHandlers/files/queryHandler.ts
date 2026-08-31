@@ -151,7 +151,11 @@ export const queryHandler = async (
       writeJson(res, 400, { error: "Missing clusterId parameter" });
       return;
     }
-    const detail = await database.getFaceClusterDetail({ filter, clusterId });
+    // Feedback #105: "View" on a Match Group needs the literal sub-cluster's
+    // faces, not the merged person it belongs to — see the comment on
+    // getFaceClusterDetail's `exactCluster` option.
+    const exactCluster = url.searchParams.get("exactCluster") === "true";
+    const detail = await database.getFaceClusterDetail({ filter, clusterId, exactCluster });
     writeJson(res, 200, detail);
     return;
   }

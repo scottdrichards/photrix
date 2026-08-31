@@ -102,6 +102,11 @@ export const fetchPeopleClusters = async ({
 export const fetchClusterDetail = async (
   {
     clusterId,
+    // Feedback #105: pass true when viewing a "Match Group"/merged
+    // sub-cluster on its own — otherwise the server resolves the request
+    // back up to the whole merged person, and "View" shows the exact same
+    // faces you already had open.
+    exactCluster = false,
     includeSubfolders = false,
     path = "",
     ratingFilter,
@@ -115,11 +120,14 @@ export const fetchClusterDetail = async (
     cameraModelFilter,
     lensFilter,
     signal,
-  }: FetchPeopleClustersOptions & { clusterId: string } = { clusterId: "" },
+  }: FetchPeopleClustersOptions & { clusterId: string; exactCluster?: boolean } = {
+    clusterId: "",
+  },
 ): Promise<PersonClusterDetailResult> => {
   const params = new URLSearchParams();
   params.set("aggregate", "peopleClusterDetail");
   params.set("clusterId", clusterId);
+  if (exactCluster) params.set("exactCluster", "true");
   if (includeSubfolders) params.set("includeSubfolders", "true");
 
   const filterParam = filtersToParam(buildFilters({
