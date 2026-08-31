@@ -50,6 +50,7 @@ const interpretation: SearchInterpretation = {
 describe("SearchBar natural-language interpretation", () => {
   beforeEach(() => {
     interpretSearchQuery.mockReset();
+    window.localStorage.clear();
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: vi.fn().mockImplementation((query: string) => ({
@@ -228,5 +229,47 @@ describe("SearchBar natural-language interpretation", () => {
 
     expect(interpretSearchQuery).not.toHaveBeenCalled();
     expect(currentFilter().semanticQuery).toBeUndefined();
+  });
+
+  it("skips the model entirely when AI search is toggled off (feedback #102)", () => {
+    interpretSearchQuery.mockResolvedValue(interpretation);
+    renderSearchBar();
+
+    fireEvent.click(screen.getByTitle("AI search: on"));
+    submit("photos of Sarah at the beach last summer");
+
+    expect(interpretSearchQuery).not.toHaveBeenCalled();
+    expect(currentFilter().semanticQuery).toBe(
+      "photos of Sarah at the beach last summer",
+    );
+  });
+
+  it("reverts an active interpretation when AI search is turned off mid-search", async () => {
+    interpretSearchQuery.mockResolvedValue(interpretation);
+    renderSearchBar();
+
+    submit("photos of Sarah at the beach last summer");
+    await screen.findByText("AI search");
+
+    fireEvent.click(screen.getByTitle("AI search: on"));
+
+    expect(screen.queryByText("AI search")).not.toBeInTheDocument();
+    expect(currentFilter().faceClusterFilter).toBeUndefined();
+    expect(currentFilter().semanticQuery).toBe(
+      "photos of Sarah at the beach last summer",
+    );
+  });
+
+  it("remembers the AI search preference across remounts", () => {
+    interpretSearchQuery.mockResolvedValue(interpretation);
+    const { unmount } = renderSearchBar();
+
+    fireEvent.click(screen.getByTitle("AI search: on"));
+    unmount();
+
+    renderSearchBar();
+    submit("photos of Sarah at the beach last summer");
+
+    expect(interpretSearchQuery).not.toHaveBeenCalled();
   });
 });
