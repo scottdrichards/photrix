@@ -10,6 +10,7 @@ import gridCss from "./ThumbnailGrid.module.css";
 
 const fetchPhotosMock = vi.fn();
 const fetchMomentClusterDetailMock = vi.fn<(clusterId: string) => Promise<MomentClusterDetail | null>>();
+const fetchSemanticSearchMock = vi.fn();
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
@@ -17,6 +18,7 @@ vi.mock("../api", async () => {
     ...actual,
     fetchPhotos: (...args: unknown[]) => fetchPhotosMock(...args),
     fetchMomentClusterDetail: (...args: [string]) => fetchMomentClusterDetailMock(...args),
+    fetchSemanticSearch: (...args: unknown[]) => fetchSemanticSearchMock(...args),
   };
 });
 
@@ -133,7 +135,12 @@ describe("ThumbnailGrid", () => {
   beforeEach(() => {
     fetchPhotosMock.mockReset();
     fetchMomentClusterDetailMock.mockReset();
+    fetchSemanticSearchMock.mockReset();
     observers.length = 0;
+  });
+
+  afterEach(() => {
+    window.history.pushState({}, "", "/");
   });
 
   it("renders the initial loading spinner inside the grid", () => {
@@ -466,5 +473,31 @@ describe("ThumbnailGrid", () => {
 
     expect(await screen.findByText("Failed to fetch photos")).toBeInTheDocument();
     consoleErrorSpy.mockRestore();
+  });
+
+  it("shows \"Showing N of total\" for a semantic search whose total exceeds the page (feedback #113)", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    fetchSemanticSearchMock.mockResolvedValueOnce({
+      items: [makePhoto("a/1.jpg"), makePhoto("a/2.jpg")],
+      total: 137,
+      query: "beach",
+    });
+
+    renderGrid();
+
+    expect(await screen.findByText("Showing 2 of 137 results")).toBeInTheDocument();
+  });
+
+  it("shows a plain count for a semantic search whose total fits on one page", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    fetchSemanticSearchMock.mockResolvedValueOnce({
+      items: [makePhoto("a/1.jpg")],
+      total: 1,
+      query: "beach",
+    });
+
+    renderGrid();
+
+    expect(await screen.findByText("1 result")).toBeInTheDocument();
   });
 });

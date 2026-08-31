@@ -450,4 +450,38 @@ describe("searchRequestHandler resilience", () => {
       "new-mid.jpg",
     ]);
   });
+
+  it("reports the true candidate count in `total`, not just the page size (feedback #113)", async () => {
+    const handler = await loadHandler({});
+
+    // 3 floor-passing hits with a page limit of 2 — `total` must still say 3.
+    const imageHits = Array.from({ length: 3 }, (_, i) => ({
+      folder: "/photos/",
+      fileName: `beach${i}.jpg`,
+      mimeType: "image/jpeg",
+      similarity: 0.5,
+    }));
+
+    const database = {
+      semanticSearch: jest.fn(async () => imageHits),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => []),
+    } as unknown as IndexDatabase;
+
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(makeReq("beach", 2), res, { database });
+
+    expect(getStatus()).toBe(200);
+    const body = getJson();
+    expect(body.items).toHaveLength(2);
+    expect(body.total).toBe(3);
+
+    // The per-source query is asked for a much larger candidate set than the
+    // page limit, not just `limit` itself — that's what makes `total` above
+    // meaningfully more than the page size.
+    const requestedLimit = (
+      database.semanticSearch as jest.MockedFunction<typeof database.semanticSearch>
+    ).mock.calls[0][2];
+    expect(requestedLimit).toBeGreaterThan(2);
+  });
 });

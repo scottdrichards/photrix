@@ -107,6 +107,20 @@ export const searchRequestHandler = async (
 
   const rawLimit = parseInt(url.searchParams.get("limit") ?? "50", 10);
   const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, rawLimit)) : 50;
+  // Feedback #113: `total` used to just be `items.length` — always equal to
+  // `limit` whenever there were at least that many hits, so the UI could
+  // only ever report "50 results" no matter how many photos actually
+  // matched. Each per-source query (semanticSearch/audioSemanticSearch/
+  // audioTranscriptSearch) is a single `ORDER BY similarity LIMIT ?` scan
+  // that already evaluates every row's similarity before truncating — the
+  // expensive part is the scan, not the row count kept afterward (see
+  // IndexDatabase.semanticSearch's comment) — so asking each source for a
+  // much larger candidate set costs relatively little and lets `total`
+  // reflect real matches within that larger set rather than just `limit`.
+  // Not the literal count of every photo in the library that matches (each
+  // source is still its own top-N, not a full scan-and-count), but a much
+  // more informative number than a number that was always exactly `limit`.
+  const CANDIDATE_LIMIT = Math.max(limit, 500);
 
   // Result ordering. Defaults to relevance (RRF rank). date/rating reorder the
   // top-N most-relevant hits by that field rather than re-selecting the library.
@@ -246,7 +260,7 @@ export const searchRequestHandler = async (
             const queryVector = await timeStage("clipEmbed", embedText(q));
             return timeStage(
               "clipScan",
-              database.semanticSearch(queryVector, dbFilter, limit),
+              database.semanticSearch(queryVector, dbFilter, CANDIDATE_LIMIT),
             );
           })(),
         )
@@ -258,13 +272,13 @@ export const searchRequestHandler = async (
             const queryVector = await timeStage("clapEmbed", embedTextWithClap(q));
             return timeStage(
               "clapScan",
-              database.audioSemanticSearch(queryVector, dbFilter, limit),
+              database.audioSemanticSearch(queryVector, dbFilter, CANDIDATE_LIMIT),
             );
           })(),
         )
       : noResults,
     useTranscript
-      ? timed("transcript", database.audioTranscriptSearch(q, dbFilter, limit))
+      ? timed("transcript", database.audioTranscriptSearch(q, dbFilter, CANDIDATE_LIMIT))
       : noResults,
   ]);
 
@@ -374,6 +388,11 @@ export const searchRequestHandler = async (
   fuseResults(clapHits, "audio");
   fuseResults(transcriptHits, "transcript");
 
+  // Feedback #113: the count of every floor-passing candidate before the
+  // display page gets sliced off it — see CANDIDATE_LIMIT above for why this
+  // is a meaningfully larger, truer number than `items.length` without
+  // costing much more than the scan the search was doing anyway.
+  const total = fused.size;
   const ranked = [...fused.values()]
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, limit);
@@ -404,14 +423,14 @@ export const searchRequestHandler = async (
   }
 
   log.info(
-    { q, items: items.length, ms: Date.now() - requestStart, timings, stageTimings },
+    { q, items: items.length, total, ms: Date.now() - requestStart, timings, stageTimings },
     "search complete",
   );
 
   const debug = url.searchParams.get("debug") === "1";
   writeJson(res, 200, {
     items,
-    total: items.length,
+    total,
     query: q,
     ...(debug ? { _diagnostics: diagnostics } : {}),
   });
