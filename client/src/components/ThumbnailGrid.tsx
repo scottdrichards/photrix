@@ -228,8 +228,15 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   const emptyMessage = filter.semanticQuery
     ? "No results found for your search."
     : "No photos yet. Upload some to get started.";
+  // Feedback #113: a semantic search's `total` (see searchRequestHandler) can
+  // now legitimately exceed the single page of items actually rendered,
+  // since semantic search has no "load more" (the sentinel below is gated
+  // off for it) — say "Showing 50 of 312" rather than a bare "312 results"
+  // that would otherwise read as a promise of 312 visible tiles.
   const resultCountLabel = data
-    ? `${numberFormatter.format(data.total)} result${data.total === 1 ? "" : "s"}`
+    ? filter.semanticQuery && data.items.length < data.total
+      ? `Showing ${numberFormatter.format(data.items.length)} of ${numberFormatter.format(data.total)} results`
+      : `${numberFormatter.format(data.total)} result${data.total === 1 ? "" : "s"}`
     : null;
   const showInitialLoading = loading && !data;
 
