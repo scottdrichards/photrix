@@ -48,6 +48,20 @@ const list = (value: unknown): string | null => {
   return null;
 };
 
+/** First token of a full name — used once there's more than one person to list. */
+const firstName = (name: string): string => name.trim().split(/\s+/)[0] ?? name;
+
+/**
+ * "Jeffrey", "Jeffrey and Jonathan", "Jeffrey, Jonathan, and Benjamin" — an
+ * Oxford-comma join with the given conjunction, matching the two/three+
+ * cases people actually read naturally. `names` must already be non-empty.
+ */
+const joinNames = (names: string[], conjunction: "and" | "or"): string => {
+  if (names.length === 1) return names[0]!;
+  if (names.length === 2) return `${names[0]} ${conjunction} ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, ${conjunction} ${names[names.length - 1]}`;
+};
+
 /**
  * Turns a share filter into plain-English facts, one per facet.
  *
@@ -62,6 +76,15 @@ export const summarizeShareFilter = async (
   const facts: ShareFilterFact[] = [];
   const clusterIds = new Set<number>();
   const named = (text: string) => facts.push({ text, nameable: true });
+  // Feedback #102/#106: `{ faceCluster: [id1, id2] }` (one leaf, an array
+  // value) is the "all of these people" shape the UI emits by default;
+  // `{ operation: "or", conditions: [{faceCluster: id1}, {faceCluster: id2}] }`
+  // (several single-id leaves) is "any of these people". That's the only
+  // structural difference this flattened leaf walk preserves, so it's what
+  // decides "and" vs "or" below rather than needing the discarded operation
+  // tree itself.
+  let facesFromArrayLeaf = false;
+  let facesLeafCount = 0;
 
   for (const condition of leafConditions(filter)) {
     // Feedback #86: when a condition carries a full lat/long bounding box
@@ -146,6 +169,8 @@ export const summarizeShareFilter = async (
         }
 
         case "faceCluster":
+          facesLeafCount += 1;
+          if (Array.isArray(value)) facesFromArrayLeaf = true;
           for (const id of Array.isArray(value) ? value : [value]) {
             if (typeof id === "number") clusterIds.add(id);
           }
@@ -187,14 +212,25 @@ export const summarizeShareFilter = async (
     const people = [...clusterIds]
       .map((id) => names.get(id))
       .filter((name): name is string => Boolean(name));
+    // Feedback #106: this fact is often the whole description, spliced
+    // straight into "A better way to view photos of {description}" — so it
+    // has to read as a bare noun phrase ("Jeffrey, Jonathan, and Benjamin"),
+    // not a full sentence with its own "Photos of..." lead-in, which
+    // doubled up once concatenated. Multiple people are named by first name
+    // only (full names get long fast); a single person keeps their full
+    // stored name since there's no ambiguity to trim for.
+    const conjunction = !facesFromArrayLeaf && facesLeafCount > 1 ? "or" : "and";
     facts.push(
       people.length > 0
         ? {
-            text: `Photos of these recognized people: ${people.join(", ")}`,
+            text: joinNames(
+              people.length > 1 ? people.map(firstName) : people,
+              conjunction,
+            ),
             nameable: true,
           }
         : {
-            text: `Photos of ${clusterIds.size} specific ${clusterIds.size === 1 ? "person" : "people"} (names not set)`,
+            text: `${clusterIds.size} specific ${clusterIds.size === 1 ? "person" : "people"} (names not set)`,
             nameable: false,
           },
     );
