@@ -82,6 +82,21 @@ const FACE_ATTRIBUTE_RESET_VERSION = 4;
 // gets populated for existing files.
 const HEIC_EMBEDDED_VIDEO_BACKFILL_VERSION = 5;
 
+// PRAGMA user_version marking that all images have been re-queued for EXIF
+// re-scan so the `tags` column (XMP dc:subject / IPTC Keywords /
+// lr:hierarchicalSubject — human-authored keyword/person tags, e.g. "Jeffrey
+// Goodsell; Timothy Goodsell") gets backfilled. The `tags` field mapping in
+// fileUtils.ts's exifFieldMapping has existed since before
+// EXIF_DESCRIPTION_BACKFILL_VERSION (3) ran, but as of 2026-08-31 zero of
+// ~195k indexed files had a non-null `tags` value even though exifr
+// correctly extracts it from real library files on demand — the one full
+// library re-scan that would have populated it (v3, for `description`) ran
+// before the extraction path worked end-to-end (and separately, IPTC segment
+// parsing was never enabled — see the `iptc: true` fix alongside this
+// migration). Re-queuing is required, not just fixing the extractor, because
+// nothing else invalidates exifProcessedAt on ordinary code changes.
+const TAGS_BACKFILL_VERSION = 6;
+
 // A cluster losing at least this fraction of its members to the confidence
 // purge is treated as a junk hub: its confident survivors are freed for
 // re-clustering rather than left behind under a junk-derived centroid.
@@ -521,6 +536,7 @@ export class IndexDatabase {
     // sees the re-queued HEIC files on its first iteration rather than
     // completing with 0 items before this migration fires off-path.
     await this.backfillHeicEmbeddedVideoDetection();
+    await this.backfillTags();
 
     this.faceClusters = new FaceClusterEngine(this.db);
 
@@ -3242,6 +3258,35 @@ export class IndexDatabase {
     log.info(
       { requeued: result?.changes ?? 0 },
       "Re-queued images for EXIF re-scan to backfill human descriptions",
+    );
+  }
+
+  /**
+   * One-time migration (gated by PRAGMA user_version) that re-queues every
+   * already-processed image for EXIF re-scan so the `tags` column (see
+   * TAGS_BACKFILL_VERSION above) gets backfilled from XMP dc:subject / IPTC
+   * Keywords / lr:hierarchicalSubject. Scoped to `tags IS NULL` so it never
+   * re-queues (and thus never clobbers) a file whose tags were already
+   * extracted or user-edited in-app.
+   */
+  private async backfillTags(): Promise<void> {
+    const versionRow = await this.db.get<{ user_version: number }>(
+      "PRAGMA user_version",
+    );
+    if ((versionRow?.user_version ?? 0) >= TAGS_BACKFILL_VERSION) return;
+
+    const result = await this.db.run(
+      `UPDATE files SET exifProcessedAt = NULL
+       WHERE exifProcessedAt IS NOT NULL
+         AND mimeType LIKE 'image/%'
+         AND tags IS NULL`,
+    );
+
+    await this.db.exec(`PRAGMA user_version = ${TAGS_BACKFILL_VERSION}`);
+    this.invalidateStatusCountsCache();
+    log.info(
+      { requeued: result?.changes ?? 0 },
+      "Re-queued images for EXIF re-scan to backfill human-authored tags/keywords",
     );
   }
 
