@@ -32,8 +32,13 @@ export const generateShareDescription = async ({
 }): Promise<string> => {
   const facts = await summarizeShareFilter(filter, database);
   if (semanticQuery) {
+    // Feedback #115: same "no leading 'Photos of'" fix as #106's people fact
+    // — this is spliced straight into "A better way to view photos of
+    // {description}", so "Photos matching the search "Tigers"" doubled up
+    // into "...view photos of Photos matching the search "Tigers"". A bare
+    // quoted phrase reads as the natural continuation instead.
     facts.unshift({
-      text: `Photos matching the search "${semanticQuery}"`,
+      text: `"${semanticQuery}"`,
       nameable: true,
     });
   }

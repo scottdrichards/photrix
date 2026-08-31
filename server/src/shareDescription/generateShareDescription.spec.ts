@@ -74,4 +74,16 @@ describe("generateShareDescription (fallback summary, feedback #108/#109)", () =
 
     expect(description).toBe("Ada Lovelace · Photos only (no videos)");
   });
+
+  it("states a semantic search term as a bare quoted phrase, not a sentence (feedback #115)", async () => {
+    const description = await generateShareDescription({
+      filter: { folder: { folder: "2025/10", recursive: true }, mimeType: { startsWith: "video/" } },
+      semanticQuery: "Tigers",
+      database: databaseWithNames({}),
+    });
+
+    expect(description).toBe(
+      '"Tigers" · Album folder: 2025/10 (including subfolders) · Videos only',
+    );
+  });
 });
