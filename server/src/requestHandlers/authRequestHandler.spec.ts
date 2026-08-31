@@ -24,13 +24,13 @@ const createJsonResponse = () => {
   return {
     res,
     getStatus: () => status,
-    getJson: () => JSON.parse(body) as { token?: string },
+    getJson: () => JSON.parse(body) as { token?: string; count?: number },
   };
 };
 
-const makeReq = (token: string, body: unknown) => {
+const makeReq = (token: string, body: unknown, url = "/api/auth/share-token") => {
   const req = new EventEmitter() as http.IncomingMessage & EventEmitter;
-  req.url = "/api/auth/share-token";
+  req.url = url;
   req.headers = {
     host: "localhost",
     authorization: `Bearer ${token}`,
@@ -134,5 +134,35 @@ describe("authShareTokenHandler", () => {
     expect(getJson().token).toBeDefined();
 
     authService.revokeToken(authToken);
+  });
+
+  it("dryRun reports the share size without minting a token", async () => {
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret";
+    const authService = await import("../auth/authService.ts");
+    const authToken = authService.issueToken();
+    const handler = await loadShareHandler();
+    const { res, getStatus, getJson } = createJsonResponse();
+
+    const queryFiles = jest.fn(() => Promise.resolve({ items: [], total: 4321 }));
+    const database = {
+      getFaceClusterNames: () => Promise.resolve(new Map<number, string>()),
+      queryFiles,
+    } as unknown as import("../indexDatabase/indexDatabase.ts").IndexDatabase;
+
+    await handler(
+      makeReq(
+        authToken,
+        { filter: { rating: { min: 4 } } },
+        "/api/auth/share-token?dryRun=1",
+      ),
+      res,
+      database,
+    );
+
+    expect(getStatus()).toBe(200);
+    expect(getJson().count).toBe(4321);
+    // A preflight must not leave a usable link behind.
+    expect(getJson().token).toBeUndefined();
+    expect(queryFiles).toHaveBeenCalled();
   });
 });
