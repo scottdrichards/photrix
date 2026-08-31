@@ -1456,9 +1456,16 @@ export function FullscreenViewer() {
                   )}
                 </>
               ) : showLiveVideo && photo.livePhotoUrl ? (
+                // Feedback #104: without a poster, the still image
+                // disappears the instant this switches from the <img>
+                // branch, leaving a blank frame until the live clip has
+                // enough data to paint. previewUrl is the same image the
+                // still branch was just showing, so this reads as a
+                // continuous transition instead of a flash of nothing.
                 <video
                   key={photo.livePhotoUrl}
                   src={photo.livePhotoUrl}
+                  poster={photo.previewUrl}
                   autoPlay
                   loop
                   playsInline
