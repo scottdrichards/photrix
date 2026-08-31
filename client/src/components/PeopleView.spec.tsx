@@ -9,6 +9,14 @@ const fetchFaceClustersPCAMock = vi.fn();
 const mergeClustersMock = vi.fn();
 const renameClusterMock = vi.fn();
 const separateClusterMock = vi.fn();
+const setPersonTagsMock = vi.fn();
+const excludeFaceFromClusterMock = vi.fn();
+// Not asserted on by any test here — just needs to resolve so the
+// unconditional on-mount effect in PeopleView doesn't throw for lack of a
+// mocked export (was missing entirely, breaking every test in this file
+// regardless of what it covered; caught while adding feedback #105 coverage).
+const fetchDefaultExclusionFilterMock = vi.fn().mockResolvedValue(null);
+const setDefaultExclusionFilterMock = vi.fn();
 const useFilterMock = vi.fn();
 const useSelectionContextMock = vi.fn();
 
@@ -21,6 +29,11 @@ vi.mock("../api", () => ({
   renameCluster: (...args: unknown[]) => renameClusterMock(...args),
   mergeClusters: (...args: unknown[]) => mergeClustersMock(...args),
   separateCluster: (...args: unknown[]) => separateClusterMock(...args),
+  setPersonTags: (...args: unknown[]) => setPersonTagsMock(...args),
+  excludeFaceFromCluster: (...args: unknown[]) => excludeFaceFromClusterMock(...args),
+  fetchDefaultExclusionFilter: (...args: unknown[]) =>
+    fetchDefaultExclusionFilterMock(...args),
+  setDefaultExclusionFilter: (...args: unknown[]) => setDefaultExclusionFilterMock(...args),
 }));
 
 vi.mock("./filter/FilterContext", () => ({
@@ -119,6 +132,7 @@ describe("PeopleView", () => {
       clusters: [
         {
           id: "person-1",
+          tags: [],
           count: 2,
           representative: {
             photo: {
@@ -135,6 +149,7 @@ describe("PeopleView", () => {
         },
         {
           id: "person-2",
+          tags: [],
           count: 1,
           representative: {
             photo: {
@@ -160,6 +175,7 @@ describe("PeopleView", () => {
         return {
           cluster: {
             id: "person-1",
+            tags: [],
             name: "Alex",
             count: 2,
             representative: {
@@ -203,6 +219,7 @@ describe("PeopleView", () => {
             centroids: [
               {
                 id: "person-4",
+                tags: [],
                 count: 3,
                 representative: {
                   photo: {
@@ -221,6 +238,7 @@ describe("PeopleView", () => {
             mergeSuggestions: [
               {
                 id: "person-3",
+                tags: [],
                 count: 2,
                 name: "Casey",
                 yearRangeLabel: "1998-2001",
@@ -245,6 +263,7 @@ describe("PeopleView", () => {
         return {
           cluster: {
             id: "person-2",
+            tags: [],
             count: 1,
             representative: {
               photo: {
@@ -281,6 +300,7 @@ describe("PeopleView", () => {
         return {
           cluster: {
             id: "person-3",
+            tags: [],
             count: 2,
             name: "Casey",
             representative: {
@@ -330,6 +350,7 @@ describe("PeopleView", () => {
         return {
           cluster: {
             id: "person-4",
+            tags: [],
             count: 3,
             name: null,
             representative: {
@@ -416,6 +437,15 @@ describe("PeopleView", () => {
       expect(screen.queryByRole("button", { name: "a.jpg" })).not.toBeInTheDocument();
     });
 
+    // Feedback #105: viewing a match group must ask the server to scope to
+    // that sub-cluster's own faces (exactCluster), not silently widen back
+    // out to the whole merged person it belongs to.
+    const calls = fetchClusterDetailMock.mock.calls as [{ clusterId: string; exactCluster?: boolean }][];
+    const groupCall = calls.find((call) => call[0].clusterId === "person-4");
+    expect(groupCall?.[0]).toMatchObject({ exactCluster: true });
+    const personCall = calls.find((call) => call[0].clusterId === "person-1");
+    expect(personCall?.[0].exactCluster).toBeFalsy();
+
     const suggestedMatchCard = screen.getByText("Casey").closest("article") as HTMLElement;
     fireEvent.click(within(suggestedMatchCard).getByRole("button", { name: "View" }));
 
@@ -444,6 +474,7 @@ describe("PeopleView", () => {
       clusters: [
         {
           id: "person-1",
+          tags: [],
           count: 2,
           name: null,
           representative: {
@@ -496,6 +527,7 @@ describe("PeopleView", () => {
       clusters: [
         {
           id: "person-1",
+          tags: [],
           count: 2,
           name: "Alex",
           representative: {
@@ -521,6 +553,7 @@ describe("PeopleView", () => {
       .mockResolvedValueOnce({
         cluster: {
           id: "person-1",
+          tags: [],
           count: 2,
           name: "Alex",
           representative: {
@@ -553,6 +586,7 @@ describe("PeopleView", () => {
             mergeSuggestions: [
               {
                 id: "person-2",
+                tags: [],
                 count: 2,
                 name: null,
                 representative: {
@@ -598,6 +632,7 @@ describe("PeopleView", () => {
     resolveBackgroundDetail?.({
       cluster: {
         id: "person-1",
+        tags: [],
         count: 4,
         name: "Alex",
         representative: {
@@ -641,6 +676,7 @@ describe("PeopleView", () => {
         centroids: [
           {
             id: "person-2",
+            tags: [],
             count: 2,
             representative: {
               photo: {
@@ -681,6 +717,7 @@ describe("PeopleView", () => {
       clusters: [
         {
           id: "person-1",
+          tags: [],
           count: 2,
           name: "Alex",
           representative: { photo: photo("a.jpg"), box },
@@ -695,6 +732,7 @@ describe("PeopleView", () => {
     fetchClusterDetailMock.mockResolvedValueOnce({
       cluster: {
         id: "person-1",
+        tags: [],
         count: 2,
         name: "Alex",
         representative: { photo: photo("a.jpg"), box },
@@ -726,6 +764,7 @@ describe("PeopleView", () => {
     fetchClusterDetailMock.mockResolvedValueOnce({
       cluster: {
         id: "person-1",
+        tags: [],
         count: 4,
         name: "Alex",
         representative: { photo: photo("a.jpg"), box },
@@ -797,6 +836,7 @@ describe("PeopleView", () => {
       clusters: [
         {
           id: "person-1",
+          tags: [],
           count: 2,
           name: "Alex",
           representative: {
@@ -821,6 +861,7 @@ describe("PeopleView", () => {
     fetchClusterDetailMock.mockResolvedValue({
       cluster: {
         id: "person-1",
+        tags: [],
         count: 2,
         name: "Alex",
         representative: {
@@ -840,6 +881,7 @@ describe("PeopleView", () => {
         mergeSuggestions: [
           {
             id: "person-2",
+            tags: [],
             count: 1,
             name: null,
             representative: {
@@ -894,6 +936,7 @@ describe("PeopleView", () => {
       clusters: [
         {
           id: "person-1",
+          tags: [],
           count: 4,
           name: "Alex",
           representative: {
@@ -919,6 +962,7 @@ describe("PeopleView", () => {
       .mockResolvedValueOnce({
         cluster: {
           id: "person-1",
+          tags: [],
           count: 4,
           name: "Alex",
           representative: {
@@ -950,6 +994,7 @@ describe("PeopleView", () => {
           centroids: [
             {
               id: "person-1",
+              tags: [],
               count: 2,
               representative: {
                 photo: {
@@ -966,6 +1011,7 @@ describe("PeopleView", () => {
             },
             {
               id: "person-2",
+              tags: [],
               count: 2,
               representative: {
                 photo: {
@@ -987,6 +1033,7 @@ describe("PeopleView", () => {
       .mockResolvedValueOnce({
         cluster: {
           id: "person-1",
+          tags: [],
           count: 2,
           name: "Alex",
           representative: {
@@ -1018,6 +1065,7 @@ describe("PeopleView", () => {
           centroids: [
             {
               id: "person-1",
+              tags: [],
               count: 2,
               representative: {
                 photo: {
@@ -1062,6 +1110,7 @@ describe("PeopleView", () => {
       clusters: [
         {
           id: "person-1",
+          tags: [],
           count: 2,
           name: "Alex",
           representative: {
@@ -1105,6 +1154,7 @@ describe("PeopleView", () => {
     resolveDetail({
       cluster: {
         id: "person-1",
+        tags: [],
         name: "Alex",
         count: 2,
         representative: {
@@ -1163,6 +1213,7 @@ describe("PeopleView", () => {
       clusters: [
         {
           id: "person-1",
+          tags: [],
           count: manyFaces.length,
           name: "Alex",
           representative: { photo: photo("face-0.jpg"), box },
@@ -1176,6 +1227,7 @@ describe("PeopleView", () => {
     fetchClusterDetailMock.mockResolvedValue({
       cluster: {
         id: "person-1",
+        tags: [],
         count: manyFaces.length,
         name: "Alex",
         representative: { photo: photo("face-0.jpg"), box },
