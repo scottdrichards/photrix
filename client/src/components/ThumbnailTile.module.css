@@ -360,6 +360,12 @@
   border-radius: 4px;
   border: 2px solid rgba(255, 255, 255, 0.92);
   box-shadow: var(--shadow-sm);
+  /* Feedback #110: these load lazily (`loading="lazy"` in ThumbnailTile) and
+     had no background at all, so a peek scrolling into view showed a blank
+     gap — border and shadow already painted, image content missing — until
+     it finished loading. Same placeholder fill PhotoStackModal's member grid
+     already uses. */
+  background-color: var(--bg4);
   transform: translate(calc(var(--peek-index, 0) * 7px), calc(var(--peek-index, 0) * -6px))
     rotate(calc((var(--peek-index, 0) + 1) * -7deg));
   z-index: calc(-1 * var(--peek-index, 0));

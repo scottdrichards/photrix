@@ -804,6 +804,20 @@ describe("ThumbnailTile", () => {
     );
   });
 
+  it("hides the match-reason source badges by default, shows them via showMatchReasons (feedback #112)", () => {
+    const photo = createPhoto({ searchSources: ["image", "transcript"] });
+
+    const { rerender } = render(<ThumbnailTile photo={photo} />);
+    expect(screen.queryByLabelText(/Matched by:/)).not.toBeInTheDocument();
+
+    rerender(<ThumbnailTile photo={photo} showMatchReasons />);
+    expect(
+      screen.getByLabelText(
+        "Matched by: Matched on image content, Matched in transcript",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("displays filename for non-image files", () => {
     const photo = createPhoto({
       path: "a/document.pdf",

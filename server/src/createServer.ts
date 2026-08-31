@@ -273,7 +273,9 @@ export const createServer = (
             return;
           }
 
-          if (req.url === "/api/auth/share-token" && req.method === "POST") {
+          // Matched on pathname, not the raw url: this route takes a `?dryRun=1`
+          // query param, which an exact-equality match would silently 404.
+          if (pathname === "/api/auth/share-token" && req.method === "POST") {
             await authShareTokenHandler(req, res, database);
             return;
           }

@@ -265,16 +265,30 @@ export const interpretSearchQuery = async ({
   if (clusterIds.length > 0) filter.faceClusterFilter = clusterIds;
   if (taggedNames.length > 0) filter.peopleInImageFilter = taggedNames;
 
-  // Folder — must be a real top-level folder *and* be named in the query. The
-  // model happily answers "Trips" for any query about a trip.
+  // Folder — must be a real folder *and* be named in the query. The model
+  // happily answers "Trips" for any query about a trip.
+  //
+  // Feedback #111: a vocabulary entry can now be a nested "Parent/Child"
+  // relative path (see searchVocabulary.ts), not just a bare top-level name.
+  // The model is still only ever asked to copy one exact string, and for a
+  // nested folder it just as often echoes only the meaningful leaf part
+  // ("Beach trip 2024") as the full compound one — a real user's query text
+  // almost never mentions the parent category either. So: fall back to
+  // matching on each entry's leaf segment when the full-string match misses,
+  // and check `queryMentions` against that same leaf, not the whole path.
   if (typeof raw.folder === "string" && raw.folder.trim()) {
     const requested = raw.folder.trim();
-    const match = vocabulary.folders.find(
-      (folder) => normalizeForMatch(folder) === normalizeForMatch(requested),
-    );
+    const normalizedRequested = normalizeForMatch(requested);
+    const leafOf = (folder: string) =>
+      folder.includes("/") ? folder.slice(folder.lastIndexOf("/") + 1) : folder;
+    const match =
+      vocabulary.folders.find((folder) => normalizeForMatch(folder) === normalizedRequested) ??
+      vocabulary.folders.find(
+        (folder) => normalizeForMatch(leafOf(folder)) === normalizedRequested,
+      );
     if (!match) {
       ignored.push(requested);
-    } else if (queryMentions(trimmedQuery, match)) {
+    } else if (queryMentions(trimmedQuery, leafOf(match))) {
       filter.path = `${match}/`;
       filter.includeSubfolders = true;
       chips.push({ field: "path", label: `Folder: ${match}` });
@@ -334,7 +348,7 @@ export const interpretSearchQuery = async ({
   }
 
   // Whatever is left describes the picture itself and goes to CLIP unchanged.
-  const visual =
+  let visual =
     typeof raw.visual === "string" ? raw.visual.trim().slice(0, MAX_VISUAL_LENGTH) : "";
 
   // Nothing structured came back: the "interpretation" is just the original
@@ -342,6 +356,18 @@ export const interpretSearchQuery = async ({
   // same results behind an AI badge.
   if (chips.length === 0) {
     return { interpreted: false, reason: "no-filters" };
+  }
+
+  // Feedback #119: "2022" against a folder literally named "2022" matched
+  // the folder (correctly) *and* kept "2022" as the leftover CLIP query —
+  // the whole query was consumed by that one structured match, so nothing
+  // is actually left to describe. The system prompt already tells the model
+  // to keep folders/dates/names out of "visual", but a small model doesn't
+  // reliably comply; this enforces it deterministically whenever `visual`
+  // is just a verbatim echo of the query some other chip already explains,
+  // regardless of which field kept it (folder, date, person, ...).
+  if (visual && normalizeForMatch(visual) === normalizeForMatch(trimmedQuery)) {
+    visual = "";
   }
 
   filter.semanticQuery = visual || undefined;

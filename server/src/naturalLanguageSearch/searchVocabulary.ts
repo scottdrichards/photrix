@@ -19,7 +19,13 @@ export type VocabularyPerson = {
 
 export type SearchVocabulary = {
   people: VocabularyPerson[];
-  /** Top-level folder names, most populated first. */
+  /**
+   * Folder names, most populated first — a bare top-level name ("Trips") or
+   * a one-level-deep relative path ("Trips/Beach Trip 2024"), see
+   * `loadFolders`. Either form is a valid `path` filter value as-is, so
+   * `interpretSearchQuery`'s matching/assignment needs no change for the
+   * nested case.
+   */
   folders: string[];
 };
 
@@ -27,7 +33,14 @@ export type SearchVocabulary = {
 // prompt, so it stays small enough to keep the 3B model's attention (and the
 // request fast) rather than exhaustive.
 const MAX_PEOPLE = 40;
-const MAX_FOLDERS = 40;
+const MAX_FOLDERS = 60;
+// How many of the most-populated top-level folders to look inside for a
+// second level of vocabulary. Bounded because each one is its own SQL round
+// trip (see loadFolders) — most libraries' real "the thing someone would
+// name in a search" folders (an event, a trip) sit one level under a handful
+// of big top-level categories ("Trips", "Family Archive"), not scattered
+// under all of them, so this doesn't need to be large to cover the common case.
+const MAX_TOP_FOLDERS_TO_EXPAND = 15;
 
 // The library's people and folders change on a human timescale; re-querying them
 // per search would add two SQL round-trips to the interactive path for nothing.
@@ -91,10 +104,38 @@ const loadPeople = async (database: IndexDatabase): Promise<VocabularyPerson[]> 
   return people;
 };
 
+/**
+ * Feedback #111: "Beach trip 2024" should match a real folder even when it's
+ * nested ("Trips/Beach trip 2024"), not just a top-level one — previously
+ * only top-level names were ever offered to the model, so any query naming
+ * an actual album/event folder one level down silently missed the folder
+ * filter entirely and fell back to date+visual matching alone. Expands the
+ * most-populated top-level folders one level deeper and represents each
+ * nested entry as its `Parent/Child` relative path, which is already a
+ * valid `path` filter value on its own — no change needed to how a match
+ * gets turned into a filter.
+ */
 const loadFolders = async (database: IndexDatabase): Promise<string[]> => {
   try {
-    const folders = await database.getFolders("/", {});
-    return folders
+    const topLevel = await database.getFolders("/", {});
+    const ranked = [...topLevel].sort((a, b) => b.count - a.count);
+
+    const nestedEntries = await Promise.all(
+      ranked.slice(0, MAX_TOP_FOLDERS_TO_EXPAND).map(async (parent) => {
+        try {
+          const children = await database.getFolders(`/${parent.name}/`, {});
+          return children.map((child) => ({
+            name: `${parent.name}/${child.name}`,
+            count: child.count,
+          }));
+        } catch (error) {
+          log.debug({ err: error, folder: parent.name }, "nested folder listing unavailable");
+          return [];
+        }
+      }),
+    );
+
+    return [...ranked, ...nestedEntries.flat()]
       .sort((a, b) => b.count - a.count)
       .slice(0, MAX_FOLDERS)
       .map(({ name }) => name);

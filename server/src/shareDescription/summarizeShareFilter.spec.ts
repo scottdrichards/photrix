@@ -39,22 +39,69 @@ describe("summarizeShareFilter", () => {
     ]);
   });
 
-  it("formats a date-taken range in both bounded and half-open forms", async () => {
+  it("coarsens a date-taken range to one level of depth — a year (feedback #109)", async () => {
+    // Same calendar year: "in {year}".
     expect(
       await textOf({
         dateTaken: { min: Date.UTC(2023, 5, 1), max: Date.UTC(2023, 5, 14) },
       }),
-    ).toEqual(["Taken between June 1, 2023 and June 14, 2023"]);
+    ).toEqual(["in 2023"]);
+
+    // Spans a year boundary: "around" the later (ending) year — matches the
+    // reported example (Dec 2023-Dec 2024 -> "around 2024"), not a midpoint
+    // or the earlier year.
+    expect(
+      await textOf({
+        dateTaken: { min: Date.UTC(2023, 11, 6), max: Date.UTC(2024, 11, 25) },
+      }),
+    ).toEqual(["around 2024"]);
 
     expect(await textOf({ dateTaken: { min: Date.UTC(2023, 5, 1) } })).toEqual([
-      "Taken on or after June 1, 2023",
+      "since 2023",
+    ]);
+    expect(await textOf({ dateTaken: { max: Date.UTC(2023, 5, 1) } })).toEqual([
+      "up to 2023",
     ]);
   });
 
-  it("resolves face-cluster ids to the people's names", async () => {
+  it("resolves face-cluster ids to the people's names, joined as a bare noun phrase (feedback #106)", async () => {
+    // Bare phrase, not a full sentence — this fact is spliced straight into
+    // "A better way to view photos of {description}" (feedback #102/#103),
+    // so a leading "Photos of these recognized people:" would double up.
     expect(
       await textOf({ faceCluster: [7, 9] }, databaseWithNames({ 7: "Ada", 9: "Grace" })),
-    ).toEqual(["Photos of these recognized people: Ada, Grace"]);
+    ).toEqual(["Ada and Grace"]);
+  });
+
+  it("keeps the full name for a single recognized person", async () => {
+    expect(
+      await textOf({ faceCluster: [7] }, databaseWithNames({ 7: "Ada Lovelace" })),
+    ).toEqual(["Ada Lovelace"]);
+  });
+
+  it("uses first names only and an Oxford comma once there are 3+ people", async () => {
+    expect(
+      await textOf(
+        { faceCluster: [1, 2, 3] },
+        databaseWithNames({
+          1: "Jeffrey Goodsell",
+          2: "Jonathan Christensen",
+          3: "Benjamin Brown",
+        }),
+      ),
+    ).toEqual(["Jeffrey, Jonathan, and Benjamin"]);
+  });
+
+  it("says \"or\" instead of \"and\" for an any-of-these-people filter", async () => {
+    expect(
+      await textOf(
+        {
+          operation: "or",
+          conditions: [{ faceCluster: 7 }, { faceCluster: 9 }],
+        },
+        databaseWithNames({ 7: "Ada", 9: "Grace" }),
+      ),
+    ).toEqual(["Ada or Grace"]);
   });
 
   it("skips the mimeType nest produced by the 'other' media type", async () => {
@@ -82,8 +129,31 @@ describe("summarizeShareFilter", () => {
         emptyDatabase,
       ),
     ).toEqual([
+      { text: "2 specific people (names not set)", nameable: false },
       { text: "Limited to one area on the map", nameable: false },
-      { text: "Photos of 2 specific people (names not set)", nameable: false },
+    ]);
+  });
+
+  it("puts the people fact first and marks near-city/date facts as leadIn modifiers (feedback #108/#109)", async () => {
+    const facts = await summarizeShareFilter(
+      {
+        operation: "and",
+        conditions: [
+          { faceCluster: [7, 9] },
+          {
+            locationLatitude: { min: 40.6, max: 40.85 },
+            locationLongitude: { min: -112.0, max: -111.75 },
+          },
+          { dateTaken: { min: Date.UTC(2024, 0, 1), max: Date.UTC(2024, 11, 31) } },
+        ],
+      },
+      databaseWithNames({ 7: "Sarah", 9: "Scott" }),
+    );
+
+    expect(facts).toEqual([
+      { text: "Sarah and Scott", nameable: true },
+      { text: "near Salt Lake City, UT", nameable: true, leadIn: true },
+      { text: "in 2024", nameable: true, leadIn: true },
     ]);
   });
 });

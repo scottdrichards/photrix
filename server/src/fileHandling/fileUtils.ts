@@ -420,6 +420,14 @@ const parseRawExifData = async (
     const rawData: unknown = await exifr.parse(fullPath, {
       translateValues: false,
       xmp: true,
+      // Some tools (older Windows Photo Gallery/Picasa-style taggers, some
+      // IPTC-only workflows) write freeform tags/keywords to the IPTC IIM
+      // "Keywords" (2:25) field rather than XMP dc:subject. exifr's `iptc`
+      // segment parser defaults to `false` and was never enabled here, so
+      // the "Keywords" alias in the `tags` field mapping below was dead —
+      // it could never match anything. XMP dc:subject/hierarchicalSubject
+      // (the common case) worked without this.
+      iptc: true,
       ifd0: {},
       exif: {},
       gps: {},

@@ -32,14 +32,28 @@ export const generateShareDescription = async ({
 }): Promise<string> => {
   const facts = await summarizeShareFilter(filter, database);
   if (semanticQuery) {
+    // Feedback #115: same "no leading 'Photos of'" fix as #106's people fact
+    // — this is spliced straight into "A better way to view photos of
+    // {description}", so "Photos matching the search "Tigers"" doubled up
+    // into "...view photos of Photos matching the search "Tigers"". A bare
+    // quoted phrase reads as the natural continuation instead.
     facts.unshift({
-      text: `Photos matching the search "${semanticQuery}"`,
+      text: `"${semanticQuery}"`,
       nameable: true,
     });
   }
   if (facts.length === 0) return "Shared photos";
 
-  const summary = facts.map(({ text }) => text).join(" · ");
+  // Feedback #108/#109: a `leadIn` fact (near-city, coarse date — see
+  // summarizeShareFilter) glues onto the previous fact with a bare space
+  // instead of the usual " · " separator, so it reads as a modifier on it
+  // ("Sarah, Scott, Alice, and Amelia near Salt Lake City, UT") rather than
+  // an unrelated second sentence.
+  const summary = facts.reduce(
+    (acc, fact, i) =>
+      i === 0 ? fact.text : `${acc}${fact.leadIn ? " " : " · "}${fact.text}`,
+    "",
+  );
   const nameable = facts.filter(({ nameable }) => nameable);
   if (nameable.length === 0) return summary;
 

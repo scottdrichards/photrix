@@ -82,6 +82,21 @@ const FACE_ATTRIBUTE_RESET_VERSION = 4;
 // gets populated for existing files.
 const HEIC_EMBEDDED_VIDEO_BACKFILL_VERSION = 5;
 
+// PRAGMA user_version marking that all images have been re-queued for EXIF
+// re-scan so the `tags` column (XMP dc:subject / IPTC Keywords /
+// lr:hierarchicalSubject — human-authored keyword/person tags, e.g. "Jeffrey
+// Goodsell; Timothy Goodsell") gets backfilled. The `tags` field mapping in
+// fileUtils.ts's exifFieldMapping has existed since before
+// EXIF_DESCRIPTION_BACKFILL_VERSION (3) ran, but as of 2026-08-31 zero of
+// ~195k indexed files had a non-null `tags` value even though exifr
+// correctly extracts it from real library files on demand — the one full
+// library re-scan that would have populated it (v3, for `description`) ran
+// before the extraction path worked end-to-end (and separately, IPTC segment
+// parsing was never enabled — see the `iptc: true` fix alongside this
+// migration). Re-queuing is required, not just fixing the extractor, because
+// nothing else invalidates exifProcessedAt on ordinary code changes.
+const TAGS_BACKFILL_VERSION = 6;
+
 // A cluster losing at least this fraction of its members to the confidence
 // purge is treated as a junk hub: its confident survivors are freed for
 // re-clustering rather than left behind under a junk-derived centroid.
@@ -521,6 +536,7 @@ export class IndexDatabase {
     // sees the re-queued HEIC files on its first iteration rather than
     // completing with 0 items before this migration fires off-path.
     await this.backfillHeicEmbeddedVideoDetection();
+    await this.backfillTags();
 
     this.faceClusters = new FaceClusterEngine(this.db);
 
@@ -2436,8 +2452,19 @@ export class IndexDatabase {
   async getFaceClusterDetail(options: {
     filter: QueryOptions["filter"];
     clusterId: string;
+    /**
+     * Feedback #105: opening a person always resolves up to the merged
+     * "canonical" person id (`effectivePersonId` below) so the whole family
+     * of merged sub-clusters shows as one page. But the "Match Groups"
+     * panel on that page lets you view one merged-in sub-cluster on its
+     * own — passing `exactCluster: true` there keeps the face query scoped
+     * to the literal `clusterId` requested instead of re-widening back out
+     * to every face under the merged person, which silently made "View" on
+     * a match group a no-op (it just showed the same full person again).
+     */
+    exactCluster?: boolean;
   }): Promise<FaceClusterDetailResult> {
-    const { filter, clusterId } = options;
+    const { filter, clusterId, exactCluster = false } = options;
     const numericClusterId = faceClusterIdFromString(clusterId);
     if (numericClusterId === null || numericClusterId <= 0) {
       return { cluster: null };
@@ -2455,7 +2482,18 @@ export class IndexDatabase {
     // unmerged persons (99.9% of cases) can bypass the COALESCE join that
     // forced a full scan of all 111k faceClusters rows (~470ms per query);
     // the direct clusterId = ? lookup uses the by_cluster covering index (1ms).
+    // An explicit `exactCluster` request takes the same fast direct-id path
+    // even when the cluster *is* merged, since it deliberately wants just
+    // that one sub-cluster's faces rather than the merged person's.
     const isUnmerged = clusterRow.personId === null;
+    const useDirectClusterFilter = isUnmerged || exactCluster;
+    // The id the *faces* queries below scope to — the merged person for a
+    // normal "open this person" request, or the literal requested cluster
+    // for an exactCluster request. Metadata (name/tags/sibling centroids)
+    // below intentionally keeps using effectivePersonId regardless — a
+    // merged-in sub-cluster has no name of its own, and callers that pass
+    // exactCluster only ever read `.faces` off the result.
+    const faceScopeId = useDirectClusterFilter ? numericClusterId : effectivePersonId;
 
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
 
@@ -2478,7 +2516,7 @@ export class IndexDatabase {
               ON faces.folder = filtered_files.folder
              AND faces.fileName = filtered_files.fileName
             ${
-              isUnmerged
+              useDirectClusterFilter
                 ? `WHERE faces.clusterId > 0 AND faces.clusterId = ?`
                 : `JOIN faceClusters
                      ON faceClusters.id = faces.clusterId
@@ -2488,7 +2526,7 @@ export class IndexDatabase {
             ORDER BY faces.clusterSimilarity DESC, faces.id
             LIMIT ${MAX_FACES_IN_CLUSTER_DETAIL}
           )`
-      : isUnmerged
+      : useDirectClusterFilter
         ? `WITH limited AS (
              SELECT id FROM faces
              WHERE clusterId > 0 AND clusterId = ?
@@ -2540,7 +2578,7 @@ export class IndexDatabase {
         AND files.fileName = faces.fileName
        ORDER BY faces.clusterSimilarity DESC, faces.id`,
       ...whereParams,
-      effectivePersonId,
+      faceScopeId,
     );
 
     if (!rows.length) {
@@ -2551,27 +2589,42 @@ export class IndexDatabase {
     // list is capped; the unfiltered unmerged path is pure index-only (1ms);
     // the COALESCE variant is kept only for merged persons and filtered queries.
     const countRow = whereClause
-      ? await this.db.get<{ count: number }>(
-          `WITH filtered_files AS MATERIALIZED (
-             SELECT folder, fileName FROM files WHERE ${whereClause}
-           )
-           SELECT COUNT(*) AS count
-           FROM filtered_files
-           CROSS JOIN faces
-             ON faces.folder = filtered_files.folder
-            AND faces.fileName = filtered_files.fileName
-           JOIN faceClusters
-             ON faceClusters.id = faces.clusterId
-           WHERE COALESCE(faceClusters.personId, faces.clusterId) = ?
-             AND faces.clusterId > 0`,
-          ...whereParams,
-          effectivePersonId,
-        )
-      : isUnmerged
+      ? useDirectClusterFilter
+        ? await this.db.get<{ count: number }>(
+            `WITH filtered_files AS MATERIALIZED (
+               SELECT folder, fileName FROM files WHERE ${whereClause}
+             )
+             SELECT COUNT(*) AS count
+             FROM filtered_files
+             CROSS JOIN faces
+               ON faces.folder = filtered_files.folder
+              AND faces.fileName = filtered_files.fileName
+             WHERE faces.clusterId = ?
+               AND faces.clusterId > 0`,
+            ...whereParams,
+            faceScopeId,
+          )
+        : await this.db.get<{ count: number }>(
+            `WITH filtered_files AS MATERIALIZED (
+               SELECT folder, fileName FROM files WHERE ${whereClause}
+             )
+             SELECT COUNT(*) AS count
+             FROM filtered_files
+             CROSS JOIN faces
+               ON faces.folder = filtered_files.folder
+              AND faces.fileName = filtered_files.fileName
+             JOIN faceClusters
+               ON faceClusters.id = faces.clusterId
+             WHERE COALESCE(faceClusters.personId, faces.clusterId) = ?
+               AND faces.clusterId > 0`,
+            ...whereParams,
+            faceScopeId,
+          )
+      : useDirectClusterFilter
         ? await this.db.get<{ count: number }>(
             `SELECT COUNT(*) AS count FROM faces
              WHERE clusterId > 0 AND clusterId = ?`,
-            effectivePersonId,
+            faceScopeId,
           )
         : await this.db.get<{ count: number }>(
             `SELECT COUNT(*) AS count
@@ -2580,7 +2633,7 @@ export class IndexDatabase {
                ON faceClusters.id = faces.clusterId
              WHERE faces.clusterId > 0
                AND COALESCE(faceClusters.personId, faces.clusterId) = ?`,
-            effectivePersonId,
+            faceScopeId,
           );
 
     const faces = rows.map(faceRowToClusterFace);
@@ -3242,6 +3295,35 @@ export class IndexDatabase {
     log.info(
       { requeued: result?.changes ?? 0 },
       "Re-queued images for EXIF re-scan to backfill human descriptions",
+    );
+  }
+
+  /**
+   * One-time migration (gated by PRAGMA user_version) that re-queues every
+   * already-processed image for EXIF re-scan so the `tags` column (see
+   * TAGS_BACKFILL_VERSION above) gets backfilled from XMP dc:subject / IPTC
+   * Keywords / lr:hierarchicalSubject. Scoped to `tags IS NULL` so it never
+   * re-queues (and thus never clobbers) a file whose tags were already
+   * extracted or user-edited in-app.
+   */
+  private async backfillTags(): Promise<void> {
+    const versionRow = await this.db.get<{ user_version: number }>(
+      "PRAGMA user_version",
+    );
+    if ((versionRow?.user_version ?? 0) >= TAGS_BACKFILL_VERSION) return;
+
+    const result = await this.db.run(
+      `UPDATE files SET exifProcessedAt = NULL
+       WHERE exifProcessedAt IS NOT NULL
+         AND mimeType LIKE 'image/%'
+         AND tags IS NULL`,
+    );
+
+    await this.db.exec(`PRAGMA user_version = ${TAGS_BACKFILL_VERSION}`);
+    this.invalidateStatusCountsCache();
+    log.info(
+      { requeued: result?.changes ?? 0 },
+      "Re-queued images for EXIF re-scan to backfill human-authored tags/keywords",
     );
   }
 

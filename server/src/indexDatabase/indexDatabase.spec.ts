@@ -1113,6 +1113,60 @@ describe("IndexDatabase", () => {
       });
     });
 
+    it("exactCluster scopes a merged sub-cluster's own faces instead of the whole merged person (feedback #105)", async () => {
+      await withTempDb(async (db) => {
+        const unit = (values: number[]) => {
+          const arr = new Float64Array(128);
+          const magnitude = Math.hypot(...values) || 1;
+          values.forEach((value, index) => {
+            arr[index] = value / magnitude;
+          });
+          return arr;
+        };
+
+        await db.addFile(createRecord("main2/a.jpg", { dimensionsWidth: 2000 }));
+        await db.saveFaceDetectionResult("main2/a.jpg", [
+          { box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([1, 0, 0]) },
+        ]);
+        await db.addFile(createRecord("main2/b.jpg", { dimensionsWidth: 2000 }));
+        await db.saveFaceDetectionResult("main2/b.jpg", [
+          { box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([1, 0.01, 0]) },
+        ]);
+
+        await db.addFile(createRecord("bg2/seed.jpg", { dimensionsWidth: 2000 }));
+        await db.saveFaceDetectionResult("bg2/seed.jpg", [
+          { box: { x: 0.5, y: 0.5, width: 0.03, height: 0.03 }, confidence: 0.9, embedding: unit([0, 0, 1]) },
+        ]);
+        await db.addFile(createRecord("bg2/second.jpg", { dimensionsWidth: 2000 }));
+        await db.saveFaceDetectionResult("bg2/second.jpg", [
+          { box: { x: 0.5, y: 0.5, width: 0.03, height: 0.03 }, confidence: 0.9, embedding: unit([0, 0.02, 1]) },
+        ]);
+
+        const before = await db.queryFaceClusters({ filter: {} });
+        const main = before.clusters.find((c) => c.representative.path.startsWith("/main2/"));
+        const bg = before.clusters.find((c) => c.representative.path.startsWith("/bg2/"));
+        expect(main).toBeDefined();
+        expect(bg).toBeDefined();
+
+        await expect(db.mergeClusters(bg!.id, main!.id)).resolves.toBe(true);
+
+        // Without exactCluster, asking for the merged-away sub-cluster's id
+        // resolves up to the canonical person and returns every face.
+        const merged = await db.getFaceClusterDetail({ filter: {}, clusterId: bg!.id });
+        expect(merged.cluster?.faces).toHaveLength(4);
+
+        // With exactCluster, the same id returns only its own two faces.
+        const exact = await db.getFaceClusterDetail({
+          filter: {},
+          clusterId: bg!.id,
+          exactCluster: true,
+        });
+        const exactPaths = (exact.cluster?.faces ?? []).map((f) => f.path).sort();
+        expect(exactPaths).toEqual(["/bg2/second.jpg", "/bg2/seed.jpg"]);
+        expect(exact.cluster?.count).toBe(2);
+      });
+    });
+
     it("stores person names on the face cluster record and returns them in people queries", async () => {
       await withTempDb(async (db) => {
         const unit = (values: number[]) => {

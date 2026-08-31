@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { QuestionCircle20Filled, QuestionCircle20Regular } from "@fluentui/react-icons";
 import type { MomentClusterMember, PhotoItem } from "../api";
 import { fetchMomentClusterDetail, fetchPhotos, fetchSemanticSearch } from "../api";
 import { Spinner } from "../Spinner";
@@ -42,6 +43,12 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  // Feedback #112: per-tile "why did this match" icons (image/audio/
+  // transcript source badges) are debug clutter for ordinary search
+  // browsing — off by default, toggled on via the button next to the
+  // result count. Local/session-only, not a filter field: it doesn't
+  // change what's returned, only whether the reason is displayed.
+  const [showMatchReasons, setShowMatchReasons] = useState(false);
 
   // The moment cluster whose "more options" modal (permanently unstack / pick
   // a different representative) is currently open, or null. This is now a
@@ -228,8 +235,15 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   const emptyMessage = filter.semanticQuery
     ? "No results found for your search."
     : "No photos yet. Upload some to get started.";
+  // Feedback #113: a semantic search's `total` (see searchRequestHandler) can
+  // now legitimately exceed the single page of items actually rendered,
+  // since semantic search has no "load more" (the sentinel below is gated
+  // off for it) — say "Showing 50 of 312" rather than a bare "312 results"
+  // that would otherwise read as a promise of 312 visible tiles.
   const resultCountLabel = data
-    ? `${numberFormatter.format(data.total)} result${data.total === 1 ? "" : "s"}`
+    ? filter.semanticQuery && data.items.length < data.total
+      ? `Showing ${numberFormatter.format(data.items.length)} of ${numberFormatter.format(data.total)} results`
+      : `${numberFormatter.format(data.total)} result${data.total === 1 ? "" : "s"}`
     : null;
   const showInitialLoading = loading && !data;
 
@@ -243,6 +257,29 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
         <div className={css.statusRow} aria-live="polite">
           <span>{resultCountLabel}</span>
           {isStale && <Spinner size="extra-tiny" />}
+          {/* Feedback #112: match-reason icons are debug info, not
+              something to show by default — this is the opt-in. Only
+              meaningful during a semantic search, since that's the only
+              time a tile can carry `searchSources` at all. */}
+          {filter.semanticQuery && (
+            <button
+              type="button"
+              className={css.matchReasonsToggle}
+              onClick={() => setShowMatchReasons((prev) => !prev)}
+              aria-pressed={showMatchReasons}
+              title={
+                showMatchReasons
+                  ? "Hide why each result matched"
+                  : "Show why each result matched"
+              }
+            >
+              {showMatchReasons ? (
+                <QuestionCircle20Filled />
+              ) : (
+                <QuestionCircle20Regular />
+              )}
+            </button>
+          )}
           <SortControl />
         </div>
       ) : null}
@@ -301,6 +338,7 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
                   onOpenStackActions={() => setExpandedStackClusterId(clusterIdKey!)}
                   className={memberClassName}
                   viewTransitionName={photoViewTransitionName(member.photo.path)}
+                  showMatchReasons={showMatchReasons}
                 />
               );
             });
@@ -328,6 +366,7 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
               // only ones involved in a stack toggle — can morph into the
               // fullscreen view instead of a hard cut.
               viewTransitionName={photoViewTransitionName(item.path)}
+              showMatchReasons={showMatchReasons}
             />
           );
         })}

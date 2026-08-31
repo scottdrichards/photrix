@@ -2,9 +2,9 @@ import {
   CheckmarkCircle24Filled,
   Circle24Regular,
   ClosedCaption24Regular,
-  Filmstrip24Regular,
   Image24Regular,
   ImageStackRegular,
+  Live24Regular,
   MoreHorizontalRegular,
   MusicNote224Regular,
   PlayCircle24Regular,
@@ -136,6 +136,15 @@ type Props = {
    * nothing on its own.
    */
   viewTransitionName?: string;
+  /**
+   * Feedback #112: the per-source "why this matched" icons (image/audio/
+   * transcript) are debug-oriented clutter for ordinary browsing — shown
+   * only when the caller (ThumbnailGrid's "Why?" toggle next to the result
+   * count) has explicitly turned match-reason display on. Defaults to
+   * false so every other caller (which never passes this) keeps the icons
+   * hidden with no change needed on their end.
+   */
+  showMatchReasons?: boolean;
 };
 
 const LONG_PRESS_MS = 500;
@@ -233,6 +242,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     onOpenStackActions,
     className,
     viewTransitionName,
+    showMatchReasons = false,
   } = props;
   const isStack = (stackCount ?? 0) > 1;
   const isRestackable = restackCount !== undefined;
@@ -705,7 +715,13 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           onMouseEnter={() => setIsLiveBadgeHovered(true)}
           onMouseLeave={() => setIsLiveBadgeHovered(false)}
         >
-          <Filmstrip24Regular fontSize={14} />
+          {/* Feedback #117: this used to be Filmstrip24Regular — the exact
+              same icon the media-type filter's "Videos" glyph uses (see
+              Filter.tsx), so a live photo's badge visually claimed to be a
+              video. Live24Regular is already the icon FullscreenViewer uses
+              for its "Play live photo" button; this just makes the tile
+              badge consistent with that instead of borrowing video's icon. */}
+          <Live24Regular fontSize={14} />
         </span>
       ) : null}
       {livePhoto.isMounted && photo.livePhotoUrl ? (
@@ -721,7 +737,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           aria-hidden="true"
         />
       ) : null}
-      {searchSources && searchSources.length > 0 ? (
+      {showMatchReasons && searchSources && searchSources.length > 0 ? (
         <span
           className={css.sourceBadges}
           aria-label={`Matched by: ${searchSources.map((s) => SOURCE_LABELS[s]).join(", ")}`}

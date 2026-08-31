@@ -46,6 +46,14 @@
   }
 }
 
+/* Feedback #107: differentiate the AI-generated half of the tagline from
+   the static lead-in, same brand-color treatment SearchInterpretationChips
+   already uses for "this came from the model, not hardcoded copy". */
+.taglineGenerated {
+  color: var(--brand, #2563eb);
+  font-weight: 600;
+}
+
 .homeLink {
   color: inherit;
   text-decoration: none;

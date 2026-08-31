@@ -10,7 +10,7 @@ const vocabulary: SearchVocabulary = {
     { name: "Ben", clusterId: "person-30" },
     { name: "Aunt May" },
   ],
-  folders: ["Trips", "Family Archive", "Screenshots"],
+  folders: ["Trips", "Family Archive", "Screenshots", "Trips/Beach Trip 2024"],
 };
 
 /** A model that always answers with the given object (or raw string). */
@@ -70,6 +70,86 @@ describe("interpretSearchQuery", () => {
         mediaTypeFilter: "video",
         semanticQuery: undefined,
       },
+    });
+  });
+
+  it("matches a nested folder when the model echoes the full compound path (feedback #111)", async () => {
+    const result = await interpret(
+      "Beach trip 2024 photos",
+      respondWith({ folder: "Trips/Beach Trip 2024", mediaType: "photo" }),
+    );
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: {
+        path: "Trips/Beach Trip 2024/",
+        includeSubfolders: true,
+      },
+    });
+    expect(result.interpreted && result.chips.map((chip) => chip.label)).toContain(
+      "Folder: Trips/Beach Trip 2024",
+    );
+  });
+
+  it("matches a nested folder when the model echoes only the leaf name (feedback #111)", async () => {
+    // Realistic case: the query never mentions the parent category ("Trips")
+    // at all, and the model reasonably doesn't invent it either.
+    const result = await interpret(
+      "Beach trip 2024 photos",
+      respondWith({ folder: "Beach Trip 2024", mediaType: "photo" }),
+    );
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: { path: "Trips/Beach Trip 2024/", includeSubfolders: true },
+    });
+  });
+
+  it("still refuses a nested folder the query never actually names", async () => {
+    const result = await interpret(
+      "photos from last year",
+      respondWith({ folder: "Beach Trip 2024" }),
+    );
+
+    expect(result.interpreted && result.filter.path).toBeUndefined();
+  });
+
+  it("drops a leftover CLIP query that's just a verbatim echo of a folder-matched query (feedback #119)", async () => {
+    const yearFolderVocabulary: SearchVocabulary = {
+      people: [],
+      folders: ["2022"],
+    };
+    const result = await interpretSearchQuery({
+      query: "2022",
+      vocabulary: yearFolderVocabulary,
+      now: NOW,
+      generate: respondWith({ folder: "2022", visual: "2022" }),
+    });
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: { path: "2022/", includeSubfolders: true, semanticQuery: undefined },
+    });
+    expect(result.interpreted && result.chips.some((chip) => chip.field === "semanticQuery")).toBe(
+      false,
+    );
+  });
+
+  it("keeps a genuinely different leftover description alongside a folder match", async () => {
+    const yearFolderVocabulary: SearchVocabulary = {
+      people: [],
+      folders: ["2022"],
+    };
+    const result = await interpretSearchQuery({
+      query: "2022 folder sunset photos",
+      vocabulary: yearFolderVocabulary,
+      now: NOW,
+      generate: respondWith({ folder: "2022", visual: "sunset" }),
+    });
+
+    expect(result).toMatchObject({
+      interpreted: true,
+      filter: { path: "2022/", semanticQuery: "sunset" },
     });
   });
 
