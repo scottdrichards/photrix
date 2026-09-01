@@ -50,8 +50,30 @@ type PendingRequest = {
   startedAt: number;
 };
 
-// Long timeout: transcription on CPU can be slow for long videos
+// Long timeout: transcription on CPU can be slow for long videos.
+// A flat cap is wrong for a library that mixes 30-second clips with multi-hour
+// interview footage: on CPU (this box falls back to CPU whenever the GPU is
+// full) transcription runs at best around realtime, so anything longer than the
+// cap could never finish and failed on the clock every single time. The budget
+// is scaled off the media's own duration instead, with the old flat value kept
+// as the floor and a hard ceiling so one pathological file cannot hold the
+// single worker forever.
 const REQUEST_TIMEOUT_MS = 30 * 60 * 1_000;
+const REQUEST_TIMEOUT_MAX_MS = 6 * 60 * 60 * 1_000;
+// Slower than realtime, because CPU int8 transcription is, plus the time spent
+// reading the source off the network share before decoding even starts.
+const REQUEST_TIMEOUT_REALTIME_FACTOR = 3;
+
+export const transcriptionTimeoutMs = (durationSeconds?: number): number => {
+  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
+    return REQUEST_TIMEOUT_MS;
+  }
+  const budget = durationSeconds * 1_000 * REQUEST_TIMEOUT_REALTIME_FACTOR;
+  return Math.min(
+    REQUEST_TIMEOUT_MAX_MS,
+    Math.max(REQUEST_TIMEOUT_MS, Math.round(budget)),
+  );
+};
 const SLOW_REQUEST_MS = 5 * 60 * 1_000;
 
 // A loaded Whisper model sits at ~3.5 GB RSS. On a 12 GB box that is the
@@ -487,6 +509,7 @@ const ensureWorkerReady = async (): Promise<void> => {
 
 const sendRequest = async (
   payload: Record<string, unknown>,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<TranscriptSegment[]> => {
   // Hold off the unload across the (possibly slow) spawn/model-load too, so a
   // worker can't be reaped in the window between becoming ready and being fed.
@@ -507,7 +530,7 @@ const sendRequest = async (
   return new Promise<TranscriptSegment[]>((resolve, reject) => {
     const timeout = createSuspensionAwareTimeout(
       COMPUTE_WORKER_IDS.whisper,
-      REQUEST_TIMEOUT_MS,
+      timeoutMs,
       () => {
         const request = pending.get(id);
         pending.delete(id);
@@ -524,7 +547,7 @@ const sendRequest = async (
             operation: request?.operation ?? operation,
             videoPath: request?.videoPath ?? videoPath,
             elapsedMs: request ? Date.now() - request.startedAt : undefined,
-            timeoutMs: REQUEST_TIMEOUT_MS,
+            timeoutMs,
             otherPending: describePendingRequests(),
           },
           "Whisper worker timed out — killing process",
@@ -551,5 +574,11 @@ const sendRequest = async (
   });
 };
 
-export const transcribeWithWhisper = (videoPath: string): Promise<TranscriptSegment[]> =>
-  sendRequest({ operation: "transcribe", videoPath });
+export const transcribeWithWhisper = (
+  videoPath: string,
+  durationSeconds?: number,
+): Promise<TranscriptSegment[]> =>
+  sendRequest(
+    { operation: "transcribe", videoPath },
+    transcriptionTimeoutMs(durationSeconds),
+  );
