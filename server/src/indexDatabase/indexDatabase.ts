@@ -4224,23 +4224,37 @@ export class IndexDatabase {
   // Audio transcription (Whisper)
   // ---------------------------------------------------------------------------
 
+  // A file that has already failed is not retried until this much time has
+  // passed. Without it, de-prioritising failures (the ORDER BY below) is only a
+  // throttle while unattempted work still exists: once the queue drains down to
+  // nothing but permanent failures, "back of the queue" is also the front, and
+  // they are re-attempted back to back forever. Every attempt streams the whole
+  // source file off the media share, so a handful of large videos that can
+  // never succeed produced terabytes a day of pointless network reads.
+  static readonly AUDIO_TRANSCRIBE_RETRY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1_000;
+
   async getFilesNeedingAudioTranscription(
     limit = 10,
-  ): Promise<Array<{ relativePath: string }>> {
+  ): Promise<Array<{ relativePath: string; durationSeconds?: number }>> {
+    const retryBefore =
+      Date.now() - IndexDatabase.AUDIO_TRANSCRIBE_RETRY_COOLDOWN_MS;
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT folder, fileName FROM files
+      `SELECT folder, fileName, duration FROM files
        WHERE exifProcessedAt IS NOT NULL
          AND audioTranscribedAt IS NULL
          AND (
            (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL)
            OR mimeType LIKE 'audio/%'
          )
+         AND (audioTranscribeErrorAt IS NULL OR audioTranscribeErrorAt < ?)
        ORDER BY audioTranscribeErrorAt IS NOT NULL, audioTranscribeErrorAt, folder, fileName
        LIMIT ?`,
+      retryBefore,
       limit,
     );
     return rows.map((row) => ({
       relativePath: joinPath(row.folder as string, row.fileName as string),
+      durationSeconds: typeof row.duration === "number" ? row.duration : undefined,
     }));
   }
 

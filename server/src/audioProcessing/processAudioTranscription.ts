@@ -10,12 +10,18 @@ import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
 const log = getLogger("processAudioTranscription");
 
 const DB_BATCH_SIZE = 10;
-const PARALLELISM = 2;
+// One at a time. There is a single Whisper worker process and it handles
+// requests serially, so dispatching two buys no concurrency — it only starts
+// the second request's timeout clock while it sits in the queue behind the
+// first. With a long first file that guaranteed the second timed out having
+// never been looked at, and then be recorded as a failure.
+const PARALLELISM = 1;
 
 export const processAudioTranscription = (
   database: IndexDatabase,
   transcribe: (
     videoPath: string,
+    durationSeconds?: number,
   ) => Promise<Array<{ start: number; end: number; text: string }>>,
 ): TaskRunner => {
   const ctrl = createTaskController("Audio transcription cancelled");
@@ -36,13 +42,13 @@ export const processAudioTranscription = (
         ctrl.checkCancelled();
 
         await Promise.all(
-          chunk.map(async ({ relativePath }) => {
+          chunk.map(async ({ relativePath, durationSeconds }) => {
             const fullPath = path.join(
               database.storagePath,
               stripLeadingSlash(relativePath),
             );
             try {
-              const segments = await transcribe(fullPath);
+              const segments = await transcribe(fullPath, durationSeconds);
               await database.saveAudioTranscription(relativePath, segments);
             } catch (error) {
               if (isWorkerEvictedError(error)) {
