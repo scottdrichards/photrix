@@ -211,6 +211,35 @@ describe("whisperWorker", () => {
     );
   });
 
+  it("scales the request timeout to the media duration", async () => {
+    const child = createFakeChild();
+    spawn.mockReturnValue(child);
+
+    const { transcribeWithWhisper, transcriptionTimeoutMs } = await import(
+      "./whisperWorker.ts"
+    );
+
+    // Unknown duration keeps the historical flat budget.
+    expect(transcriptionTimeoutMs(undefined)).toBe(30 * 60 * 1_000);
+    // Short media never drops below it either.
+    expect(transcriptionTimeoutMs(30)).toBe(30 * 60 * 1_000);
+    // A 40-minute video gets 3x realtime rather than a budget it cannot meet.
+    expect(transcriptionTimeoutMs(40 * 60)).toBe(2 * 60 * 60 * 1_000);
+    // ...but one pathological file cannot hold the single worker forever.
+    expect(transcriptionTimeoutMs(24 * 60 * 60)).toBe(6 * 60 * 60 * 1_000);
+
+    const transcription = transcribeWithWhisper("/tmp/long.mp4", 40 * 60);
+    child.stdout.write(JSON.stringify({ type: "ready", device: "cpu" }) + "\n");
+    await flush();
+
+    expect(
+      timeouts.some((entry) => entry.timeoutMs === 2 * 60 * 60 * 1_000),
+    ).toBe(true);
+
+    child.stdout.write(JSON.stringify({ id: 1, segments: [] }) + "\n");
+    await expect(transcription).resolves.toEqual([]);
+  });
+
   it("unloads the idle worker so its resident model is returned to the OS", async () => {
     jest.useFakeTimers();
     const child = createFakeChild();
