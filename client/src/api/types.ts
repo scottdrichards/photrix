@@ -118,12 +118,21 @@ export type ClusterFace = {
  * A face detected in a specific photo, resolved to its People cluster. Powers
  * the clickable name labels in the fullscreen face overlay. `personId` is the
  * `person-N` cluster id used for People deep links; `name` is null when the
- * person hasn't been named.
+ * person hasn't been named. `faceId` targets this exact detection — used by
+ * the face-assign panel to exclude "the face already on screen" from its
+ * related-faces preview.
  */
 export type PhotoPersonFace = {
+  faceId: number;
   box: FaceBox;
   personId: string;
   name: string | null;
+};
+
+/** A named person, for the face-assign panel's existing-name autocomplete. */
+export type NamedPerson = {
+  id: string;
+  name: string;
 };
 
 export type PersonCluster = {

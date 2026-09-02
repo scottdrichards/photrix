@@ -13,6 +13,7 @@ type FaceRegion = {
 
 /** A detected face resolved to its People cluster, for name labels. */
 export type NamedFace = {
+  faceId: number;
   box: { x: number; y: number; width: number; height: number };
   personId: string;
   name: string | null;
@@ -23,13 +24,21 @@ type FaceOverlayProps = {
   faceTableBoxesRaw?: unknown;
   aspectRatio: number;
   /**
-   * Detected faces with resolved People names, rendered as labels. Not
-   * clickable — a name label sits on top of the zoomable photo and clicking it
-   * has no special behavior of its own (it just falls through to the same
-   * zoom click as the rest of the image), so it deliberately has no cursor or
-   * click handler of its own.
+   * Detected faces with resolved People names, rendered as labels. A *named*
+   * face's label is not clickable — it sits on top of the zoomable photo and
+   * clicking it has no special behavior of its own (it just falls through to
+   * the same zoom click as the rest of the image), so it deliberately has no
+   * cursor or click handler of its own. An *unnamed* face instead renders a
+   * real "Who is this?" button — see `onAssignFace`.
    */
   namedFaces?: NamedFace[];
+  /**
+   * When provided, every unnamed face in `namedFaces` renders a clickable
+   * "Who is this?" chip instead of nothing, so a viewer can start naming a
+   * cluster right from the photo it appears in. Omitted entirely (not just
+   * disabled) in a read-only/shared view — see FullscreenViewer's `READ_ONLY`.
+   */
+  onAssignFace?: (face: NamedFace) => void;
 };
 
 const unwrapJsonString = (value: unknown): unknown => {
@@ -221,6 +230,7 @@ export function FaceOverlay({
   faceTableBoxesRaw,
   aspectRatio,
   namedFaces,
+  onAssignFace,
 }: FaceOverlayProps) {
   const exifFaceRegions = useMemo(() => parseFaceRegions(regionsRaw), [regionsRaw]);
   const tableFaceRegions = useMemo(
@@ -248,6 +258,9 @@ export function FaceOverlay({
   }
 
   const nameLabels = (namedFaces ?? []).filter((face) => face.name);
+  const unnamedFaces = onAssignFace
+    ? (namedFaces ?? []).filter((face) => !face.name)
+    : [];
 
   return (
     <>
@@ -285,7 +298,7 @@ export function FaceOverlay({
           className={`${css.faceFrameRect} ${css.faceTableFrameRect}`}
         />
       </svg>
-      {nameLabels.length > 0 && (
+      {(nameLabels.length > 0 || unnamedFaces.length > 0) && (
         <div className={css.faceLabelLayer}>
           {nameLabels.map((face, index) => (
             <span
@@ -298,6 +311,23 @@ export function FaceOverlay({
             >
               {face.name}
             </span>
+          ))}
+          {unnamedFaces.map((face, index) => (
+            <button
+              key={index}
+              type="button"
+              className={css.faceAssignButton}
+              style={{
+                left: `${face.box.x * 100}%`,
+                top: `${(face.box.y - face.box.height / 2) * 100}%`,
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onAssignFace?.(face);
+              }}
+            >
+              Who is this?
+            </button>
           ))}
         </div>
       )}

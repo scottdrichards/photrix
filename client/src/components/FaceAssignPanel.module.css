@@ -1,0 +1,140 @@
+.panel {
+  position: absolute;
+  bottom: var(--space-m);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 96;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s);
+  width: min(92vw, 420px);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  color: var(--viewer-overlay-fg);
+  background: var(--viewer-overlay-bg);
+  border: 1px solid var(--viewer-overlay-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(10px);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-s);
+}
+
+.title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.closeButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+
+.closeButton:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.previewRow {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.previewThumb {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.form {
+  display: flex;
+  gap: var(--space-s);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--viewer-overlay-border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font-size: 13px;
+}
+
+.input:focus {
+  outline: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+.saveButton {
+  padding: 6px 14px;
+  border: 1px solid var(--viewer-overlay-border);
+  border-radius: var(--radius-md);
+  background: rgba(15, 108, 189, 0.6);
+  color: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.saveButton:hover:not(:disabled) {
+  background: rgba(15, 108, 189, 0.8);
+}
+
+.saveButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.suggestionChip {
+  padding: 3px 10px;
+  border: 1px solid var(--viewer-overlay-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.suggestionChip:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.suggestionChip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.error {
+  margin: 0;
+  font-size: 12px;
+  color: #ff9d9d;
+}
