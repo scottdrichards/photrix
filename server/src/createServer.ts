@@ -548,10 +548,15 @@ export const createServer = (
             return;
           }
 
-          if (
-            req.url?.startsWith("/api/people/") &&
-            (req.method === "POST" || req.url === "/api/people/tags")
-          ) {
+          // Matched by pathname prefix alone — peopleRequestHandler owns its
+          // own per-route method checks and 404s anything it doesn't
+          // recognize. An earlier version gated this on `req.method ===
+          // "POST" || req.url === "/api/people/tags"`, which matches the
+          // full URL *string* rather than the path: any query string (e.g.
+          // `?clusterId=`, needed by `/api/people/cluster-preview`) 404'd
+          // before ever reaching the handler — the same class of bug fixed
+          // for `/api/auth/share-token?dryRun=1` (see docs/security-audit.md).
+          if (req.url?.startsWith("/api/people/")) {
             if (shareScope) {
               // People management (rename/merge/separate/tags) mutates or
               // reads owner-only face-cluster state; a read-only share view

@@ -33,7 +33,8 @@ import { TagEditor } from "./TagEditor";
 import { DescriptionEditor } from "./DescriptionEditor";
 import { getToken } from "../auth";
 import { createClientOperationId, logClientEvent } from "../diagnostics";
-import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes } from "./FaceOverlay";
+import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes, type NamedFace } from "./FaceOverlay";
+import { FaceAssignPanel } from "./FaceAssignPanel";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { MiniMap } from "./MiniMap";
 import { ShareOptionsModal } from "./ShareOptionsModal";
@@ -313,6 +314,12 @@ export function FullscreenViewer() {
   const [showFaces, setShowFaces] = useState(false);
   const [hasFaceOverlayData, setHasFaceOverlayData] = useState(false);
   const [peopleFaces, setPeopleFaces] = useState<PhotoPersonFace[]>([]);
+  // Which unnamed face's "Who is this?" chip is open, if any (see
+  // FaceAssignPanel). Bumping facesRefreshToken re-runs the faces-fetch
+  // effect below to pick up a just-saved name/merge without duplicating its
+  // fetch logic.
+  const [activeFaceAssign, setActiveFaceAssign] = useState<NamedFace | null>(null);
+  const [facesRefreshToken, setFacesRefreshToken] = useState(0);
   // AI caption (<=6 words, from the vision model on Ollama): drives both the
   // slide-down toast and a temporary document.title override while this
   // photo is open. `toastKey` bumps on every new caption so the CSS
@@ -403,7 +410,9 @@ export function FullscreenViewer() {
   }, [photo?.path]);
 
   // Fetch the photo's detected faces (with resolved People names) so the face
-  // overlay can label each face and link to its person page.
+  // overlay can label each face and link to its person page. facesRefreshToken
+  // is bumped after a successful FaceAssignPanel save so a just-named/merged
+  // face's label updates immediately, without a second copy of this fetch.
   useEffect(() => {
     if (!photo || photo.mediaType === "video") return;
 
@@ -416,7 +425,13 @@ export function FullscreenViewer() {
       });
 
     return () => abortController.abort();
-  }, [photo?.path, photo?.mediaType]);
+  }, [photo?.path, photo?.mediaType, facesRefreshToken]);
+
+  // Closes any open "Who is this?" panel when the viewer moves to a
+  // different photo, rather than leaving it open against the wrong face.
+  useEffect(() => {
+    setActiveFaceAssign(null);
+  }, [photo?.path]);
 
   // AI caption: fired on every photo open, shown as a slide-down toast and
   // (while this photo stays open) the tab title. A real generation takes
@@ -1529,6 +1544,7 @@ export function FullscreenViewer() {
                       faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
                       aspectRatio={photoAspectRatio}
                       namedFaces={peopleFaces}
+                      onAssignFace={READ_ONLY ? undefined : setActiveFaceAssign}
                     />
                   )}
                   <div ref={setCropContainerEl} className={css.cropOverlayContainer} />
@@ -1560,11 +1576,22 @@ export function FullscreenViewer() {
                       faceTableBoxesRaw={photo.metadata?.faceTableBoxes}
                       aspectRatio={photoAspectRatio}
                       namedFaces={peopleFaces}
+                      onAssignFace={READ_ONLY ? undefined : setActiveFaceAssign}
                     />
                   )}
                 </SwipePhotoViewer>
               )}
-              {!editMode && !READ_ONLY && photo.mediaType !== "video" && (
+              {!editMode && !READ_ONLY && photo.mediaType !== "video" && activeFaceAssign && (
+                <FaceAssignPanel
+                  face={activeFaceAssign}
+                  onClose={() => setActiveFaceAssign(null)}
+                  onAssigned={() => {
+                    setActiveFaceAssign(null);
+                    setFacesRefreshToken((token) => token + 1);
+                  }}
+                />
+              )}
+              {!editMode && !READ_ONLY && photo.mediaType !== "video" && !activeFaceAssign && (
                 // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
                 <div
                   className={css.taggingBar}
