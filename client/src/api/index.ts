@@ -66,6 +66,8 @@ export {
   fetchClusterDetail,
   fetchFaceClustersPCA,
   fetchPeopleFacesForFile,
+  fetchNamedPeople,
+  fetchClusterFacePreview,
   buildFaceCropUrl,
   renameCluster,
   mergeClusters,

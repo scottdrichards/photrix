@@ -1208,10 +1208,98 @@ describe("IndexDatabase", () => {
         expect(faces[0]?.box.height).toBeCloseTo(0.2, 5);
         expect(faces[0]?.personId).toBe(clusterId);
         expect(faces[0]?.name).toBe("Riley");
+        // faceId targets the exact detection — the fullscreen face-assign
+        // panel uses it to exclude "the face already on screen" from its
+        // related-faces preview (getClusterFacePreview's excludeFaceId).
+        expect(typeof faces[0]?.faceId).toBe("number");
 
         // Files with no detected faces yield an empty list, not an error.
         await db.addFile(createRecord("people/no-faces.jpg", { dimensionsWidth: 2000 }));
         expect(await db.getPeopleFacesForFile("people/no-faces.jpg")).toEqual([]);
+      });
+    });
+
+    it("listNamedPeople returns only named, never-merged-into clusters", async () => {
+      await withTempDb(async (db) => {
+        const unit = (values: number[]) => {
+          const arr = new Float64Array(128);
+          values.forEach((value, index) => {
+            arr[index] = value;
+          });
+          return arr;
+        };
+
+        await db.addFile(createRecord("people/named-1.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(createRecord("people/named-2.jpg", { dimensionsWidth: 2000 }));
+        await db.saveFaceDetectionResult("people/named-1.jpg", [
+          { box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([1, 0, 0]) },
+        ]);
+        await db.saveFaceDetectionResult("people/named-2.jpg", [
+          { box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([0, 1, 0]) },
+        ]);
+
+        // getPeopleFacesForFile (not queryFaceClusters, which hides singleton
+        // clusters from the People grid) is how the real face-assign panel
+        // learns a face's clusterId, so use the same path here.
+        const first = (await db.getPeopleFacesForFile("people/named-1.jpg"))[0]!.personId;
+        const second = (await db.getPeopleFacesForFile("people/named-2.jpg"))[0]!.personId;
+        expect(first).not.toBe(second);
+
+        // Unnamed clusters never show up in the autocomplete list.
+        expect(await db.listNamedPeople()).toEqual([]);
+
+        await db.renameCluster(first, "Bob");
+        expect(await db.listNamedPeople()).toEqual([{ id: first, name: "Bob" }]);
+
+        // Sorted by name, case-insensitively ("amy" before "Bob" despite the
+        // lowercase 'a' sorting after 'B' in a plain byte-order comparison).
+        await db.renameCluster(second, "amy");
+        expect(await db.listNamedPeople()).toEqual([
+          { id: second, name: "amy" },
+          { id: first, name: "Bob" },
+        ]);
+      });
+    });
+
+    it("getClusterFacePreview returns other sightings of the same person, excluding one faceId", async () => {
+      await withTempDb(async (db) => {
+        const unit = (values: number[]) => {
+          const arr = new Float64Array(128);
+          values.forEach((value, index) => {
+            arr[index] = value;
+          });
+          return arr;
+        };
+
+        await db.addFile(createRecord("people/preview-1.jpg", { dimensionsWidth: 2000 }));
+        await db.addFile(createRecord("people/preview-2.jpg", { dimensionsWidth: 2000 }));
+        await db.saveFaceDetectionResult("people/preview-1.jpg", [
+          { box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([1, 0, 0]) },
+        ]);
+        await db.saveFaceDetectionResult("people/preview-2.jpg", [
+          { box: { x: 0.3, y: 0.3, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([0.99, 0.01, 0]) },
+        ]);
+
+        const facesInFile1 = await db.getPeopleFacesForFile("people/preview-1.jpg");
+        const ownFaceId = facesInFile1[0]!.faceId;
+        const clusterId = facesInFile1[0]!.personId;
+
+        const full = await db.getClusterFacePreview(clusterId);
+        // Paths come back with a leading slash, matching every other
+        // ApiFaceRep-shaped result (see faceRowToClusterFace / joinPath).
+        expect(full.map((f) => f.path).sort()).toEqual([
+          "/people/preview-1.jpg",
+          "/people/preview-2.jpg",
+        ]);
+
+        const excludingOwn = await db.getClusterFacePreview(clusterId, {
+          excludeFaceId: ownFaceId,
+        });
+        expect(excludingOwn).toHaveLength(1);
+        expect(excludingOwn[0]?.path).toBe("/people/preview-2.jpg");
+
+        // An unknown/invalid cluster id yields an empty list, not an error.
+        expect(await db.getClusterFacePreview("person-999999")).toEqual([]);
       });
     });
 

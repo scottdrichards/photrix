@@ -1531,6 +1531,7 @@ export class IndexDatabase {
    */
   async getPeopleFacesForFile(relativePath: string): Promise<
     Array<{
+      faceId: number;
       box: { x: number; y: number; width: number; height: number };
       personId: string;
       name: string | null;
@@ -1538,6 +1539,7 @@ export class IndexDatabase {
   > {
     const { folder, fileName } = splitPath(relativePath);
     const rows = await this.db.all<{
+      id: number;
       boxX: number;
       boxY: number;
       boxWidth: number;
@@ -1546,6 +1548,7 @@ export class IndexDatabase {
       name: string | null;
     }>(
       `SELECT
+         faces.id,
          faces.boxX,
          faces.boxY,
          faces.boxWidth,
@@ -1563,6 +1566,7 @@ export class IndexDatabase {
     );
 
     return rows.map((row) => ({
+      faceId: row.id,
       box: {
         x: row.boxX,
         y: row.boxY,
@@ -1572,6 +1576,91 @@ export class IndexDatabase {
       personId: faceClusterIdToString(row.personId),
       name: row.name,
     }));
+  }
+
+  /**
+   * A handful of *other* sightings of this same clustered person, for the
+   * fullscreen face-assign panel's "does this look right?" preview before
+   * naming/merging an unnamed cluster. Deliberately much cheaper than
+   * `getFaceClusterDetail`: no filter/count/centroid/merge-suggestion work,
+   * just the top-N members by `clusterSimilarity` (the same ranking the
+   * People tab uses to pick a representative). `excludeFaceId` leaves out
+   * the face the panel was opened from, so the preview shows other photos
+   * rather than repeating the one already on screen.
+   */
+  async getClusterFacePreview(
+    clusterId: string,
+    options: { limit?: number; excludeFaceId?: number } = {},
+  ): Promise<FaceClusterFace[]> {
+    const numericId = faceClusterIdFromString(clusterId);
+    if (numericId === null || numericId <= 0) return [];
+    const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 6) || 6, 50));
+
+    const params: unknown[] = [numericId];
+    let excludeClause = "";
+    if (typeof options.excludeFaceId === "number" && Number.isFinite(options.excludeFaceId)) {
+      excludeClause = "AND faces.id != ?";
+      params.push(options.excludeFaceId);
+    }
+
+    const rows = await this.db.all<{
+      id: number;
+      folder: string;
+      fileName: string;
+      boxX: number;
+      boxY: number;
+      boxWidth: number;
+      boxHeight: number;
+      mimeType: string | null;
+      dimensionWidth: number | null;
+      dimensionHeight: number | null;
+      regions: string | null;
+    }>(
+      `SELECT
+         faces.id,
+         faces.folder,
+         faces.fileName,
+         faces.boxX,
+         faces.boxY,
+         faces.boxWidth,
+         faces.boxHeight,
+         files.mimeType,
+         files.dimensionsWidth AS dimensionWidth,
+         files.dimensionsHeight AS dimensionHeight,
+         files.regions
+       FROM faces
+       JOIN faceClusters ON faceClusters.id = faces.clusterId
+       JOIN files
+         ON files.folder = faces.folder AND files.fileName = faces.fileName
+       WHERE faces.clusterId > 0
+         AND COALESCE(faceClusters.personId, faces.clusterId) = ?
+         ${excludeClause}
+       ORDER BY faces.clusterSimilarity DESC, faces.id
+       LIMIT ${limit}`,
+      ...params,
+    );
+
+    return rows.map(faceRowToClusterFace);
+  }
+
+  /**
+   * Every currently-named person, for the face-assign panel's "type an
+   * existing name" autocomplete. Only a canonical/root cluster row ever
+   * carries a name: `renameCluster` always writes it onto the effective
+   * root, and `mergeClusters` immediately nulls it off any row it merges
+   * away — so a plain `name IS NOT NULL` is sufficient (no need to also
+   * check `personId`, which points at the row's *own* id for a named,
+   * never-merged root rather than staying NULL — see renameCluster). This
+   * stays a small result set (dozens, not the library's full cluster count)
+   * regardless of how many total face clusters exist.
+   */
+  async listNamedPeople(): Promise<Array<{ id: string; name: string }>> {
+    const rows = await this.db.all<{ id: number; name: string }>(
+      `SELECT id, name FROM faceClusters
+       WHERE name IS NOT NULL
+       ORDER BY name COLLATE NOCASE`,
+    );
+    return rows.map((row) => ({ id: faceClusterIdToString(row.id), name: row.name }));
   }
 
   /**

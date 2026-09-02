@@ -6,6 +6,7 @@ import type {
   FaceBox,
   FaceClusterPCAPoint,
   FetchPeopleClustersOptions,
+  NamedPerson,
   PeopleClustersResult,
   PersonClusterDetailResult,
   PhotoPersonFace,
@@ -202,6 +203,45 @@ export const fetchPeopleFacesForFile = async (
     { signal },
   );
   return Array.isArray(payload.faces) ? payload.faces : [];
+};
+
+/** Every named person, for the face-assign panel's existing-name autocomplete. */
+export const fetchNamedPeople = async (signal?: AbortSignal): Promise<NamedPerson[]> => {
+  const payload = await fetchJsonOrThrow<{ people?: NamedPerson[] }>(
+    "/api/people/named",
+    "fetch named people",
+    { signal },
+  );
+  return Array.isArray(payload.people) ? payload.people : [];
+};
+
+/**
+ * A few other sightings of one cluster's person — the fullscreen face-assign
+ * panel's "does this look right?" preview before naming/merging. Pass the
+ * face already on screen as `excludeFaceId` so the preview doesn't just show
+ * the same photo back.
+ */
+export const fetchClusterFacePreview = async ({
+  clusterId,
+  excludeFaceId,
+  limit,
+  signal,
+}: {
+  clusterId: string;
+  excludeFaceId?: number;
+  limit?: number;
+  signal?: AbortSignal;
+}): Promise<ClusterFace[]> => {
+  const params = new URLSearchParams();
+  params.set("clusterId", clusterId);
+  if (excludeFaceId != null) params.set("excludeFaceId", String(excludeFaceId));
+  if (limit != null) params.set("limit", String(limit));
+  const payload = await fetchJsonOrThrow<{ faces?: ApiFaceRep[] }>(
+    `/api/people/cluster-preview?${params.toString()}`,
+    "fetch cluster face preview",
+    { signal },
+  );
+  return Array.isArray(payload.faces) ? payload.faces.map(toClusterFace) : [];
 };
 
 export const fetchFaceClustersPCA = async ({
