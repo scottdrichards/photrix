@@ -88,6 +88,38 @@ export const peopleRequestHandler = async (
     return;
   }
 
+  // GET /api/people/named — every named person (id + name), for the
+  // fullscreen face-assign panel's "type an existing name" autocomplete.
+  if (url.pathname === "/api/people/named" && req.method === "GET") {
+    const people = await database.listNamedPeople();
+    writeJson(res, 200, { people });
+    return;
+  }
+
+  // GET /api/people/cluster-preview — a few other sightings of one cluster's
+  // person, so the face-assign panel can show "does this look right?" before
+  // naming/merging. `excludeFaceId` (optional) omits the face the panel was
+  // opened from; `limit` (optional, default 6) caps how many come back.
+  if (url.pathname === "/api/people/cluster-preview" && req.method === "GET") {
+    const clusterId = url.searchParams.get("clusterId");
+    if (!clusterId) {
+      writeJson(res, 400, { error: "Missing clusterId parameter" });
+      return;
+    }
+    const limitParam = url.searchParams.get("limit");
+    const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : NaN;
+    const excludeFaceIdParam = url.searchParams.get("excludeFaceId");
+    const parsedExcludeFaceId = excludeFaceIdParam
+      ? Number.parseInt(excludeFaceIdParam, 10)
+      : NaN;
+    const faces = await database.getClusterFacePreview(clusterId, {
+      ...(Number.isFinite(parsedLimit) ? { limit: parsedLimit } : {}),
+      ...(Number.isFinite(parsedExcludeFaceId) ? { excludeFaceId: parsedExcludeFaceId } : {}),
+    });
+    writeJson(res, 200, { faces });
+    return;
+  }
+
   // POST /api/people/tags — replace a person's tag list
   if (url.pathname === "/api/people/tags" && req.method === "POST") {
     let body: unknown;

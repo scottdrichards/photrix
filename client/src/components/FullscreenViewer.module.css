@@ -253,6 +253,35 @@
   backdrop-filter: blur(2px);
 }
 
+/* Same anchoring as .faceLabel, but a real button: an unnamed face gets a
+   "Who is this?" chip instead of nothing, opening FaceAssignPanel. Needs its
+   own pointer-events override since the shared .faceLabelLayer parent sets
+   pointer-events: none so the rest of the overlay stays click-through. */
+.faceAssignButton {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  transform: translate(-50%, calc(-100% - 4px)) scale(var(--label-counter-scale, 1));
+  max-width: 45%;
+  padding: 3px 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  backdrop-filter: blur(2px);
+}
+
+.faceAssignButton:hover {
+  background: rgba(0, 0, 0, 0.75);
+  border-color: #fff;
+}
+
 .topRightActions {
   position: absolute;
   top: var(--space-m);
