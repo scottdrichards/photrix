@@ -38,6 +38,143 @@ def _get_exif_orientation(exif_bytes):
     return 1
 
 
+def _read_box_header(f):
+    """Read one ISOBMFF box header at the file's current position. Returns
+    (start, size, type, header_len) with size including the header, or None
+    at EOF."""
+    start = f.tell()
+    header = f.read(8)
+    if len(header) < 8:
+        return None
+    size, box_type = struct.unpack('>I4s', header)
+    box_type = box_type.decode('latin1', 'replace')
+    header_len = 8
+    if size == 1:
+        largesize = struct.unpack('>Q', f.read(8))[0]
+        header_len += 8
+        size = largesize
+    if box_type == 'uuid':
+        f.read(16)
+        header_len += 16
+    return start, size, box_type, header_len
+
+
+def _iter_boxes(f, container_start, container_size):
+    """Yield (start, size, type, header_len) for each direct child box of a
+    container spanning [container_start, container_start + container_size)."""
+    end = container_start + container_size
+    while f.tell() < end:
+        hdr = _read_box_header(f)
+        if hdr is None:
+            break
+        start, size, box_type, header_len = hdr
+        if size == 0:  # box extends to EOF (only valid for the last top-level box)
+            f.seek(0, os.SEEK_END)
+            size = f.tell() - start
+        if size <= 0 or start + size > end:
+            break
+        yield start, size, box_type, header_len
+        f.seek(start + size)
+
+
+def _get_heic_container_transform(input_path):
+    """Read the HEIF 'meta' box structure directly to find the primary
+    item's native (pre-rotation) pixel dimensions (its 'ispe' property) and
+    rotation ('irot'/'imir' properties) — the authoritative source for a
+    tiled/grid HEIC's orientation, straight from the same box structure
+    libheif itself reads.
+
+    EXIF orientation is not a reliable stand-in for this: Apple's tiled HEIC
+    encoder routinely leaves EXIF orientation at 1 (identity) and expresses
+    the real rotation via 'irot' instead, which the old EXIF-orientation-only
+    logic had no way to see — verified case: a portrait iPhone SE photo
+    encoded as a 4032x3024 (landscape) tile grid with 'irot' angle 3
+    (270° CCW) and EXIF orientation 1. Using EXIF there silently produced a
+    correctly-tiled but 90°-off, scrambled-looking canvas (wrong grid
+    dimensions too, since native_w/h were derived from the wrong signal).
+
+    Returns (native_w, native_h, rotation_ccw_degrees, mirror_axis) or None
+    if the box structure can't be parsed this way (caller should fall back
+    to the EXIF-orientation heuristic). mirror_axis is None (no mirror),
+    'horizontal', or 'vertical'.
+    """
+    try:
+        with open(input_path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            f.seek(0)
+
+            meta = None
+            for start, size, box_type, header_len in _iter_boxes(f, 0, file_size):
+                if box_type == 'meta':
+                    meta = (start, size, header_len)
+                    break
+            if meta is None:
+                return None
+            meta_start, meta_size, meta_header_len = meta
+            f.seek(meta_start + meta_header_len + 4)  # skip meta FullBox version+flags
+
+            pitm_id = None
+            iprp = None
+            for start, size, box_type, header_len in _iter_boxes(f, meta_start, meta_size):
+                if box_type == 'pitm':
+                    f.seek(start + header_len)
+                    version = f.read(1)[0]
+                    f.read(3)  # flags
+                    pitm_id = (struct.unpack('>H', f.read(2))[0] if version == 0
+                               else struct.unpack('>I', f.read(4))[0])
+                elif box_type == 'iprp':
+                    iprp = (start, size, header_len)
+            if pitm_id is None or iprp is None:
+                return None
+            iprp_start, iprp_size, iprp_header_len = iprp
+            f.seek(iprp_start + iprp_header_len)  # rewind: the meta-children loop above left the file position past iprp
+
+            props = []  # ordered (type, body) — 1-indexed by ipma property_index
+            assoc = {}  # item_id -> [property_index, ...]
+            for start, size, box_type, header_len in _iter_boxes(f, iprp_start, iprp_size):
+                if box_type == 'ipco':
+                    for pstart, psize, ptype, pheader_len in _iter_boxes(f, start, size):
+                        f.seek(pstart + pheader_len)
+                        props.append((ptype, f.read(psize - pheader_len)))
+                elif box_type == 'ipma':
+                    f.seek(start + header_len)
+                    version = f.read(1)[0]
+                    flags = int.from_bytes(f.read(3), 'big')
+                    entry_count = struct.unpack('>I', f.read(4))[0]
+                    for _ in range(entry_count):
+                        item_id = (struct.unpack('>H', f.read(2))[0] if version < 1
+                                   else struct.unpack('>I', f.read(4))[0])
+                        assoc_count = f.read(1)[0]
+                        indices = []
+                        for _ in range(assoc_count):
+                            if flags & 1:
+                                indices.append(struct.unpack('>H', f.read(2))[0] & 0x7FFF)
+                            else:
+                                indices.append(f.read(1)[0] & 0x7F)
+                        assoc[item_id] = indices
+
+            native_w = native_h = None
+            rotation_ccw = 0
+            mirror_axis = None
+            for idx in assoc.get(pitm_id, []):
+                if not (1 <= idx <= len(props)):
+                    continue
+                ptype, body = props[idx - 1]
+                if ptype == 'ispe' and len(body) >= 12:
+                    native_w = struct.unpack('>I', body[4:8])[0]
+                    native_h = struct.unpack('>I', body[8:12])[0]
+                elif ptype == 'irot' and body:
+                    rotation_ccw = (body[0] & 0x3) * 90
+                elif ptype == 'imir' and body:
+                    mirror_axis = 'vertical' if (body[0] & 0x1) == 0 else 'horizontal'
+            if native_w and native_h:
+                return native_w, native_h, rotation_ccw, mirror_axis
+            return None
+    except Exception:
+        return None
+
+
 def _open_heic_via_pyav(input_path):
     """Decode tiled Apple HEIC using pyav (FFmpeg), bypassing the libde265
     green-tile artifact that affects some iPhone photos.
@@ -68,20 +205,31 @@ def _open_heic_via_pyav(input_path):
         tile_streams = [s for s in container.streams.video if (s.width, s.height) == (tile_w, tile_h)]
         n_tiles = len(tile_streams)
 
-        # Get image dimensions and EXIF orientation from pillow_heif metadata
-        # (no pixel decode happens here — pillow_heif is lazy).
-        pillow_heif.options.THUMBNAILS = False
-        hf = pillow_heif.open_heif(input_path)
-        heif_img = hf[0]
-        displayed_w, displayed_h = heif_img.size
-        orientation = _get_exif_orientation(heif_img.info.get('exif', b''))
-
-        # Derive native HEVC canvas size (before EXIF rotation is applied).
-        # Orientations 5–8 transpose width and height.
-        if orientation in (5, 6, 7, 8):
-            native_w, native_h = displayed_h, displayed_w
+        # Prefer the authoritative container-level transform (see
+        # _get_heic_container_transform's docstring for why EXIF orientation
+        # alone isn't trustworthy here). Only fall back to the EXIF heuristic
+        # if the box structure couldn't be parsed.
+        rotation_ccw = 0
+        mirror_axis = None
+        exif_orientation = None  # set only on the fallback path
+        container_transform = _get_heic_container_transform(input_path)
+        if container_transform is not None:
+            native_w, native_h, rotation_ccw, mirror_axis = container_transform
         else:
-            native_w, native_h = displayed_w, displayed_h
+            # Get image dimensions and EXIF orientation from pillow_heif
+            # metadata (no pixel decode happens here — pillow_heif is lazy).
+            pillow_heif.options.THUMBNAILS = False
+            hf = pillow_heif.open_heif(input_path)
+            heif_img = hf[0]
+            displayed_w, displayed_h = heif_img.size
+            exif_orientation = _get_exif_orientation(heif_img.info.get('exif', b''))
+
+            # Derive native HEVC canvas size (before EXIF rotation is applied).
+            # Orientations 5–8 transpose width and height.
+            if exif_orientation in (5, 6, 7, 8):
+                native_w, native_h = displayed_h, displayed_w
+            else:
+                native_w, native_h = displayed_w, displayed_h
 
         grid_cols = math.ceil(native_w / tile_w)
         grid_rows = math.ceil(native_h / tile_h)
@@ -109,18 +257,30 @@ def _open_heic_via_pyav(input_path):
 
         img = Image.fromarray(canvas)
 
-        # Apply EXIF orientation using the same mapping as PIL's exif_transpose.
-        _TRANSPOSE = {
-            2: Image.FLIP_LEFT_RIGHT,
-            3: Image.ROTATE_180,
-            4: Image.FLIP_TOP_BOTTOM,
-            5: Image.TRANSPOSE,
-            6: Image.ROTATE_270,
-            7: Image.TRANSVERSE,
-            8: Image.ROTATE_90,
-        }
-        if orientation in _TRANSPOSE:
-            img = img.transpose(_TRANSPOSE[orientation])
+        if exif_orientation is not None:
+            # Fallback path: apply EXIF orientation the same way PIL's own
+            # exif_transpose does.
+            _TRANSPOSE = {
+                2: Image.FLIP_LEFT_RIGHT,
+                3: Image.ROTATE_180,
+                4: Image.FLIP_TOP_BOTTOM,
+                5: Image.TRANSPOSE,
+                6: Image.ROTATE_270,
+                7: Image.TRANSVERSE,
+                8: Image.ROTATE_90,
+            }
+            if exif_orientation in _TRANSPOSE:
+                img = img.transpose(_TRANSPOSE[exif_orientation])
+        else:
+            # Container-transform path: apply rotation (HEIF 'irot' angle is
+            # CCW, matching PIL's ROTATE_*), then mirror.
+            _ROTATE = {90: Image.ROTATE_90, 180: Image.ROTATE_180, 270: Image.ROTATE_270}
+            if rotation_ccw in _ROTATE:
+                img = img.transpose(_ROTATE[rotation_ccw])
+            if mirror_axis == 'horizontal':
+                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+            elif mirror_axis == 'vertical':
+                img = img.transpose(Image.FLIP_TOP_BOTTOM)
 
         return img
     finally:
