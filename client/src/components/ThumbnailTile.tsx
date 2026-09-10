@@ -626,9 +626,13 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
         // (where the peeking preview photos are) opens it, rather than a
         // small top-right icon (see feedback #81). Always rendered when this
         // tile is a stack, even without preview-peek images to sit over, so
-        // the click/keyboard target exists unconditionally. The count is
-        // only shown once it's actually informative — two peeking photos
-        // already reads as "a stack" on its own.
+        // the click/keyboard target exists unconditionally.
+        // 2026-09-10: dropped the icon+count chip that used to render here —
+        // the stack of peeking photos (.stackPreviewPeeks, below) is the
+        // whole visual now, this is just its invisible hit/focus target, and
+        // .stackPreviewPeek's hover/focus rule (keyed off this element via
+        // :has()) fans the peeks out a bit as the "clickable" cue instead of
+        // a badge.
         <span
           className={css.stackExpandControl}
           role="button"
@@ -645,10 +649,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
             e.stopPropagation();
             onToggleStack?.();
           }}
-        >
-          <ImageStackRegular fontSize={14} />
-          {stackCount && stackCount > 2 ? stackCount : null}
-        </span>
+        />
       ) : null}
       {isStack || isRestackable ? (
         <span className={css.stackControls}>
