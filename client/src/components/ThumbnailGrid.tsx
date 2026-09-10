@@ -28,9 +28,12 @@ const numberFormatter = new Intl.NumberFormat();
 type ThumbnailGridProps = {
   view: "library" | "people";
   onViewChange: (view: "library" | "people") => void;
+  /** Reports the current result total (null while nothing has loaded yet) so
+   * the header subtitle can show it without duplicating this fetch. */
+  onTotalChange?: (total: number | null) => void;
 };
 
-const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
+const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: ThumbnailGridProps) => {
   const { filter } = useFilter();
   const { setItems } = useSelectionContext();
   const [page, setPage] = useState(1);
@@ -198,6 +201,10 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   useEffect(() => {
     setItems(data?.items ?? []);
   }, [data, setItems]);
+
+  useEffect(() => {
+    onTotalChange?.(data?.total ?? null);
+  }, [data?.total, onTotalChange]);
 
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
