@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PhotoItem } from "../api";
+import { formatProgressLabel, useProgressiveImageFetch } from "../hooks/useProgressiveImageFetch";
+import { Spinner } from "../Spinner";
 import type { EditStyle } from "./PhotoEditor";
 import css from "./SwipePhotoViewer.module.css";
 
@@ -107,6 +109,14 @@ export function SwipePhotoViewer({
   const [trackAnimating, setTrackAnimating] = useState(false);
   const [zoom, setZoom] = useState<ZoomState>(NO_ZOOM);
   const [zoomAnimating, setZoomAnimating] = useState(true);
+  // Streams the full-resolution image via fetch (rather than a bare <img src>)
+  // so a slow load gets a real percentage/ETA instead of an indefinite gray
+  // box — see useProgressiveImageFetch. Only the centre photo, not the
+  // swipe-neighbour previews, which stay plain <img>s. Once loaded this holds
+  // a stable object URL — it must NOT be swapped back to the plain remote URL
+  // afterwards, or the browser would silently re-fetch the same image a
+  // second time right after finishing the first.
+  const fullImageFetch = useProgressiveImageFetch(photo.fullUrl);
 
   // Reset all interaction state whenever the centre photo changes.
   useEffect(() => {
@@ -409,7 +419,7 @@ export function SwipePhotoViewer({
               }}
             />
             <img
-              src={photo.fullUrl}
+              src={fullImageFetch.src}
               alt={photo.name}
               data-role="image"
               className={css.image}
@@ -422,6 +432,16 @@ export function SwipePhotoViewer({
                 ...(editStyle?.clipPath ? { clipPath: editStyle.clipPath } : {}),
               }}
             />
+            {!fullImageLoaded && (
+              // Feedback: a slow-loading photo used to sit as a plain gray box
+              // with no indication anything was happening. Shows as soon as the
+              // fetch starts (even before the first byte), then fills in a real
+              // percentage + ETA once Content-Length + a download rate are known.
+              <div className={css.loadingPill} aria-live="polite">
+                <Spinner size="extra-tiny" />
+                <span>{formatProgressLabel(fullImageFetch)}</span>
+              </div>
+            )}
             {editStyle?.vignetteBackground && (
               <div
                 className={css.vignetteOverlay}
