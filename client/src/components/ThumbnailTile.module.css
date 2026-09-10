@@ -369,6 +369,29 @@
   transform: translate(calc(var(--peek-index, 0) * 7px), calc(var(--peek-index, 0) * -6px))
     rotate(calc((var(--peek-index, 0) + 1) * -7deg));
   z-index: calc(-1 * var(--peek-index, 0));
+  /* 2026-09-10: the stack no longer has a separate icon/count badge — the
+     peek photos are the only "this is a stack, click it" affordance, so a
+     light "explode" (peeks fan out further) on hover/focus of the invisible
+     .stackExpandControl sitting over them (see the :has() rule below) is
+     what signals clickability now. */
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+/* Fans the peeks out further when the (invisible) expand hit-target that
+   sits on top of them is hovered/focused — see .stackExpandControl. `:has()`
+   with a following-sibling `+` lets the earlier-in-DOM peeks react to state
+   on the later-in-DOM control, since plain CSS has no "previous sibling"
+   combinator. */
+.stackPreviewPeeks:has(+ .stackExpandControl:hover) .stackPreviewPeek,
+.stackPreviewPeeks:has(+ .stackExpandControl:focus-visible) .stackPreviewPeek {
+  transform: translate(
+      calc(var(--peek-index, 0) * 15px + 5px),
+      calc(var(--peek-index, 0) * -13px - 5px)
+    )
+    rotate(calc((var(--peek-index, 0) + 1) * -13deg));
+  box-shadow: var(--shadow-md, 0 4px 10px rgba(0, 0, 0, 0.35));
 }
 
 /* Groups the stack/restack toggle with its "more options" kebab in the same
@@ -436,29 +459,27 @@
    preview photos (see .stackPreviewPeek), so clicking the stack itself opens
    it (feedback #81) instead of the small top-right icon that used to be the
    only way in. z-index above .stackPreviewPeeks so it's always clickable
-   even though the peeks visually sit in the same corner. */
+   even though the peeks visually sit in the same corner.
+   2026-09-10: no longer a visible icon/count pill — it's a plain invisible
+   hit box now (sized to comfortably cover the peeks' fanned-out footprint),
+   so the peek photos themselves are the only visible "this is a stack"
+   affordance. Hovering/focusing it fans the peeks out (see
+   .stackPreviewPeek's :has() rule); focus still gets a visible outline so
+   keyboard users can find it. */
 .stackExpandControl {
   position: absolute;
-  bottom: var(--space-xs);
-  right: var(--space-xs);
+  bottom: 0;
+  right: 0;
   z-index: 3;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 3px 8px;
-  border-radius: var(--radius-full);
-  background-color: rgba(0, 0, 0, 0.62);
-  color: #fff;
-  font-size: 0.72rem;
-  font-weight: 600;
-  line-height: 1;
-  box-shadow: var(--shadow-sm);
+  width: 64px;
+  height: 56px;
+  border-radius: 8px;
   cursor: pointer;
   pointer-events: auto;
+  background: transparent;
 }
 
-.stackExpandControl:hover,
 .stackExpandControl:focus-visible {
-  background-color: rgba(0, 0, 0, 0.8);
-  outline: none;
+  outline: 2px solid #fff;
+  outline-offset: -2px;
 }

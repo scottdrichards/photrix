@@ -205,7 +205,6 @@ describe("ThumbnailTile", () => {
       const badge = screen.getByRole("button", {
         name: "3 photos of this moment — show separately",
       });
-      expect(badge).toHaveTextContent("3");
       fireEvent.click(badge);
       expect(onToggleStack).toHaveBeenCalledTimes(1);
 
@@ -244,7 +243,7 @@ describe("ThumbnailTile", () => {
       expect(onToggleStack).toHaveBeenCalledTimes(2);
     });
 
-    it("shows the stack count only once it's greater than 2", () => {
+    it("never shows an icon/count badge on the expand target — the peek photos are the only visual (2026-09-10)", () => {
       useSelectionContextMock.mockReturnValue({
         setSelected: vi.fn(),
         selectionMode: false,
@@ -257,13 +256,13 @@ describe("ThumbnailTile", () => {
       const twoStackBadge = screen.getByRole("button", {
         name: "2 photos of this moment — show separately",
       });
-      expect(twoStackBadge).not.toHaveTextContent("2");
+      expect(twoStackBadge).toBeEmptyDOMElement();
 
-      rerender(<ThumbnailTile photo={createPhoto()} stackCount={3} />);
-      const threeStackBadge = screen.getByRole("button", {
-        name: "3 photos of this moment — show separately",
+      rerender(<ThumbnailTile photo={createPhoto()} stackCount={5} />);
+      const fiveStackBadge = screen.getByRole("button", {
+        name: "5 photos of this moment — show separately",
       });
-      expect(threeStackBadge).toHaveTextContent("3");
+      expect(fiveStackBadge).toBeEmptyDOMElement();
     });
 
     it("puts the expand trigger at the bottom-right of the tile, not the top-right kebab corner", () => {
