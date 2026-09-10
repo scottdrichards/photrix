@@ -55,6 +55,8 @@ import {
 // Extract a token from the URL immediately (before auth check) so share links self-authenticate.
 extractUrlToken();
 
+const numberFormatter = new Intl.NumberFormat();
+
 const sharedView = isSharedView();
 // Whether a real account session exists underneath this share view — read before
 // any request can disturb it, same as sharedView.
@@ -261,6 +263,16 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
 
   const { filter } = useFilter();
   const { description: viewDescription } = usePageTitle(filter);
+  // Live result count for the header subtitle, reported by ThumbnailGrid so
+  // it isn't fetched twice. Only meaningful in the library view — reset when
+  // navigating to People so the subtitle doesn't show a stale count there.
+  const [resultCount, setResultCount] = useState<number | null>(null);
+  const handleTotalChange = useCallback((total: number | null) => {
+    setResultCount(total);
+  }, []);
+  useEffect(() => {
+    if (view !== "library") setResultCount(null);
+  }, [view]);
 
   useEffect(() => {
     if (sharedView) return;
@@ -301,8 +313,24 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
                   // span (same brand-color treatment as the AI-search
                   // chips) to signal "the app said this, not us".
                   <>
-                    A better way to view photos of{" "}
-                    <span className={css.taglineGenerated}>{viewDescription}</span>
+                    A better way to view{" "}
+                    {resultCount != null && (
+                      <>
+                        <span className={css.resultCount}>
+                          {numberFormatter.format(resultCount)}
+                        </span>{" "}
+                        photo{resultCount === 1 ? "" : "s"}{" "}
+                      </>
+                    )}
+                    of <span className={css.taglineGenerated}>{viewDescription}</span>
+                  </>
+                ) : resultCount != null ? (
+                  <>
+                    A better way to view{" "}
+                    <span className={css.resultCount}>
+                      {numberFormatter.format(resultCount)}
+                    </span>{" "}
+                    photo{resultCount === 1 ? "" : "s"}.
                   </>
                 ) : (
                   "A better way to view photos."
@@ -381,7 +409,11 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
         {isSuggestionOpen && <SuggestionModal onClose={() => setIsSuggestionOpen(false)} />}
 
         {view === "library" ? (
-          <ThumbnailGrid view={view} onViewChange={handleViewChange} />
+          <ThumbnailGrid
+            view={view}
+            onViewChange={handleViewChange}
+            onTotalChange={handleTotalChange}
+          />
         ) : (
           <PeopleView
             view={view}
