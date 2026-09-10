@@ -282,8 +282,15 @@
   border-color: #fff;
 }
 
+/* Fixed to the viewport rather than absolute-in-.container: .container is a
+   flex sibling of .infoSidebar and shrinks when the info panel opens, which
+   used to drag this row's right edge (and every icon in it) left along with
+   it. Anchoring to the viewport instead keeps the icons stationary no matter
+   what .infoSidebar is doing; .infoSidebar's own top padding below already
+   reserves exactly this row's height so the panel's content starts under it,
+   not behind it. */
 .topRightActions {
-  position: absolute;
+  position: fixed;
   top: var(--space-m);
   right: var(--space-m);
   display: flex;
