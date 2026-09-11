@@ -11,6 +11,7 @@ export default defineConfig({
     host: true,
     port: 5173,
     allowedHosts: [
+      "dev.photos.scottdrichards.com",
       "localhost",
       "photrix.scottdrichards.com",
       "local.photrix.scottdrichards.com",
