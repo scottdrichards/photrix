@@ -1,6 +1,10 @@
 .tile {
   border-radius: var(--radius-md);
-  overflow: hidden;
+  /* Deliberately NOT overflow: hidden here (was, until 2026-09-12) — the
+     stack-explode hover animation needs to bleed past the tile's edge to
+     feel tacked onto the thumbnail rather than cropped by it. The actual
+     image/video content is still clipped, just one level down — see
+     .tileMedia, which wraps only that content. */
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
@@ -28,6 +32,26 @@
      thumbnail-size * ratio) so revealing an off-screen tile on scroll doesn't
      jump. */
   contain-intrinsic-size: auto calc(var(--thumbnail-size, 200px) * var(--ratio, 1)) auto var(--thumbnail-size, 200px);
+}
+
+/* Wraps only the actual image/video content (the isVideo/isImage/unknownFile
+   block in ThumbnailTile.tsx) so it alone gets clipped to rounded corners —
+   everything else in the tile (checkbox, badges, the stack peeks) is a
+   sibling of this, not a descendant, so it isn't clipped by this element's
+   overflow:hidden. Same flex setup .tile itself used to have, so the image
+   children inside size/stack exactly as before; flex-grow: 1 makes this the
+   one flex-participating child of .tile, filling it the same way a lone
+   .image element used to. */
+.tileMedia {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  flex-grow: 1;
+  width: 100%;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  border-radius: inherit;
 }
 
 .tile:hover {
