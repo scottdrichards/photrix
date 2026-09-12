@@ -757,6 +757,13 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           ) : null}
         </span>
       ) : null}
+      {/* Clips only the actual image/video content (rounded corners, no
+          bleed) — everything else in this tile (badges, the stack peeks) is
+          a sibling of this wrapper, not a descendant, specifically so an
+          overlay that's meant to extend past the tile's edge (the stack
+          explode animation) isn't cut off by this wrapper's overflow:hidden.
+          See .tileMedia's comment in the CSS module. */}
+      <div className={css.tileMedia}>
       {isVideo ? (
         <>
           <span
@@ -884,6 +891,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           <span className={css.unknownFileName}>{photo.name}</span>
         </div>
       )}
+      </div>
     </button>
   );
 };
