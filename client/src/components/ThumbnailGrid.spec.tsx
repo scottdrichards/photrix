@@ -197,7 +197,6 @@ describe("ThumbnailGrid", () => {
       expect(fetchPhotosMock).toHaveBeenCalledTimes(1);
       expect(screen.getAllByTestId("tile")).toHaveLength(1);
       expect(screen.getByText("a/1.jpg")).toBeInTheDocument();
-      expect(screen.getByText("3 results")).toBeInTheDocument();
       expect(observers.length).toBeGreaterThan(0);
     });
 
@@ -256,7 +255,6 @@ describe("ThumbnailGrid", () => {
     expect(
       await screen.findByText("No photos yet. Upload some to get started."),
     ).toBeInTheDocument();
-    expect(screen.getByText("0 results")).toBeInTheDocument();
   });
 
   const stackedItem = {

@@ -23,7 +23,6 @@ const PAGE_SIZE = 200;
  * page merged before the scroll arrives.
  */
 const LOAD_MORE_MARGIN_PX = 2000;
-const numberFormatter = new Intl.NumberFormat();
 
 type ThumbnailGridProps = {
   view: "library" | "people";
@@ -235,9 +234,6 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
   const emptyMessage = filter.semanticQuery
     ? "No results found for your search."
     : "No photos yet. Upload some to get started.";
-  const resultCountLabel = data
-    ? `${numberFormatter.format(data.total)} result${data.total === 1 ? "" : "s"}`
-    : null;
   const showInitialLoading = loading && !data;
 
   return (
@@ -246,9 +242,11 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
         <ViewToggle view={view} onViewChange={onViewChange} />
       </TopRailPortal>
       {error ? <h3>{error}</h3> : null}
-      {resultCountLabel ? (
+      {data ? (
+        // The plain "{N} results" label used to live here — dropped since
+        // the header subtitle now shows the same live total in its own
+        // accent color, making this a duplicate.
         <div className={css.statusRow} aria-live="polite">
-          <span>{resultCountLabel}</span>
           {isStale && <Spinner size="extra-tiny" />}
           <SortControl />
         </div>
