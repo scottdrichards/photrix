@@ -245,13 +245,14 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
   // Feedback #113: a semantic search's `total` (see searchRequestHandler) can
   // now legitimately exceed the single page of items actually rendered,
   // since semantic search has no "load more" (the sentinel below is gated
-  // off for it) — say "Showing 50 of 312" rather than a bare "312 results"
-  // that would otherwise read as a promise of 312 visible tiles.
-  const resultCountLabel = data
-    ? filter.semanticQuery && data.items.length < data.total
+  // off for it) — say "Showing 50 of 312" so it's clear more results exist
+  // than are on screen. The plain "{N} results" case was dropped: the header
+  // subtitle already shows the live total (in its own accent color), so
+  // repeating it here was redundant.
+  const resultCountLabel =
+    data && filter.semanticQuery && data.items.length < data.total
       ? `Showing ${numberFormatter.format(data.items.length)} of ${numberFormatter.format(data.total)} results`
-      : `${numberFormatter.format(data.total)} result${data.total === 1 ? "" : "s"}`
-    : null;
+      : null;
   const showInitialLoading = loading && !data;
 
   return (
@@ -260,9 +261,9 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
         <ViewToggle view={view} onViewChange={onViewChange} />
       </TopRailPortal>
       {error ? <h3>{error}</h3> : null}
-      {resultCountLabel ? (
+      {data ? (
         <div className={css.statusRow} aria-live="polite">
-          <span>{resultCountLabel}</span>
+          {resultCountLabel && <span>{resultCountLabel}</span>}
           {isStale && <Spinner size="extra-tiny" />}
           {/* Feedback #112: match-reason icons are debug info, not
               something to show by default — this is the opt-in. Only
