@@ -204,7 +204,6 @@ describe("ThumbnailGrid", () => {
       expect(fetchPhotosMock).toHaveBeenCalledTimes(1);
       expect(screen.getAllByTestId("tile")).toHaveLength(1);
       expect(screen.getByText("a/1.jpg")).toBeInTheDocument();
-      expect(screen.getByText("3 results")).toBeInTheDocument();
       expect(observers.length).toBeGreaterThan(0);
     });
 
@@ -263,7 +262,6 @@ describe("ThumbnailGrid", () => {
     expect(
       await screen.findByText("No photos yet. Upload some to get started."),
     ).toBeInTheDocument();
-    expect(screen.getByText("0 results")).toBeInTheDocument();
   });
 
   const stackedItem = {
@@ -488,7 +486,7 @@ describe("ThumbnailGrid", () => {
     expect(await screen.findByText("Showing 2 of 137 results")).toBeInTheDocument();
   });
 
-  it("shows a plain count for a semantic search whose total fits on one page", async () => {
+  it("shows no redundant count for a semantic search whose total fits on one page (the header subtitle already shows it)", async () => {
     window.history.pushState({}, "", "/?q=beach");
     fetchSemanticSearchMock.mockResolvedValueOnce({
       items: [makePhoto("a/1.jpg")],
@@ -498,6 +496,7 @@ describe("ThumbnailGrid", () => {
 
     renderGrid();
 
-    expect(await screen.findByText("1 result")).toBeInTheDocument();
+    expect(await screen.findByText("a/1.jpg")).toBeInTheDocument();
+    expect(screen.queryByText(/result/i)).not.toBeInTheDocument();
   });
 });
