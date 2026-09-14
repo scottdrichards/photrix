@@ -23,14 +23,16 @@ const PAGE_SIZE = 200;
  * page merged before the scroll arrives.
  */
 const LOAD_MORE_MARGIN_PX = 2000;
-const numberFormatter = new Intl.NumberFormat();
 
 type ThumbnailGridProps = {
   view: "library" | "people";
   onViewChange: (view: "library" | "people") => void;
+  /** Reports the current result total (null while nothing has loaded yet) so
+   * the header subtitle can show it without duplicating this fetch. */
+  onTotalChange?: (total: number | null) => void;
 };
 
-const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
+const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: ThumbnailGridProps) => {
   const { filter } = useFilter();
   const { setItems } = useSelectionContext();
   const [page, setPage] = useState(1);
@@ -200,6 +202,10 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   }, [data, setItems]);
 
   useEffect(() => {
+    onTotalChange?.(data?.total ?? null);
+  }, [data?.total, onTotalChange]);
+
+  useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
     if (!sentinel || loading || filter.semanticQuery) {
       return;
@@ -228,9 +234,6 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
   const emptyMessage = filter.semanticQuery
     ? "No results found for your search."
     : "No photos yet. Upload some to get started.";
-  const resultCountLabel = data
-    ? `${numberFormatter.format(data.total)} result${data.total === 1 ? "" : "s"}`
-    : null;
   const showInitialLoading = loading && !data;
 
   return (
@@ -239,9 +242,11 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
         <ViewToggle view={view} onViewChange={onViewChange} />
       </TopRailPortal>
       {error ? <h3>{error}</h3> : null}
-      {resultCountLabel ? (
+      {data ? (
+        // The plain "{N} results" label used to live here — dropped since
+        // the header subtitle now shows the same live total in its own
+        // accent color, making this a duplicate.
         <div className={css.statusRow} aria-live="polite">
-          <span>{resultCountLabel}</span>
           {isStale && <Spinner size="extra-tiny" />}
           <SortControl />
         </div>

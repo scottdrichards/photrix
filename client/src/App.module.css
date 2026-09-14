@@ -46,6 +46,14 @@
   }
 }
 
+/* Draws attention to the live result count in the header subtitle —
+   deliberately not the brand color, so it reads as its own attention-
+   grabbing fact rather than blending into the surrounding static copy. */
+.resultCount {
+  color: var(--success, #2e7d32);
+  font-weight: 700;
+}
+
 .homeLink {
   color: inherit;
   text-decoration: none;

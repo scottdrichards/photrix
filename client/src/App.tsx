@@ -54,6 +54,8 @@ import {
 // Extract a token from the URL immediately (before auth check) so share links self-authenticate.
 extractUrlToken();
 
+const numberFormatter = new Intl.NumberFormat();
+
 const sharedView = isSharedView();
 // Whether a real account session exists underneath this share view — read before
 // any request can disturb it, same as sharedView.
@@ -213,6 +215,16 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
 
   const { filter } = useFilter();
   const { description: viewDescription } = usePageTitle(filter);
+  // Live result count for the header subtitle, reported by ThumbnailGrid so
+  // it isn't fetched twice. Only meaningful in the library view — reset when
+  // navigating to People so the subtitle doesn't show a stale count there.
+  const [resultCount, setResultCount] = useState<number | null>(null);
+  const handleTotalChange = useCallback((total: number | null) => {
+    setResultCount(total);
+  }, []);
+  useEffect(() => {
+    if (view !== "library") setResultCount(null);
+  }, [view]);
 
   useEffect(() => {
     if (sharedView) return;
@@ -241,15 +253,32 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
                 {sharedView ? "Photrix" : <a className={css.homeLink} href="/">Photrix</a>}
               </h2>
               <small>
-                {sharedView
-                  ? "Shared view"
-                  : // Feedback #85: append the current view's generated
-                    // description ("...of your trip to Mexico") when one
-                    // exists — usePageTitle already fetches/debounces this
-                    // for document.title, so this is free reuse, not an
-                    // extra request. Kept short/subtle per the original
-                    // ask's own tone, not a full sentence.
-                    `A better way to view photos.${viewDescription ? ` …${viewDescription}` : ""}`}
+                {sharedView ? (
+                  "Shared view"
+                ) : (
+                  // Feedback #85: append the current view's generated
+                  // description ("...of your trip to Mexico") when one
+                  // exists — usePageTitle already fetches/debounces this
+                  // for document.title, so this is free reuse, not an
+                  // extra request. The live result count (reported by
+                  // ThumbnailGrid) is folded into the same sentence and set
+                  // off in its own color so it grabs attention as a live
+                  // fact rather than blending into the static copy.
+                  <>
+                    A better way to view{" "}
+                    {resultCount != null ? (
+                      <>
+                        <span className={css.resultCount}>
+                          {numberFormatter.format(resultCount)}
+                        </span>{" "}
+                        photo{resultCount === 1 ? "" : "s"}
+                      </>
+                    ) : (
+                      "photos"
+                    )}
+                    {viewDescription ? ` of ${viewDescription}` : "."}
+                  </>
+                )}
               </small>
             </div>
 
@@ -324,7 +353,11 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
         {isSuggestionOpen && <SuggestionModal onClose={() => setIsSuggestionOpen(false)} />}
 
         {view === "library" ? (
-          <ThumbnailGrid view={view} onViewChange={handleViewChange} />
+          <ThumbnailGrid
+            view={view}
+            onViewChange={handleViewChange}
+            onTotalChange={handleTotalChange}
+          />
         ) : (
           <PeopleView
             view={view}
