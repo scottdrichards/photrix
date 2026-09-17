@@ -257,6 +257,38 @@ describe("App", () => {
     expect(screen.getByTestId("people-view")).toBeInTheDocument();
   });
 
+  // Feedback #127: the floating view-toggle/sort bar must hide once the grid
+  // is scrolled away from the top, and reappear once it's scrolled back —
+  // purely a function of position, not the direction that got it there.
+  it("hides the floating view-toggle bar once scrolled away from the top, and shows it again back at the top", async () => {
+    await act(async () => {
+      render(<App />);
+    });
+
+    const dock = screen.getByTestId("floating-bar-dock");
+    expect(dock).toHaveAttribute("aria-hidden", "false");
+
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 400 });
+    await act(async () => {
+      fireEvent.scroll(window);
+    });
+    expect(dock).toHaveAttribute("aria-hidden", "true");
+
+    // Scrolling further down (not up) must not bring it back — this is
+    // purely position-based, unlike the old direction-tracking behavior.
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 800 });
+    await act(async () => {
+      fireEvent.scroll(window);
+    });
+    expect(dock).toHaveAttribute("aria-hidden", "true");
+
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+    await act(async () => {
+      fireEvent.scroll(window);
+    });
+    expect(dock).toHaveAttribute("aria-hidden", "false");
+  });
+
   it("follows the system theme by default", async () => {
     setSystemDarkMode(true);
 

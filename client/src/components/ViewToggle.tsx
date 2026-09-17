@@ -9,11 +9,14 @@ type ViewToggleProps = {
   onViewChange: (view: "library" | "people") => void;
 };
 
-// Feedback #121/#122/#123: this used to hide on scroll-down and reappear on
-// any scroll-up (not just reaching the top), so it could pop back over a
-// photo anywhere in a long grid. It now lives in a bar fixed to the bottom
-// of the viewport (see .floatingBarDock in App.module.css) and stays put —
-// nothing here needs to hide itself to get out of the way anymore.
+// Feedback #121/#122/#123/#127: this used to hide on scroll-down and
+// reappear on any scroll-up (not just reaching the top), so it could pop
+// back over a photo anywhere in a long grid. It now lives in a bar fixed to
+// the bottom of the viewport, shown only near the top of the page — see
+// App.tsx's `nearTop` and .floatingBarDock/.floatingBarDockHidden in
+// App.module.css. The show/hide lives one level up (in the shared dock, not
+// per-component) so it applies uniformly whether this renders alongside
+// SortControl or on its own.
 export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
   const [exportMode, setExportMode] = useState<"share" | "download" | null>(null);
   const { selectionMode, checkedPaths, exitSelectionMode, items } = useSelectionContext();

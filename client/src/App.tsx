@@ -57,6 +57,10 @@ extractUrlToken();
 
 const numberFormatter = new Intl.NumberFormat();
 
+// Feedback #127: below this scroll offset the floating view-toggle/sort bar
+// (see .floatingBarDock) is shown; above it, hidden.
+const NEAR_TOP_THRESHOLD_PX = 24;
+
 const sharedView = isSharedView();
 // Whether a real account session exists underneath this share view — read before
 // any request can disturb it, same as sharedView.
@@ -311,6 +315,21 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
     void probeVideoPlaybackProfile();
   }, []);
 
+  // Feedback #127: floating the view-toggle/sort bar at the bottom of the
+  // viewport (see #121/#122/#123) still needs to get out of the way while
+  // scrolling through the grid — it should only be there when the grid is
+  // scrolled to the top, not permanently on-screen. Unlike the old
+  // implementation this ignores scroll *direction* entirely: it's purely a
+  // function of the current position, so there's no "reappears over a photo
+  // the user scrolled up past" failure mode.
+  const [nearTop, setNearTop] = useState(true);
+  useEffect(() => {
+    const onScroll = () => setNearTop(window.scrollY <= NEAR_TOP_THRESHOLD_PX);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   useEffect(() => {
     if (sharedView) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -430,10 +449,16 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
             it back over a photo the user was looking at, and the sort
             control lived in-flow above the grid and pushed every tile down
             whenever it was visible. Floating it at the bottom of the
-            viewport instead means it never competes with in-flow layout and
-            never has to disappear to get out of the way — scrolling the grid
-            itself is enough. */}
-        <div className={css.floatingBarDock} style={{ pointerEvents: "none" }}>
+            viewport fixes both, but feedback #127: it still needs to get out
+            of the way while scrolling through the grid, so it's only shown
+            near the top (see the `nearTop` effect above) rather than
+            permanently on-screen. */}
+        <div
+          className={cx(css.floatingBarDock, !nearTop && css.floatingBarDockHidden)}
+          style={{ pointerEvents: "none" }}
+          aria-hidden={!nearTop}
+          data-testid="floating-bar-dock"
+        >
           <div ref={setViewToggleHost} style={{ pointerEvents: "none" }} />
         </div>
 
