@@ -272,4 +272,16 @@ describe("SearchBar natural-language interpretation", () => {
 
     expect(interpretSearchQuery).not.toHaveBeenCalled();
   });
+
+  // Feedback #131: which vector modalities (image/audio/transcript) a
+  // semantic query matches against is an implementation detail AI search
+  // should own, not something surfaced as a user-facing control.
+  it("does not expose a search-sources modality toggle", () => {
+    renderSearchBar();
+
+    expect(screen.queryByRole("group", { name: "Search sources" })).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/Image vector/)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/Audio vector/)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/Transcript/)).not.toBeInTheDocument();
+  });
 });

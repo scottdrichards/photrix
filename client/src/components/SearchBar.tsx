@@ -1,18 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ClosedCaption24Regular,
   Dismiss24Regular,
-  Image24Regular,
-  MusicNote224Regular,
   Search24Regular,
   Sparkle24Filled,
   Sparkle24Regular,
 } from "@fluentui/react-icons";
 import {
-  SEARCH_SOURCES,
   type InterpretedFilterChip,
   type InterpretedSearchFilter,
-  type SearchSource,
 } from "../../../shared/filter-contract/src";
 import { interpretSearchQuery } from "../api/naturalLanguageSearch";
 import { useFilter, type FilterState } from "./filter/FilterContext";
@@ -79,16 +74,6 @@ type ActiveInterpretation = {
   previous: InterpretedSearchFilter;
 };
 
-const SOURCE_TOGGLES: { source: SearchSource; label: string; icon: React.ReactNode }[] = [
-  { source: "image", label: "Image vector", icon: <Image24Regular fontSize={18} /> },
-  { source: "audio", label: "Audio vector", icon: <MusicNote224Regular fontSize={18} /> },
-  {
-    source: "transcript",
-    label: "Transcript",
-    icon: <ClosedCaption24Regular fontSize={18} />,
-  },
-];
-
 export const SearchBar = () => {
   const { filter, setFilter } = useFilter();
   const query = filter.semanticQuery ?? "";
@@ -130,7 +115,6 @@ export const SearchBar = () => {
   const hasActiveQuery = !!query || !!interpretation;
   const showExpanded = isExpanded || hasActiveQuery || isWide;
 
-  const activeSources = filter.searchSources ?? SEARCH_SOURCES;
 
   const expand = () => {
     setIsExpanded(true);
@@ -266,17 +250,6 @@ export const SearchBar = () => {
     }
   };
 
-  const toggleSource = (source: SearchSource) => {
-    const isActive = activeSources.includes(source);
-    const next = isActive
-      ? activeSources.filter((s) => s !== source)
-      : SEARCH_SOURCES.filter((s) => activeSources.includes(s) || s === source);
-    if (next.length === 0) return;
-    setFilter({
-      searchSources: next.length === SEARCH_SOURCES.length ? undefined : next,
-    });
-  };
-
   return (
     <div
       ref={containerRef}
@@ -346,33 +319,15 @@ export const SearchBar = () => {
             {aiSearchEnabled ? <Sparkle24Filled /> : <Sparkle24Regular />}
           </button>
         </div>
-        <div
-          className={css.sourceToggles}
-          role="group"
-          aria-label="Search sources"
-          title={
-            aiSearchEnabled
-              ? "Modalities the AI interpretation's leftover free text is matched against"
-              : "Modalities searched"
-          }
-        >
-          {SOURCE_TOGGLES.map(({ source, label, icon }) => {
-            const isActive = activeSources.includes(source);
-            return (
-              <button
-                key={source}
-                type="button"
-                className={`${css.sourceToggle} ${isActive ? css.sourceToggleActive : ""}`}
-                onClick={() => toggleSource(source)}
-                aria-pressed={isActive}
-                title={`${label}: ${isActive ? "on" : "off"}`}
-                tabIndex={showExpanded ? 0 : -1}
-              >
-                {icon}
-              </button>
-            );
-          })}
-        </div>
+        {/* Feedback #131: which modalities (image/audio/transcript vectors)
+            a semantic query matches against used to be a user-facing toggle
+            group here. Surfacing that distinction asked the user to
+            understand an implementation detail of how search works instead
+            of just trusting AI search to pick the right modalities for what
+            they typed — removed rather than hidden-but-still-wired, so a
+            share link's ?sources= (still read/serialized for backward
+            compatibility) can't silently reappear as a stuck filter with no
+            visible control to change it back. */}
       </form>
 
       {interpretation && (
