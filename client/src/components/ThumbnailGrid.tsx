@@ -259,6 +259,10 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
     <>
       <TopRailPortal>
         <ViewToggle view={view} onViewChange={onViewChange} />
+        {/* Feedback #122/#123: used to live in-flow in .statusRow above the
+            grid, pushing every tile down whenever it was visible. It's now
+            part of the same fixed floating bar as the view-toggle pill. */}
+        {data && <SortControl />}
       </TopRailPortal>
       {error ? <h3>{error}</h3> : null}
       {data ? (
@@ -288,7 +292,6 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
               )}
             </button>
           )}
-          <SortControl />
         </div>
       ) : null}
       <div

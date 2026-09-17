@@ -390,9 +390,19 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
               )}
             </div>
           </header>
-          <div className={css.viewToggleDock} style={{ pointerEvents: "none" }}>
-            <div ref={setViewToggleHost} style={{ pointerEvents: "none" }} />
-          </div>
+        </div>
+
+        {/* Feedback #121/#122/#123: this used to dock just under the header
+            and hide/show based on scroll direction, which meant scrolling up
+            anywhere in a long grid — not just reaching the top — could shove
+            it back over a photo the user was looking at, and the sort
+            control lived in-flow above the grid and pushed every tile down
+            whenever it was visible. Floating it at the bottom of the
+            viewport instead means it never competes with in-flow layout and
+            never has to disappear to get out of the way — scrolling the grid
+            itself is enough. */}
+        <div className={css.floatingBarDock} style={{ pointerEvents: "none" }}>
+          <div ref={setViewToggleHost} style={{ pointerEvents: "none" }} />
         </div>
 
         {!sharedView && (

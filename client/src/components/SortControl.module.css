@@ -1,8 +1,12 @@
+/* Feedback #122/#123: used to sit in-flow above the grid (pushing every
+   tile down whenever it was visible) with margin-inline-start: auto to pin
+   it to the far end of that row. It now lives in the same fixed floating
+   bar as the view-toggle pill (see .floatingBarDock in App.module.css), so
+   it needs no auto-margin — the bar itself centers its contents. */
 .sortControl {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
-  margin-inline-start: auto;
 }
 
 .label {
