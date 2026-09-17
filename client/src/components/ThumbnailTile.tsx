@@ -2,9 +2,9 @@ import {
   CheckmarkCircle24Filled,
   Circle24Regular,
   ClosedCaption24Regular,
-  Filmstrip24Regular,
   Image24Regular,
   ImageStackRegular,
+  Live24Regular,
   MoreHorizontalRegular,
   MusicNote224Regular,
   PlayCircle24Regular,
@@ -705,8 +705,18 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           onMouseEnter={() => setIsLiveBadgeHovered(true)}
           onMouseLeave={() => setIsLiveBadgeHovered(false)}
         >
-          <Filmstrip24Regular fontSize={14} />
-        </span>
+          {/* Feedback #117: this used to be Filmstrip24Regular — the exact
+              same icon the media-type filter's "Videos" glyph uses (see
+              Filter.tsx), so a live photo's badge visually claimed to be a
+              video. Live24Regular is already the icon FullscreenViewer uses
+              for its "Play live photo" button; this just makes the tile
+              badge consistent with that instead of borrowing video's icon.
+              Feedback #124: the bare icon still wasn't obvious enough on a
+              small thumbnail, so it now carries the same "LIVE" text Apple
+              Photos puts next to its own live-photo glyph — the icon alone
+              reads as an abstract circle, the word doesn't. */}
+          <Live24Regular fontSize={14} />
+          <span className={css.livePhotoBadgeLabel}>LIVE</span>        </span>
       ) : null}
       {livePhoto.isMounted && photo.livePhotoUrl ? (
         <video
