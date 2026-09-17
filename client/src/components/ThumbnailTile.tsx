@@ -2,6 +2,7 @@ import {
   CheckmarkCircle24Filled,
   Circle24Regular,
   ClosedCaption24Regular,
+  DocumentQuestionMark24Regular,
   Image24Regular,
   ImageStackRegular,
   Live24Regular,
@@ -909,7 +910,17 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           )}
         </>
       ) : (
+        // Feedback #129: a file the browser can't render at all (an
+        // embedded .DS_Store, a sidecar, anything the indexer picked up but
+        // isn't image/video) used to fall back to just the bare filename,
+        // with nothing to distinguish it from a broken thumbnail. A generic
+        // document glyph makes it read as "this is a real file, just not a
+        // previewable one" rather than looking like something failed to load.
         <div className={css.unknownFile}>
+          <DocumentQuestionMark24Regular
+            className={css.unknownFileIcon}
+            aria-hidden="true"
+          />
           <span className={css.unknownFileName}>{photo.name}</span>
         </div>
       )}

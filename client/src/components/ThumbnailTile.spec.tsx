@@ -817,15 +817,18 @@ describe("ThumbnailTile", () => {
     ).toBeInTheDocument();
   });
 
-  it("displays filename for non-image files", () => {
+  it("displays a file icon and filename for non-image files (feedback #129)", () => {
     const photo = createPhoto({
       path: "a/document.pdf",
       name: "document.pdf",
       metadata: { mimeType: "application/pdf" },
     });
-    render(<ThumbnailTile photo={photo} />);
+    const { container } = render(<ThumbnailTile photo={photo} />);
 
     expect(screen.getByText("document.pdf")).toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    // A generic document glyph, not just the bare name -- otherwise this
+    // reads as a broken/failed thumbnail rather than a real, unrenderable file.
+    expect(container.querySelector("svg")).toBeInTheDocument();
   });
 });
