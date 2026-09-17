@@ -102,7 +102,18 @@ export function SwipePhotoViewer({
     moved: false,
   });
 
-  const [pane, setPane] = useState({ w: 0, h: 0 });
+  // Feedback #125: starting at {0, 0} means the letterboxed box (and the
+  // thumbnail placeholder + loading pill inside it) has no size at all until
+  // the ResizeObserver below reports back on the next tick, so the very
+  // first frame after opening a photo renders nothing — reading as "the
+  // window waited to open". Seeding this from the current viewport gives it
+  // a reasonable size immediately; the observer corrects it a moment later
+  // once the real pane is measured (smaller when e.g. the info panel is
+  // open), same as before.
+  const [pane, setPane] = useState(() => ({
+    w: typeof window !== "undefined" ? window.innerWidth : 0,
+    h: typeof window !== "undefined" ? window.innerHeight : 0,
+  }));
   const [dragDx, setDragDx] = useState(0);
   const [trackAnimating, setTrackAnimating] = useState(false);
   const [zoom, setZoom] = useState<ZoomState>(NO_ZOOM);
