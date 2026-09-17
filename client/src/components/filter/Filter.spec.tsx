@@ -524,4 +524,21 @@ describe("Filter", () => {
       maxWidth: "none",
     });
   });
+
+  // Feedback #130: the whole icon row collapses behind one Filters toggle on
+  // a narrow window (a CSS media query hides the row and the toggle
+  // otherwise, so this exercises the JS state the CSS switches on rather
+  // than the CSS itself, which jsdom doesn't evaluate).
+  it("opens and closes the collapsed filter row from its own toggle, and on an outside click", () => {
+    renderFilter();
+
+    const toggle = screen.getByRole("button", { name: "Filters" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.mouseDown(document.body);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
 });

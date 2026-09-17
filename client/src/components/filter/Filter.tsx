@@ -2,6 +2,7 @@ import {
   Calendar24Regular,
   Camera24Regular,
   Filmstrip24Regular,
+  Filter24Regular,
   Folder24Regular,
   FolderOpen24Regular,
   Image24Regular,
@@ -35,6 +36,12 @@ type FilterPanel =
 export const Filter = () => {
   const filterBarRef = useRef<HTMLDivElement>(null);
   const { filter, setFilter } = useFilter();
+  // Feedback #130: on a narrow window the full row of filter icons has no
+  // room to breathe (it used to just become a horizontally-scrolling strip,
+  // easy to not notice at all). Collapsed behind a single toggle there
+  // instead; on a wide window .filterCollapseToggle is hidden via CSS and
+  // this is simply always true, so nothing changes for desktop.
+  const [isBarOpen, setIsBarOpen] = useState(false);
   const {
     includeSubfolders,
     ratingFilter,
@@ -144,6 +151,19 @@ export const Filter = () => {
     document.addEventListener("mousedown", handle);
     return () => document.removeEventListener("mousedown", handle);
   }, [activePanel]);
+
+  // Same outside-click-closes behavior as an individual filter panel, for
+  // the collapsed (narrow-window) icon row itself.
+  useEffect(() => {
+    if (!isBarOpen) return;
+    const handle = (e: MouseEvent) => {
+      if (!filterBarRef.current?.contains(e.target as Node)) {
+        setIsBarOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [isBarOpen]);
 
   useEffect(() => {
     applyPanelLayout();
@@ -397,6 +417,17 @@ export const Filter = () => {
 
   return (
     <div ref={filterBarRef} className={css.iconBar}>
+      <button
+        type="button"
+        className={`btn btn-icon ${css.filterIconButton} ${css.filterCollapseToggle} ${isBarOpen ? "btn-primary" : "btn-subtle"}`}
+        onClick={() => setIsBarOpen((current) => !current)}
+        aria-expanded={isBarOpen}
+        aria-label="Filters"
+        title="Filters"
+      >
+        <Filter24Regular fontSize={20} />
+      </button>
+      <div className={`${css.iconBarButtons} ${isBarOpen ? css.iconBarButtonsOpen : ""}`}>
       {/* Folders */}
       <div className="popover-anchor">
         <button
@@ -742,6 +773,7 @@ export const Filter = () => {
         >
           <FolderOpen24Regular fontSize={20} />
         </button>
+      </div>
       </div>
     </div>
   );
