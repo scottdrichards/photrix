@@ -537,7 +537,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
-  animation: aiCaptionSlideDown 0.35s ease-out;
+  /* Feedback #128: the animation shorthand had no fill-mode, which defaults
+     to `none` -- once it finished, the transform reverted to unset instead
+     of staying at the keyframes' `to` state (translate(-50%, 0)). That left
+     the box positioned by `left: 50%` alone, i.e. its *left edge* (not its
+     center) sitting at the horizontal midpoint, with all the content
+     hanging off to the right of it. `forwards` keeps the toast at the
+     keyframes' end state once the animation completes. */
+  animation: aiCaptionSlideDown 0.35s ease-out forwards;
 }
 
 @media print {
