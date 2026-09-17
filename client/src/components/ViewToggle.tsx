@@ -1,5 +1,5 @@
 import { ArrowDownload24Regular, Dismiss24Regular, Share24Regular } from "@fluentui/react-icons";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { ShareOptionsModal } from "./ShareOptionsModal";
 import { useSelectionContext } from "./selection/SelectionContext";
 import css from "./ViewToggle.module.css";
@@ -9,51 +9,19 @@ type ViewToggleProps = {
   onViewChange: (view: "library" | "people") => void;
 };
 
-// Below this scroll offset we treat the page as "at the top" and always
-// show the pill anchored just under the header, regardless of direction.
-const NEAR_TOP_THRESHOLD_PX = 24;
-
+// Feedback #121/#122/#123: this used to hide on scroll-down and reappear on
+// any scroll-up (not just reaching the top), so it could pop back over a
+// photo anywhere in a long grid. It now lives in a bar fixed to the bottom
+// of the viewport (see .floatingBarDock in App.module.css) and stays put —
+// nothing here needs to hide itself to get out of the way anymore.
 export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
-  const [hidden, setHidden] = useState(false);
   const [exportMode, setExportMode] = useState<"share" | "download" | null>(null);
-  const lastScrollYRef = useRef(0);
   const { selectionMode, checkedPaths, exitSelectionMode, items } = useSelectionContext();
 
   const selectedPhotos = useMemo(
     () => items.filter((item) => checkedPaths.has(item.path)),
     [items, checkedPaths],
   );
-
-  useEffect(() => {
-    lastScrollYRef.current = window.scrollY;
-
-    const onScroll = () => {
-      const y = window.scrollY;
-      const previousY = lastScrollYRef.current;
-      lastScrollYRef.current = y;
-
-      if (y <= NEAR_TOP_THRESHOLD_PX) {
-        setHidden(false);
-        return;
-      }
-
-      if (y > previousY) {
-        // Scrolling down: hide completely (no layout or hit-test footprint).
-        setHidden(true);
-        return;
-      }
-
-      if (y < previousY) {
-        // Scrolling up: reappear in the header rail's docked position.
-        setHidden(false);
-      }
-    };
-
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      window.removeEventListener("scroll", onScroll);
-    };
-  }, []);
 
   return (
     <>
@@ -64,10 +32,7 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
           onClose={() => setExportMode(null)}
         />
       )}
-      <div
-        className={hidden ? `${css.toggleWrapper} ${css.toggleWrapperHidden}` : css.toggleWrapper}
-        aria-hidden={hidden}
-      >
+      <div className={css.toggleWrapper}>
         {selectionMode ? (
           <div className={css.selectionBar}>
             <span className={css.selectionCount}>{checkedPaths.size} selected</span>
@@ -75,7 +40,6 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
               className="btn btn-subtle"
               onClick={() => setExportMode("share")}
               disabled={checkedPaths.size === 0}
-              tabIndex={hidden ? -1 : 0}
             >
               <Share24Regular fontSize={18} />
               Share
@@ -84,16 +48,11 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
               className="btn btn-subtle"
               onClick={() => setExportMode("download")}
               disabled={checkedPaths.size === 0}
-              tabIndex={hidden ? -1 : 0}
             >
               <ArrowDownload24Regular fontSize={18} />
               Download
             </button>
-            <button
-              className="btn btn-subtle"
-              onClick={exitSelectionMode}
-              tabIndex={hidden ? -1 : 0}
-            >
+            <button className="btn btn-subtle" onClick={exitSelectionMode}>
               <Dismiss24Regular fontSize={18} />
               Clear
             </button>
@@ -111,7 +70,6 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
                 onClick={() => onViewChange("library")}
                 role="tab"
                 aria-selected={view === "library"}
-                tabIndex={hidden ? -1 : 0}
               >
                 Thumbnails
               </button>
@@ -121,7 +79,6 @@ export const ViewToggle = ({ view, onViewChange }: ViewToggleProps) => {
                 onClick={() => onViewChange("people")}
                 role="tab"
                 aria-selected={view === "people"}
-                tabIndex={hidden ? -1 : 0}
               >
                 People
               </button>

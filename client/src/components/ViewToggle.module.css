@@ -1,24 +1,18 @@
+/* Feedback #121/#122/#123: floating over the grid now instead of sitting
+   against the header's own glass background, so this needs its own —
+   otherwise it (and, when present, the sort segments docked next to it)
+   would read as see-through chips floating with nothing behind them. */
 .toggleWrapper {
   display: flex;
-  opacity: 1;
-  visibility: visible;
+  align-items: center;
+  gap: var(--space-s);
   pointer-events: auto;
-  transition:
-    opacity 0.2s ease,
-    transform 0.2s ease;
-}
-
-.toggleWrapperHidden {
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(-8px);
-  /* Drop hit-testing immediately so nothing lingers as a dead click zone,
-     even while the opacity transition is still fading out. */
-  pointer-events: none;
-  transition:
-    opacity 0.2s ease,
-    transform 0.2s ease,
-    visibility 0s linear 0.2s;
+  padding: var(--space-xs);
+  border-radius: var(--radius-full);
+  background-color: var(--surface-glass);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--stroke2);
+  box-shadow: var(--shadow-sm, 0 4px 14px rgba(0, 0, 0, 0.18));
 }
 
 .selectionBar {
@@ -26,6 +20,7 @@
   align-items: center;
   gap: var(--space-m);
   width: 100%;
+  padding-inline: var(--space-s);
 }
 
 .selectionCount {

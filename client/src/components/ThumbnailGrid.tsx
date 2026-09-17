@@ -237,13 +237,16 @@ const ThumbnailGridComponent = ({ view, onViewChange }: ThumbnailGridProps) => {
     <>
       <TopRailPortal>
         <ViewToggle view={view} onViewChange={onViewChange} />
+        {/* Feedback #122/#123: used to live in-flow in .statusRow above the
+            grid, pushing every tile down whenever it was visible. It's now
+            part of the same fixed floating bar as the view-toggle pill. */}
+        {data && <SortControl />}
       </TopRailPortal>
       {error ? <h3>{error}</h3> : null}
       {resultCountLabel ? (
         <div className={css.statusRow} aria-live="polite">
           <span>{resultCountLabel}</span>
           {isStale && <Spinner size="extra-tiny" />}
-          <SortControl />
         </div>
       ) : null}
       <div

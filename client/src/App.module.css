@@ -25,13 +25,11 @@
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--stroke2);
   /* backdrop-filter alone makes .header a (static, unpositioned) stacking
-     context, which traps its filter-popover descendants (z-index: 50) inside
-     that context's own in-flow paint layer. .viewToggleDock is a sibling with
-     an explicit positive z-index (1), which *always* paints after in-flow
-     content regardless of any z-index used deeper inside .header — so a
-     popover could never appear above the view-toggle pill no matter how high
-     its z-index was set. Making .header itself a positioned stacking-context
-     root with z-index above the dock's fixes that (feedback #72). */
+     context, which traps popover descendants (z-index: 50) inside that
+     context's own in-flow paint layer unless .header is itself given a
+     positioned stacking-context root with a z-index above them
+     (feedback #72). .floatingBarDock is fixed to the viewport now (feedback
+     #121/#122/#123) so it no longer competes with this stack at all. */
   position: relative;
   z-index: 2;
   .title {
@@ -60,12 +58,21 @@
   pointer-events: none;
 }
 
-.viewToggleDock {
-  position: absolute;
+/* Feedback #121/#122/#123: previously docked just under the sticky header
+   and hid itself on scroll-down/reappeared on any scroll-up, which meant it
+   could reappear over content anywhere in a long grid, not just at the top.
+   Floating it fixed at the bottom of the viewport instead means it's always
+   reachable without ever needing to disappear — if it's over something the
+   user cares about, scrolling the grid moves the *content*, which is a
+   change already required to bring more content into view anyway. The sort
+   control now lives inside this same bar instead of pushing the grid down
+   from above it. */
+.floatingBarDock {
+  position: fixed;
   left: 50%;
-  bottom: -5px;
-  z-index: 1;
-  transform: translate(-50%, 100%);
+  bottom: var(--space-m);
+  z-index: 40;
+  transform: translateX(-50%);
 }
 
 .headerActions {
