@@ -15,6 +15,11 @@ export type UrlNavState = {
   view: ViewMode;
   people: PeopleSelection;
   /**
+   * Path of the photo the fullscreen viewer has open, or `null` — see
+   * `preview` in filterUrlState.ts. Feedback #120.
+   */
+  previewPath: string | null;
+  /**
    * Forces `replaceState` for the write this state triggers. Used for
    * corrections the user did not ask for (a person that vanished under a new
    * filter, an id that changed under a merge), which must not become history
@@ -37,7 +42,7 @@ export const useSyncUrlWithFilter = (
   onNavigate: (next: UrlNavState) => void,
 ): void => {
   const { filter, setFilter } = useFilter();
-  const { view, replace } = nav;
+  const { view, replace, previewPath } = nav;
   const { personId, groupId } = nav.people;
 
   // The URL this hook last put in the address bar. `null` until the first write,
@@ -48,7 +53,7 @@ export const useSyncUrlWithFilter = (
 
   useEffect(() => {
     const nextUrl = buildAppUrl(
-      { view, filter, people: { personId, groupId } },
+      { view, filter, people: { personId, groupId }, preview: previewPath },
       window.location.search,
     );
     if (currentUrl() === nextUrl) {
@@ -71,7 +76,7 @@ export const useSyncUrlWithFilter = (
     } else {
       window.history.replaceState(null, "", nextUrl);
     }
-  }, [filter, view, personId, groupId, replace]);
+  }, [filter, view, personId, groupId, previewPath, replace]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -80,7 +85,12 @@ export const useSyncUrlWithFilter = (
       // follows this state update recognises there is nothing to do.
       lastWrittenUrlRef.current = currentUrl();
       setFilter(state.filter);
-      onNavigateRef.current({ view: state.view, people: state.people, replace: true });
+      onNavigateRef.current({
+        view: state.view,
+        people: state.people,
+        previewPath: state.preview,
+        replace: true,
+      });
     };
 
     window.addEventListener("popstate", handlePopState);
