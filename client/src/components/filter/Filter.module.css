@@ -5,13 +5,38 @@
   flex-wrap: wrap;
 }
 
-/* On phones the bar lives in a horizontally-scrolling slot, so keep the icons
-   on a single non-wrapping row and don't let them shrink. */
+.iconBarButtons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-m);
+  flex-wrap: wrap;
+}
+
+/* Feedback #130: hidden by default, shown only in the narrow layout below —
+   on a wide window the icon row is always visible with no toggle at all. */
+.filterCollapseToggle {
+  display: none;
+}
+
+/* On phones the bar collapses behind a single Filters toggle instead of
+   being a permanently-visible (if horizontally-scrolling) row — the row on
+   its own had no visual weight next to the rest of the header and was easy
+   to miss or to scroll past without noticing more of it existed. */
 @media (max-width: 720px) {
-  .iconBar {
+  .filterCollapseToggle {
+    display: flex;
+    flex-shrink: 0;
+  }
+
+  .iconBarButtons {
+    display: none;
     flex-wrap: nowrap;
     gap: var(--space-s);
     width: max-content;
+  }
+
+  .iconBarButtonsOpen {
+    display: flex;
   }
 
   .filterIconButton {
