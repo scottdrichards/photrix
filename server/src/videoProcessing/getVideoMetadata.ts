@@ -8,6 +8,8 @@ type FFProbeStream = {
   codec_name?: string;
   pix_fmt?: string;
   r_frame_rate?: string;
+  /** e.g. "bt709" (SDR), "smpte2084" (HDR10/HDR10+ PQ), "arib-std-b67" (HLG). */
+  color_transfer?: string;
   tags?: {
     rotate?: string;
   };
@@ -56,7 +58,20 @@ export type VideoSourceProfile = {
   codec: string;
   /** ffmpeg pixel format of the video stream ("yuv420p", "yuv420p10le", …), or "". */
   pixelFormat: string;
+  /** ffmpeg color_transfer of the video stream ("bt709", "smpte2084", …), or "". */
+  colorTransfer: string;
 };
+
+/**
+ * True for HDR10/HDR10+ (PQ, "smpte2084") and HLG ("arib-std-b67") sources.
+ * Both encode brightness on a curve a plain SDR (bt709/gamma) pipeline
+ * doesn't know how to interpret — treating the samples as if they were SDR
+ * (which a bare `scale` filter does) produces a flat, washed-out image
+ * rather than an error, so this has to be checked explicitly rather than
+ * discovered from a visibly-broken output.
+ */
+export const isHdrColorTransfer = (colorTransfer: string): boolean =>
+  colorTransfer === "smpte2084" || colorTransfer === "arib-std-b67";
 
 /**
  * True when the source decodes to more than 8 bits per component ("yuv420p10le",
@@ -101,6 +116,7 @@ export const getVideoSourceProfile = (
           rotation: extractRotationDegrees(streams),
           codec: video?.codec_name ?? "",
           pixelFormat: video?.pix_fmt ?? "",
+          colorTransfer: video?.color_transfer ?? "",
         });
       } catch (e) {
         reject(e);

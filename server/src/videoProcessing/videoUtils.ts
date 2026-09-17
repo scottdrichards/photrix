@@ -12,8 +12,44 @@ import {
   runWithoutRequestAbortSignal,
 } from "../common/requestAbort.ts";
 import { getGpuAcceleration } from "./gpuAcceleration.ts";
+import { getVideoSourceProfile, isHdrColorTransfer } from "./getVideoMetadata.ts";
 
 const MAX_CAPTURED_LOG_CHARS = 64_000;
+
+/**
+ * Feedback #132/#133: HDR10/HDR10+ (PQ) and HLG source frames encode
+ * brightness on a curve a plain SDR viewer doesn't know how to read. A bare
+ * `scale` filter copies the samples through unchanged, which an SDR-assuming
+ * JPEG viewer then displays flat and washed-out rather than tonemapped —
+ * this is the standard ffmpeg recipe for converting such a frame down to
+ * SDR before encoding a thumbnail: light-linearize, do the actual tonemap in
+ * a floating-point RGB working space, then convert back to bt709/limited
+ * range for a normal JPEG. Deliberately NOT applied to the re-encoded
+ * preview/HLS video paths — #133 narrowed this to the static thumbnails
+ * specifically, since the video's own contrast is a source-material
+ * property, not a bug in this app.
+ */
+const HDR_TO_SDR_TONEMAP =
+  "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable,zscale=t=bt709:m=bt709:r=tv,format=yuv420p";
+
+const buildThumbnailScaleFilter = (heightArg: number, isHdr: boolean): string => {
+  const scale = `scale=-2:${heightArg}`;
+  return isHdr ? `${HDR_TO_SDR_TONEMAP},${scale}` : scale;
+};
+
+/**
+ * Best-effort HDR probe for a thumbnail's `-vf`: on any failure (corrupt
+ * file, ffprobe missing, unusual container) this assumes SDR rather than
+ * blocking thumbnail generation on a second ffmpeg call succeeding.
+ */
+const probeIsHdr = async (filePath: string): Promise<boolean> => {
+  try {
+    const profile = await getVideoSourceProfile(filePath);
+    return isHdrColorTransfer(profile.colorTransfer);
+  } catch {
+    return false;
+  }
+};
 
 export const appendWithLimit = (current: string, chunk: string): string => {
   if (chunk.length >= MAX_CAPTURED_LOG_CHARS) {
@@ -173,6 +209,7 @@ export const generateVideoThumbnail = async (
       }
 
       const gpu = await getGpuAcceleration();
+      const isHdr = await probeIsHdr(filePath);
 
       const generateWithMode = async (useHardware: boolean): Promise<void> => {
         await mkdir(dirname(cachedPath), { recursive: true });
@@ -187,7 +224,7 @@ export const generateVideoThumbnail = async (
             "-vframes",
             "1",
             "-vf",
-            `scale=-2:${height === "original" ? -1 : height}`,
+            buildThumbnailScaleFilter(height === "original" ? -1 : height, isHdr),
             cachedPath,
           ];
 
@@ -303,6 +340,7 @@ export const generateVideoScrubFrame = async (
       }
 
       const gpu = await getGpuAcceleration();
+      const isHdr = await probeIsHdr(filePath);
 
       const generateWithMode = async (useHardware: boolean): Promise<void> => {
         await mkdir(dirname(cachedPath), { recursive: true });
@@ -317,7 +355,7 @@ export const generateVideoScrubFrame = async (
             "-vframes",
             "1",
             "-vf",
-            `scale=-2:${VIDEO_SCRUB_HEIGHT}`,
+            buildThumbnailScaleFilter(VIDEO_SCRUB_HEIGHT, isHdr),
             cachedPath,
           ];
 
