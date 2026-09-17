@@ -440,6 +440,16 @@
   border-left: 1px solid rgba(255, 255, 255, 0.15);
   padding: calc(var(--space-m) + 40px) var(--space-m) var(--space-m);
   overflow-y: auto;
+  /* Feedback #126: without these, a modal-hosted scroll container like this
+     one is a well-known dead zone on iOS Safari specifically — momentum
+     scrolling silently doesn't engage, and a wheel/touch gesture that starts
+     over the panel can instead chain through to whatever's behind it (here,
+     the dialog's own document.documentElement.style.overflow = "hidden"
+     lock, or the photo viewer's own pan/zoom gestures) rather than scrolling
+     this panel's own content. */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .infoTitle {
