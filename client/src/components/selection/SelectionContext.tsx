@@ -19,6 +19,14 @@ export type SelectionContextValue = {
   items: PhotoItem[];
   selected: PhotoItem | null;
   setSelected: (photo: PhotoItem | null) => void;
+  /**
+   * Selects (or clears, given `null`) by path rather than a `PhotoItem`
+   * object, and skips the view-transition morph `setSelected` does — there
+   * is no origin tile to animate from when the URL itself is the trigger
+   * (initial load with `?preview=`, or browser back/forward). See
+   * useSyncUrlWithFilter's `previewPath` (feedback #120).
+   */
+  selectByPath: (path: string | null) => void;
   setItems: (items: PhotoItem[]) => void;
   selectNext: () => void;
   selectPrevious: () => void;
@@ -95,6 +103,10 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
     runWithViewTransition(() => setSelectedPath(photo?.path ?? null));
   }, []);
 
+  const selectByPath = useCallback((path: string | null) => {
+    setSelectedPath(path);
+  }, []);
+
   const selectNext = useCallback(() => {
     if (!selectedPath) return;
     const index = items.findIndex((item) => item.path === selectedPath);
@@ -135,6 +147,7 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
       items,
       selected,
       setSelected,
+      selectByPath,
       setItems,
       selectNext,
       selectPrevious,
@@ -149,6 +162,7 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
       items,
       selected,
       setSelected,
+      selectByPath,
       setItems,
       selectNext,
       selectPrevious,

@@ -11,6 +11,7 @@ const SyncHarness = ({ initialView = "library" as ViewMode } = {}) => {
   const [nav, setNav] = useState<UrlNavState>({
     view: initialView,
     people: { personId: null, groupId: null },
+    previewPath: null,
   });
   useSyncUrlWithFilter(nav, setNav);
   const view = nav.view;

@@ -28,6 +28,7 @@ import {
  *   view=people         non-default view mode
  *   cluster=person-12   open person in the People tab (only with view=people)
  *   group=person-34     selected match group inside that person
+ *   preview=<file path> the fullscreen viewer is open on this photo
  *   includeSubfolders=false
  *   q=sunset            semantic query
  *   sources=image,transcript   enabled search sources (omitted when all are on)
@@ -66,6 +67,15 @@ export type AppUrlState = {
   view: ViewMode;
   filter: ClientFilterState;
   people: PeopleSelection;
+  /**
+   * Path of the photo currently open in the fullscreen viewer, or `null`
+   * when it's closed. Feedback #120/#125: previously this lived only in
+   * SelectionContext's component state, so refreshing or sharing a link
+   * while a photo was open silently dropped back to the bare grid — the
+   * same class of bug #2/#3 fixed for the People tab's cluster/group
+   * selection.
+   */
+  preview: string | null;
 };
 
 /**
@@ -262,6 +272,10 @@ export const readViewModeFromSearch = (search: string): ViewMode =>
  * A person is only meaningful inside the People tab, and a match group is only
  * meaningful inside a person — so both are gated on their parent.
  */
+/** Which photo the fullscreen viewer has open, if any. */
+export const readPreviewFromSearch = (search: string): string | null =>
+  new URLSearchParams(search).get("preview") || null;
+
 export const readPeopleSelectionFromSearch = (search: string): PeopleSelection => {
   const params = new URLSearchParams(search);
   if (params.get("view") !== "people") return NO_PEOPLE_SELECTION;
@@ -309,6 +323,7 @@ export const parseAppUrlState = (location: {
   view: readViewModeFromSearch(location.search),
   filter: createFilterStateFromUrl(location),
   people: readPeopleSelectionFromSearch(location.search),
+  preview: readPreviewFromSearch(location.search),
 });
 
 // ---------------------------------------------------------------------------
@@ -323,7 +338,7 @@ export const buildAppSearchParams = (
   state: AppUrlState,
   currentSearch = "",
 ): URLSearchParams => {
-  const { filter, view, people } = state;
+  const { filter, view, people, preview } = state;
   const params = new URLSearchParams();
   const token = new URLSearchParams(currentSearch).get("token");
 
@@ -333,6 +348,7 @@ export const buildAppSearchParams = (
     params.set("cluster", people.personId);
     if (people.groupId) params.set("group", people.groupId);
   }
+  if (preview) params.set("preview", preview);
 
   // Only persist non-defaults so ordinary library URLs stay clean.
   if (!isDefaultSort(filter.sortBy)) {
@@ -396,5 +412,6 @@ export const navigationKey = (url: string): string => {
     params.get("view") ?? "",
     params.get("cluster") ?? "",
     params.get("group") ?? "",
+    params.get("preview") ?? "",
   ].join("|");
 };
