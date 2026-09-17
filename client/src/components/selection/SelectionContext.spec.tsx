@@ -15,7 +15,7 @@ const createPhoto = (path: string): PhotoItem => ({
 const photos = [createPhoto("a/1.jpg"), createPhoto("a/2.jpg"), createPhoto("a/3.jpg")];
 
 const SelectionHarness = () => {
-  const { items, selected, setItems, setSelected, selectNext, selectPrevious } =
+  const { items, selected, setItems, setSelected, selectByPath, selectNext, selectPrevious } =
     useSelectionContext();
 
   return (
@@ -36,6 +36,12 @@ const SelectionHarness = () => {
       </button>
       <button type="button" onClick={() => setSelected(null)}>
         clear-selection
+      </button>
+      <button type="button" onClick={() => selectByPath("a/2.jpg")}>
+        select-by-path-second
+      </button>
+      <button type="button" onClick={() => selectByPath("does/not/exist.jpg")}>
+        select-by-path-missing
       </button>
       <button type="button" onClick={selectNext}>
         next
@@ -80,5 +86,24 @@ describe("SelectionContext", () => {
     fireEvent.click(screen.getByRole("button", { name: "set-second" }));
     fireEvent.click(screen.getByRole("button", { name: "clear-selection" }));
     expect(screen.getByTestId("selected-name")).toHaveTextContent("none");
+  });
+
+  // Feedback #120: selectByPath is the URL-driven entry point (initial load
+  // with ?preview=, browser back/forward) — it has no PhotoItem in hand, only
+  // a path, and must resolve gracefully rather than throw when that path
+  // isn't (yet, or ever) in the loaded items.
+  it("selects by path once matching items are loaded, and no-ops for an unknown path", () => {
+    render(
+      <SelectionProvider>
+        <SelectionHarness />
+      </SelectionProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "select-by-path-missing" }));
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("none");
+
+    fireEvent.click(screen.getByRole("button", { name: "load-items" }));
+    fireEvent.click(screen.getByRole("button", { name: "select-by-path-second" }));
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("2.jpg");
   });
 });

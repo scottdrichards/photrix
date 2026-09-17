@@ -21,7 +21,7 @@ import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { TopRailPortalProvider } from "./components/TopRailPortal";
 import { Filter } from "./components/filter/Filter";
 import { FilterProvider, useFilter } from "./components/filter/FilterContext";
-import { SelectionProvider } from "./components/selection/SelectionContext";
+import { SelectionProvider, useSelectionContext } from "./components/selection/SelectionContext";
 import {
   useSyncUrlWithFilter,
   type UrlNavState,
@@ -64,10 +64,10 @@ const ownsAccountSession = hasAccountSession();
 
 const initialNavFromUrl = (): UrlNavState => {
   if (typeof window === "undefined") {
-    return { view: "library", people: NO_PEOPLE_SELECTION };
+    return { view: "library", people: NO_PEOPLE_SELECTION, previewPath: null };
   }
-  const { view, people } = parseAppUrlState(window.location);
-  return { view, people };
+  const { view, people, preview } = parseAppUrlState(window.location);
+  return { view, people, previewPath: preview };
 };
 
 const copyToClipboard = async (text: string): Promise<boolean> => {
@@ -242,21 +242,53 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   const [viewToggleHost, setViewToggleHost] = useState<HTMLDivElement | null>(null);
   const [nav, setNav] = useState<UrlNavState>(initialNavFromUrl);
   const { view } = nav;
+  const { selected, selectByPath } = useSelectionContext();
 
   useSyncUrlWithFilter(nav, setNav);
 
+  // Feedback #120: mirror the fullscreen viewer's open photo into the URL
+  // (nav.previewPath), the same way nav.people already mirrors the People
+  // tab's selection — a refresh, a shared link, or the back button should
+  // all be able to reopen (or close) it, not just drop back to the bare grid.
+  useEffect(() => {
+    const openPath = selected?.path ?? null;
+    setNav((prev) => (prev.previewPath === openPath ? prev : { ...prev, previewPath: openPath }));
+  }, [selected]);
+
+  useEffect(() => {
+    if (nav.previewPath === (selected?.path ?? null)) return;
+    // Not wrapped in the view-transition morph setSelected uses — there is no
+    // origin tile to animate from on a URL-driven change (initial load,
+    // back/forward). selectByPath resolves against whatever items the
+    // current view has already loaded, so it's a no-op until that catches up.
+    selectByPath(nav.previewPath);
+    // Only react to the URL side of this; the effect above already handles
+    // the reverse direction, and depending on `selected` here too would
+    // re-run this on every selection change for no reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav.previewPath]);
+
   // A person only exists inside the People tab, so leaving it clears the
-  // selection rather than leaving state the URL can no longer express.
+  // selection rather than leaving state the URL can no longer express. The
+  // open preview doesn't carry across either — the People tab and the
+  // library grid load different item lists, so a path from one won't
+  // resolve in the other.
   const handleViewChange = useCallback((nextView: ViewMode) => {
     setNav((prev) => ({
       view: nextView,
       people: nextView === "people" ? prev.people : NO_PEOPLE_SELECTION,
+      previewPath: null,
     }));
   }, []);
 
   const handlePeopleNavigate = useCallback(
     (people: PeopleSelection, options?: { replace?: boolean }) => {
-      setNav((prev) => ({ view: prev.view, people, replace: options?.replace }));
+      setNav((prev) => ({
+        view: prev.view,
+        people,
+        previewPath: prev.previewPath,
+        replace: options?.replace,
+      }));
     },
     [],
   );

@@ -16,6 +16,7 @@ const baseState = (overrides: Partial<AppUrlState> = {}): AppUrlState => ({
   view: "library",
   filter: { includeSubfolders: true, path: "" },
   people: { personId: null, groupId: null },
+  preview: null,
   ...overrides,
 });
 
@@ -57,6 +58,26 @@ describe("app URL state", () => {
     expect(restored.filter.includeSubfolders).toBe(false);
     expect(restored.filter.mediaTypeFilter).toBe("video");
     expect(restored.filter.faceClusterFilter).toEqual(["person-3"]);
+  });
+
+  describe("preview", () => {
+    // Feedback #120: the fullscreen viewer's open photo used to live only in
+    // component state, so a refresh or a shared link with a photo open
+    // silently dropped back to the bare grid.
+    it("restores the open photo across a refresh", () => {
+      const restored = roundTrip(baseState({ preview: "trip/2024/sunset.jpg" }));
+      expect(restored.preview).toBe("trip/2024/sunset.jpg");
+    });
+
+    it("omits the param entirely when nothing is open", () => {
+      expect(buildAppUrl(baseState())).not.toContain("preview=");
+    });
+
+    it("changes the navigation key, so back closes the viewer instead of leaving the page", () => {
+      const closed = buildAppUrl(baseState());
+      const open = buildAppUrl(baseState({ preview: "trip/2024/sunset.jpg" }));
+      expect(navigationKey(closed)).not.toBe(navigationKey(open));
+    });
   });
 
   describe("face attributes", () => {

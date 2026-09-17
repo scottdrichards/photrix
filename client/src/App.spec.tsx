@@ -35,6 +35,10 @@ vi.mock("./hooks/useSyncUrlWithFilter", () => ({
 
 vi.mock("./components/selection/SelectionContext", () => ({
   SelectionProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  useSelectionContext: () => ({
+    selected: null,
+    selectByPath: () => {},
+  }),
 }));
 
 vi.mock("./components/ViewToggle", () => ({
