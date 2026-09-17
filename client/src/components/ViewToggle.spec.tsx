@@ -4,14 +4,6 @@ import type { PhotoItem } from "../api";
 import { ViewToggle } from "./ViewToggle";
 import { SelectionProvider, useSelectionContext } from "./selection/SelectionContext";
 
-const setScrollY = (value: number) => {
-  Object.defineProperty(window, "scrollY", {
-    configurable: true,
-    writable: true,
-    value,
-  });
-};
-
 const renderViewToggle = (view: "library" | "people" = "library") =>
   render(
     <SelectionProvider>
@@ -70,68 +62,22 @@ const renderSelectionModeWithCheckedItem = (view: "library" | "people" = "librar
   );
 
 describe("ViewToggle", () => {
-  beforeEach(() => {
-    setScrollY(0);
-  });
-
-  it("renders visible (not hidden) at the top of the page", () => {
+  // Feedback #121/#122/#123: this used to hide on scroll-down and reappear
+  // on any scroll-up (not just at the top of the page), so it could pop
+  // back over content anywhere in a long grid. It now floats fixed to the
+  // bottom of the viewport (see App.module.css's .floatingBarDock) and
+  // never hides itself, so there's no scroll-driven visibility left to test.
+  it("renders visible and interactive regardless of scroll position", () => {
     renderViewToggle();
 
-    const tablist = screen.getByRole("tablist", { name: "Current view" });
-    expect(tablist.parentElement).toHaveAttribute("aria-hidden", "false");
-  });
-
-  it("hides completely (no layout/hit-test footprint) when scrolling down", () => {
-    renderViewToggle();
-
-    setScrollY(50);
-    fireEvent.scroll(window);
-    setScrollY(150);
-    fireEvent.scroll(window);
-
-    const tablist = screen.getByRole("tablist", { name: "Current view", hidden: true });
-    const wrapper = tablist.parentElement;
-    expect(wrapper).toHaveAttribute("aria-hidden", "true");
-    // Buttons should drop out of the tab order while hidden.
-    for (const tab of screen.getAllByRole("tab", { hidden: true })) {
-      expect(tab).toHaveAttribute("tabindex", "-1");
-    }
-  });
-
-  it("reappears anchored under the header when scrolling back up", () => {
-    renderViewToggle();
-
-    // Scroll down first so the pill is hidden and scrolled away from the top.
-    setScrollY(50);
-    fireEvent.scroll(window);
-    setScrollY(400);
-    fireEvent.scroll(window);
-
-    // Now scroll back up.
-    setScrollY(350);
+    setScrollYForTest(400);
     fireEvent.scroll(window);
 
     const tablist = screen.getByRole("tablist", { name: "Current view" });
-    const wrapper = tablist.parentElement as HTMLElement;
-    expect(wrapper).toHaveAttribute("aria-hidden", "false");
+    expect(tablist.parentElement).not.toHaveAttribute("aria-hidden", "true");
     for (const tab of screen.getAllByRole("tab")) {
-      expect(tab).toHaveAttribute("tabindex", "0");
+      expect(tab).not.toHaveAttribute("tabindex", "-1");
     }
-  });
-
-  it("returns to the top anchor and reveals itself once scrolled back near the top", () => {
-    renderViewToggle();
-
-    setScrollY(50);
-    fireEvent.scroll(window);
-    setScrollY(150);
-    fireEvent.scroll(window);
-
-    setScrollY(10);
-    fireEvent.scroll(window);
-
-    const tablist = screen.getByRole("tablist", { name: "Current view" });
-    expect(tablist.parentElement).toHaveAttribute("aria-hidden", "false");
   });
 
   it("shows share and download actions in selection mode", () => {
@@ -150,3 +96,11 @@ describe("ViewToggle", () => {
     expect(screen.getByRole("heading", { name: "Download 1 item" })).toBeInTheDocument();
   });
 });
+
+function setScrollYForTest(value: number) {
+  Object.defineProperty(window, "scrollY", {
+    configurable: true,
+    writable: true,
+    value,
+  });
+}
