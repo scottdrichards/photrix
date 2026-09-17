@@ -170,6 +170,11 @@
   display: flex;
 }
 
+/* Feedback #124: a bare circular icon read as an abstract, generic
+   badge — easy to mistake for the burst/stack or rating badges next to it.
+   Pairing it with the "LIVE" text (the same convention Apple Photos and
+   the iOS camera roll use) makes what it means legible at a glance instead
+   of requiring the viewer to recognise a specific glyph. */
 .livePhotoBadge {
   position: absolute;
   top: var(--space-xxs);
@@ -179,8 +184,9 @@
   border-radius: var(--radius-full);
   display: flex;
   align-items: center;
+  gap: 3px;
   justify-content: center;
-  padding: var(--space-xs);
+  padding: var(--space-xs) var(--space-s) var(--space-xs) var(--space-xs);
   box-shadow: var(--shadow-sm);
   opacity: 0.86;
   z-index: 2;
@@ -190,6 +196,13 @@
   transition:
     color var(--dur-fast, 150ms) ease-out,
     opacity var(--dur-fast, 150ms) ease-out;
+}
+
+.livePhotoBadgeLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1;
 }
 
 @media (hover: hover) and (pointer: fine) {
