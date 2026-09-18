@@ -9,6 +9,7 @@ import { ThumbnailTile } from "./ThumbnailTile";
 import { PhotoStackModal } from "./PhotoStackModal";
 import { SelectionActionBar } from "./SelectionActionBar";
 import { SortControl } from "./SortControl";
+import { SortDockPortal } from "./SortDockPortal";
 import { TopRailPortal } from "./TopRailPortal";
 import { ViewToggle } from "./ViewToggle";
 import { photoViewTransitionName, runWithViewTransition } from "./viewTransition";
@@ -259,11 +260,14 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
     <>
       <TopRailPortal>
         <ViewToggle view={view} onViewChange={onViewChange} />
-        {/* Feedback #122/#123: used to live in-flow in .statusRow above the
-            grid, pushing every tile down whenever it was visible. It's now
-            part of the same fixed floating bar as the view-toggle pill. */}
-        {data && <SortControl />}
       </TopRailPortal>
+      {/* Feedback #122/#123: used to live in-flow in .statusRow above the
+          grid, pushing every tile down whenever it was visible. A user
+          comment then found that sharing the view-toggle pill's floating
+          dock made the two stack (rather than sit in a row) and broke
+          SortControl's clicks outright, so it now gets its own dock,
+          pinned to the bottom-right — see SortDockPortal. */}
+      <SortDockPortal>{data && <SortControl />}</SortDockPortal>
       {error ? <h3>{error}</h3> : null}
       {data ? (
         <div className={css.statusRow} aria-live="polite">

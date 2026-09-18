@@ -19,6 +19,7 @@ import { StatusModal } from "./components/StatusModal";
 import { SuggestionModal } from "./components/SuggestionModal";
 import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { TopRailPortalProvider } from "./components/TopRailPortal";
+import { SortDockProvider } from "./components/SortDockPortal";
 import { Filter } from "./components/filter/Filter";
 import { FilterProvider, useFilter } from "./components/filter/FilterContext";
 import { SelectionProvider, useSelectionContext } from "./components/selection/SelectionContext";
@@ -244,6 +245,7 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isSuggestionOpen, setIsSuggestionOpen] = useState(false);
   const [viewToggleHost, setViewToggleHost] = useState<HTMLDivElement | null>(null);
+  const [sortDockHost, setSortDockHost] = useState<HTMLDivElement | null>(null);
   const [nav, setNav] = useState<UrlNavState>(initialNavFromUrl);
   const { view } = nav;
   const { selected, selectByPath } = useSelectionContext();
@@ -344,6 +346,7 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
 
   return (
     <TopRailPortalProvider host={viewToggleHost}>
+    <SortDockProvider host={sortDockHost}>
       <div className={css.app}>
         <div className={cx(css.topRail, isStatusOpen ? css.topRailStatusOpen : undefined)}>
           <header className={css.header}>
@@ -462,6 +465,23 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
           <div ref={setViewToggleHost} style={{ pointerEvents: "none" }} />
         </div>
 
+        {/* A comment (not a queue item, unlike #121-#123/#127 above): sharing
+            the centered dock with the view-toggle pill made SortControl's
+            box stack under (not beside) the pill — each is its own
+            block-level box, so the pill's own width, not a shared row,
+            decided how wide the centered dock read as — and its buttons
+            didn't respond to clicks at all, since nothing in that chain set
+            pointer-events back to auto for it (see SortControl.module.css).
+            Its own dock, pinned to the bottom-right, sidesteps both. */}
+        <div
+          className={cx(css.sortDock, !nearTop && css.sortDockHidden)}
+          style={{ pointerEvents: "none" }}
+          aria-hidden={!nearTop}
+          data-testid="sort-dock"
+        >
+          <div ref={setSortDockHost} style={{ pointerEvents: "none" }} />
+        </div>
+
         {!sharedView && (
           <>
             <StatusModal isOpen={isStatusOpen} onDismiss={() => setIsStatusOpen(false)} />
@@ -492,6 +512,7 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
         )}
         <FullscreenViewer />
       </div>
+    </SortDockProvider>
     </TopRailPortalProvider>
   );
 };

@@ -80,8 +80,12 @@
    Floating it fixed at the bottom of the viewport fixes the "reappears over
    content" part, but feedback #127 wants it to still get out of the way
    while scrolling, so it's shown only near the top of the page (App.tsx's
-   `nearTop`) rather than permanently. The sort control lives inside this
-   same bar instead of pushing the grid down from above it. */
+   `nearTop`) rather than permanently. SortControl used to live inside this
+   same bar (pushing the grid down from above it was the thing #122/#123
+   fixed) but a user comment found that sharing one centered box made the
+   two controls stack instead of sit in a row, and broke SortControl's
+   clicks outright — see .sortDock below, which gives it a wholly separate
+   dock instead. */
 .floatingBarDock {
   position: fixed;
   left: 50%;
@@ -101,6 +105,30 @@
      tab order while hidden, same as the old scroll-hide behavior did via
      tabIndex — no per-button bookkeeping needed since the whole subtree is
      driven from one place now. */
+  visibility: hidden;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease,
+    visibility 0s linear 0.2s;
+}
+
+/* Pinned to the bottom-right, deliberately separate from .floatingBarDock —
+   see the comment on that class. No horizontal centering transform here, so
+   (unlike a sibling positioned inside .floatingBarDock would be) this is a
+   real position: fixed against the viewport with nothing above it that
+   could turn into an unwanted containing block. */
+.sortDock {
+  position: fixed;
+  right: var(--space-m);
+  bottom: var(--space-m);
+  z-index: 40;
+  opacity: 1;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.sortDockHidden {
+  opacity: 0;
+  transform: translateY(12px);
   visibility: hidden;
   transition:
     opacity 0.2s ease,

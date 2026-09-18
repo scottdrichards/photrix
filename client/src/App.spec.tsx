@@ -289,6 +289,29 @@ describe("App", () => {
     expect(dock).toHaveAttribute("aria-hidden", "false");
   });
 
+  // A user comment (not a queue item, unlike #121-#123/#127 above): sharing
+  // one floating dock made the sort control's box stack under the
+  // view-toggle pill instead of sitting beside it, and its clicks landed
+  // nowhere. It now has its own separate dock, pinned to the bottom-right,
+  // that hides/shows in lockstep with the view-toggle one.
+  it("gives the sort control its own dock, separate from the view-toggle dock", async () => {
+    await act(async () => {
+      render(<App />);
+    });
+
+    const viewToggleDock = screen.getByTestId("floating-bar-dock");
+    const sortDock = screen.getByTestId("sort-dock");
+    expect(sortDock).not.toBe(viewToggleDock);
+    expect(viewToggleDock).not.toContainElement(sortDock);
+    expect(sortDock).toHaveAttribute("aria-hidden", "false");
+
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 400 });
+    await act(async () => {
+      fireEvent.scroll(window);
+    });
+    expect(sortDock).toHaveAttribute("aria-hidden", "true");
+  });
+
   it("follows the system theme by default", async () => {
     setSystemDarkMode(true);
 

@@ -1,12 +1,28 @@
 /* Feedback #122/#123: used to sit in-flow above the grid (pushing every
    tile down whenever it was visible) with margin-inline-start: auto to pin
-   it to the far end of that row. It now lives in the same fixed floating
-   bar as the view-toggle pill (see .floatingBarDock in App.module.css), so
-   it needs no auto-margin — the bar itself centers its contents. */
+   it to the far end of that row. It now floats in its own dock pinned to
+   the bottom-right (see .sortDock in App.module.css), so it needs no
+   auto-margin. That dock, and everything between it and the true page
+   root, sets pointer-events: none so the empty space around a floating
+   control never eats a click meant for the grid underneath -- which means
+   this element has to explicitly opt back into pointer-events: auto itself,
+   or every click lands on nothing (the actual "sort buttons aren't
+   clickable" bug: this rule was simply missing). */
 .sortControl {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
+  pointer-events: auto;
+  /* Floating alone over the grid now rather than sharing a backdrop with
+     the view-toggle pill (see ViewToggle.module.css's .toggleWrapper for
+     the same treatment there) -- otherwise the "Sort" label had nothing
+     behind it and could disappear against a light photo. */
+  padding: var(--space-xs);
+  border-radius: var(--radius-full);
+  background-color: var(--surface-glass);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--stroke2);
+  box-shadow: var(--shadow-sm, 0 4px 14px rgba(0, 0, 0, 0.18));
 }
 
 .label {
