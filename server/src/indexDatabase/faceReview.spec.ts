@@ -24,9 +24,7 @@ const unit = (values: number[]): Float32Array => {
   return Float32Array.from(values.map((v) => v / magnitude));
 };
 
-const baseFace = (
-  overrides: Partial<AnomalyInput> & { faceId: number },
-): AnomalyInput => ({
+const baseFace = (overrides: Partial<AnomalyInput> & { faceId: number }): AnomalyInput => ({
   similarity: 0.85,
   takenAt: null,
   latitude: null,
@@ -61,12 +59,34 @@ describe("suggestCutoff", () => {
     expect(suggestCutoff(similarities)).toBeNull();
   });
 
-  it("requires the gap to stand out against the distribution's own spacing", () => {
-    // Ragged cluster: ordinary steps are already ~0.02, so a 0.035 step is not
+  it("requires the gap to stand out against the distribution's own spread", () => {
+    // Broad cluster: ordinary steps are already ~0.02, so a 0.035 step is not
     // evidence of anything even though it clears the absolute floor.
     const ragged = Array.from({ length: 20 }, (_, i) => 0.9 - i * 0.02);
     ragged[15] -= 0.015;
     expect(suggestCutoff(ragged)).toBeNull();
+  });
+
+  it("uses a spread that does not collapse as the cluster grows", () => {
+    // The regression this guards: with a *median neighbour gap* scale, adding
+    // members drives the scale to ~0 and any tail gap qualifies. Measured on the
+    // real library a 17k-face person had a median gap of ~1e-5. Same shaped
+    // distribution, two sizes — both must give the same verdict.
+    const band = (count: number) =>
+      Array.from({ length: count }, (_, i) => 0.85 - (i / count) * 0.2);
+    const withTail = (count: number) => [...band(count), 0.3, 0.29];
+
+    const small = suggestCutoff(withTail(40));
+    const large = suggestCutoff(withTail(4000));
+    expect(small).not.toBeNull();
+    expect(large).not.toBeNull();
+    // Both cut the same two stragglers off the bottom, not a size-dependent set.
+    expect(small!.keepCount).toBe(40);
+    expect(large!.keepCount).toBe(4000);
+
+    // And a clean band of either size is still judged clean.
+    expect(suggestCutoff(band(40))).toBeNull();
+    expect(suggestCutoff(band(4000))).toBeNull();
   });
 });
 
@@ -101,9 +121,7 @@ describe("scoreAnomalies", () => {
 
   it("does not fire the date signal when the person has no date spread", () => {
     const at = Date.UTC(2022, 5, 1);
-    const faces = Array.from({ length: 12 }, (_, i) =>
-      baseFace({ faceId: i, takenAt: at }),
-    );
+    const faces = Array.from({ length: 12 }, (_, i) => baseFace({ faceId: i, takenAt: at }));
     faces.push(baseFace({ faceId: 99, takenAt: at + 3 * DAY }));
     for (const result of scoreAnomalies(faces)) {
       expect(result.flags).not.toContain("date");
@@ -188,8 +206,8 @@ describe("planOptimization", () => {
     similarities = cleanBand(10),
   ): OptimizeCluster => ({ id, name, count, vector: unit(values), similarities });
 
-  it("proposes merging two near-identical centroids, larger absorbing smaller", () => {
-    const proposals = planOptimization([
+  it("proposes merging two near-identical centroids, larger absorbing smaller", async () => {
+    const proposals = await planOptimization([
       cluster("person-1", null, 40, [1, 0.02, 0]),
       cluster("person-2", null, 6, [1, 0.03, 0]),
       cluster("person-3", null, 30, [0, 0, 1]),
@@ -201,8 +219,8 @@ describe("planOptimization", () => {
     expect(merges[0].similarity).toBeGreaterThan(MERGE_PROPOSAL_THRESHOLD);
   });
 
-  it("keeps the named side as the merge target even when it is smaller", () => {
-    const proposals = planOptimization([
+  it("keeps the named side as the merge target even when it is smaller", async () => {
+    const proposals = await planOptimization([
       cluster("person-1", null, 80, [1, 0.02, 0]),
       cluster("person-2", "Ada", 5, [1, 0.03, 0]),
     ]);
@@ -211,8 +229,8 @@ describe("planOptimization", () => {
     expect(merge.sourceId).toBe("person-1");
   });
 
-  it("reports a two-named-people pair but marks the name conflict", () => {
-    const proposals = planOptimization([
+  it("reports a two-named-people pair but marks the name conflict", async () => {
+    const proposals = await planOptimization([
       cluster("person-1", "Ada", 40, [1, 0.02, 0]),
       cluster("person-2", "Grace", 30, [1, 0.03, 0]),
     ]);
@@ -220,8 +238,8 @@ describe("planOptimization", () => {
     expect(merge.nameConflict).toBe(true);
   });
 
-  it("never proposes the same source twice, so the plan can be applied top-down", () => {
-    const proposals = planOptimization([
+  it("never proposes the same source twice, so the plan can be applied top-down", async () => {
+    const proposals = await planOptimization([
       cluster("person-1", null, 40, [1, 0.01, 0]),
       cluster("person-2", null, 30, [1, 0.02, 0]),
       cluster("person-3", null, 20, [1, 0.03, 0]),
@@ -234,8 +252,8 @@ describe("planOptimization", () => {
     }
   });
 
-  it("proposes a radius for a cluster with a trailing tail", () => {
-    const proposals = planOptimization([
+  it("proposes a radius for a cluster with a trailing tail", async () => {
+    const proposals = await planOptimization([
       cluster("person-1", "Ada", 23, [1, 0, 0], [...cleanBand(20), 0.61, 0.6, 0.58]),
       cluster("person-2", "Grace", 30, [0, 1, 0], cleanBand(30)),
     ]);

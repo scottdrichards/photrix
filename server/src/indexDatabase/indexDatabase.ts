@@ -4176,8 +4176,12 @@ export class IndexDatabase {
     for (const row of clusterRows) {
       const personId = row.personId ?? row.id;
       const anchor = row.anchorCentroid ? toAlignedFloat32(row.anchorCentroid) : null;
-      const vector = anchor ?? toUnitFloat32(row.centroid);
-      if (!vector) continue;
+      // Both columns hold raw Float32 written by the engine — read them with
+      // toAlignedFloat32, never decodeEmbedding/toUnitFloat32, which is for the
+      // int8-encoded vectors in faceEmbeddings and would silently misread the
+      // blob's length as a different dimension.
+      const vector = anchor ?? toAlignedFloat32(row.centroid);
+      if (!vector.length) continue;
       const scale = anchor ? (row.anchorCount ?? 1) : row.weight;
 
       let accumulator = accumulators.get(personId);
@@ -4224,7 +4228,7 @@ export class IndexDatabase {
       });
     }
 
-    return planOptimization(clusters, {
+    return await planOptimization(clusters, {
       ...(options.maxProposals !== undefined ? { maxProposals: options.maxProposals } : {}),
     });
   }

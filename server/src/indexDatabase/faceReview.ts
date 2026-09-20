@@ -30,13 +30,25 @@ const MIN_FACES_FOR_CUTOFF = 8;
 
 /**
  * A gap only counts as the boundary between "them" and "not them" if it is both
- * absolutely meaningful and much larger than the distribution's ordinary
- * spacing. The absolute floor stops a tight, clean cluster from being cut at a
- * 0.002 ripple; the multiple stops a naturally ragged cluster from being cut at
- * whatever its largest ordinary step happens to be.
+ * absolutely meaningful and large against the distribution's own *spread*. The
+ * absolute floor stops a tight, clean cluster being cut at a 0.002 ripple; the
+ * IQR multiple stops a naturally broad cluster being cut at whatever its
+ * largest ordinary step happens to be.
+ *
+ * The scale has to be the IQR, not the median distance between neighbours.
+ * Measured against the real library (55 named people, 2026-09-20): at n=17k the
+ * median neighbour gap is ~1e-5, so *any* tail gap clears a multiple of it and
+ * the test does nothing. The IQR is a density-robust spread — it does not
+ * shrink as members are added — so the same constant means the same thing for
+ * a 20-face person and a 17,000-face one.
+ *
+ * Tuned on that measurement: 0.75 rejects every suggestion that was visibly
+ * junk (Alice gap 0.04 on IQR 0.18, Amelia 0.03/0.14, Scott 0.05/0.17, Douglas
+ * 0.03/0.21, Rosie 0.05/0.36 — all sub-0.4 gap/IQR) while keeping every clean
+ * one (Diane 4.7, Eric 5.0, Rachel 6.4, Nathan 4.8, Micah 3.7, Lily 2.1).
  */
 const MIN_CUTOFF_GAP = 0.03;
-const CUTOFF_GAP_MEDIAN_MULTIPLE = 3;
+const CUTOFF_GAP_IQR_MULTIPLE = 0.75;
 
 /**
  * Only the lower part of the sorted list is eligible to be cut. A cut high up
@@ -44,6 +56,16 @@ const CUTOFF_GAP_MEDIAN_MULTIPLE = 3;
  * that case is a split (see `planSplit`), not a cutoff.
  */
 const CUTOFF_SEARCH_START_FRACTION = 0.5;
+
+/** Linear-interpolated quantile over an *ascending* array. */
+const quantile = (sorted: number[], q: number): number => {
+  if (!sorted.length) return NaN;
+  const position = (sorted.length - 1) * q;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return sorted[lower];
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+};
 
 export type CutoffSuggestion = {
   /**
@@ -72,12 +94,9 @@ export type CutoffSuggestion = {
 export const suggestCutoff = (similarities: number[]): CutoffSuggestion | null => {
   if (similarities.length < MIN_FACES_FOR_CUTOFF) return null;
 
-  const gaps: number[] = [];
-  for (let i = 1; i < similarities.length; i += 1) {
-    gaps.push(similarities[i - 1] - similarities[i]);
-  }
-  const sortedGaps = [...gaps].sort((a, b) => a - b);
-  const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)];
+  // `similarities` arrives descending; quantile() wants ascending.
+  const ascending = [...similarities].reverse();
+  const iqr = quantile(ascending, 0.75) - quantile(ascending, 0.25);
 
   const searchStart = Math.max(
     1,
@@ -95,7 +114,7 @@ export const suggestCutoff = (similarities: number[]): CutoffSuggestion | null =
   }
   if (bestIndex < 0) return null;
 
-  const required = Math.max(MIN_CUTOFF_GAP, medianGap * CUTOFF_GAP_MEDIAN_MULTIPLE);
+  const required = Math.max(MIN_CUTOFF_GAP, iqr * CUTOFF_GAP_IQR_MULTIPLE);
   if (bestGap < required) return null;
 
   return {
@@ -165,15 +184,6 @@ const SIGNAL_CEILING = {
   date: 0.7,
   folder: 0.3,
 } as const;
-
-const quantile = (sorted: number[], q: number): number => {
-  if (!sorted.length) return NaN;
-  const position = (sorted.length - 1) * q;
-  const lower = Math.floor(position);
-  const upper = Math.ceil(position);
-  if (lower === upper) return sorted[lower];
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
-};
 
 /** Great-circle distance in km. Shares the haversine form used for share descriptions. */
 export const haversineKm = (
@@ -255,11 +265,7 @@ export const scoreAnomalies = (faces: AnomalyInput[]): AnomalyResult[] => {
       const low = q1 - iqr * DATE_FENCE_MULTIPLE;
       const high = q3 + iqr * DATE_FENCE_MULTIPLE;
       const outside =
-        face.takenAt < low
-          ? low - face.takenAt
-          : face.takenAt > high
-            ? face.takenAt - high
-            : 0;
+        face.takenAt < low ? low - face.takenAt : face.takenAt > high ? face.takenAt - high : 0;
       if (outside > 0) {
         flags.push("date");
         reasons.push(
@@ -350,6 +356,9 @@ export type OptimizeProposal = MergeProposal | TightenProposal;
  */
 export const MERGE_PROPOSAL_THRESHOLD = 0.75;
 
+/** Outer-loop rows between event-loop yields; a power of two so the test is a mask. */
+const YIELD_EVERY_ROWS = 64;
+
 const dot = (a: Float32Array, b: Float32Array): number => {
   const length = Math.min(a.length, b.length);
   let sum = 0;
@@ -361,15 +370,17 @@ const dot = (a: Float32Array, b: Float32Array): number => {
  * Produces a dry-run repair plan for the whole library: which people to merge,
  * and which to tighten with a radius.
  *
+ * Async only to yield the event loop — it does no I/O and stays deterministic.
+ *
  * Every proposal is evidence plus an action, never an applied change — the
  * caller applies them one at a time. Merges are ordered by similarity so the
  * most obvious duplicates are decided first, and each source appears at most
  * once so applying the list top-down can't try to move a cluster twice.
  */
-export const planOptimization = (
+export const planOptimization = async (
   clusters: OptimizeCluster[],
   options: { mergeThreshold?: number; maxProposals?: number } = {},
-): OptimizeProposal[] => {
+): Promise<OptimizeProposal[]> => {
   const mergeThreshold = options.mergeThreshold ?? MERGE_PROPOSAL_THRESHOLD;
   const maxProposals = options.maxProposals ?? 50;
 
@@ -395,6 +406,17 @@ export const planOptimization = (
   };
 
   for (let i = 0; i < clusters.length; i += 1) {
+    // Cooperative yield. This loop is quadratic in the number of people and the
+    // server is single-threaded, so without it a plan stalls every other
+    // request on the box for its whole duration. Measured on the real library
+    // (2026-09-20): 3684 person-level candidates, 6.8M pairs of 512-dim
+    // vectors, ~15 s of CPU. That is tolerable for an explicit, dry-run action
+    // *because* it yields; it would not be as a blocking call. If it ever needs
+    // to be faster, prefilter pairs on a low-dimensional random projection
+    // before spending a full dot product on them.
+    if ((i & (YIELD_EVERY_ROWS - 1)) === 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     for (let j = i + 1; j < clusters.length; j += 1) {
       if (dot(clusters[i].vector, clusters[j].vector) < mergeThreshold) continue;
       const rootA = find(clusters[i].id);
@@ -508,8 +530,7 @@ export const planSplit = (
       dot(member.vector, centroidA) >= dot(member.vector, centroidB) ? 0 : 1,
     );
     const changed =
-      assignment.length !== next.length ||
-      next.some((value, i) => value !== assignment[i]);
+      assignment.length !== next.length || next.some((value, i) => value !== assignment[i]);
     assignment = next;
     if (!changed) break;
 
