@@ -57,14 +57,25 @@ const FACE_LOAD_MORE_MARGIN_PX = 1200;
 type FaceImageProps = {
   face: ClusterFace;
   className: string;
+  /**
+   * Feedback #134: the match-group / suggested-match crops sit above the "All
+   * faces" grid and are only a handful, but they used to queue behind (and
+   * compete for the browser's per-host connection cap and the server's crop
+   * decode with) up to a page of grid thumbnails that all start at once, so
+   * the small, important section painted last. "high" fetches eagerly at high
+   * priority; the grid passes "low".
+   */
+  priority?: "high" | "low";
 };
 
-const FaceImage = ({ face, className }: FaceImageProps) => (
+const FaceImage = ({ face, className, priority }: FaceImageProps) => (
   <img
     src={buildFaceCropUrl(face)}
     alt={face.photo.name}
     className={className}
-    loading="lazy"
+    loading={priority === "high" ? "eager" : "lazy"}
+    fetchPriority={priority}
+    decoding="async"
   />
 );
 
@@ -96,7 +107,7 @@ const FaceThumb = ({ face, label, onClick, onExclude, excluding }: FaceThumbProp
     aria-label={label}
   >
     <div className={css.faceThumbViewport}>
-      <FaceImage face={face} className={css.faceThumbImage} />
+      <FaceImage face={face} className={css.faceThumbImage} priority="low" />
       {onExclude && (
         <button
           type="button"
@@ -388,6 +399,7 @@ const PersonDetail = ({
           <FaceImage
             face={cluster.representative}
             className={css.personIdentityFace}
+            priority="high"
           />
           <div className={css.personIdentityText}>
             <InlineNameEditor name={cluster.name} onSave={onRename} />
@@ -426,6 +438,7 @@ const PersonDetail = ({
                       <FaceImage
                         face={centroid.representative}
                         className={css.relatedPersonFaceImage}
+                        priority="high"
                       />
                     </div>
                     <div className={css.relatedPersonBody}>
@@ -474,6 +487,7 @@ const PersonDetail = ({
                       <FaceImage
                         face={suggestion.representative}
                         className={css.relatedPersonFaceImage}
+                        priority="high"
                       />
                     </div>
                     <div className={css.relatedPersonBody}>

@@ -913,6 +913,12 @@ describe("PeopleView", () => {
       expect(screen.getByRole("button", { name: "Dismiss suggested match person-2" })).toBeInTheDocument();
     });
 
+    // Feedback #134: the suggested match's face crop is fetched eagerly at
+    // high priority so it paints ahead of the "All faces" grid below it.
+    const suggestionFace = screen.getByAltText("b.jpg");
+    expect(suggestionFace).toHaveAttribute("fetchpriority", "high");
+    expect(suggestionFace).toHaveAttribute("loading", "eager");
+
     fireEvent.click(screen.getByRole("button", { name: "Dismiss suggested match person-2" }));
 
     expect(screen.queryByRole("button", { name: "Merge person-2 into Alex" })).not.toBeInTheDocument();
