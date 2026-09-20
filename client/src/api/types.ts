@@ -135,6 +135,52 @@ export type NamedPerson = {
   name: string;
 };
 
+/** Why a face looks out of place beyond the embedding — see server faceReview.ts. */
+export type FaceAnomalyFlag = "low-similarity" | "date" | "location" | "folder";
+
+export type FaceVerdict = "confirmed" | "rejected";
+
+/** One face in the review view, with its distance and its evidence. */
+export type ReviewFace = ClusterFace & {
+  similarity: number | null;
+  verdict: FaceVerdict | null;
+  anomalyScore: number;
+  flags: FaceAnomalyFlag[];
+  reasons: string[];
+};
+
+export type PersonReview = {
+  personId: string;
+  name: string | null;
+  /** True when distances are measured from confirmed faces rather than the group average. */
+  anchored: boolean;
+  anchorCount: number;
+  radius: number | null;
+  /** Sorted by similarity, descending. */
+  faces: ReviewFace[];
+  rejected: ReviewFace[];
+  suggestedCutoff: { keepCount: number; threshold: number; gap: number } | null;
+};
+
+export type OptimizeProposal =
+  | {
+      kind: "merge";
+      targetId: string;
+      sourceId: string;
+      similarity: number;
+      targetName: string | null;
+      sourceName: string | null;
+      nameConflict: boolean;
+    }
+  | {
+      kind: "tighten";
+      clusterId: string;
+      name: string | null;
+      threshold: number;
+      affected: number;
+      gap: number;
+    };
+
 export type PersonCluster = {
   id: string;
   count: number;

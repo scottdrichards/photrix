@@ -167,6 +167,105 @@ export const peopleRequestHandler = async (
     return;
   }
 
+  // GET /api/people/review — one person's faces ordered by distance from their
+  // reference point, each with its anomaly signals, plus a suggested cut line.
+  // The backing view for the review UI; see indexDatabase.getFaceClusterReview.
+  if (url.pathname === "/api/people/review" && req.method === "GET") {
+    const clusterId = url.searchParams.get("clusterId");
+    if (!clusterId) {
+      writeJson(res, 400, { error: "Missing clusterId parameter" });
+      return;
+    }
+    const review = await database.getFaceClusterReview(clusterId);
+    if (!review) {
+      writeJson(res, 404, { error: "Cluster not found" });
+      return;
+    }
+    writeJson(res, 200, review);
+    return;
+  }
+
+  // POST /api/people/cutoff — "this face and everything below it is not them".
+  //
+  // `threshold: null` clears the person's radius instead of applying one.
+  // `dryRun: true` reports the count without changing anything, which is what
+  // lets the UI label the button with a real number while the line is dragged.
+  if (url.pathname === "/api/people/cutoff" && req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      writeJson(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const b = body as Record<string, unknown>;
+    if (typeof b.clusterId !== "string") {
+      writeJson(res, 400, { error: "Missing clusterId" });
+      return;
+    }
+    if (b.threshold === null) {
+      const cleared = await database.clearFaceClusterRadius(b.clusterId);
+      if (!cleared) {
+        writeJson(res, 404, { error: "Cluster not found" });
+        return;
+      }
+      writeJson(res, 200, { ok: true, affected: 0 });
+      return;
+    }
+    if (typeof b.threshold !== "number" || !Number.isFinite(b.threshold)) {
+      writeJson(res, 400, { error: "threshold must be a number or null" });
+      return;
+    }
+    const result = await database.applyFaceClusterCutoff(b.clusterId, b.threshold, {
+      dryRun: b.dryRun === true,
+    });
+    if (!result) {
+      writeJson(res, 404, { error: "Cluster not found" });
+      return;
+    }
+    writeJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
+  // POST /api/people/verdict — record (or with verdict null, withdraw) the
+  // user's judgement on specific faces. Takes a list: the review UI's whole
+  // point is acting on many faces at once.
+  if (url.pathname === "/api/people/verdict" && req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      writeJson(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const b = body as Record<string, unknown>;
+    const faceIds = Array.isArray(b.faceIds)
+      ? b.faceIds.filter((id): id is number => typeof id === "number" && Number.isFinite(id))
+      : [];
+    if (!faceIds.length) {
+      writeJson(res, 400, { error: "Missing faceIds" });
+      return;
+    }
+    if (b.verdict !== "confirmed" && b.verdict !== "rejected" && b.verdict !== null) {
+      writeJson(res, 400, { error: "verdict must be confirmed, rejected or null" });
+      return;
+    }
+    const applied = await database.setFaceVerdicts(faceIds, b.verdict);
+    writeJson(res, 200, { ok: true, applied });
+    return;
+  }
+
+  // GET /api/people/optimize — a dry-run library-wide repair plan. Applying a
+  // proposal is a normal /merge or /cutoff call; nothing here changes state.
+  if (url.pathname === "/api/people/optimize" && req.method === "GET") {
+    const minWeightParam = Number.parseInt(url.searchParams.get("minWeight") ?? "", 10);
+    const proposals = await database.planFaceClusterOptimization(
+      Number.isFinite(minWeightParam) ? { minWeight: minWeightParam } : {},
+    );
+    writeJson(res, 200, { proposals });
+    return;
+  }
+
   // POST /api/people/separate — detach one centroid from a named person
   if (url.pathname === "/api/people/separate" && req.method === "POST") {
     let body: unknown;

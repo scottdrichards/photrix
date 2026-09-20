@@ -14,6 +14,11 @@ export type {
   DateHistogramResult,
   FaceBox,
   ClusterFace,
+  FaceAnomalyFlag,
+  FaceVerdict,
+  ReviewFace,
+  PersonReview,
+  OptimizeProposal,
   PersonCluster,
   PersonClusterWithFaces,
   PersonCentroid,
@@ -76,6 +81,10 @@ export {
   setPersonTags,
   fetchAllPersonTags,
   excludeFaceFromCluster,
+  fetchPersonReview,
+  applyPersonCutoff,
+  setFaceVerdicts,
+  fetchOptimizePlan,
 } from "./people";
 
 export {

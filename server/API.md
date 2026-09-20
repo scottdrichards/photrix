@@ -288,6 +288,72 @@ Names that `/faces/identify` can return, and how many centroids back them.
 { "people": ["Alice Diane Richards", "..."], "centroids": 248 }
 ```
 
+### Face cluster review — finding and removing faces that don't belong
+
+Automatic clustering is greedy, so a person's group collects a few faces that
+aren't them. These four endpoints are the repair path. All are under the normal
+`/api` auth gate and refused for scoped share links.
+
+#### GET `/people/review?clusterId=person-123`
+
+Everything needed to review one person in a single response.
+
+```jsonc
+{
+  "personId": "person-123",
+  "name": "Ada",
+  "anchored": true,      // distances measured from confirmed faces, not the group mean
+  "anchorCount": 6,
+  "radius": 0.71,        // current similarity floor, or null
+  "faces": [ /* sorted by `similarity` descending */ ],
+  "rejected": [ /* previously removed, so they can be restored */ ],
+  "suggestedCutoff": { "keepCount": 41, "threshold": 0.664, "gap": 0.11 }
+}
+```
+
+Each face carries the usual crop fields plus `similarity`, `verdict`
+(`"confirmed" | "rejected" | null`), `anomalyScore` (0-1) and `flags` /
+`reasons` — independent date, location and folder signals that catch a
+look-alike sitting comfortably inside the similarity band.
+
+**`anchored` matters.** When false, distances are measured from the running
+centroid, which the very faces you are trying to find have already pulled
+towards themselves. Confirming a handful of good faces builds an anchor the
+intruders can't move, and every distance after that is worth more.
+
+#### POST `/people/cutoff`
+
+```jsonc
+{ "clusterId": "person-123", "threshold": 0.664, "dryRun": false }
+```
+
+Removes every face below `threshold` and remembers it as the person's radius,
+so faces below it are kept out on future scans too. `"threshold": null` clears
+the radius instead. `"dryRun": true` returns the count without changing
+anything.
+
+A **confirmed face is never cut**, whatever the threshold — which is what makes
+moving the line safe to experiment with.
+
+#### POST `/people/verdict`
+
+```jsonc
+{ "faceIds": [881, 882], "verdict": "confirmed" }
+```
+
+`"confirmed"`, `"rejected"`, or `null` to withdraw a previous verdict and hand
+the face back to the clustering engine. Verdicts are re-applied after a
+library-wide re-cluster, so a manual correction is durable rather than being
+silently undone the next time the clustering threshold changes.
+
+#### GET `/people/optimize`
+
+A dry-run repair plan over the whole library — `merge` proposals (two centroids
+that are really one person, with `nameConflict` flagged when both sides are
+already named differently) and `tighten` proposals (a person whose similarity
+distribution has a removable tail). Nothing is applied; each proposal is acted
+on with a normal `/people/merge` or `/people/cutoff` call.
+
 ## Examples
 
 ### Get all files with basic metadata

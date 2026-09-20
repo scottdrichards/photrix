@@ -53,6 +53,21 @@ export const LOW_CONFIDENCE_CLUSTER_ID = -1;
 export const MANUALLY_EXCLUDED_CLUSTER_ID = -2;
 
 /**
+ * Confirmed faces needed before a cluster gets an anchor centroid.
+ *
+ * The anchor's whole value is that it is *not* pulled about by the intruders
+ * the running mean has already absorbed, and one or two vouched-for faces are
+ * not a better estimate of a person than a hundred mostly-right ones — a single
+ * confirmed profile shot would make a worse reference than the mean it
+ * replaced. Three is the point where the anchor starts averaging out pose and
+ * lighting rather than encoding one photo.
+ */
+export const FACE_ANCHOR_MIN_CONFIRMED = 3;
+
+/** The two values `faceVerdicts.verdict` can hold. */
+export type FaceVerdict = "confirmed" | "rejected";
+
+/**
  * A cluster's stored per-face `clusterSimilarity` is written once, against the
  * centroid as it was when each face joined — the seed is stored as 1.0 and
  * early joiners keep inflated scores as the running mean drifts. Left alone,
@@ -110,6 +125,15 @@ export class FaceClusterEngine {
     weight: number;
     /** `weight` when member similarities were last rescored (see refresh). */
     refreshedWeight: number;
+    /**
+     * User-set similarity floor for joining this cluster, measured against
+     * `anchor` when there is one and the running mean otherwise. NULL = none.
+     */
+    radius: number | null;
+    /** Unit-length centroid of the user-confirmed faces only; null until enough exist. */
+    anchor: Float32Array | null;
+    /** How many confirmed faces `anchor` was built from. */
+    anchorCount: number;
   }> = [];
   private clustersById = new Map<number, FaceClusterEngine["clusters"][number]>();
   private nextClusterId = 1;
@@ -145,8 +169,13 @@ export class FaceClusterEngine {
       weight: number;
       threshold: number;
       similarityRefreshedWeight: number | null;
+      radius: number | null;
+      anchorCentroid: Buffer | null;
+      anchorCount: number | null;
     }>(
-      "SELECT id, centroid, weight, threshold, similarityRefreshedWeight FROM faceClusters",
+      `SELECT id, centroid, weight, threshold, similarityRefreshedWeight,
+              radius, anchorCentroid, anchorCount
+       FROM faceClusters`,
     );
 
     const staleThreshold = rows.some(
@@ -175,6 +204,9 @@ export class FaceClusterEngine {
         magnitude: magnitudeOf(mean),
         weight: row.weight,
         refreshedWeight: row.similarityRefreshedWeight ?? 0,
+        radius: row.radius,
+        anchor: row.anchorCentroid ? toAlignedFloat32(row.anchorCentroid) : null,
+        anchorCount: row.anchorCount ?? 0,
       };
       this.clusters.push(cluster);
       this.clustersById.set(row.id, cluster);
@@ -244,11 +276,28 @@ export class FaceClusterEngine {
           // people essentially never both clear the (high) threshold for the
           // same face, so the first hit is the right one and the scan usually
           // ends within the few large clusters.
-          if (dot >= FACE_CLUSTER_SIMILARITY_THRESHOLD) {
-            match = cluster;
-            similarity = dot;
-            break;
+          if (dot < FACE_CLUSTER_SIMILARITY_THRESHOLD) continue;
+
+          // A cluster the user has drawn a radius around gets a second, stricter
+          // test — and against the anchor (faces they vouched for) rather than
+          // the running mean, which the intruders they are trying to remove have
+          // already pulled towards themselves.
+          //
+          // Failing it `continue`s rather than `break`s: the face has been
+          // rejected by *this* person, not declared a non-face, so the scan goes
+          // on and it may legitimately land in another cluster or seed its own.
+          // Without that, a radius would quietly send borderline faces to
+          // "unclustered" instead of to whoever they actually belong to.
+          if (
+            cluster.radius != null &&
+            referenceSimilarity(cluster, unit) < cluster.radius
+          ) {
+            continue;
           }
+
+          match = cluster;
+          similarity = dot;
+          break;
         }
 
         if (match) {
@@ -265,6 +314,9 @@ export class FaceClusterEngine {
             magnitude: 1,
             weight: 1,
             refreshedWeight: 0,
+            radius: null,
+            anchor: null,
+            anchorCount: 0,
           };
           similarity = 1;
           this.clusters.push(match);
@@ -331,74 +383,373 @@ export class FaceClusterEngine {
   }
 
   /**
-   * Feedback #90: manually removes one outlier face from a cluster it was
-   * (correctly or not) auto-assigned to. Subtracts its vector from the
-   * cluster's running centroid — same math as `removeFaces` — so the outlier
-   * stops pulling the centroid, then stamps the face row with
-   * MANUALLY_EXCLUDED_CLUSTER_ID (excluding it from every People query, same
-   * as the other <= 0 sentinels) and records the exclusion so it's visible/
-   * reversible later. Unlike `removeFaces`, this face is *never* re-clustered
-   * automatically — it isn't set back to NULL, so the backfill's "clusterId
-   * IS NULL" scan never picks it up again.
+   * Removes outlier faces from the clusters they were auto-assigned to — one at
+   * a time from the viewer, or a whole tail at once from the review UI's
+   * cutoff.
    *
-   * Known gap: a full re-cluster triggered by changing
-   * FACE_CLUSTER_SIMILARITY_THRESHOLD resets every non-NULL `faces.clusterId`
-   * to NULL (see `load()`), which would un-exclude this face too. That's a
-   * rare, code-level event (not a normal user action), so it's accepted
-   * rather than special-cased — the `faceExclusions` row remains as a record
-   * if a future migration wants to re-apply exclusions after a threshold
-   * change.
+   * Each face's vector is subtracted from its cluster's running centroid (same
+   * math as `removeFaces`) so the outlier stops pulling the centroid, the face
+   * row is stamped MANUALLY_EXCLUDED_CLUSTER_ID (keeping it out of every People
+   * query, like the other <= 0 sentinels), and a `rejected` verdict is
+   * recorded. Unlike `removeFaces`, a rejected face is never re-clustered
+   * automatically: it isn't set back to NULL, so the backfill's "clusterId IS
+   * NULL" scan won't pick it up. `clearVerdicts` is the way back.
+   *
+   * Bulk rather than single-face because the cutoff is the main way this gets
+   * used, and rejecting sixty faces as sixty transactions would both hammer the
+   * centroid write and leave a half-applied cutoff behind if it were
+   * interrupted.
    */
-  excludeFace(face: {
-    id: number;
-    clusterId: number;
-    embedding: Buffer | Uint8Array;
-  }): Promise<void> {
+  rejectFaces(
+    faces: Array<{
+      id: number;
+      clusterId: number;
+      /** Person root the verdict is recorded against; see the faceVerdicts table. */
+      personId: number;
+      embedding: Buffer | Uint8Array;
+    }>,
+  ): Promise<void> {
+    if (!faces.length) return Promise.resolve();
     return this.runExclusive(async () => {
       await this.ensureLoaded();
 
       const now = Date.now();
       const statements: Array<{ sql: string; params: unknown[] }> = [];
       const dirty = new Set<FaceClusterEngine["clusters"][number]>();
+      const touched = new Set<number>();
 
-      const cluster = this.clustersById.get(face.clusterId);
-      const unit = cluster ? toUnitFloat32(face.embedding) : null;
-      if (cluster && unit) {
-        if (cluster.weight <= 1) {
-          this.clustersById.delete(cluster.id);
-          this.clusters.splice(this.clusters.indexOf(cluster), 1);
-          statements.push({
-            sql: "DELETE FROM faceClusters WHERE id = ?",
-            params: [cluster.id],
-          });
-        } else {
-          const { mean, weight } = cluster;
-          for (let i = 0; i < mean.length; i += 1) {
-            mean[i] = (mean[i] * weight - unit[i]) / (weight - 1);
+      for (const face of faces) {
+        const cluster = this.clustersById.get(face.clusterId);
+        const unit = cluster ? toUnitFloat32(face.embedding) : null;
+        if (cluster && unit) {
+          touched.add(cluster.id);
+          if (cluster.weight <= 1) {
+            this.clustersById.delete(cluster.id);
+            this.clusters.splice(this.clusters.indexOf(cluster), 1);
+            dirty.delete(cluster);
+            statements.push({
+              sql: "DELETE FROM faceClusters WHERE id = ?",
+              params: [cluster.id],
+            });
+          } else {
+            const { mean, weight } = cluster;
+            for (let i = 0; i < mean.length; i += 1) {
+              mean[i] = (mean[i] * weight - unit[i]) / (weight - 1);
+            }
+            cluster.weight = weight - 1;
+            cluster.magnitude = magnitudeOf(mean);
+            dirty.add(cluster);
+            this.mutationsSinceSort += 1;
           }
-          cluster.weight = weight - 1;
-          cluster.magnitude = magnitudeOf(mean);
-          dirty.add(cluster);
-          this.mutationsSinceSort += 1;
         }
+
+        statements.push(
+          {
+            sql: "UPDATE faces SET clusterId = ?, clusterSimilarity = NULL WHERE id = ?",
+            params: [MANUALLY_EXCLUDED_CLUSTER_ID, face.id],
+          },
+          {
+            sql: `INSERT INTO faceVerdicts (faceId, personId, verdict, decidedAt)
+                  VALUES (?, ?, 'rejected', ?)
+                  ON CONFLICT(faceId) DO UPDATE SET
+                    personId = excluded.personId,
+                    verdict = excluded.verdict,
+                    decidedAt = excluded.decidedAt`,
+            params: [face.id, face.personId, now],
+          },
+        );
       }
 
-      statements.push(
-        {
-          sql: "UPDATE faces SET clusterId = ?, clusterSimilarity = NULL WHERE id = ?",
-          params: [MANUALLY_EXCLUDED_CLUSTER_ID, face.id],
-        },
-        {
-          sql: `INSERT INTO faceExclusions (faceId, excludedFromClusterId, excludedAt)
-                VALUES (?, ?, ?)
+      await this.persist(statements, dirty, now);
+      // A rejected face may have been confirmed earlier (the user changed their
+      // mind), in which case it is still inside the anchor and has to come out.
+      await this.recomputeAnchors([...touched]);
+    });
+  }
+
+  /**
+   * Records the positive verdict: "yes, this really is them".
+   *
+   * The counterpart to `rejectFaces`, and the reason the verdict table is worth
+   * having over a plain exclusion list. Confirming changes no assignment — the
+   * face is already in the cluster — but it does three things nothing else can:
+   * it feeds the anchor centroid, it makes the face immune to a later cutoff,
+   * and it survives a re-cluster as a re-assertable fact.
+   */
+  confirmFaces(
+    faces: Array<{ id: number; clusterId: number; personId: number }>,
+  ): Promise<void> {
+    if (!faces.length) return Promise.resolve();
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      const now = Date.now();
+      await this.db.transaction(
+        faces.map((face) => ({
+          sql: `INSERT INTO faceVerdicts (faceId, personId, verdict, decidedAt)
+                VALUES (?, ?, 'confirmed', ?)
                 ON CONFLICT(faceId) DO UPDATE SET
-                  excludedFromClusterId = excluded.excludedFromClusterId,
-                  excludedAt = excluded.excludedAt`,
-          params: [face.id, face.clusterId, now],
+                  personId = excluded.personId,
+                  verdict = excluded.verdict,
+                  decidedAt = excluded.decidedAt`,
+          params: [face.id, face.personId, now] as unknown[],
+        })),
+      );
+      await this.recomputeAnchors([...new Set(faces.map((face) => face.clusterId))]);
+    });
+  }
+
+  /**
+   * Clears a face's verdict entirely, returning it to "the clustering engine's
+   * opinion stands". Un-rejecting also sets `clusterId` back to NULL so the
+   * backfill re-clusters it from scratch — the cluster it was pulled out of may
+   * not even be the one it now belongs in, and re-deriving is more honest than
+   * putting it back where it used to be.
+   */
+  clearVerdicts(faceIds: number[]): Promise<void> {
+    if (!faceIds.length) return Promise.resolve();
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      const placeholders = faceIds.map(() => "?").join(", ");
+      const affected = await this.db.all<{ clusterId: number | null }>(
+        `SELECT DISTINCT clusterId FROM faces WHERE id IN (${placeholders})`,
+        ...faceIds,
+      );
+      await this.db.transaction([
+        {
+          sql: `UPDATE faces SET clusterId = NULL, clusterSimilarity = NULL
+                WHERE id IN (${placeholders}) AND clusterId = ?`,
+          params: [...faceIds, MANUALLY_EXCLUDED_CLUSTER_ID],
         },
+        {
+          sql: `DELETE FROM faceVerdicts WHERE faceId IN (${placeholders})`,
+          params: [...faceIds],
+        },
+      ]);
+      await this.recomputeAnchors(
+        affected
+          .map((row) => row.clusterId)
+          .filter((id): id is number => typeof id === "number" && id > 0),
+      );
+    });
+  }
+
+  /**
+   * Sets (or clears, with null) the similarity floor on a set of clusters.
+   *
+   * Takes a list because a *person* can own several centroids after merges, and
+   * the gate that enforces the radius runs per cluster — so a person-level
+   * cutoff has to be written onto every centroid they own, or faces would keep
+   * arriving through whichever one was left open.
+   */
+  setRadius(clusterIds: number[], radius: number | null): Promise<void> {
+    if (!clusterIds.length) return Promise.resolve();
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      for (const id of clusterIds) {
+        const cluster = this.clustersById.get(id);
+        if (cluster) cluster.radius = radius;
+      }
+      await this.db.transaction(
+        clusterIds.map((id) => ({
+          sql: "UPDATE faceClusters SET radius = ? WHERE id = ?",
+          params: [radius, id] as unknown[],
+        })),
+      );
+    });
+  }
+
+  /**
+   * The vector a person's faces should be measured against: the anchor when
+   * they have one, the running mean otherwise.
+   *
+   * Several centroids can belong to one person (a beard year, a childhood), so
+   * this folds them together weighted by how much evidence each carries —
+   * confirmed-face count for anchors, member count for means. Returns null when
+   * none of the ids resolve to a live cluster.
+   */
+  getReferenceVector(
+    clusterIds: number[],
+  ): Promise<{ vector: Float32Array; anchored: boolean } | null> {
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      const clusters = clusterIds
+        .map((id) => this.clustersById.get(id))
+        .filter((cluster): cluster is FaceClusterEngine["clusters"][number] =>
+          Boolean(cluster),
+        );
+      if (!clusters.length) return null;
+
+      // An anchored cluster contributes only its anchor. Mixing a person's
+      // anchor with their own contaminated running mean would put back exactly
+      // the drift the anchor exists to exclude.
+      const anchored = clusters.filter((cluster) => cluster.anchor);
+      const contributors = anchored.length ? anchored : clusters;
+
+      const dimension = contributors[0].anchor?.length ?? contributors[0].mean.length;
+      const sum = new Float32Array(dimension);
+      for (const cluster of contributors) {
+        const vector = cluster.anchor ?? cluster.mean;
+        const scale = cluster.anchor
+          ? cluster.anchorCount
+          : cluster.weight / (cluster.magnitude || 1);
+        for (let i = 0; i < dimension; i += 1) sum[i] += vector[i] * scale;
+      }
+      const magnitude = magnitudeOf(sum);
+      if (!magnitude) return null;
+      for (let i = 0; i < dimension; i += 1) sum[i] /= magnitude;
+      return { vector: sum, anchored: anchored.length > 0 };
+    });
+  }
+
+  /**
+   * Re-asserts every stored verdict against the current assignments.
+   *
+   * This is what closes the long-standing gap where changing
+   * FACE_CLUSTER_SIMILARITY_THRESHOLD reset `faces.clusterId` library-wide and
+   * silently un-did every manual exclusion the user had ever made. The
+   * clustering backfill calls it once it has drained, at which point membership
+   * has settled and a rejected face that has landed back in a cluster can be
+   * pulled straight back out. Returns how many faces it had to re-reject.
+   */
+  async reapplyVerdicts(): Promise<number> {
+    const rows = await this.db.all<{
+      faceId: number;
+      personId: number;
+      clusterId: number;
+      embedding: Buffer | null;
+    }>(
+      // personId comes from where the face sits *now*, not from the verdict
+      // row: after a re-cluster the stored value names a centroid id that no
+      // longer exists, and re-recording it would leave the verdict pointing at
+      // nothing (so the review view would stop listing its own rejections).
+      `SELECT v.faceId AS faceId,
+              COALESCE(fc.personId, f.clusterId) AS personId,
+              f.clusterId AS clusterId, fe.embedding AS embedding
+       FROM faceVerdicts v
+       JOIN faces f ON f.id = v.faceId
+       JOIN faceClusters fc ON fc.id = f.clusterId
+       LEFT JOIN faceEmbeddings fe ON fe.faceId = v.faceId
+       WHERE v.verdict = 'rejected' AND f.clusterId > 0`,
+    );
+    const rejectable = rows
+      .filter((row) => row.embedding)
+      .map((row) => ({
+        id: row.faceId,
+        clusterId: row.clusterId,
+        personId: row.personId,
+        embedding: row.embedding!,
+      }));
+    if (rejectable.length) {
+      await this.rejectFaces(rejectable);
+      log.info(
+        { faces: rejectable.length },
+        "Re-applied manual face rejections after re-clustering",
+      );
+    }
+
+    // Anchors are derived state, so rebuild them from the confirmed verdicts
+    // rather than trusting whatever survived the reset.
+    const confirmedClusters = await this.db.all<{ clusterId: number }>(
+      `SELECT DISTINCT f.clusterId AS clusterId
+       FROM faceVerdicts v JOIN faces f ON f.id = v.faceId
+       WHERE v.verdict = 'confirmed' AND f.clusterId > 0`,
+    );
+    if (confirmedClusters.length) {
+      await this.runExclusive(async () => {
+        await this.ensureLoaded();
+        await this.recomputeAnchors(confirmedClusters.map((row) => row.clusterId));
+      });
+    }
+    return rejectable.length;
+  }
+
+  /**
+   * Rebuilds `anchorCentroid` for each cluster from its currently-confirmed
+   * faces. Not locked — every caller already holds the mutation chain, and
+   * taking it again here would deadlock on the chain's sequential `then`.
+   */
+  private async recomputeAnchors(clusterIds: number[]): Promise<void> {
+    for (const clusterId of new Set(clusterIds)) {
+      const cluster = this.clustersById.get(clusterId);
+      if (!cluster) continue;
+
+      const rows = await this.db.all<{ embedding: Buffer }>(
+        `SELECT fe.embedding AS embedding
+         FROM faceVerdicts v
+         JOIN faces f ON f.id = v.faceId
+         JOIN faceEmbeddings fe ON fe.faceId = v.faceId
+         WHERE v.verdict = 'confirmed' AND f.clusterId = ?`,
+        clusterId,
       );
 
-      await this.persist(statements, dirty, now);
+      const units = rows
+        .map((row) => toUnitFloat32(row.embedding))
+        .filter((unit): unit is Float32Array => Boolean(unit));
+
+      if (units.length < FACE_ANCHOR_MIN_CONFIRMED) {
+        cluster.anchor = null;
+        cluster.anchorCount = units.length;
+        await this.db.transaction([
+          {
+            sql: "UPDATE faceClusters SET anchorCentroid = NULL, anchorCount = ? WHERE id = ?",
+            params: [units.length, clusterId],
+          },
+        ]);
+        continue;
+      }
+
+      const sum = new Float32Array(units[0].length);
+      for (const unit of units) {
+        for (let i = 0; i < sum.length; i += 1) sum[i] += unit[i];
+      }
+      const magnitude = magnitudeOf(sum);
+      if (!magnitude) continue;
+      for (let i = 0; i < sum.length; i += 1) sum[i] /= magnitude;
+
+      cluster.anchor = sum;
+      cluster.anchorCount = units.length;
+      await this.db.transaction([
+        {
+          sql: "UPDATE faceClusters SET anchorCentroid = ?, anchorCount = ? WHERE id = ?",
+          params: [Buffer.from(sum.buffer.slice(0)), units.length, clusterId],
+        },
+      ]);
+    }
+  }
+
+  /**
+   * Throws away every persisted assignment and centroid so the backfill
+   * re-derives the lot from the embeddings.
+   *
+   * This is the same reset `load()` performs by itself when
+   * FACE_CLUSTER_SIMILARITY_THRESHOLD changes, exposed deliberately: it is the
+   * only honest way to re-cluster after a tuning change, and having it as a
+   * named operation means the consequences can be documented in one place
+   * rather than being a side effect of editing a constant.
+   *
+   * Manual verdicts are *not* dropped — `faceVerdicts` survives, and
+   * `reapplyVerdicts` puts them back over the new assignments once the backfill
+   * drains. Radii and anchors do go, since both are attached to centroids that
+   * no longer exist.
+   */
+  resetAssignments(): Promise<void> {
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      await this.db.transaction([
+        { sql: "DELETE FROM faceClusters", params: [] },
+        {
+          sql: "UPDATE faces SET clusterId = NULL, clusterSimilarity = NULL WHERE clusterId IS NOT NULL",
+          params: [],
+        },
+      ]);
+      this.clusters = [];
+      this.clustersById.clear();
+      this.nextClusterId = 1;
+      this.mutationsSinceSort = 0;
+      // The memoized load has already run; leaving it resolved keeps a later
+      // caller from re-reading the rows this just deleted.
+      this.loadPromise = Promise.resolve();
+      log.info("Face cluster assignments reset; backfill will re-derive them");
     });
   }
 
@@ -687,6 +1038,25 @@ export const toAlignedFloat32 = (buffer: Buffer | Uint8Array): Float32Array => {
  */
 export const toUnitFloat32 = (buffer: Buffer | Uint8Array): Float32Array | null =>
   decodeEmbedding(buffer);
+
+/**
+ * Similarity of a unit vector to a cluster's *reference* point — its anchor if
+ * the user has confirmed enough faces to build one, otherwise the running mean.
+ *
+ * The distinction is the whole point of the anchor. Asking "is this face far
+ * from the centroid?" when the centroid is a mean over the intruders you are
+ * trying to find is self-defeating: every intruder has already moved the
+ * target towards itself, and a cluster with several of them measures them as
+ * closer than they are. The anchor is fixed by faces the user has vouched for,
+ * so it doesn't move when a bad face joins.
+ */
+const referenceSimilarity = (
+  cluster: { mean: Float32Array; magnitude: number; anchor: Float32Array | null },
+  unit: Float32Array,
+): number =>
+  cluster.anchor
+    ? dotProduct(unit, cluster.anchor)
+    : dotProduct(unit, cluster.mean) / cluster.magnitude;
 
 /** 4-way unrolled dot product — ~1.5× the plain loop on 512-dim vectors. */
 export const dotProduct = (a: Float32Array, b: Float32Array): number => {

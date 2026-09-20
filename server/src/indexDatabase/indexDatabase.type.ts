@@ -1,4 +1,6 @@
 import { FileRecord } from "./fileRecord.type.ts";
+import type { AnomalyFlag, CutoffSuggestion } from "./faceReview.ts";
+import type { FaceVerdict } from "./faceClusterEngine.ts";
 import type {
   FaceMatchFilter,
   FileQueryExtraField,
@@ -184,6 +186,43 @@ export type FaceClusterResult = {
 
 export type FaceClusterDetailResult = {
   cluster: FaceCluster | null;
+};
+
+/**
+ * One face as the review UI sees it: the crop, how far it sits from the
+ * person's reference point, whether the user has already ruled on it, and what
+ * (if anything) looks wrong about it beyond the embedding.
+ */
+export type FaceReviewFace = FaceClusterFace & {
+  /** Cosine similarity to the person's anchor, or centroid. Null when unscoreable. */
+  similarity: number | null;
+  verdict: FaceVerdict | null;
+  /** 0..1 — see faceReview.ts's scoreAnomalies. */
+  anomalyScore: number;
+  flags: AnomalyFlag[];
+  /** One readable sentence per flag, for the UI to show as evidence. */
+  reasons: string[];
+};
+
+export type FaceReviewResult = {
+  personId: string;
+  name: string | null;
+  /**
+   * True when `similarity` was measured against confirmed faces rather than the
+   * running centroid. The UI says so, because it changes how much the numbers
+   * are worth: an un-anchored distance is measured from a point the intruders
+   * have already moved.
+   */
+  anchored: boolean;
+  anchorCount: number;
+  /** The person's current similarity floor, if one has been set. */
+  radius: number | null;
+  /** Sorted by similarity, descending. Excludes already-rejected faces. */
+  faces: FaceReviewFace[];
+  /** Previously rejected faces, so the UI can show and undo them. */
+  rejected: FaceReviewFace[];
+  /** Where the natural break in `faces` is, if there is one worth proposing. */
+  suggestedCutoff: CutoffSuggestion | null;
 };
 
 export type FaceClusterPCAPoint = {

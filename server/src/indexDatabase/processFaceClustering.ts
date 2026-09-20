@@ -38,6 +38,17 @@ export const processFaceClustering = (database: IndexDatabase): TaskRunner => {
       log.info({ totalAssigned }, "Face clustering backlog drained");
     }
 
+    // Membership has settled, so now re-assert the user's own verdicts over it.
+    // This is the step that makes a manual correction durable: a library-wide
+    // re-cluster (what changing FACE_CLUSTER_SIMILARITY_THRESHOLD triggers)
+    // resets every faces.clusterId, which used to silently put every manually
+    // excluded face back into the cluster it had been pulled out of. Cheap when
+    // there is nothing to do — one indexed read of faceVerdicts.
+    const reapplied = await database.reapplyFaceVerdicts();
+    if (reapplied > 0) {
+      log.info({ reapplied }, "Re-applied manual face verdicts after clustering");
+    }
+
     // Now that membership is settled, rescore drifted clusters' stored
     // similarities so the People tab's representative tracks the real centroid
     // instead of the (stale) seed face. Cheap when nothing is stale — it's an

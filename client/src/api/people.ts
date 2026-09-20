@@ -5,11 +5,15 @@ import type {
   ClusterFace,
   FaceBox,
   FaceClusterPCAPoint,
+  FaceVerdict,
   FetchPeopleClustersOptions,
   NamedPerson,
+  OptimizeProposal,
   PeopleClustersResult,
   PersonClusterDetailResult,
+  PersonReview,
   PhotoPersonFace,
+  ReviewFace,
 } from "./types";
 
 type ApiFaceRep = {
@@ -386,4 +390,118 @@ export const excludeFaceFromCluster = async (faceId: number): Promise<void> => {
   if (!response.ok) {
     throw new Error(`Failed to exclude face (status ${response.status})`);
   }
+};
+
+
+/**
+ * One person's faces ordered by how far they sit from that person's reference
+ * point, each with its verdict and anomaly evidence, plus a suggested cut line.
+ *
+ * The server returns the face crops in the same `ApiFaceRep` shape everything
+ * else here uses, so the extra review fields are grafted onto the usual
+ * `ClusterFace` rather than given a parallel photo model.
+ */
+export const fetchPersonReview = async (
+  clusterId: string,
+  signal?: AbortSignal,
+): Promise<PersonReview> => {
+  type ApiReviewFace = ApiFaceRep & {
+    similarity: number | null;
+    verdict: FaceVerdict | null;
+    anomalyScore: number;
+    flags: ReviewFace["flags"];
+    reasons: string[];
+  };
+  const payload = await fetchJsonOrThrow<{
+    personId: string;
+    name: string | null;
+    anchored: boolean;
+    anchorCount: number;
+    radius: number | null;
+    faces: ApiReviewFace[];
+    rejected: ApiReviewFace[];
+    suggestedCutoff: PersonReview["suggestedCutoff"];
+  }>(
+    `/api/people/review?clusterId=${encodeURIComponent(clusterId)}`,
+    "fetch person review",
+    { signal },
+  );
+
+  const toReviewFace = (face: ApiReviewFace): ReviewFace => ({
+    ...toClusterFace(face),
+    similarity: face.similarity,
+    verdict: face.verdict,
+    anomalyScore: face.anomalyScore,
+    flags: face.flags ?? [],
+    reasons: face.reasons ?? [],
+  });
+
+  return {
+    personId: payload.personId,
+    name: payload.name,
+    anchored: payload.anchored,
+    anchorCount: payload.anchorCount,
+    radius: payload.radius,
+    faces: (payload.faces ?? []).map(toReviewFace),
+    rejected: (payload.rejected ?? []).map(toReviewFace),
+    suggestedCutoff: payload.suggestedCutoff,
+  };
+};
+
+/**
+ * Applies (or previews, with `dryRun`) a cut line: every face below `threshold`
+ * leaves the person, and the threshold sticks as their radius. Pass
+ * `threshold: null` to clear an existing radius instead.
+ */
+export const applyPersonCutoff = async ({
+  clusterId,
+  threshold,
+  dryRun,
+}: {
+  clusterId: string;
+  threshold: number | null;
+  dryRun?: boolean;
+}): Promise<{ affected: number }> => {
+  const response = await fetchWithDiagnostics("/api/people/cutoff", "apply person cutoff", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clusterId, threshold, ...(dryRun ? { dryRun } : {}) }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to apply cutoff (status ${response.status})`);
+  }
+  const data = (await response.json()) as { affected?: number };
+  return { affected: data.affected ?? 0 };
+};
+
+/**
+ * Records the user's judgement on specific faces — or withdraws it with
+ * `verdict: null`, which returns them to the clustering engine's opinion.
+ */
+export const setFaceVerdicts = async (
+  faceIds: number[],
+  verdict: FaceVerdict | null,
+): Promise<number> => {
+  const response = await fetchWithDiagnostics("/api/people/verdict", "set face verdicts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ faceIds, verdict }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to set face verdict (status ${response.status})`);
+  }
+  const data = (await response.json()) as { applied?: number };
+  return data.applied ?? 0;
+};
+
+/** A dry-run library-wide repair plan. Nothing is applied until the user acts on a row. */
+export const fetchOptimizePlan = async (
+  signal?: AbortSignal,
+): Promise<OptimizeProposal[]> => {
+  const payload = await fetchJsonOrThrow<{ proposals?: OptimizeProposal[] }>(
+    "/api/people/optimize",
+    "fetch optimize plan",
+    { signal },
+  );
+  return payload.proposals ?? [];
 };

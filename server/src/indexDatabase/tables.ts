@@ -404,6 +404,26 @@ export const tables = {
       // row `name` lives on, id = COALESCE(personId, id)); non-root member
       // clusters keep this NULL. NULL and "[]" both mean "no tags".
       { name: "tags", type: "TEXT" },
+      // Per-person similarity floor set from the review UI's cutoff (see
+      // faceReview.ts). A face below it is not allowed to join this cluster
+      // even when it clears the global clustering threshold, which is what
+      // makes "these and everything below them are not this person" stick
+      // rather than being re-made on the next scan. NULL means no floor.
+      // Written to every centroid belonging to the person, not just the root,
+      // because the gate is applied by FaceClusterEngine per *cluster* — it
+      // has no person-level view at assignment time.
+      { name: "radius", type: "REAL" },
+      // Centroid of this cluster's user-*confirmed* faces only, Float32, unit
+      // length (see faceClusterEngine.recomputeAnchor). The running `centroid`
+      // above is a mean over every member, intruders included, so it is the
+      // wrong thing to measure "does this face belong" against — the outliers
+      // have already dragged it towards themselves. The anchor is the one
+      // reference point the user has personally vouched for. NULL until enough
+      // faces are confirmed (FACE_ANCHOR_MIN_CONFIRMED).
+      { name: "anchorCentroid", type: "BLOB" },
+      // Number of confirmed faces folded into `anchorCentroid`; 0/NULL when
+      // there is no anchor.
+      { name: "anchorCount", type: "INTEGER", default: 0 },
     ],
     compositeIndexes: [],
   },
@@ -423,18 +443,36 @@ export const tables = {
     ],
   },
   /**
-   * One row per face manually excluded from a cluster (feedback #90). Written
-   * by FaceClusterEngine.excludeFace alongside the `faces.clusterId` sentinel
-   * write; kept as its own table (rather than just the sentinel) so an
-   * excluded face's original cluster is recoverable/inspectable later, and so
-   * a future "undo" or "reconcile after threshold change" pass has something
-   * to read.
+   * One row per face the user has personally ruled on — the supervision layer
+   * over automatic clustering. Supersedes the old write-only `faceExclusions`
+   * table (migrated in by migrateFaceVerdicts.ts).
+   *
+   * Two-sided on purpose. A pure exclusion list can only ever say "not this
+   * one", so it stays a growing pile of corrections that the next re-cluster
+   * silently undoes and that never makes the clustering itself any better. A
+   * verdict table also records the *positive* judgement, and that turns the
+   * same rows into something load-bearing:
+   *
+   * - `confirmed` faces define the person's anchor centroid
+   *   (`faceClusters.anchorCentroid`), which is the reference every review
+   *   distance is measured against.
+   * - `confirmed` also overrides a cutoff, so raising a person's radius can
+   *   never throw away a face the user has already vouched for.
+   * - both verdicts are re-applied after a full re-cluster
+   *   (reapplyFaceVerdicts), closing the gap where changing
+   *   FACE_CLUSTER_SIMILARITY_THRESHOLD un-did every manual exclusion.
+   *
+   * `personId` is the cluster the verdict was made *about*, resolved to the
+   * person root at write time, so a later merge doesn't strand the row against
+   * a centroid id that no longer means anything on its own.
    */
-  faceExclusions: {
+  faceVerdicts: {
     columns: [
       { name: "faceId", type: "INTEGER", isPrimaryKey: true },
-      { name: "excludedFromClusterId", type: "INTEGER" },
-      { name: "excludedAt", type: "INTEGER" },
+      { name: "personId", type: "INTEGER", indexExpression: true },
+      // "confirmed" | "rejected".
+      { name: "verdict", type: "TEXT" },
+      { name: "decidedAt", type: "INTEGER" },
     ],
     compositeIndexes: [],
   },

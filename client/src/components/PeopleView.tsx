@@ -25,6 +25,7 @@ import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { FaceClusterViz } from "./FaceClusterViz";
+import { PersonReviewPanel } from "./PersonReviewPanel";
 import { TopRailPortal } from "./TopRailPortal";
 import { ViewToggle } from "./ViewToggle";
 import { isSharedView } from "../hooks/useShareFilter";
@@ -302,6 +303,8 @@ type PersonDetailProps = {
   /** Feedback #95: this person is the app-wide default-hidden person. */
   isDefaultExcluded: boolean;
   onToggleDefaultExclusion: () => void;
+  /** Re-fetches the person after the review panel changes their membership. */
+  onReviewChanged: () => void;
   /**
    * The person opened from a card we already had, with their faces still in
    * flight. The header is fully real (name, count and face all come from the
@@ -327,6 +330,7 @@ const PersonDetail = ({
   onSetTags,
   isDefaultExcluded,
   onToggleDefaultExclusion,
+  onReviewChanged,
   loadingFaces = false,
 }: PersonDetailProps) => {
   const { setItems, setSelected } = useSelectionContext();
@@ -335,6 +339,13 @@ const PersonDetail = ({
   // write is what makes it stick across future clustering passes.
   const [excludedFaceIds, setExcludedFaceIds] = useState<Set<number>>(new Set());
   const [excludingFaceId, setExcludingFaceId] = useState<number | null>(null);
+  // The review panel replaces the face grid rather than sitting beside it: both
+  // show the same faces, and showing them twice invites the user to correct a
+  // face in the list that isn't the one they are reviewing.
+  const [reviewing, setReviewing] = useState(false);
+  useEffect(() => {
+    setReviewing(false);
+  }, [cluster.id]);
   const visibleFaces = (selectedFaceGroup?.faces ?? cluster.faces).filter(
     (face) => !excludedFaceIds.has(face.faceId),
   );
@@ -407,6 +418,16 @@ const PersonDetail = ({
             <TagEditor tags={cluster.tags} onSave={onSetTags} />
           </div>
         </div>
+        {!READ_ONLY && (
+          <button
+            type="button"
+            className={css.defaultExclusionToggle}
+            onClick={() => setReviewing((open) => !open)}
+            title="Sort this person's faces by how far they sit from the rest, and cut the ones that don't belong"
+          >
+            {reviewing ? "Close review" : "Review faces"}
+          </button>
+        )}
         {!READ_ONLY && (
           <button
             type="button"
@@ -533,6 +554,13 @@ const PersonDetail = ({
           )}
         </div>
       )}
+      {reviewing ? (
+        <PersonReviewPanel
+          personId={cluster.id}
+          onClose={() => setReviewing(false)}
+          onChanged={onReviewChanged}
+        />
+      ) : (
       <section className={css.detailSection}>
         <div className={css.detailSectionHeader}>
           <div className={css.selectedFacesHeader}>
@@ -577,6 +605,7 @@ const PersonDetail = ({
           </>
         )}
       </section>
+      )}
     </div>
   );
 };
@@ -1227,6 +1256,10 @@ const PeopleViewComponent = ({
             defaultExclusionPersonId === Number(visibleDetail.id.replace(/^person-/, ""))
           }
           onToggleDefaultExclusion={handleToggleDefaultExclusion}
+          onReviewChanged={() => {
+            void loadClusterDetail(visibleDetail.id, undefined, { showSpinner: false });
+            void refreshPeopleClusters();
+          }}
         />
       </section>
     );
