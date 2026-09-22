@@ -219,3 +219,42 @@
   color: var(--fg2);
   font-size: 0.9rem;
 }
+
+/* Confirmation for a removal that would take other faces with it. Sits above
+   the grid rather than in a modal: the faces it names are right below, so
+   covering them would hide the evidence the decision rests on. */
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s);
+  padding: var(--space-s);
+  border: 1px solid var(--brand);
+  border-radius: var(--radius-md);
+  background: var(--bg2);
+}
+
+.confirmText {
+  margin: 0;
+  color: var(--fg1);
+  font-size: 0.9rem;
+}
+
+.confirmSample {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.confirmThumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--bg3);
+}
+
+.confirmActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}

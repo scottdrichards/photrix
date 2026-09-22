@@ -346,6 +346,47 @@ the face back to the clustering engine. Verdicts are re-applied after a
 library-wide re-cluster, so a manual correction is durable rather than being
 silently undone the next time the clustering threshold changes.
 
+#### Cluster geometry — `/people/refit`, `/people/shrink-exclude`, `/people/grow-include`, `/people/new-cluster`
+
+A cluster is a **centre and a distance** — a spherical cap over unit embeddings,
+where a face belongs iff its cosine similarity to the centre clears the
+cluster's `radius`. These reshape it.
+
+`POST /people/shrink-exclude` `{clusterId, faceId, dryRun}` tightens every one
+of the person's caps that currently reaches the face, just enough to put it
+outside, and reports everything that leaves with it:
+
+```jsonc
+{ "affected": 3, "excludable": true, "faceIds": [...], "sample": [ /* crops */ ] }
+```
+
+`affected` **includes the face you named** — it is the number the user is
+agreeing to. `excludable: false` means the face sits *closer* to the centre than
+members being kept: a cap can only exclude from the outside in, so no radius
+removes it and the caller should fall back to `POST /people/verdict` with
+`"rejected"`.
+
+`POST /people/grow-include` `{clusterId, faceId, dryRun, includeCollateral}`
+widens a cluster to take a face in, **moving the centre towards it** rather than
+inflating in place — the far side of the cluster does not sweep outwards, so it
+does not hoover up unrelated people on the opposite side. The dry run lists
+faces that are not this person's which the widened cap would cover;
+`includeCollateral` takes them in too.
+
+`POST /people/new-cluster` `{clusterId, faceId}` is the decline path: give the
+face its own cluster under the same person rather than over-widening an
+existing one.
+
+`POST /people/refit` `{clusterId}` re-derives centre and radius from the members
+the cluster actually has, and **splits it** when one cap cannot hold them
+without also covering a rejected face — the "this person is really two looks"
+case. Grow and shrink only ever move a boundary around a centre fixed long ago;
+refit is what gives the slack back, so it belongs at the end of an edit session.
+
+```jsonc
+{ "caps": 2, "uncovered": 0, "clusterIds": ["person-41", "person-9007"] }
+```
+
 #### GET `/people/optimize`
 
 A dry-run repair plan over the whole library — `merge` proposals (two centroids
