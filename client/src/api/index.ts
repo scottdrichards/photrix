@@ -63,6 +63,8 @@ export {
   updatePhotoMetadata,
 } from "./photos";
 
+export type { CapChange } from "./people";
+
 export type { PhotoMetadataPatch } from "./photos";
 
 export { createFallbackPhoto, buildMomentClusterPreviewUrl } from "./photoItem";
@@ -85,6 +87,10 @@ export {
   applyPersonCutoff,
   setFaceVerdicts,
   fetchOptimizePlan,
+  refitCluster,
+  shrinkToExcludeFace,
+  growToIncludeFace,
+  startClusterForFace,
 } from "./people";
 
 export {
