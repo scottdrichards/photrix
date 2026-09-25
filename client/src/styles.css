@@ -335,6 +335,9 @@ progress::-moz-progress-bar {
 
 /* ── Dialog ── */
 dialog {
+  /* Without border-box, max-width: 92vw plus the padding below overflows the
+     viewport on phones (content flush to one edge, clipped at the other). */
+  box-sizing: border-box;
   border: 1px solid var(--stroke2);
   border-radius: var(--radius-lg);
   padding: var(--space-xxl);

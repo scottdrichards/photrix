@@ -126,6 +126,15 @@
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
+/* On phones the centered view toggle and this right-anchored sort bar are
+   together wider than the viewport, so they overlapped and the People tab was
+   hidden behind the sort segments. Stack the sort bar above the toggle. */
+@media (max-width: 720px) {
+  .sortDock {
+    bottom: calc(var(--space-m) + 56px);
+  }
+}
+
 .sortDockHidden {
   opacity: 0;
   transform: translateY(12px);
