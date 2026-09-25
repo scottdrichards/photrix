@@ -451,6 +451,12 @@
     justify-content: center;
     border-radius: var(--radius-md);
   }
+
+  /* The bar wraps here, so the divider would dangle at the end of the stars
+     row instead of separating anything. */
+  .taggingDivider {
+    display: none;
+  }
 }
 
 .videoBadge {
@@ -471,6 +477,10 @@
   min-width: 260px;
   max-width: 45vw;
   height: 100%;
+  /* Without border-box the horizontal padding is added on top of width:100%
+     in the stacked (mobile) layout, pushing the panel and its textarea past
+     the right edge of the viewport. */
+  box-sizing: border-box;
   color: var(--viewer-overlay-fg);
   background: linear-gradient(180deg, rgba(18, 20, 24, 0.94), rgba(10, 11, 14, 0.96));
   border-left: 1px solid rgba(255, 255, 255, 0.15);
