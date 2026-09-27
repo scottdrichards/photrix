@@ -193,7 +193,7 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
         if (err.name === "AbortError") return;
         setError(
           semanticQuery
-            ? "Semantic search failed. Is the CLIP worker running?"
+            ? "Search models are still loading. Try again in a few seconds."
             : "Failed to fetch photos",
         );
       })
