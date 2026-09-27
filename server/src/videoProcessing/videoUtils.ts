@@ -20,21 +20,30 @@ const MAX_CAPTURED_LOG_CHARS = 64_000;
  * Feedback #132/#133: HDR10/HDR10+ (PQ) and HLG source frames encode
  * brightness on a curve a plain SDR viewer doesn't know how to read. A bare
  * `scale` filter copies the samples through unchanged, which an SDR-assuming
- * JPEG viewer then displays flat and washed-out rather than tonemapped —
- * this is the standard ffmpeg recipe for converting such a frame down to
- * SDR before encoding a thumbnail: light-linearize, do the actual tonemap in
- * a floating-point RGB working space, then convert back to bt709/limited
- * range for a normal JPEG. Deliberately NOT applied to the re-encoded
- * preview/HLS video paths — #133 narrowed this to the static thumbnails
- * specifically, since the video's own contrast is a source-material
- * property, not a bug in this app.
+ * JPEG viewer then displays flat and washed-out rather than tonemapped.
+ * Deliberately NOT applied to the re-encoded preview/HLS video paths — #133
+ * narrowed this to the static thumbnails specifically, since the video's own
+ * contrast is a source-material property, not a bug in this app.
+ *
+ * Feedback #140: the first attempt at this (zscale's built-in `tonemap`,
+ * applied per RGB channel in a floating-point working space) shipped a worse
+ * bug than the one it fixed — real HDR10 phone footage came out with a
+ * reddish, blotchy cast on skin highlights, reproduced across every
+ * tonemap operator and npl value zscale offers, so it's a property of that
+ * filter's naive per-channel rolloff, not a tuning problem. `libplacebo`'s
+ * tonemapper is perceptual (it maps in a proper hue-preserving colour
+ * space), confirmed by eye against the same source frame to fix exactly
+ * this without introducing it. It needs a GPU context (Vulkan on this box's
+ * Intel iGPU); on any failure — a box with no such context, a future ffmpeg
+ * build without libplacebo — the caller falls back to the plain scale
+ * rather than failing the thumbnail outright.
  */
-const HDR_TO_SDR_TONEMAP =
-  "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable,zscale=t=bt709:m=bt709:r=tv,format=yuv420p";
+const HDR_TO_SDR_LIBPLACEBO =
+  "libplacebo=tonemapping=auto:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv";
 
 const buildThumbnailScaleFilter = (heightArg: number, isHdr: boolean): string => {
   const scale = `scale=-2:${heightArg}`;
-  return isHdr ? `${HDR_TO_SDR_TONEMAP},${scale}` : scale;
+  return isHdr ? `${HDR_TO_SDR_LIBPLACEBO},${scale}` : scale;
 };
 
 /**
@@ -211,7 +220,7 @@ export const generateVideoThumbnail = async (
       const gpu = await getGpuAcceleration();
       const isHdr = await probeIsHdr(filePath);
 
-      const generateWithMode = async (useHardware: boolean): Promise<void> => {
+      const generateWithMode = async (useHardware: boolean, useTonemap: boolean): Promise<void> => {
         await mkdir(dirname(cachedPath), { recursive: true });
         await new Promise<void>((resolve, reject) => {
           const args = [
@@ -224,7 +233,7 @@ export const generateVideoThumbnail = async (
             "-vframes",
             "1",
             "-vf",
-            buildThumbnailScaleFilter(height === "original" ? -1 : height, isHdr),
+            buildThumbnailScaleFilter(height === "original" ? -1 : height, useTonemap),
             cachedPath,
           ];
 
@@ -249,7 +258,7 @@ export const generateVideoThumbnail = async (
             }
 
             if (useHardware && gpu?.isHardwareFailure(stderr)) {
-              generateWithMode(false).then(resolve).catch(reject);
+              generateWithMode(false, useTonemap).then(resolve).catch(reject);
               return;
             }
 
@@ -267,7 +276,15 @@ export const generateVideoThumbnail = async (
         });
       };
 
-      await generateWithMode(gpu !== null);
+      try {
+        await generateWithMode(gpu !== null, isHdr);
+      } catch (err) {
+        // libplacebo needs a GPU/Vulkan context; on a box without one (or
+        // any other tonemap-specific failure) a plain scale is always safe
+        // and no worse than the pre-#132/#133 behavior.
+        if (!isHdr) throw err;
+        await generateWithMode(gpu !== null, false);
+      }
     }),
   );
   return cachedPath;
@@ -342,7 +359,7 @@ export const generateVideoScrubFrame = async (
       const gpu = await getGpuAcceleration();
       const isHdr = await probeIsHdr(filePath);
 
-      const generateWithMode = async (useHardware: boolean): Promise<void> => {
+      const generateWithMode = async (useHardware: boolean, useTonemap: boolean): Promise<void> => {
         await mkdir(dirname(cachedPath), { recursive: true });
         await new Promise<void>((resolve, reject) => {
           const args = [
@@ -355,7 +372,7 @@ export const generateVideoScrubFrame = async (
             "-vframes",
             "1",
             "-vf",
-            buildThumbnailScaleFilter(VIDEO_SCRUB_HEIGHT, isHdr),
+            buildThumbnailScaleFilter(VIDEO_SCRUB_HEIGHT, useTonemap),
             cachedPath,
           ];
 
@@ -380,7 +397,7 @@ export const generateVideoScrubFrame = async (
             }
 
             if (useHardware && gpu?.isHardwareFailure(stderr)) {
-              generateWithMode(false).then(resolve).catch(reject);
+              generateWithMode(false, useTonemap).then(resolve).catch(reject);
               return;
             }
 
@@ -398,7 +415,12 @@ export const generateVideoScrubFrame = async (
         });
       };
 
-      await generateWithMode(gpu !== null);
+      try {
+        await generateWithMode(gpu !== null, isHdr);
+      } catch (err) {
+        if (!isHdr) throw err;
+        await generateWithMode(gpu !== null, false);
+      }
     }),
   );
   return cachedPath;

@@ -106,8 +106,12 @@ describe("videoUtils", () => {
     expect(result).toBe(cached);
   });
 
-  // Feedback #132/#133: HDR10/HLG source frames rendered as a washed-out
-  // thumbnail because the extract filter never tonemapped them to SDR.
+  // Feedback #132/#133/#140: HDR10/HLG source frames rendered as a
+  // washed-out thumbnail because the extract filter never tonemapped them
+  // to SDR (#132/#133); the first tonemap attempt (zscale's built-in
+  // per-channel `tonemap`) then shipped a reproducible reddish/blotchy skin
+  // artifact on real HDR10 phone footage, so it moved to libplacebo's
+  // perceptual tonemapper (#140).
   it("tonemaps an HDR10 (smpte2084) source before scaling the thumbnail", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-video-thumb-hdr-"));
     const source = path.join(root, "hdr10.mp4");
@@ -127,9 +131,54 @@ describe("videoUtils", () => {
     expect(thumbnailCall).toBeDefined();
     const args = thumbnailCall![1] as string[];
     const vf = args[args.indexOf("-vf") + 1];
-    expect(vf).toContain("zscale=t=linear");
-    expect(vf).toContain("tonemap=hable");
+    expect(vf).toContain("libplacebo=tonemapping=");
     expect(vf).toMatch(/scale=-2:320$/);
+  });
+
+  it("falls back to a plain scale when the libplacebo tonemap attempt fails", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-video-thumb-hdr-fallback-"));
+    const source = path.join(root, "hdr10.mp4");
+    writeFileSync(source, "video");
+
+    // Every ffmpeg call with "libplacebo" in its -vf fails (simulating a box
+    // with no Vulkan/GPU context); the plain-scale retry must still succeed.
+    const spawnMock = jest.fn((cmd: string, args: readonly string[] = []) => {
+      const proc = makeSpawnProcess();
+      if (cmd === "ffprobe") {
+        queueMicrotask(() => {
+          proc.stdout.emit(
+            "data",
+            Buffer.from(
+              JSON.stringify({ streams: [{ codec_type: "video", color_transfer: "smpte2084" }] }),
+            ),
+          );
+          proc.emit("close", 0);
+        });
+        return proc;
+      }
+      const vfIndex = args.indexOf("-vf");
+      const usesLibplacebo = vfIndex !== -1 && (args[vfIndex + 1] ?? "").includes("libplacebo");
+      const isThumbnailExtract = args.includes("-vframes");
+      queueMicrotask(() =>
+        proc.emit("close", isThumbnailExtract && !usesLibplacebo ? 0 : 1),
+      );
+      return proc;
+    });
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+
+    const { generateVideoThumbnail: generateVideoThumbnailFresh } = await import(
+      "./videoUtils.ts"
+    );
+    const result = await generateVideoThumbnailFresh(source, 320);
+    expect(result).toContain("320.jpg");
+
+    const thumbnailCalls = spawnMock.mock.calls.filter(
+      ([, args]) => Array.isArray(args) && (args as string[]).includes("-vframes"),
+    );
+    // One failed libplacebo attempt, one successful plain-scale retry.
+    expect(thumbnailCalls.length).toBe(2);
+    const lastArgs = thumbnailCalls[thumbnailCalls.length - 1][1] as string[];
+    expect(lastArgs[lastArgs.indexOf("-vf") + 1]).toBe("scale=-2:320");
   });
 
   it("does not tonemap an ordinary SDR (bt709) source", async () => {
