@@ -135,10 +135,21 @@ const asDetectedFace = (face: RawFace): DetectedFace => ({
   ...(face.attributes ? { attributes: parseFaceAttributes(face.attributes) } : {}),
 });
 
+/**
+ * How ready a search model is, from the searcher's point of view:
+ * - "ready": loaded in memory; a query embeds in milliseconds.
+ * - "loading": being loaded right now (process starting, waiting for the GPU,
+ *   or a first embed pulling the weights in).
+ * - "cold": not loaded; the next query pays the full load.
+ * - "unavailable": deliberately disabled on this server.
+ */
+export type SearchModelState = "ready" | "loading" | "cold" | "unavailable";
+
 type WorkerHandle = {
   ensureReady: () => Promise<void>;
   send: (payload: Record<string, unknown>) => Promise<WorkerSuccess>;
   getProcess: () => ChildProcessWithoutNullStreams | null;
+  getClipState: () => SearchModelState;
 };
 
 const createWorkerHandle = (label: string): WorkerHandle => {
@@ -146,6 +157,13 @@ const createWorkerHandle = (label: string): WorkerHandle => {
   let proc: ChildProcessWithoutNullStreams | null = null;
   let readyPromise: Promise<void> | null = null;
   const pending = new Map<number, PendingRequest>();
+  // The Python side loads CLIP lazily on the first embed, *after* reporting
+  // "ready" — so process readiness says nothing about whether a search will be
+  // fast. Track it here instead: warm once an embed has come back from the
+  // current process, cold again when that process exits.
+  let processReady = false;
+  let clipWarm = false;
+  let clipRequestsInFlight = 0;
 
   const rejectAllPending = (error: Error) => {
     for (const { reject, timeout } of pending.values()) {
@@ -233,6 +251,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
           if (settled) return;
           clearTimeout(readyTimer);
           settled = true;
+          processReady = true;
           log.info({ label }, "Image analysis worker ready");
           resolve();
         };
@@ -279,6 +298,8 @@ const createWorkerHandle = (label: string): WorkerHandle => {
           const pendingCount = pending.size;
           proc = null;
           readyPromise = null;
+          processReady = false;
+          clipWarm = false;
           // A kill we issued ourselves (GPU reclaim for playback, shutdown) is
           // not a failure of the in-flight files: tag the rejection so the task
           // runner leaves them pending for retry instead of marking them errored.
@@ -313,6 +334,31 @@ const createWorkerHandle = (label: string): WorkerHandle => {
   };
 
   const send = (payload: Record<string, unknown>): Promise<WorkerSuccess> => {
+    const loadsClip =
+      payload.operation === "embedText" ||
+      (payload.operation === "analyzeImage" && Boolean(payload.embed));
+    if (!loadsClip) return sendRaw(payload);
+    clipRequestsInFlight++;
+    return sendRaw(payload).then(
+      (result) => {
+        clipRequestsInFlight--;
+        if (result.embedding) clipWarm = true;
+        return result;
+      },
+      (error: unknown) => {
+        clipRequestsInFlight--;
+        throw error;
+      },
+    );
+  };
+
+  const getClipState = (): SearchModelState => {
+    if (proc && clipWarm) return "ready";
+    if ((readyPromise && !processReady) || clipRequestsInFlight > 0) return "loading";
+    return "cold";
+  };
+
+  const sendRaw = (payload: Record<string, unknown>): Promise<WorkerSuccess> => {
     const id = nextId++;
 
     return new Promise<WorkerSuccess>((resolve, reject) => {
@@ -350,7 +396,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
     });
   };
 
-  return { ensureReady, send, getProcess: () => proc };
+  return { ensureReady, send, getProcess: () => proc, getClipState };
 };
 
 const analysisWorker = createWorkerHandle("analysis");
@@ -434,6 +480,10 @@ export const analyzeFaceAttributes = async (
   }
   return byId;
 };
+
+/** Whether a text search against CLIP will be fast right now. */
+export const getImageSearchModelState = (): SearchModelState =>
+  analysisWorker.getClipState();
 
 export const embedText = (text: string): Promise<Float32Array> =>
   // Pin the worker awake for the duration: this is the foreground search path,

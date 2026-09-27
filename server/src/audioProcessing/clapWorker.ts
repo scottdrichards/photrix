@@ -17,6 +17,7 @@ import {
   killAndAwaitExit,
   markWorkerEvictedError,
 } from "../taskOrchestrator/computeWorkers.ts";
+import type { SearchModelState } from "../imageAnalysis/imageAnalysisWorker.ts";
 
 const log = getLogger("clapWorker");
 
@@ -37,6 +38,9 @@ const CLAP_SCRIPT = path.resolve(process.cwd(), "python", "clap_worker.py");
 let nextRequestId = 1;
 let worker: ChildProcessWithoutNullStreams | null = null;
 let readyPromise: Promise<void> | null = null;
+// CLAP loads its weights before reporting "ready" (unlike the image worker),
+// so a ready process is a warm model.
+let workerReady = false;
 const pending = new Map<number, PendingRequest>();
 
 // Allow the orchestrator to freeze the worker during user requests. embedText
@@ -154,6 +158,7 @@ const ensureWorkerReady = async (): Promise<void> => {
         clearTimeout(slowTimer);
         clearTimeout(readyTimer);
         settled = true;
+        workerReady = true;
         log.info("CLAP worker ready");
         resolve();
       };
@@ -205,6 +210,7 @@ const ensureWorkerReady = async (): Promise<void> => {
         const pendingCount = pending.size;
         worker = null;
         readyPromise = null;
+        workerReady = false;
         // A kill we issued ourselves (GPU reclaim for playback, shutdown) is
         // not a failure of the in-flight files: tag the rejection so the task
         // runner leaves them pending for retry instead of marking them errored.
@@ -294,3 +300,11 @@ export const embedTextWithClap = (text: string): Promise<Float32Array> =>
   withForegroundWorker(COMPUTE_WORKER_IDS.clap, () =>
     sendRequest({ operation: "embedText", text }),
   );
+
+/** Whether a text search against CLAP will be fast right now. */
+export const getAudioSearchModelState = (): SearchModelState => {
+  if (process.env.PHOTRIX_DISABLE_AUDIO === "1") return "unavailable";
+  if (worker && workerReady) return "ready";
+  if (readyPromise) return "loading";
+  return "cold";
+};
