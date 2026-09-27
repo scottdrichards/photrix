@@ -78,6 +78,9 @@ maintenance toggle); it owns the runners and overrides the duty cycle.
    checks resources back in, removes the task, and wakes the loop.
 4. `noteUserActivity()` (called by the HTTP layer for every non-polling request)
    extends `userActiveUntil` and reconciles the duty cycle so the backlog yields.
+5. `beginUserRequest(label)` returns a lease that holds a full stop until
+   `release()`. Heavy requests, HLS playback sessions and the startup warmup
+   each hold one.
 
 ## Observability
 
@@ -89,6 +92,14 @@ maintenance toggle); it owns the runners and overrides the duty cycle.
   surfaces as a per-task "Status unavailable" rather than a hung request.
 
 ## Gotchas for future changes
+
+- A user-activity lease that is never released expires after
+  `PHOTRIX_USER_LEASE_MAX_MS` (default 10 min) and logs
+  `User-activity lease expired without release` with its label. Before leases
+  this was a bare counter: one missed `endUserRequest` froze every background
+  task indefinitely with nothing logged. If that warning appears, the label names
+  the caller whose release path is broken. Holders that legitimately run longer
+  (playback) must call `refresh()` while in use.
 
 - Pausing is cooperative. A runner that never reaches a chunk boundary will not
   pause — keep chunks small.

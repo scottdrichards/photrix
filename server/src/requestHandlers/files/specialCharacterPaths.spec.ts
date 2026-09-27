@@ -25,8 +25,7 @@ const orchestrator = {
   addTask: () => {},
   onQueueExhausted: () => {},
   noteUserActivity: () => {},
-  beginUserRequest: () => {},
-  endUserRequest: () => {},
+  beginUserRequest: () => ({ release: () => {}, refresh: () => {} }),
   getDiagnosticsSnapshot: () => ({}),
 } as unknown as TaskOrchestrator;
 

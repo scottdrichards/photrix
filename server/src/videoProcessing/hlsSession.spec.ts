@@ -88,9 +88,10 @@ describe("playback lifecycle hooks", () => {
     process.env.PHOTRIX_HLS_IDLE_MS = "100";
     const { touchHlsSession, touchVariant, setPlaybackLifecycleHooks } =
       await loadSession(50);
-    const onSessionStart = jest.fn();
     const onSessionEnd = jest.fn();
-    setPlaybackLifecycleHooks({ onSessionStart, onSessionEnd });
+    const refresh = jest.fn();
+    const onSessionStart = jest.fn(() => ({ release: onSessionEnd, refresh }));
+    setPlaybackLifecycleHooks({ onSessionStart });
     const dir = "/hls/f";
 
     // Repeated touches during one playback session start exactly one bracket —
@@ -101,6 +102,8 @@ describe("playback lifecycle hooks", () => {
     touchHlsSession(dir);
     expect(onSessionStart).toHaveBeenCalledTimes(1);
     expect(onSessionEnd).not.toHaveBeenCalled();
+    // Each touch of a live session keeps its lease from aging out mid-playback.
+    expect(refresh).toHaveBeenCalledTimes(1);
 
     // Only once the whole tree goes idle and is reaped does the bracket close.
     jest.advanceTimersByTime(150);

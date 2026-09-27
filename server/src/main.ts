@@ -103,8 +103,7 @@ const startServer = async () => {
   // ABR variant switch loses NVENC to a libx264 fallback that can't sustain
   // realtime above ~360p.
   setPlaybackLifecycleHooks({
-    onSessionStart: () => taskOrchestrator.beginUserRequest(),
-    onSessionEnd: () => taskOrchestrator.endUserRequest(),
+    onSessionStart: () => taskOrchestrator.beginUserRequest("HLS playback"),
   });
 
   // Bind the HTTP port now, before the GPU probes, model warmups, and background
@@ -183,7 +182,7 @@ const startServer = async () => {
   // embedding blobs that a concurrent warmSemanticSearch would have just loaded.
   // Running the scan last (sequentially) ensures it warms pages that will
   // actually stay hot for the first real queries.
-  taskOrchestrator.beginUserRequest();
+  const warmupLease = taskOrchestrator.beginUserRequest("startup search warmup");
   void Promise.allSettled([
     embedText("warmup").then(() => logger.info("CLIP text-embedding model warmed")),
     audioDisabled
@@ -197,7 +196,7 @@ const startServer = async () => {
         .warmSemanticSearch()
         .then(() => logger.info("Semantic search vector cache warmed")),
     ]);
-    taskOrchestrator.endUserRequest();
+    warmupLease.release();
     for (const r of [...modelResults, ...scanResult]) {
       if (r.status === "rejected") {
         logger.warn({ err: r.reason }, "Search warmup step failed (non-fatal)");

@@ -318,7 +318,7 @@ describe("taskOrchestrator backoff", () => {
       computeThrottle: { suspend, resume },
     });
 
-    orchestrator.beginUserRequest();
+    const lease = orchestrator.beginUserRequest("GET /api/search");
     expect(suspend).toHaveBeenCalledTimes(1);
 
     // Advance well past the 2s activity cooldown while the request is still in
@@ -329,7 +329,7 @@ describe("taskOrchestrator backoff", () => {
     expect(resume).not.toHaveBeenCalled();
 
     // Request ends -> trailing cooldown -> workers thaw exactly once.
-    orchestrator.endUserRequest();
+    lease.release();
     clock += 5_000;
     await wait(40);
     expect(resume).toHaveBeenCalledTimes(1);
@@ -347,18 +347,20 @@ describe("taskOrchestrator backoff", () => {
       computeThrottle: { suspend, resume },
     });
 
-    orchestrator.beginUserRequest();
-    orchestrator.beginUserRequest();
+    const first = orchestrator.beginUserRequest("GET /api/search");
+    const second = orchestrator.beginUserRequest("GET /api/files/");
     expect(suspend).toHaveBeenCalledTimes(1);
 
-    // First of two concurrent requests ends; one is still in flight.
-    orchestrator.endUserRequest();
+    // First of two concurrent requests ends; one is still in flight. Releasing it
+    // twice (finish then close) must not also release the other one.
+    first.release();
+    first.release();
     clock += 10_000;
     await wait(40);
     expect(resume).not.toHaveBeenCalled();
 
     // Last request ends -> cooldown lapses -> thaw.
-    orchestrator.endUserRequest();
+    second.release();
     clock += 5_000;
     await wait(40);
     expect(resume).toHaveBeenCalledTimes(1);
@@ -381,5 +383,64 @@ describe("taskOrchestrator backoff", () => {
     // stay thawed so background work can keep making progress.
     expect(suspend).not.toHaveBeenCalled();
     ticker.stop();
+  });
+
+  it("drops a lease that is never released once it outlives the max age", async () => {
+    mockLog.warn.mockClear();
+    let clock = 1_000_000;
+    const suspend = jest.fn();
+    const resume = jest.fn();
+    const orchestrator = createTaskOrchestrator({
+      isOverloaded: () => false,
+      now: () => clock,
+      dutyOnMs: 10,
+      dutyOffMs: 10,
+      computeThrottle: { suspend, resume },
+    });
+
+    // A request whose finish/close never fires: nothing ever releases it.
+    orchestrator.beginUserRequest("GET /api/video/negotiate");
+    clock += 5 * 60_000;
+    await wait(40);
+    expect(resume).not.toHaveBeenCalled();
+    expect(orchestrator.getDiagnosticsSnapshot().activeLeases).toEqual([
+      { label: "GET /api/video/negotiate", ageMs: 5 * 60_000 },
+    ]);
+
+    // Past the max age the lease is dropped and named in the log, and background
+    // work resumes instead of staying frozen forever.
+    clock += 6 * 60_000;
+    await wait(40);
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(orchestrator.getDiagnosticsSnapshot().activeRequests).toBe(0);
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "GET /api/video/negotiate" }),
+      expect.stringContaining("expired without release"),
+    );
+  });
+
+  it("keeps a refreshed lease alive past the max age", async () => {
+    let clock = 1_000_000;
+    const resume = jest.fn();
+    const orchestrator = createTaskOrchestrator({
+      isOverloaded: () => false,
+      now: () => clock,
+      dutyOnMs: 10,
+      dutyOffMs: 10,
+      computeThrottle: { suspend: jest.fn(), resume },
+    });
+
+    const lease = orchestrator.beginUserRequest("HLS playback");
+    for (let i = 0; i < 3; i++) {
+      clock += 8 * 60_000;
+      lease.refresh();
+      await wait(20);
+    }
+    expect(resume).not.toHaveBeenCalled();
+
+    lease.release();
+    clock += 5_000;
+    await wait(40);
+    expect(resume).toHaveBeenCalledTimes(1);
   });
 });

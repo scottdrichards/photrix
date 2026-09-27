@@ -34,6 +34,8 @@ type VariantEncode = {
 type Session = {
   // Whole-tree reaper.
   treeTimer: ReturnType<typeof setTimeout>;
+  // User-activity lease held for the session's lifetime (see playbackHooks).
+  activity?: PlaybackActivity;
   // Per variant height: its current encode state.
   variants: Map<number, VariantEncode>;
 };
@@ -41,18 +43,20 @@ type Session = {
 // Keyed by the HLS base directory (the whole tree is reaped together).
 const sessions = new Map<string, Session>();
 
-// Lifecycle hooks bracketing each session from creation to reap. Wired (in
-// main.ts) to the task orchestrator's beginUserRequest/endUserRequest so an
+// Lifecycle hook bracketing each session from creation to reap. Wired (in
+// main.ts) to the task orchestrator's beginUserRequest lease so an
 // active playback counts as user activity for its whole lifetime, not just the
 // instants of individual segment fetches. An HLS player buffers ahead and goes
 // HTTP-quiet for many seconds mid-playback; without this bracket the
 // orchestrator declares the user idle in those gaps, resumes background ML
 // work, and releases the GPU VRAM reclaim — so the workers respawn, refill
 // VRAM, and the next ABR variant switch can't get NVENC and falls back to
-// realtime-starved libx264.
+// realtime-starved libx264. The session owns the lease it gets back: it refreshes
+// it on every touch (so a long playback never hits the lease's max age) and
+// releases it on reap.
+type PlaybackActivity = { release: () => void; refresh: () => void };
 type PlaybackLifecycleHooks = {
-  onSessionStart: () => void;
-  onSessionEnd: () => void;
+  onSessionStart: () => PlaybackActivity;
 };
 let playbackHooks: PlaybackLifecycleHooks | undefined;
 
@@ -71,7 +75,8 @@ const reap = async (hlsDir: string): Promise<void> => {
   const session = sessions.get(hlsDir);
   if (!session) return;
   sessions.delete(hlsDir);
-  playbackHooks?.onSessionEnd();
+  clearTimeout(session.treeTimer);
+  session.activity?.release();
 
   // Stop every encoder first so nothing is writing into a directory we're removing.
   for (const encode of session.variants.values()) killVariant(encode);
@@ -94,9 +99,12 @@ const armTreeTimer = (hlsDir: string): ReturnType<typeof setTimeout> => {
 const ensureSession = (hlsDir: string): Session => {
   let session = sessions.get(hlsDir);
   if (!session) {
-    session = { treeTimer: armTreeTimer(hlsDir), variants: new Map() };
+    session = {
+      treeTimer: armTreeTimer(hlsDir),
+      variants: new Map(),
+      activity: playbackHooks?.onSessionStart(),
+    };
     sessions.set(hlsDir, session);
-    playbackHooks?.onSessionStart();
   }
   return session;
 };
@@ -111,6 +119,7 @@ export const touchHlsSession = (hlsDir: string): void => {
   if (session) {
     clearTimeout(session.treeTimer);
     session.treeTimer = armTreeTimer(hlsDir);
+    session.activity?.refresh();
     return;
   }
   ensureSession(hlsDir);
