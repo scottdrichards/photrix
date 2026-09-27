@@ -1,5 +1,7 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MomentClusterDetail, PhotoItem } from "../api";
+import { SearchUnavailableError } from "../api";
+import { useFilter } from "./filter/FilterContext";
 import { FilterProvider } from "./filter/FilterContext";
 import { SelectionProvider } from "./selection/SelectionContext";
 import { ThumbnailGrid } from "./ThumbnailGrid";
@@ -11,6 +13,7 @@ import gridCss from "./ThumbnailGrid.module.css";
 const fetchPhotosMock = vi.fn();
 const fetchMomentClusterDetailMock = vi.fn<(clusterId: string) => Promise<MomentClusterDetail | null>>();
 const fetchSemanticSearchMock = vi.fn();
+const fetchSearchStatusMock = vi.fn();
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
@@ -19,6 +22,7 @@ vi.mock("../api", async () => {
     fetchPhotos: (...args: unknown[]) => fetchPhotosMock(...args),
     fetchMomentClusterDetail: (...args: [string]) => fetchMomentClusterDetailMock(...args),
     fetchSemanticSearch: (...args: unknown[]) => fetchSemanticSearchMock(...args),
+    fetchSearchStatus: (...args: unknown[]) => fetchSearchStatusMock(...args),
   };
 });
 
@@ -136,6 +140,12 @@ describe("ThumbnailGrid", () => {
     fetchPhotosMock.mockReset();
     fetchMomentClusterDetailMock.mockReset();
     fetchSemanticSearchMock.mockReset();
+    fetchSearchStatusMock.mockReset();
+    fetchSearchStatusMock.mockResolvedValue({
+      image: "ready",
+      audio: "ready",
+      transcript: "ready",
+    });
     observers.length = 0;
   });
 
@@ -537,4 +547,133 @@ describe("ThumbnailGrid", () => {
     const secondCallArgs = fetchSemanticSearchMock.mock.calls[1][0] as { offset?: number };
     expect(secondCallArgs.offset).toBe(50);
   });
+
+  it("says which source is missing from a partial search, and retries once its model is ready", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    fetchSemanticSearchMock
+      .mockResolvedValueOnce({
+        items: [makePhoto("t/1.mp4")],
+        total: 1,
+        query: "beach",
+        sourceStatus: {
+          image: { status: "failed", reason: "loading" },
+          audio: { status: "ok" },
+          transcript: { status: "ok" },
+        },
+      })
+      .mockResolvedValueOnce({
+        items: [makePhoto("i/1.jpg"), makePhoto("t/1.mp4")],
+        total: 2,
+        query: "beach",
+        sourceStatus: {
+          image: { status: "ok" },
+          audio: { status: "ok" },
+          transcript: { status: "ok" },
+        },
+      });
+
+    renderGrid();
+
+    expect(
+      await screen.findByText(/Image matches aren.t included: the model was still loading/),
+    ).toBeInTheDocument();
+    expect(await screen.findByText(/Ready now/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(fetchSemanticSearchMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("i/1.jpg")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/aren.t included/)).not.toBeInTheDocument();
+  });
+
+  it("explains a search that returned nothing because the models were loading, instead of 'No results found'", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    fetchSearchStatusMock.mockResolvedValue({
+      image: "loading",
+      audio: "loading",
+      transcript: "ready",
+    });
+    fetchSemanticSearchMock.mockRejectedValueOnce(
+      new SearchUnavailableError({
+        image: { status: "failed", reason: "loading" },
+        audio: { status: "failed", reason: "loading" },
+        transcript: { status: "ok" },
+      }),
+    );
+
+    renderGrid();
+
+    expect(await screen.findByText(/Audio matches aren.t included/)).toBeInTheDocument();
+    expect(screen.getByText(/Waiting for the model to finish loading/)).toBeInTheDocument();
+    expect(screen.queryByText("No results found for your search.")).not.toBeInTheDocument();
+  });
+
+  it("clears an earlier search error when the next search succeeds", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    fetchSemanticSearchMock
+      .mockRejectedValueOnce(new Error("Failed to semantic search (status 500)"))
+      .mockResolvedValueOnce({ items: [makePhoto("a/1.jpg")], total: 1, query: "sunset" });
+
+    let setQuery: (q: string) => void = () => {};
+    const QuerySetter = () => {
+      const { setFilter } = useFilter();
+      setQuery = (q) => setFilter({ semanticQuery: q });
+      return null;
+    };
+    render(
+      <FilterProvider>
+        <SelectionProvider>
+          <QuerySetter />
+          <ThumbnailGrid view="library" onViewChange={() => {}} />
+        </SelectionProvider>
+      </FilterProvider>,
+    );
+
+    expect(await screen.findByText(/Search models are still loading/)).toBeInTheDocument();
+
+    act(() => setQuery("sunset"));
+
+    expect(await screen.findByText("a/1.jpg")).toBeInTheDocument();
+    expect(screen.queryByText(/Search models are still loading/)).not.toBeInTheDocument();
+  });
+
+  it("keeps showing search progress when a query is replaced mid-flight", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    // Both searches honour their abort signal the way fetch does, and never
+    // finish on their own — so only an abort can settle one.
+    fetchSemanticSearchMock.mockImplementation(
+      ({ signal }: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason));
+        }),
+    );
+
+    let setQuery: (q: string) => void = () => {};
+    const QuerySetter = () => {
+      const { setFilter } = useFilter();
+      setQuery = (q) => setFilter({ semanticQuery: q });
+      return null;
+    };
+    render(
+      <FilterProvider>
+        <SelectionProvider>
+          <QuerySetter />
+          <ThumbnailGrid view="library" onViewChange={() => {}} />
+        </SelectionProvider>
+      </FilterProvider>,
+    );
+    expect(await screen.findByText("Searching")).toBeInTheDocument();
+
+    act(() => setQuery("beach house"));
+
+    await waitFor(() => {
+      expect(fetchSemanticSearchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+    // The first search's abort has settled by now; progress must still show.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByText("Searching")).toBeInTheDocument();
+  });
 });
+
