@@ -754,6 +754,276 @@ export class FaceClusterEngine {
   }
 
   /**
+   * Replaces a cluster's geometry with a refitted set of caps.
+   *
+   * `fits[0]` reuses `clusterId` — its members are already there, only the
+   * centre and radius change. Every further fit becomes a **new** cluster and
+   * its faces are moved across; the caller links those to the same person, so
+   * a split shows up as one person owning one more "look" rather than as a
+   * stranger appearing in the library.
+   *
+   * The refitted centre is written into `centroid`, which is otherwise a
+   * running mean. That is deliberate: after a refit the cap centre *is* the
+   * best estimate of where the cluster sits, and later joins fold into it the
+   * same way they always did. It drifts again from there, which is what makes
+   * refit something to re-run after edits rather than once.
+   *
+   * Returns the cluster ids used, `clusterId` first.
+   */
+  applyRefit(
+    clusterId: number,
+    fits: Array<{ centre: Float32Array; minSimilarity: number; faceIds: number[] }>,
+  ): Promise<number[]> {
+    if (!fits.length) return Promise.resolve([]);
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      const now = Date.now();
+      const statements: Array<{ sql: string; params: unknown[] }> = [];
+      const usedIds: number[] = [];
+
+      for (const [index, fit] of fits.entries()) {
+        const isOriginal = index === 0;
+        const targetId = isOriginal ? clusterId : this.nextClusterId++;
+        usedIds.push(targetId);
+
+        const centre = Float32Array.from(fit.centre);
+        const weight = Math.max(1, fit.faceIds.length);
+
+        if (isOriginal) {
+          const cluster = this.clustersById.get(targetId);
+          if (cluster) {
+            cluster.mean = centre;
+            cluster.magnitude = magnitudeOf(centre);
+            cluster.weight = weight;
+            cluster.radius = fit.minSimilarity;
+          }
+        } else {
+          const cluster = {
+            id: targetId,
+            mean: centre,
+            magnitude: magnitudeOf(centre),
+            weight,
+            refreshedWeight: weight,
+            radius: fit.minSimilarity,
+            anchor: null,
+            anchorCount: 0,
+          };
+          this.clusters.push(cluster);
+          this.clustersById.set(targetId, cluster);
+        }
+
+        statements.push({
+          sql: `INSERT INTO faceClusters (id, centroid, weight, threshold, updatedAt, radius)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  centroid = excluded.centroid,
+                  weight = excluded.weight,
+                  updatedAt = excluded.updatedAt,
+                  radius = excluded.radius`,
+          params: [
+            targetId,
+            Buffer.from(centre.buffer.slice(0)),
+            weight,
+            FACE_CLUSTER_SIMILARITY_THRESHOLD,
+            now,
+            fit.minSimilarity,
+          ],
+        });
+
+        // Members of a *new* cap move; members of the original are already
+        // where they belong and only need rescoring against the new centre.
+        if (!isOriginal && fit.faceIds.length) {
+          statements.push({
+            sql: `UPDATE faces SET clusterId = ? WHERE id IN (${fit.faceIds
+              .map(() => "?")
+              .join(", ")})`,
+            params: [targetId, ...fit.faceIds],
+          });
+        }
+      }
+
+      await this.db.transaction(statements);
+      this.mutationsSinceSort += fits.length;
+
+      // Stored similarities are relative to a centre that just moved, so every
+      // touched cap's members need rescoring or the People tab's representative
+      // ordering silently refers to the old geometry.
+      for (const [index, fit] of fits.entries()) {
+        const centre = Float32Array.from(fit.centre);
+        await this.rescoreMembers([usedIds[index]], centre, magnitudeOf(centre));
+      }
+      return usedIds;
+    });
+  }
+
+  /**
+   * Widens a cluster to take in faces it did not previously reach, using a cap
+   * the caller has already computed (see faceGeometry.growCapToInclude).
+   */
+  applyGrow(
+    clusterId: number,
+    cap: { centre: Float32Array; minSimilarity: number },
+    faceIds: number[],
+  ): Promise<void> {
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      const cluster = this.clustersById.get(clusterId);
+      if (!cluster) return;
+
+      const centre = Float32Array.from(cap.centre);
+      cluster.mean = centre;
+      cluster.magnitude = magnitudeOf(centre);
+      cluster.weight += faceIds.length;
+      cluster.radius = cap.minSimilarity;
+      this.mutationsSinceSort += 1;
+
+      const statements: Array<{ sql: string; params: unknown[] }> = [
+        {
+          sql: `UPDATE faceClusters
+                SET centroid = ?, weight = ?, radius = ?, updatedAt = ?
+                WHERE id = ?`,
+          params: [
+            Buffer.from(centre.buffer.slice(0)),
+            cluster.weight,
+            cap.minSimilarity,
+            Date.now(),
+            clusterId,
+          ],
+        },
+      ];
+      if (faceIds.length) {
+        statements.push({
+          sql: `UPDATE faces SET clusterId = ? WHERE id IN (${faceIds
+            .map(() => "?")
+            .join(", ")})`,
+          params: [clusterId, ...faceIds],
+        });
+      }
+      await this.db.transaction(statements);
+      await this.rescoreMembers([clusterId], centre, magnitudeOf(centre));
+    });
+  }
+
+  /**
+   * Tightens the radius on one or more of a person's caps and releases the
+   * faces that now fall outside.
+   *
+   * Evicted faces go back to `clusterId IS NULL`, not to the excluded
+   * sentinel: tightening says "not close enough to *this* cap", which is a
+   * statement about one cluster, not about the face. The backfill re-homes
+   * them, and the narrowed radius is what stops them coming back here.
+   */
+  applyShrink(
+    updates: Array<{ clusterId: number; minSimilarity: number }>,
+    evictFaceIds: number[],
+  ): Promise<void> {
+    if (!updates.length) return Promise.resolve();
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      const statements: Array<{ sql: string; params: unknown[] }> = [];
+
+      for (const update of updates) {
+        const cluster = this.clustersById.get(update.clusterId);
+        if (cluster) cluster.radius = update.minSimilarity;
+        statements.push({
+          sql: "UPDATE faceClusters SET radius = ?, updatedAt = ? WHERE id = ?",
+          params: [update.minSimilarity, Date.now(), update.clusterId],
+        });
+      }
+
+      if (evictFaceIds.length) {
+        statements.push({
+          sql: `UPDATE faces SET clusterId = NULL, clusterSimilarity = NULL
+                WHERE id IN (${evictFaceIds.map(() => "?").join(", ")})`,
+          params: [...evictFaceIds],
+        });
+      }
+      await this.db.transaction(statements);
+    });
+  }
+
+  /**
+   * Starts a brand-new cluster around a cap and moves `faceIds` into it.
+   *
+   * The decline path for a grow that would have swallowed other people: rather
+   * than widening an existing cap far enough to cause collateral, give the face
+   * its own. A person owning one more small cluster is cheap and correct; a
+   * person owning one over-wide cluster is neither.
+   */
+  createCluster(
+    cap: { centre: Float32Array; minSimilarity: number },
+    faceIds: number[],
+  ): Promise<number> {
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      const id = this.nextClusterId++;
+      const centre = Float32Array.from(cap.centre);
+      const weight = Math.max(1, faceIds.length);
+
+      const cluster = {
+        id,
+        mean: centre,
+        magnitude: magnitudeOf(centre),
+        weight,
+        refreshedWeight: weight,
+        radius: cap.minSimilarity,
+        anchor: null,
+        anchorCount: 0,
+      };
+      this.clusters.push(cluster);
+      this.clustersById.set(id, cluster);
+      this.mutationsSinceSort += 1;
+
+      const statements: Array<{ sql: string; params: unknown[] }> = [
+        {
+          sql: `INSERT INTO faceClusters (id, centroid, weight, threshold, updatedAt, radius)
+                VALUES (?, ?, ?, ?, ?, ?)`,
+          params: [
+            id,
+            Buffer.from(centre.buffer.slice(0)),
+            weight,
+            FACE_CLUSTER_SIMILARITY_THRESHOLD,
+            Date.now(),
+            cap.minSimilarity,
+          ],
+        },
+      ];
+      if (faceIds.length) {
+        statements.push({
+          sql: `UPDATE faces SET clusterId = ?, clusterSimilarity = NULL
+                WHERE id IN (${faceIds.map(() => "?").join(", ")})`,
+          params: [id, ...faceIds],
+        });
+      }
+      await this.db.transaction(statements);
+      await this.rescoreMembers([id], centre, magnitudeOf(centre));
+      return id;
+    });
+  }
+
+  /** The live geometry of a cluster, for callers doing cap maths. */
+  getCap(
+    clusterId: number,
+  ): Promise<{ centre: Float32Array; minSimilarity: number; weight: number } | null> {
+    return this.runExclusive(async () => {
+      await this.ensureLoaded();
+      const cluster = this.clustersById.get(clusterId);
+      if (!cluster || !cluster.magnitude) return null;
+      const centre = new Float32Array(cluster.mean.length);
+      for (let i = 0; i < centre.length; i += 1) {
+        centre[i] = cluster.mean[i] / cluster.magnitude;
+      }
+      return {
+        centre,
+        // No explicit radius yet means the cluster is still governed by the
+        // global threshold — that *is* its radius, just never written down.
+        minSimilarity: cluster.radius ?? FACE_CLUSTER_SIMILARITY_THRESHOLD,
+        weight: cluster.weight,
+      };
+    });
+  }
+
+  /**
    * Drops clusters that no longer have any member faces (e.g. after bulk file
    * removals). Run when the backfill drains; keeps the scan set from
    * accumulating ghosts.

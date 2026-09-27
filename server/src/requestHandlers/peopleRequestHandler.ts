@@ -266,6 +266,117 @@ export const peopleRequestHandler = async (
     return;
   }
 
+  // --- Cluster geometry: a cluster is a centre and a distance, and these are
+  // the three ways a correction changes that shape. See faceGeometry.ts.
+
+  // POST /api/people/refit — re-derive centre and radius from current members,
+  // splitting when one cap cannot hold them without a rejected face.
+  if (url.pathname === "/api/people/refit" && req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      writeJson(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const b = body as Record<string, unknown>;
+    if (typeof b.clusterId !== "string") {
+      writeJson(res, 400, { error: "Missing clusterId" });
+      return;
+    }
+    const result = await database.refitFaceCluster(b.clusterId);
+    if (!result) {
+      writeJson(res, 404, { error: "Cluster not found or has no members" });
+      return;
+    }
+    writeJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
+  // POST /api/people/shrink-exclude — tighten the radius until a face falls
+  // out. `dryRun` reports the collateral without acting, which is what lets the
+  // UI say "this also removes 14 others" before the user commits.
+  //
+  // `excludable: false` means the face sits closer to the centre than members
+  // being kept, so no radius removes it — the caller should fall back to
+  // POST /api/people/verdict with "rejected".
+  if (url.pathname === "/api/people/shrink-exclude" && req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      writeJson(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const b = body as Record<string, unknown>;
+    if (typeof b.clusterId !== "string" || typeof b.faceId !== "number") {
+      writeJson(res, 400, { error: "Missing clusterId or faceId" });
+      return;
+    }
+    const result = await database.shrinkToExcludeFace(b.clusterId, b.faceId, {
+      dryRun: b.dryRun === true,
+    });
+    if (!result) {
+      writeJson(res, 404, { error: "Cluster or face not found" });
+      return;
+    }
+    writeJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
+  // POST /api/people/grow-include — widen a cluster towards a face so it
+  // belongs, moving the centre rather than inflating in place. `dryRun` lists
+  // the faces that are not this person's which the widened cap would cover;
+  // `includeCollateral` takes them in as well.
+  if (url.pathname === "/api/people/grow-include" && req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      writeJson(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const b = body as Record<string, unknown>;
+    if (typeof b.clusterId !== "string" || typeof b.faceId !== "number") {
+      writeJson(res, 400, { error: "Missing clusterId or faceId" });
+      return;
+    }
+    const result = await database.growToIncludeFace(b.clusterId, b.faceId, {
+      dryRun: b.dryRun === true,
+      includeCollateral: b.includeCollateral === true,
+    });
+    if (!result) {
+      writeJson(res, 404, { error: "Cluster or face not found" });
+      return;
+    }
+    writeJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
+  // POST /api/people/new-cluster — give a face its own cluster under the same
+  // person. The decline path when growing would have cost too much.
+  if (url.pathname === "/api/people/new-cluster" && req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      writeJson(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const b = body as Record<string, unknown>;
+    if (typeof b.clusterId !== "string" || typeof b.faceId !== "number") {
+      writeJson(res, 400, { error: "Missing clusterId or faceId" });
+      return;
+    }
+    const result = await database.startClusterForFace(b.clusterId, b.faceId);
+    if (!result) {
+      writeJson(res, 404, { error: "Cluster or face not found" });
+      return;
+    }
+    writeJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
   // POST /api/people/separate — detach one centroid from a named person
   if (url.pathname === "/api/people/separate" && req.method === "POST") {
     let body: unknown;

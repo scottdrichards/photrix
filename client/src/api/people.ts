@@ -505,3 +505,121 @@ export const fetchOptimizePlan = async (
   );
   return payload.proposals ?? [];
 };
+
+
+/**
+ * Re-derives a cluster's centre and radius from its current members, splitting
+ * it when one cap cannot hold them without also covering a rejected face.
+ */
+export const refitCluster = async (
+  clusterId: string,
+): Promise<{ caps: number; uncovered: number }> => {
+  const response = await fetchWithDiagnostics("/api/people/refit", "refit cluster", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clusterId }),
+  });
+  if (!response.ok) throw new Error(`Failed to refit (status ${response.status})`);
+  const data = (await response.json()) as { caps?: number; uncovered?: number };
+  return { caps: data.caps ?? 0, uncovered: data.uncovered ?? 0 };
+};
+
+export type CapChange = {
+  /** How many faces the change moves. Includes the one you clicked. */
+  affected: number;
+  /** A handful of them, for a "this is what you're about to do" preview. */
+  sample: ClusterFace[];
+  faceIds: number[];
+  /**
+   * Only on shrink: false when the face sits closer to the centre than members
+   * being kept, so no radius removes it and a per-face rejection is the tool.
+   */
+  excludable?: boolean;
+};
+
+const toCapChange = (payload: {
+  affected?: number;
+  sample?: ApiFaceRep[];
+  faceIds?: number[];
+  excludable?: boolean;
+}): CapChange => ({
+  affected: payload.affected ?? 0,
+  sample: (payload.sample ?? []).map(toClusterFace),
+  faceIds: payload.faceIds ?? [],
+  ...(payload.excludable !== undefined ? { excludable: payload.excludable } : {}),
+});
+
+/** Tightens the radius until `faceId` falls outside. `dryRun` previews the cost. */
+export const shrinkToExcludeFace = async ({
+  clusterId,
+  faceId,
+  dryRun,
+}: {
+  clusterId: string;
+  faceId: number;
+  dryRun?: boolean;
+}): Promise<CapChange> => {
+  const response = await fetchWithDiagnostics(
+    "/api/people/shrink-exclude",
+    "shrink to exclude face",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clusterId, faceId, ...(dryRun ? { dryRun } : {}) }),
+    },
+  );
+  if (!response.ok) throw new Error(`Failed to exclude (status ${response.status})`);
+  return toCapChange(await response.json());
+};
+
+/** Widens a cluster towards `faceId`. `dryRun` lists who else the cap would cover. */
+export const growToIncludeFace = async ({
+  clusterId,
+  faceId,
+  dryRun,
+  includeCollateral,
+}: {
+  clusterId: string;
+  faceId: number;
+  dryRun?: boolean;
+  includeCollateral?: boolean;
+}): Promise<CapChange> => {
+  const response = await fetchWithDiagnostics(
+    "/api/people/grow-include",
+    "grow to include face",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clusterId,
+        faceId,
+        ...(dryRun ? { dryRun } : {}),
+        ...(includeCollateral ? { includeCollateral } : {}),
+      }),
+    },
+  );
+  if (!response.ok) throw new Error(`Failed to include face (status ${response.status})`);
+  return toCapChange(await response.json());
+};
+
+/** Gives a face its own cluster under the same person. */
+export const startClusterForFace = async ({
+  clusterId,
+  faceId,
+}: {
+  clusterId: string;
+  faceId: number;
+}): Promise<{ clusterId: string }> => {
+  const response = await fetchWithDiagnostics(
+    "/api/people/new-cluster",
+    "start cluster for face",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clusterId, faceId }),
+    },
+  );
+  if (!response.ok) throw new Error(`Failed to start cluster (status ${response.status})`);
+  const data = (await response.json()) as { clusterId: string };
+  return { clusterId: data.clusterId };
+};

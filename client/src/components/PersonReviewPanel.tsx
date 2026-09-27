@@ -1,10 +1,12 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import type { FaceAnomalyFlag, PersonReview, ReviewFace } from "../api";
+import type { CapChange, FaceAnomalyFlag, PersonReview, ReviewFace } from "../api";
 import {
   applyPersonCutoff,
   buildFaceCropUrl,
   fetchPersonReview,
+  refitCluster,
   setFaceVerdicts,
+  shrinkToExcludeFace,
 } from "../api";
 import { Spinner } from "../Spinner";
 import css from "./PersonReviewPanel.module.css";
@@ -89,6 +91,11 @@ export const PersonReviewPanel = ({
    * the server's suggestion so the common case is one click: look, then apply.
    */
   const [cutIndex, setCutIndex] = useState<number | null>(null);
+  /** A removal waiting on confirmation because it would take others with it. */
+  const [pendingRemoval, setPendingRemoval] = useState<{
+    face: ReviewFace;
+    preview: CapChange;
+  } | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -155,6 +162,67 @@ export const PersonReviewPanel = ({
     runAction(() =>
       setFaceVerdicts([face.faceId], face.verdict === verdict ? null : verdict),
     );
+
+  /**
+   * Removing a face has two different mechanisms behind one button, and which
+   * one applies is a property of the geometry rather than a choice the user
+   * should have to understand.
+   *
+   * Tightening the cluster's radius is preferred: it is a statement about the
+   * cluster's shape, so it keeps this face — and anything further out — from
+   * drifting back in on the next scan. But a cap can only exclude from the
+   * outside in, so a convincing look-alike sitting *closer* to the centre than
+   * genuine members cannot be removed that way at any radius. The server says
+   * so (`excludable: false`) and we fall back to a per-face exception.
+   *
+   * In between there is the case worth asking about: tightening works, but
+   * takes others with it. That is what the confirmation is for.
+   */
+  const handleRemove = async (face: ReviewFace) => {
+    setBusy(true);
+    try {
+      const preview = await shrinkToExcludeFace({
+        clusterId: personId,
+        faceId: face.faceId,
+        dryRun: true,
+      });
+      if (preview.excludable === false) {
+        await setFaceVerdicts([face.faceId], "rejected");
+        await load();
+        onChanged();
+        return;
+      }
+      if (preview.affected <= 1) {
+        await shrinkToExcludeFace({ clusterId: personId, faceId: face.faceId });
+        await load();
+        onChanged();
+        return;
+      }
+      setPendingRemoval({ face, preview });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not work out what that removes");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmRemoval = () => {
+    const pending = pendingRemoval;
+    if (!pending) return;
+    setPendingRemoval(null);
+    return runAction(() =>
+      shrinkToExcludeFace({ clusterId: personId, faceId: pending.face.faceId }),
+    );
+  };
+
+  const exceptOnly = () => {
+    const pending = pendingRemoval;
+    if (!pending) return;
+    setPendingRemoval(null);
+    return runAction(() => setFaceVerdicts([pending.face.faceId], "rejected"));
+  };
+
+  const handleRefit = () => runAction(() => refitCluster(personId));
 
   const handleApplyCut = () => {
     if (cutThreshold === null) return;
@@ -263,8 +331,53 @@ export const PersonReviewPanel = ({
               Clear limit
             </button>
           )}
+          <button
+            type="button"
+            className={css.secondaryButton}
+            disabled={busy}
+            title="Re-centre this group on the faces it actually contains, splitting it if one shape can't hold them"
+            onClick={handleRefit}
+          >
+            Refit
+          </button>
         </div>
       </div>
+
+      {pendingRemoval && (
+        <div className={css.confirm} role="alertdialog" aria-live="polite">
+          <p className={css.confirmText}>
+            Tightening the group enough to drop this face also drops{" "}
+            <strong>{pendingRemoval.preview.affected - 1}</strong> other
+            {pendingRemoval.preview.affected - 1 === 1 ? "" : "s"}.
+          </p>
+          <div className={css.confirmSample}>
+            {pendingRemoval.preview.sample.map((sampleFace) => (
+              <img
+                key={sampleFace.faceId}
+                src={buildFaceCropUrl(sampleFace)}
+                alt={sampleFace.photo.name}
+                className={css.confirmThumb}
+                loading="lazy"
+              />
+            ))}
+          </div>
+          <div className={css.confirmActions}>
+            <button type="button" className={css.applyButton} onClick={confirmRemoval}>
+              Remove all {pendingRemoval.preview.affected}
+            </button>
+            <button type="button" className={css.secondaryButton} onClick={exceptOnly}>
+              Just this one
+            </button>
+            <button
+              type="button"
+              className={css.secondaryButton}
+              onClick={() => setPendingRemoval(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className={css.grid}>
         {faces.map((face, index) => {
@@ -330,9 +443,9 @@ export const PersonReviewPanel = ({
                     type="button"
                     className={css.reject}
                     disabled={busy}
-                    title="Not them — remove from this group"
-                    aria-label="Reject this face"
-                    onClick={() => handleVerdict(face, "rejected")}
+                    title="Not them — tightens the group to leave this face out"
+                    aria-label="Remove this face"
+                    onClick={() => void handleRemove(face)}
                   >
                     ✕
                   </button>
