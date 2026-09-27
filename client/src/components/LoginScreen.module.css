@@ -5,6 +5,8 @@
   align-items: center;
   justify-content: center;
   background: var(--bg, #0a0a0a);
+  padding: 1rem;
+  box-sizing: border-box;
   z-index: 1000;
 }
 
@@ -13,6 +15,7 @@
   border: 1px solid var(--border, #2a2a2a);
   border-radius: 12px;
   padding: 2.5rem 2rem;
+  box-sizing: border-box;
   width: 100%;
   max-width: 360px;
   display: flex;
