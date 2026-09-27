@@ -57,13 +57,16 @@ const SORT_FIELDS: SortFieldDef[] = [
     field: "quality",
     label: "Quality",
     Icon: Ribbon20Regular,
-    defaultDirection: "asc",
+    // Feedback #137: this defaulted to ascending ("worst first") on the
+    // theory that quality sort is mainly for finding shots to prune — but a
+    // sort control's default is what most people see, and "best first" is
+    // the unsurprising reading of sorting by quality at all, same as
+    // rating/date. Ascending ("find the worst to prune") is still one click
+    // away.
+    defaultDirection: "desc",
     // Derived from face attributes (smiling/eyes open/in focus/well
     // exposed); photos with no scored faces have no signal and always sort
-    // last regardless of direction. Defaults to ascending — this sort is
-    // mainly useful for finding the worst shots to prune, so "worst first" is
-    // the more useful default direction (unlike rating/date, where "best/most
-    // recent first" is what you want by default).
+    // last regardless of direction (see buildQueryOrderBy).
     directionHint: { asc: "Lowest quality first", desc: "Highest quality first" },
   },
 ];
