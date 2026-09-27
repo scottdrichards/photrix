@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act } from "react";
 import { AccountPanel } from "./AccountPanel";
+import { initInstall, resetInstallStateForTests } from "../install";
 
 const mocks = vi.hoisted(() => ({
   fetchAccount: vi.fn(),
@@ -123,5 +125,48 @@ describe("AccountPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  describe("install app section", () => {
+    beforeEach(() => {
+      resetInstallStateForTests();
+      initInstall();
+    });
+
+    it("points at the browser menu when there is no install prompt", async () => {
+      render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+      await screen.findByText("Signed in as alice");
+
+      expect(screen.getByRole("heading", { name: "Install app" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Install Photrix" })).not.toBeInTheDocument();
+    });
+
+    it("offers an Install button once the browser provides a prompt", async () => {
+      render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+      await screen.findByText("Signed in as alice");
+
+      const prompt = vi.fn().mockResolvedValue(undefined);
+      act(() => {
+        const event = Object.assign(new Event("beforeinstallprompt"), {
+          prompt,
+          userChoice: Promise.resolve({ outcome: "accepted" }),
+        });
+        window.dispatchEvent(event);
+      });
+
+      fireEvent.click(await screen.findByRole("button", { name: "Install Photrix" }));
+      await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    });
+
+    it("disappears once installed", async () => {
+      render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+      await screen.findByText("Signed in as alice");
+
+      act(() => {
+        window.dispatchEvent(new Event("appinstalled"));
+      });
+
+      expect(screen.queryByRole("heading", { name: "Install app" })).not.toBeInTheDocument();
+    });
   });
 });
