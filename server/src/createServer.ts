@@ -237,7 +237,7 @@ export const createServer = (
             !pathname.endsWith("/");
           // Photo captions call out to Ollama and take ~90-100s on the current
           // host — a real "heavy request" by cost, but bracketing it with
-          // beginUserRequest/endUserRequest would pin every background task
+          // a beginUserRequest lease would pin every background task
           // (including moment clustering) stopped for that whole span on every
           // single photo open. Treat it like asset serving instead: it still
           // counts as activity (so background yields briefly), just not a full
@@ -252,15 +252,9 @@ export const createServer = (
           if (tracksActivity && (isAssetServe || isPhotoCaption || isSuggestRotation)) {
             taskOrchestrator.noteUserActivity();
           } else if (tracksActivity) {
-            taskOrchestrator.beginUserRequest();
-            let ended = false;
-            const endRequest = () => {
-              if (ended) return;
-              ended = true;
-              taskOrchestrator.endUserRequest();
-            };
-            res.once("finish", endRequest);
-            res.once("close", endRequest);
+            const lease = taskOrchestrator.beginUserRequest(`${req.method} ${pathname}`);
+            res.once("finish", lease.release);
+            res.once("close", lease.release);
           }
 
           if (req.url === "/api/auth/login" && req.method === "POST") {

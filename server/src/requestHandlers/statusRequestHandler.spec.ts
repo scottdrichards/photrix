@@ -68,11 +68,11 @@ const alwaysEnabledOrchestrator: TaskOrchestrator = {
   addTask: () => {},
   onQueueExhausted: () => {},
   noteUserActivity: () => {},
-  beginUserRequest: () => {},
-  endUserRequest: () => {},
+  beginUserRequest: () => ({ release: () => {}, refresh: () => {} }),
   getDiagnosticsSnapshot: () => ({
     processBackgroundTasks: true,
     activeRequests: 0,
+    activeLeases: [],
     userActive: false,
     overloaded: false,
     dutyOff: false,

@@ -13,6 +13,15 @@ const ACTIVITY_COOLDOWN_MS = 2_000;
 // keeps the backlog always making progress while freeing disk/CPU in between.
 const DUTY_ON_MS = Number(process.env.PHOTRIX_BG_DUTY_ON_MS) || 2_000;
 const DUTY_OFF_MS = Number(process.env.PHOTRIX_BG_DUTY_OFF_MS) || 2_000;
+// Hard ceiling on how long a single user-activity lease can hold background work
+// in a full stop without being refreshed. A lease whose release never runs (a
+// response whose finish/close never fired, a lifecycle hook that never ended) used
+// to pin a bare counter above zero forever, silently freezing all indexing: new
+// and moved files sat unprocessed for 37h before anyone noticed. Past this age the
+// lease is dropped and logged loudly by label so the leaking caller can be found.
+// Well above the HTTP server's 5-minute requestTimeout; long-lived holders (HLS
+// playback) refresh their lease while in use.
+const USER_LEASE_MAX_MS = Number(process.env.PHOTRIX_USER_LEASE_MAX_MS) || 10 * 60_000;
 
 export type QueueType = "blocking" | "implied" | "background";
 // cpu/gpu/disk/network are notional fractions (0–1) tracked as reservations.
@@ -84,6 +93,14 @@ export type Task = {
   priority?: TaskPriority;
 };
 
+// One holder of user activity (an in-flight request, a playback session, the
+// startup warmup). release() is idempotent; refresh() pushes out the expiry for
+// holders that legitimately outlive USER_LEASE_MAX_MS.
+export type UserActivityLease = {
+  release: () => void;
+  refresh: () => void;
+};
+
 type RunningTask = {
   name: string;
   type?: TaskType;
@@ -106,12 +123,13 @@ export type TaskOrchestrator = {
   // the request's *entire* duration, not just a fixed cooldown. A single search
   // can run 10–15s on a busy box (cold model load, a starved vector scan); the
   // cooldown alone lets background workers resume mid-request and re-starve it.
-  // Every beginUserRequest must be paired with exactly one endUserRequest.
-  beginUserRequest: () => void;
-  endUserRequest: () => void;
+  // Release the returned lease when the request ends. A lease that is never
+  // released expires after USER_LEASE_MAX_MS and is logged with its label.
+  beginUserRequest: (label: string) => UserActivityLease;
   getDiagnosticsSnapshot: () => {
     processBackgroundTasks: boolean;
     activeRequests: number;
+    activeLeases: Array<{ label: string; ageMs: number }>;
     userActive: boolean;
     overloaded: boolean;
     dutyOff: boolean;
@@ -261,11 +279,33 @@ export const createTaskOrchestrator = (
   //      keeps running full speed. Workers are NOT frozen here — the goal is to
   //      keep making progress, just more gently.
   let userActiveUntil = 0;
-  // Requests currently being served. While any are in flight the box belongs to
-  // the user, so background work stays fully stopped regardless of the cooldown
+  // Activity leases currently held. While any are live the box belongs to the
+  // user, so background work stays fully stopped regardless of the cooldown
   // clock; the cooldown only adds a trailing grace period after the last one.
-  let activeRequests = 0;
-  const userActive = () => activeRequests > 0 || now() < userActiveUntil;
+  type LeaseState = { label: string; startedAt: number; expiresAt: number };
+  const activeLeases = new Set<LeaseState>();
+  const expireStaleLeases = () => {
+    if (activeLeases.size === 0) return;
+    const t = now();
+    for (const lease of activeLeases) {
+      if (t < lease.expiresAt) continue;
+      activeLeases.delete(lease);
+      log.warn(
+        { label: lease.label, ageMs: t - lease.startedAt },
+        "User-activity lease expired without release; dropping it so background work can resume",
+      );
+      recordServerDiagnosticEvent({
+        level: "warn",
+        event: "task.userLease.expired",
+        message: `User-activity lease expired: ${lease.label}`,
+        data: { label: lease.label, ageMs: t - lease.startedAt },
+      });
+    }
+  };
+  const userActive = () => {
+    expireStaleLeases();
+    return activeLeases.size > 0 || now() < userActiveUntil;
+  };
 
   // Regime 1: background/implied work must be fully stopped.
   const fullStop = () => !processBackgroundTasks || userActive();
@@ -403,7 +443,11 @@ export const createTaskOrchestrator = (
 
   const getDiagnosticsSnapshot = () => ({
     processBackgroundTasks,
-    activeRequests,
+    activeRequests: activeLeases.size,
+    activeLeases: [...activeLeases].map(({ label, startedAt }) => ({
+      label,
+      ageMs: now() - startedAt,
+    })),
     userActive: userActive(),
     overloaded: overloadActive(),
     dutyOff,
@@ -669,17 +713,28 @@ export const createTaskOrchestrator = (
       userActiveUntil = now() + ACTIVITY_COOLDOWN_MS;
       reconcileBackoff();
     },
-    beginUserRequest: () => {
-      activeRequests += 1;
+    beginUserRequest: (label: string) => {
+      const startedAt = now();
+      const lease: LeaseState = {
+        label,
+        startedAt,
+        expiresAt: startedAt + USER_LEASE_MAX_MS,
+      };
+      activeLeases.add(lease);
       // Extend the cooldown immediately too, so even a request that ends before
       // the next reconcile still leaves a trailing grace window.
       userActiveUntil = now() + ACTIVITY_COOLDOWN_MS;
       reconcileBackoff();
-    },
-    endUserRequest: () => {
-      activeRequests = Math.max(0, activeRequests - 1);
-      userActiveUntil = now() + ACTIVITY_COOLDOWN_MS;
-      reconcileBackoff();
+      return {
+        release: () => {
+          if (!activeLeases.delete(lease)) return; // already released or expired
+          userActiveUntil = now() + ACTIVITY_COOLDOWN_MS;
+          reconcileBackoff();
+        },
+        refresh: () => {
+          if (activeLeases.has(lease)) lease.expiresAt = now() + USER_LEASE_MAX_MS;
+        },
+      };
     },
     getDiagnosticsSnapshot,
   };
