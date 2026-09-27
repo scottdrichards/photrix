@@ -13,13 +13,19 @@
   margin-inline: calc(var(--space-m) * -1);
 }
 
+/* Two rows at every width: brand + utility buttons on top, search + filters
+   underneath. Letting everything share one wrapping flex row made the icons
+   break into ragged 2-3 line stacks at phone and tablet widths. */
 .header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title actions"
+    "search search";
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-m);
-  padding-block: var(--space-m);
+  column-gap: var(--space-m);
+  row-gap: var(--space-s);
+  padding-block: var(--space-s) var(--space-m);
   padding-inline: var(--space-m);
   background-color: var(--surface-glass);
   backdrop-filter: blur(10px);
@@ -33,14 +39,25 @@
   position: relative;
   z-index: 2;
   .title {
-    h2 {
-      margin: 0;
-      font-size: 2rem;
-    }
+    grid-area: title;
+    min-width: 0;
     display: flex;
     flex-direction: row;
     align-items: baseline;
     gap: var(--space-m);
+    h2 {
+      margin: 0;
+      font-size: 2rem;
+      line-height: 1.2;
+      flex-shrink: 0;
+    }
+    /* One line, truncated, rather than wrapping under the wordmark. */
+    small {
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
   }
 }
 
@@ -146,59 +163,79 @@
 }
 
 .headerActions {
+  grid-area: actions;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: var(--space-xs);
+}
+
+.searchRow {
+  grid-area: search;
   display: flex;
   align-items: center;
   gap: var(--space-m);
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  min-width: 0;
 }
 
-/* Transparent wrapper so the Filter icon bar stays a direct flex child of
-   .headerActions on desktop; on mobile it becomes its own scrollable row. */
+/* Transparent wrapper so the Filter icon bar is a direct flex child of
+   .searchRow at every width. */
 .filterSlot {
   display: contents;
 }
 
-/* ── Mobile: keep the header to two compact rows ──
-   Row 1: title + search/theme/share/status.  Row 2: the filter icon bar,
-   which scrolls horizontally instead of wrapping into several lines. */
+/* Text labels only where there is room for all of them on one line. */
+@media (max-width: 1100px) {
+  .btnLabel {
+    display: none;
+  }
+}
+
+/* ── Phones ──
+   Row 1: wordmark + compact icon buttons.  Row 2: a full-width search field
+   with the Filters toggle beside it; the filter icons open as a third row. */
 @media (max-width: 720px) {
   .header {
-    padding-block: var(--space-s);
-    gap: var(--space-s);
+    column-gap: var(--space-s);
+    padding-block: var(--space-xs) var(--space-s);
   }
 
-  .title h2 {
-    font-size: 1.35rem;
+  .header .title h2 {
+    font-size: 1.4rem;
   }
 
-  .title small {
+  .header .title small {
     display: none;
   }
 
   .headerActions {
-    flex: 1;
-    min-width: 0;
+    gap: 0;
+  }
+
+  .headerActions > :global(.btn) {
+    padding: 7px;
+  }
+
+  .headerActions .themeToggle {
+    zoom: 0.75;
+    margin-inline-end: var(--space-xs);
+  }
+
+  .searchRow {
+    flex-wrap: wrap;
     gap: var(--space-s);
   }
+}
 
-  .btnLabel {
-    display: none;
+/* Smallest phones: the wordmark and five controls only just share a line. */
+@media (max-width: 360px) {
+  .header .title h2 {
+    font-size: 1.25rem;
   }
 
-  .filterSlot {
-    display: flex;
-    order: 2;
-    flex-basis: 100%;
-    width: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-
-  .filterSlot::-webkit-scrollbar {
-    display: none;
+  .headerActions > :global(.btn) {
+    padding: 5px;
   }
 }
 

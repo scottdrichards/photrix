@@ -393,10 +393,6 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
             </div>
 
             <div className={css.headerActions}>
-              <SearchBar />
-              <div className={css.filterSlot}>
-                <Filter />
-              </div>
               <ThemeToggle theme={theme} followsSystem={followsSystem} onToggle={onThemeToggle} />
               <ShareButton />
               {/* Global entry point, deliberately rendered in every view
@@ -442,6 +438,15 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
                   </button>
                 </>
               )}
+            </div>
+
+            {/* Search and filters get their own row at every width, so the
+                brand/utility row above never has to wrap around them. */}
+            <div className={css.searchRow}>
+              <SearchBar />
+              <div className={css.filterSlot}>
+                <Filter />
+              </div>
             </div>
           </header>
         </div>
