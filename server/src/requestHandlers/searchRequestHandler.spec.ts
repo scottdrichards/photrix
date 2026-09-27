@@ -26,9 +26,11 @@ const createJsonResponse = () => {
   return { res, getStatus: () => status, getJson: () => JSON.parse(body) };
 };
 
-const makeReq = (q: string, limit?: number) =>
+const makeReq = (q: string, limit?: number, offset?: number) =>
   ({
-    url: `/api/search?q=${encodeURIComponent(q)}${limit ? `&limit=${limit}` : ""}`,
+    url:
+      `/api/search?q=${encodeURIComponent(q)}${limit ? `&limit=${limit}` : ""}` +
+      (offset ? `&offset=${offset}` : ""),
     headers: { host: "localhost" },
   }) as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
 
@@ -483,5 +485,48 @@ describe("searchRequestHandler resilience", () => {
       database.semanticSearch as jest.MockedFunction<typeof database.semanticSearch>
     ).mock.calls[0][2];
     expect(requestedLimit).toBeGreaterThan(2);
+  });
+
+  // Feedback #141: search was hard-capped at `limit` (default 50) with no
+  // way to see more -- offset pages into the same ranked candidate set
+  // CANDIDATE_LIMIT already computes, rather than re-selecting a new top-N.
+  it("pages through results with offset, without repeating or skipping any", async () => {
+    const handler = await loadHandler({});
+
+    const imageHits = Array.from({ length: 5 }, (_, i) => ({
+      folder: "/photos/",
+      fileName: `beach${i}.jpg`,
+      mimeType: "image/jpeg",
+      // Descending similarity so rank order is deterministic.
+      similarity: 0.9 - i * 0.1,
+    }));
+
+    const database = {
+      semanticSearch: jest.fn(async () => imageHits),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => []),
+    } as unknown as IndexDatabase;
+
+    const { res: res1, getJson: getJson1 } = createJsonResponse();
+    await handler(makeReq("beach", 2, 0), res1, { database });
+    const page1 = getJson1();
+    expect(page1.items.map((i: { fileName: string }) => i.fileName)).toEqual([
+      "beach0.jpg",
+      "beach1.jpg",
+    ]);
+    expect(page1.total).toBe(5);
+
+    const { res: res2, getJson: getJson2 } = createJsonResponse();
+    await handler(makeReq("beach", 2, 2), res2, { database });
+    const page2 = getJson2();
+    expect(page2.items.map((i: { fileName: string }) => i.fileName)).toEqual([
+      "beach2.jpg",
+      "beach3.jpg",
+    ]);
+
+    const { res: res3, getJson: getJson3 } = createJsonResponse();
+    await handler(makeReq("beach", 2, 4), res3, { database });
+    const page3 = getJson3();
+    expect(page3.items.map((i: { fileName: string }) => i.fileName)).toEqual(["beach4.jpg"]);
   });
 });

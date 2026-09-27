@@ -499,4 +499,42 @@ describe("ThumbnailGrid", () => {
     expect(await screen.findByText("a/1.jpg")).toBeInTheDocument();
     expect(screen.queryByText(/result/i)).not.toBeInTheDocument();
   });
+
+  // Feedback #141: search used to hard-cap at one page with no way to see
+  // more -- scrolling to the sentinel must now request the next page, the
+  // same way the plain library grid already does.
+  it("loads a second page of search results when scrolled to the sentinel", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    fetchSemanticSearchMock
+      .mockResolvedValueOnce({
+        items: [makePhoto("a/1.jpg")],
+        total: 2,
+        query: "beach",
+      })
+      .mockResolvedValueOnce({
+        items: [makePhoto("a/2.jpg")],
+        total: 2,
+        query: "beach",
+      });
+
+    renderGrid();
+
+    await waitFor(() => {
+      expect(fetchSemanticSearchMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("a/1.jpg")).toBeInTheDocument();
+      expect(observers.length).toBeGreaterThan(0);
+    });
+
+    await act(async () => {
+      observers.forEach((observer) => observer.trigger(true));
+    });
+
+    await waitFor(() => {
+      expect(fetchSemanticSearchMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("a/2.jpg")).toBeInTheDocument();
+    });
+
+    const secondCallArgs = fetchSemanticSearchMock.mock.calls[1][0] as { offset?: number };
+    expect(secondCallArgs.offset).toBe(50);
+  });
 });

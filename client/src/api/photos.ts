@@ -294,6 +294,7 @@ export const fetchDateHistogram = async ({
 export const fetchSemanticSearch = async ({
   q,
   limit = 50,
+  offset = 0,
   signal,
   searchSources,
   includeSubfolders = false,
@@ -313,6 +314,7 @@ export const fetchSemanticSearch = async ({
   const params = new URLSearchParams();
   params.set("q", q.trim());
   params.set("limit", String(limit));
+  if (offset > 0) params.set("offset", String(offset));
   if (includeSubfolders) params.set("includeSubfolders", "true");
   if (path) params.set("path", path);
   // Only send `sources` when a subset is selected; absent means "all sources".

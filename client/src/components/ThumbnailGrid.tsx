@@ -17,6 +17,14 @@ import css from "./ThumbnailGrid.module.css";
 
 const PAGE_SIZE = 200;
 /**
+ * Feedback #141: search used to hard-cap at one screenful (the server's
+ * default `limit`) with no way to see more. Paginating it the same way the
+ * plain library grid does needs a page size in actual request terms (limit +
+ * offset), unlike PAGE_SIZE above which only applies to the library grid's
+ * own page/pageSize API shape.
+ */
+const SEARCH_PAGE_SIZE = 50;
+/**
  * How far below the last loaded tile the next page is requested. The sentinel
  * sits at the very end of the grid, so this is the entire warning the fetch
  * gets: at 200px the user reached the bottom of the content and *then* waited
@@ -158,6 +166,8 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
     const fetchPromise = semanticQuery
       ? fetchSemanticSearch({
           q: semanticQuery,
+          limit: SEARCH_PAGE_SIZE,
+          offset: (page - 1) * SEARCH_PAGE_SIZE,
           signal: abortController.signal,
           ...filterOptions,
         })
@@ -171,7 +181,7 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
     fetchPromise
       .then((result) => {
         setData((previousData) => {
-          if (semanticQuery || page === 1 || !previousData) {
+          if (page === 1 || !previousData) {
             return { ...result, filterUsed: filter };
           }
 
@@ -216,7 +226,7 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
 
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
-    if (!sentinel || loading || filter.semanticQuery) {
+    if (!sentinel || loading) {
       return;
     }
     const observer = new IntersectionObserver(
@@ -237,19 +247,19 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
     return () => {
       observer.disconnect();
     };
-  }, [loading, data?.items.length, data?.total, filter.semanticQuery]);
+  }, [loading, data?.items.length, data?.total]);
 
   const isStale = loading && !!data && page === 1;
   const emptyMessage = filter.semanticQuery
     ? "No results found for your search."
     : "No photos yet. Upload some to get started.";
-  // Feedback #113: a semantic search's `total` (see searchRequestHandler) can
-  // now legitimately exceed the single page of items actually rendered,
-  // since semantic search has no "load more" (the sentinel below is gated
-  // off for it) — say "Showing 50 of 312" so it's clear more results exist
-  // than are on screen. The plain "{N} results" case was dropped: the header
-  // subtitle already shows the live total (in its own accent color), so
-  // repeating it here was redundant.
+  // Feedback #113/#141: a semantic search's `total` (see searchRequestHandler)
+  // can exceed the items rendered so far -- scrolling to the sentinel below
+  // now loads the next page (#141; it used to be capped with no way to see
+  // more) — say "Showing 50 of 312" so it's clear there's more to scroll to.
+  // The plain "{N} results" case was dropped: the header subtitle already
+  // shows the live total (in its own accent color), so repeating it here was
+  // redundant.
   const resultCountLabel =
     data && filter.semanticQuery && data.items.length < data.total
       ? `Showing ${numberFormatter.format(data.items.length)} of ${numberFormatter.format(data.total)} results`
@@ -385,7 +395,7 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
             />
           );
         })}
-        {!filter.semanticQuery && data && data.items.length < data.total && (
+        {data && data.items.length < data.total && (
           <div ref={loadMoreSentinelRef} className={css.sentinel}>
             {loading && <Spinner size="extra-tiny" />}
           </div>
