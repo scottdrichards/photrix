@@ -293,9 +293,12 @@ describe("Filter", () => {
 
     fireEvent.click(faceButton);
 
+    // Feedback #138: deselecting the last person clears the filter entirely
+    // (`undefined`, dropped by JSON.stringify) rather than writing the
+    // filter-contract's NONE sentinel (`null`, "match faces in no cluster").
     await waitFor(() => {
-      expect(screen.getByTestId("filter-state").textContent).toContain(
-        '"faceClusterFilter":null',
+      expect(screen.getByTestId("filter-state").textContent).not.toContain(
+        "faceClusterFilter",
       );
     });
   });
