@@ -1,5 +1,8 @@
 import type http from "node:http";
-import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
+import {
+  getGpuAcceleration,
+  type GpuAcceleration,
+} from "../../videoProcessing/gpuAcceleration.ts";
 import { getHLSInfo } from "../../videoProcessing/generateHLS.ts";
 import {
   getMultibitrateHLSDirectory,
@@ -106,6 +109,25 @@ export const PREVIEW_MAX_SECONDS = 6;
 
 /** Lowest advertised HLS variant — the only one a preview is ever allowed to use. */
 export const PREVIEW_VARIANT_HEIGHT = 360;
+
+/**
+ * Whether a playback decision should evict the background ML workers to free
+ * VRAM ahead of the encode.
+ *
+ * Only a *fresh* NVIDIA encode needs it: NVDEC/NVENC allocate from the same
+ * CUDA device the ML workers live on. A VAAPI (Intel) or AMF (AMD) encode uses
+ * a different device, so killing the CUDA workers frees nothing the encoder can
+ * use — and it throws away warm CLIP/CLAP models that the very next search then
+ * has to reload, which is slower than the search timeout. Opening a video from
+ * search results and then refining the query is exactly that sequence.
+ */
+export const shouldReclaimGpuForPlayback = (
+  result: VideoPlaybackResponse,
+  gpu: Pick<GpuAcceleration, "vendor"> | null,
+): boolean =>
+  gpu?.vendor === "nvidia" &&
+  result.mode === "hls" &&
+  (result.reason === REASON_GPU_HLS || result.reason === REASON_PREVIEW_TRANSCODE);
 
 export type NegotiationDeps = {
   hasCachedHLS: (filePath: string) => Promise<boolean>;
@@ -331,20 +353,19 @@ export const videoNegotiationRequestHandler = async (
   const deps = buildDeps(database, storageRoot);
   const result = await negotiateVideoPlayback(request, deps);
 
-  // On-the-fly GPU HLS is imminent: evict the background ML workers now so their
-  // VRAM is freed by the time the player fetches the first segment and ffmpeg
-  // spawns, instead of racing the encoder's own reclaim. A cached-HLS hit or a
-  // raw/direct decision needs no GPU, so we leave the workers alone there.
-  if (
-    result.mode === "hls" &&
-    (result.reason === REASON_GPU_HLS || result.reason === REASON_PREVIEW_TRANSCODE)
-  ) {
+  // An on-the-fly NVIDIA encode is imminent: evict the background ML workers now
+  // so their VRAM is freed by the time the player fetches the first segment and
+  // ffmpeg spawns, instead of racing the encoder's own reclaim. A cached-HLS
+  // hit, a raw/direct decision, or a non-NVIDIA encoder needs no CUDA memory, so
+  // the workers are left alone there (see shouldReclaimGpuForPlayback).
+  const gpu = await getGpuAcceleration();
+  if (shouldReclaimGpuForPlayback(result, gpu)) {
     reclaimGpuForUser();
   }
 
   const fileName = path.basename(videoPath);
   const metadata = await deps.getFileMetadata(videoPath);
-  const gpuAvailable = (await getGpuAcceleration()) !== null;
+  const gpuAvailable = gpu !== null;
 
   const logData = {
     file: fileName,

@@ -11,6 +11,7 @@ import {
   REASON_PREVIEW_TRANSCODE,
   REASON_PREVIEW_UNAVAILABLE,
   PREVIEW_MAX_SECONDS,
+  shouldReclaimGpuForPlayback,
   type NegotiationDeps,
 } from "./videoNegotiation.ts";
 
@@ -338,5 +339,29 @@ describe("negotiateVideoPlayback", () => {
     );
 
     expect(result).toEqual({ mode: "error", reason: "File not found" });
+  });
+});
+
+describe("shouldReclaimGpuForPlayback", () => {
+  const liveEncode = { mode: "hls" as const, url: "/x", reason: REASON_GPU_HLS };
+  const livePreview = { mode: "hls" as const, url: "/x", reason: REASON_PREVIEW_TRANSCODE };
+  const cached = { mode: "hls" as const, url: "/x", reason: REASON_CACHED_HLS };
+  const direct = { mode: "direct" as const, url: "/x", reason: REASON_DIRECT };
+
+  it("reclaims for a fresh NVIDIA encode, full or preview", () => {
+    expect(shouldReclaimGpuForPlayback(liveEncode, { vendor: "nvidia" })).toBe(true);
+    expect(shouldReclaimGpuForPlayback(livePreview, { vendor: "nvidia" })).toBe(true);
+  });
+
+  it("leaves the ML workers alone when the encoder is not on the CUDA device", () => {
+    expect(shouldReclaimGpuForPlayback(liveEncode, { vendor: "intel" })).toBe(false);
+    expect(shouldReclaimGpuForPlayback(livePreview, { vendor: "intel" })).toBe(false);
+    expect(shouldReclaimGpuForPlayback(liveEncode, { vendor: "amd" })).toBe(false);
+    expect(shouldReclaimGpuForPlayback(liveEncode, null)).toBe(false);
+  });
+
+  it("never reclaims when no encode happens", () => {
+    expect(shouldReclaimGpuForPlayback(cached, { vendor: "nvidia" })).toBe(false);
+    expect(shouldReclaimGpuForPlayback(direct, { vendor: "nvidia" })).toBe(false);
   });
 });
