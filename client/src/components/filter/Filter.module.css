@@ -3,6 +3,9 @@
   align-items: center;
   gap: var(--space-m);
   flex-wrap: wrap;
+  /* Beside the search field, let the field give up width rather than
+     wrapping the icons onto a second line. */
+  flex-shrink: 0;
 }
 
 .iconBarButtons {
@@ -18,11 +21,24 @@
   display: none;
 }
 
-/* On phones the bar collapses behind a single Filters toggle instead of
-   being a permanently-visible (if horizontally-scrolling) row — the row on
-   its own had no visual weight next to the rest of the header and was easy
-   to miss or to scroll past without noticing more of it existed. */
+@media (max-width: 1100px) {
+  .iconBar,
+  .iconBarButtons {
+    gap: var(--space-xs);
+  }
+}
+
+/* On phones the bar collapses behind a single Filters toggle that sits
+   beside the search field; opening it drops the icons into their own row
+   underneath, spread edge to edge. .iconBar is display: contents so the
+   toggle and that row are laid out by the header's search row directly.
+   The row wraps rather than scrolls: an overflow container here would clip
+   the filter popovers, which are position: fixed inside it. */
 @media (max-width: 720px) {
+  .iconBar {
+    display: contents;
+  }
+
   .filterCollapseToggle {
     display: flex;
     flex-shrink: 0;
@@ -30,9 +46,9 @@
 
   .iconBarButtons {
     display: none;
-    flex-wrap: nowrap;
-    gap: var(--space-s);
-    width: max-content;
+    flex-basis: 100%;
+    justify-content: space-between;
+    gap: var(--space-xxs);
   }
 
   .iconBarButtonsOpen {
@@ -41,6 +57,18 @@
 
   .filterIconButton {
     flex-shrink: 0;
+  }
+}
+
+@media (max-width: 360px) {
+  .iconBarButtons {
+    gap: 0;
+  }
+
+  .iconBarButtons .filterIconButton {
+    min-width: 32px;
+    width: 32px;
+    height: 32px;
   }
 }
 

@@ -25,8 +25,6 @@ const SEARCH_EXAMPLES = [
   "flowers in bloom",
 ];
 
-const WIDE_BREAKPOINT = "(min-width: 700px)";
-
 // Feedback #102: AI interpretation is on by default (that's the whole point
 // of the feature — type a sentence, get a filter back) but some searches are
 // better served by the plain per-modality vector search below it, so this is
@@ -78,9 +76,6 @@ export const SearchBar = () => {
   const { filter, setFilter } = useFilter();
   const query = filter.semanticQuery ?? "";
   const inputRef = useRef<HTMLInputElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [isWide, setIsWide] = useState(() => window.matchMedia(WIDE_BREAKPOINT).matches);
   const [exampleIdx, setExampleIdx] = useState(0);
   const [exampleVisible, setExampleVisible] = useState(true);
   const [isFocused, setIsFocused] = useState(false);
@@ -105,28 +100,7 @@ export const SearchBar = () => {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    const mq = window.matchMedia(WIDE_BREAKPOINT);
-    const handler = (e: MediaQueryListEvent) => setIsWide(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-
   const hasActiveQuery = !!query || !!interpretation;
-  const showExpanded = isExpanded || hasActiveQuery || isWide;
-
-
-  const expand = () => {
-    setIsExpanded(true);
-    // Focus input after the CSS transition starts
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => inputRef.current?.focus());
-    });
-  };
-
-  const collapse = () => {
-    if (!hasActiveQuery && !isWide) setIsExpanded(false);
-  };
 
   /** Put every field an interpretation changed back the way it was. */
   const revertInterpretation = (
@@ -145,7 +119,6 @@ export const SearchBar = () => {
     // before this feature. Interpretation is a later, optional refinement.
     if (interpretation) revertInterpretation(interpretation, { semanticQuery: value });
     else setFilter({ semanticQuery: value || undefined });
-    if (!value && !isWide) setIsExpanded(false);
 
     const seq = ++submitSeq.current;
     if (!value || !aiSearchEnabled) return;
@@ -176,7 +149,6 @@ export const SearchBar = () => {
     if (interpretation)
       revertInterpretation(interpretation, { semanticQuery: undefined });
     else setFilter({ semanticQuery: undefined });
-    if (!isWide) setIsExpanded(false);
   };
 
   /** Drop one derived filter, keeping the rest of the interpretation in place. */
@@ -222,19 +194,8 @@ export const SearchBar = () => {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
       inputRef.current?.blur();
-      collapse();
     }
   };
-
-  // Collapse on outside click (only matters on narrow screens where collapse is possible)
-  useEffect(() => {
-    if (!showExpanded || isWide) return;
-    const handlePointerDown = (e: PointerEvent) => {
-      if (!containerRef.current?.contains(e.target as Node)) collapse();
-    };
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [showExpanded, hasActiveQuery, isWide]);
 
   const toggleAiSearch = () => {
     const next = !aiSearchEnabled;
@@ -251,28 +212,10 @@ export const SearchBar = () => {
   };
 
   return (
-    <div
-      ref={containerRef}
-      className={`${css.searchWrapper} ${showExpanded ? css.searchWrapperExpanded : ""}`}
-    >
-      {/* Icon-only button shown when collapsed */}
-      <button
-        type="button"
-        className={css.iconBtn}
-        onClick={expand}
-        aria-label="Search your photos"
-        aria-expanded={showExpanded}
-      >
-        <Search24Regular />
-      </button>
-
-      {/* Expandable form */}
-      <form
-        className={css.searchBar}
-        onSubmit={handleSubmit}
-        role="search"
-        aria-hidden={!showExpanded}
-      >
+    // Always a visible field: on phones it gets a full-width row of its own
+    // in the header, so there is no collapsed icon-only mode to manage.
+    <div className={css.searchWrapper}>
+      <form className={css.searchBar} onSubmit={handleSubmit} role="search">
         <Search24Regular className={css.searchIcon} />
         <div className={css.inputWrap}>
           <input
@@ -282,7 +225,6 @@ export const SearchBar = () => {
             placeholder=""
             defaultValue={query}
             aria-label="Search your photos"
-            tabIndex={showExpanded ? 0 : -1}
             onKeyDown={handleKeyDown}
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
@@ -302,7 +244,6 @@ export const SearchBar = () => {
             className={css.clearBtn}
             onClick={handleClear}
             aria-label="Clear search"
-            tabIndex={showExpanded ? 0 : -1}
           >
             <Dismiss24Regular />
           </button>
@@ -314,7 +255,6 @@ export const SearchBar = () => {
             onClick={toggleAiSearch}
             aria-pressed={aiSearchEnabled}
             title={`AI search: ${aiSearchEnabled ? "on" : "off"}`}
-            tabIndex={showExpanded ? 0 : -1}
           >
             {aiSearchEnabled ? <Sparkle24Filled /> : <Sparkle24Regular />}
           </button>

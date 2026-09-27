@@ -1,75 +1,33 @@
-/* Outer wrapper — collapsed by default, just wide enough for the icon button */
+/* Grows to a comfortable width beside the filter icons on wide screens and
+   takes whatever the row leaves on phones. */
 .searchWrapper {
   position: relative;
   display: flex;
   align-items: center;
+  flex: 0 1 380px;
+  min-width: 200px;
 }
 
-/* The icon-only trigger button */
-.iconBtn {
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  padding: var(--space-xs);
-  cursor: pointer;
-  color: var(--text3, #666);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm, 4px);
-  transition: color var(--dur-fast, 120ms) ease;
-  z-index: 1;
-}
-
-.iconBtn:hover {
-  color: var(--text1, #111);
-}
-
-/* Hide the icon button when expanded (the form's own icon takes over) */
-.searchWrapperExpanded .iconBtn {
-  display: none;
-}
-
-/* The full search form — hidden by default via zero width + overflow:hidden */
 .searchBar {
   display: flex;
   align-items: center;
   gap: var(--space-s);
+  width: 100%;
+  height: 36px;
+  box-sizing: border-box;
   background: var(--fill2, #f4f4f4);
   border: 1px solid var(--stroke2, #ddd);
-  border-radius: 6px;
-  padding-inline: var(--space-s);
-  overflow: hidden;
-  width: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    width var(--dur-normal, 200ms) ease,
-    opacity var(--dur-normal, 200ms) ease;
+  border-radius: 999px;
+  padding-inline: var(--space-m) var(--space-xs);
 }
 
-/* Expanded state — animate to full width */
-.searchWrapperExpanded .searchBar {
-  width: 320px;
-  opacity: 1;
-  pointer-events: auto;
+.searchBar:focus-within {
+  border-color: var(--brand, #2563eb);
 }
 
-/* Auto-expand when there's enough horizontal space */
-@media (min-width: 700px) {
-  .iconBtn {
-    display: none;
-  }
-
-  .searchBar {
-    width: 260px;
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  /* On wide screens, expanded just means a bit wider */
-  .searchWrapperExpanded .searchBar {
-    width: 360px;
+@media (max-width: 720px) {
+  .searchWrapper {
+    flex: 1 1 0;
   }
 }
 
@@ -100,13 +58,14 @@
 .examplePlaceholder {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
+  display: block;
+  align-content: center;
   font-size: 0.875rem;
   color: var(--text3, #999);
   pointer-events: none;
   white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
   opacity: 0;
   transition: opacity 450ms ease;
 }
