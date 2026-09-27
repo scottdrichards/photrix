@@ -71,6 +71,11 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
     nextIncludeUnknown = includeUnknown,
   ) => {
     setFilter({
+      // Feedback #138: `null` is the filter-contract's NONE sentinel ("match
+      // faces with no attribute data"), not "no filter" -- this panel has no
+      // way to express that first thing, so an empty selection must clear to
+      // `undefined` or a stray attr=_none-shaped param and an active icon
+      // survive "clearing" every attribute.
       faceAttributeFilter:
         attributes.length > 0
           ? {
@@ -79,7 +84,7 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
               // state stays minimal and comparable.
               ...(nextIncludeUnknown ? {} : { includeUnknown: false }),
             }
-          : null,
+          : undefined,
     });
   };
 
@@ -168,7 +173,10 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
     const next = selected.includes(clusterId)
       ? selected.filter((id) => id !== clusterId)
       : [...selected, clusterId];
-    setFilter({ faceClusterFilter: next.length > 0 ? next : null });
+    // Feedback #138: same NONE-sentinel-vs-clear mix-up as above -- an empty
+    // selection must clear to `undefined`, not the sentinel for "match faces
+    // belonging to no cluster at all".
+    setFilter({ faceClusterFilter: next.length > 0 ? next : undefined });
   };
 
   const setClusterMode = (nextMode: FaceClusterMatchMode) => {
@@ -204,9 +212,9 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
               className="btn btn-sm btn-subtle"
               onClick={() =>
                 setFilter({
-                  faceClusterFilter: null,
+                  faceClusterFilter: undefined,
                   faceClusterMatchMode: undefined,
-                  faceAttributeFilter: null,
+                  faceAttributeFilter: undefined,
                 })
               }
             >

@@ -133,7 +133,9 @@ describe("FaceFilterPanel attribute controls", () => {
     expect(chip("Smiling").getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.click(chip("Smiling"));
-    expect(lastAttributeFilter).toBeNull();
+    // Feedback #138: an empty attribute selection clears to `undefined` (no
+    // filter), not the NONE sentinel.
+    expect(lastAttributeFilter).toBeUndefined();
   });
 
   it("'Photo ready' selects all four attributes at once", async () => {
@@ -156,7 +158,7 @@ describe("FaceFilterPanel attribute controls", () => {
     fireEvent.click(chip("Photo ready"));
     fireEvent.click(chip("Photo ready"));
 
-    expect(lastAttributeFilter).toBeNull();
+    expect(lastAttributeFilter).toBeUndefined();
   });
 
   it("lights 'Photo ready' only once every attribute is on", async () => {
@@ -224,8 +226,8 @@ describe("FaceFilterPanel attribute controls", () => {
     fireEvent.click(chip("Photo ready"));
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
 
-    expect(lastAttributeFilter).toBeNull();
-    expect(lastClusterFilter).toBeNull();
+    expect(lastAttributeFilter).toBeUndefined();
+    expect(lastClusterFilter).toBeUndefined();
     expect(lastClusterMatchMode).toBeUndefined();
   });
 

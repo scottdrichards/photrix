@@ -99,7 +99,9 @@ describe("DateHistogram", () => {
     const clearButton = await screen.findByRole("button", { name: "Clear" });
     fireEvent.click(clearButton);
 
-    expect(setFilterMock).toHaveBeenCalledWith({ dateRange: null });
+    // Feedback #138: clearing must produce `undefined` (no filter), not the
+    // filter-contract's NONE sentinel (`null`, "match photos with no date").
+    expect(setFilterMock).toHaveBeenCalledWith({ dateRange: undefined });
   });
 
   it("selects the clicked bucket's range on a single click", async () => {

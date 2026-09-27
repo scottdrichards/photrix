@@ -110,7 +110,12 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
   } = filter;
   const value = dateRange;
   const onChange = useCallback(
-    (range: Range) => setFilter({ dateRange: range }),
+    // Feedback #138: `null` here always means "clear the selection", never
+    // the filter-contract's NONE sentinel ("explicitly match photos with no
+    // date") -- this UI has no way to express that second thing. Passing
+    // `null` straight through to setFilter left a stray dates=_none in the
+    // URL and the Date icon lit up as active after clearing.
+    (range: Range) => setFilter({ dateRange: range ?? undefined }),
     [setFilter],
   );
   // Read the current selection inside the fetch effect without listing it as a
