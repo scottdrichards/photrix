@@ -184,7 +184,8 @@ export const interpretSearchQuery = async ({
 
   const raw = parseJsonObject(answer);
   if (!raw) {
-    log.warn({ answer: answer.slice(0, 200) }, "query interpretation was not JSON");
+    // Only the length: the model's answer restates the user's query.
+    log.warn({ answerLength: answer.length }, "query interpretation was not JSON");
     return { interpreted: false, reason: "malformed" };
   }
 
@@ -374,7 +375,8 @@ export const interpretSearchQuery = async ({
   if (visual) chips.push({ field: "semanticQuery", label: `“${visual}”` });
 
   log.info(
-    { query: trimmedQuery, chips: chips.length, ignored: ignored.length },
+    // Deliberately no query text: search history is private.
+    { chips: chips.length, ignored: ignored.length },
     "query interpreted",
   );
 

@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { rm } from "node:fs/promises";
 import { getLogger } from "../observability/logger.ts";
+import { pathToken } from "../observability/privacy.ts";
 import { closeHlsWatcher } from "./hlsSegmentWatcher.ts";
 
 const log = getLogger("HlsSession");
@@ -84,9 +85,13 @@ const reap = async (hlsDir: string): Promise<void> => {
 
   try {
     await rm(hlsDir, { recursive: true, force: true });
-    log.info({ hlsDir }, "Reaped ephemeral HLS after idle");
+    log.info({ hlsDir: pathToken(hlsDir) }, "Reaped ephemeral HLS after idle");
   } catch (err) {
-    log.warn({ err, hlsDir }, "Failed to reap HLS directory");
+    // Error code only: fs error messages quote the (path-mirroring) directory.
+    log.warn(
+      { code: (err as NodeJS.ErrnoException)?.code, hlsDir: pathToken(hlsDir) },
+      "Failed to reap HLS directory",
+    );
   }
 };
 
@@ -137,7 +142,7 @@ const armVariantIdle = (
     // restarts the encode (at whatever position is then requested) rather than waiting
     // on a process that is no longer running. The tree is still reaped on its own timer.
     killVariant(encode);
-    log.debug({ hlsDir, height }, "Reaped idle HLS variant encode");
+    log.debug({ hlsDir: pathToken(hlsDir), height }, "Reaped idle HLS variant encode");
   }, VARIANT_IDLE_MS);
   timer.unref?.();
   return timer;

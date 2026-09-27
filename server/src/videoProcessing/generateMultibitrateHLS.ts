@@ -7,6 +7,7 @@ import { existsSync } from "fs";
 import { getGpuAcceleration, type GpuAcceleration } from "./gpuAcceleration.ts";
 import { HLS_SEGMENT_SECONDS } from "./buildHlsPlaylist.ts";
 import { getLogger } from "../observability/logger.ts";
+import { pathToken } from "../observability/privacy.ts";
 import {
   getVideoSourceProfile,
   isHighBitDepthPixelFormat,
@@ -342,6 +343,13 @@ const stderrTail = (stderr: string): string =>
   stderr.trim().split("\n").slice(-3).join(" | ");
 
 /**
+ * ffmpeg's stderr quotes its input file and output directory; swap both for
+ * tokens so a failed encode's diagnostics don't record which video was played.
+ */
+const scrubEncodePaths = (text: string, filePath: string, hlsDir: string): string =>
+  text.split(filePath).join(pathToken(filePath)).split(hlsDir).join(pathToken(hlsDir));
+
+/**
  * Runs a single-variant HLS encode for one height, always from segment 0.
  * Writes segments + playlist into `{height}p/`. Falls back down the tiers if
  * hardware encoding fails.
@@ -523,7 +531,7 @@ const encodeVariant = (
               : "software (libx264)";
 
       log.info(
-        { hlsDir, variant: `${variant.height}p`, encoder: encoderLabel, rotation },
+        { hlsDir: pathToken(hlsDir), variant: `${variant.height}p`, encoder: encoderLabel, rotation },
         "HLS encode spawned",
       );
 
@@ -533,7 +541,7 @@ const encodeVariant = (
         if (!existsSync(firstSegment)) return;
         clearInterval(firstSegmentPoll);
         log.info(
-          { hlsDir, variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
+          { hlsDir: pathToken(hlsDir), variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
           "HLS first segment ready",
         );
       }, 100);
@@ -548,7 +556,7 @@ const encodeVariant = (
         clearInterval(firstSegmentPoll);
         if (code === 0) {
           log.info(
-            { hlsDir, variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
+            { hlsDir: pathToken(hlsDir), variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
             "HLS encode complete",
           );
           resolve();
@@ -565,7 +573,7 @@ const encodeVariant = (
         // and starving the variant they switched *to*.
         if (signal) {
           log.debug(
-            { hlsDir, variant: `${variant.height}p`, signal },
+            { hlsDir: pathToken(hlsDir), variant: `${variant.height}p`, signal },
             "HLS encode cancelled",
           );
           resolve();
@@ -584,7 +592,7 @@ const encodeVariant = (
           const nextTier: EncodeTier =
             useIntelGpuFrames ? "system-frames" : "software";
           log.warn(
-            { hlsDir, variant: `${variant.height}p`, nextTier, stderr: stderrTail(stderr) },
+            { hlsDir: pathToken(hlsDir), variant: `${variant.height}p`, nextTier, stderr: scrubEncodePaths(stderrTail(stderr), filePath, hlsDir) },
             "GPU encode failed, retrying on a lower tier",
           );
           encodeVariant(
@@ -602,7 +610,7 @@ const encodeVariant = (
         }
         // Surface the ffmpeg stderr tail so a failed encode is diagnosable
         // rather than an opaque "generation failed" with no cause.
-        const detail = stderrTail(stderr);
+        const detail = scrubEncodePaths(stderrTail(stderr), filePath, hlsDir);
         reject(
           new Error(
             `HLS ABR generation failed (exit ${code ?? "unknown"})${detail ? `: ${detail}` : ""}`,

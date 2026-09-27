@@ -1,6 +1,7 @@
 import { watch, existsSync, type FSWatcher } from "node:fs";
 import { EventEmitter } from "node:events";
 import { getLogger } from "../observability/logger.ts";
+import { pathToken } from "../observability/privacy.ts";
 
 const log = getLogger("HLS");
 
@@ -60,7 +61,10 @@ const getOrCreateWatcher = (hlsDir: string): EventEmitter => {
       if (watchers.get(hlsDir) === entry) watchers.delete(hlsDir);
       entry.watcher = undefined;
       closeQuietly(watcher);
-      log.debug({ err, hlsDir }, "HLS watcher error — falling back to polling");
+      log.debug(
+        { code: (err as NodeJS.ErrnoException)?.code, hlsDir: pathToken(hlsDir) },
+        "HLS watcher error — falling back to polling",
+      );
       emitter.emit("change");
     });
 
@@ -68,7 +72,10 @@ const getOrCreateWatcher = (hlsDir: string): EventEmitter => {
   } catch (err) {
     // The directory may not exist (yet). Waiters still work via polling.
     watchers.delete(hlsDir);
-    log.debug({ err, hlsDir }, "Could not watch HLS directory — falling back to polling");
+    log.debug(
+      { code: (err as NodeJS.ErrnoException)?.code, hlsDir: pathToken(hlsDir) },
+      "Could not watch HLS directory — falling back to polling",
+    );
   }
 
   return emitter;

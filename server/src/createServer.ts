@@ -31,6 +31,7 @@ import {
 import type { TaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import { writeJson } from "./utils.ts";
 import { getLogger } from "./observability/logger.ts";
+import { redactRequestPath } from "./observability/privacy.ts";
 import {
   extractToken,
   getShareScope,
@@ -252,7 +253,9 @@ export const createServer = (
           if (tracksActivity && (isAssetServe || isPhotoCaption || isSuggestRotation)) {
             taskOrchestrator.noteUserActivity();
           } else if (tracksActivity) {
-            const lease = taskOrchestrator.beginUserRequest(`${req.method} ${pathname}`);
+            const lease = taskOrchestrator.beginUserRequest(
+              `${req.method} ${redactRequestPath(pathname)}`,
+            );
             res.once("finish", lease.release);
             res.once("close", lease.release);
           }
