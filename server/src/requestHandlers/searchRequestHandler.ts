@@ -107,6 +107,18 @@ export const searchRequestHandler = async (
 
   const rawLimit = parseInt(url.searchParams.get("limit") ?? "50", 10);
   const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, rawLimit)) : 50;
+  // Feedback #141: lets the client page through results past the first
+  // screenful instead of being hard-capped at `limit`. The ranked candidate
+  // set below is already computed once per request regardless of offset (see
+  // CANDIDATE_LIMIT) — paging just slices a later window out of the same
+  // sorted array, so it costs nothing extra beyond widening that candidate
+  // set enough to cover the requested window.
+  const rawOffset = parseInt(url.searchParams.get("offset") ?? "0", 10);
+  // Capped the same way `limit` is capped above -- a page-through session is
+  // never going to need more than a few thousand results deep, and an
+  // unbounded offset would otherwise scale CANDIDATE_LIMIT (and thus every
+  // per-source scan) with it.
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.min(5000, rawOffset)) : 0;
   // Feedback #113: `total` used to just be `items.length` — always equal to
   // `limit` whenever there were at least that many hits, so the UI could
   // only ever report "50 results" no matter how many photos actually
@@ -120,7 +132,7 @@ export const searchRequestHandler = async (
   // Not the literal count of every photo in the library that matches (each
   // source is still its own top-N, not a full scan-and-count), but a much
   // more informative number than a number that was always exactly `limit`.
-  const CANDIDATE_LIMIT = Math.max(limit, 500);
+  const CANDIDATE_LIMIT = Math.max(offset + limit, 500);
 
   // Result ordering. Defaults to relevance (RRF rank). date/rating reorder the
   // top-N most-relevant hits by that field rather than re-selecting the library.
@@ -395,7 +407,7 @@ export const searchRequestHandler = async (
   const total = fused.size;
   const ranked = [...fused.values()]
     .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, limit);
+    .slice(offset, offset + limit);
   const items = sortSearchResults(ranked, sort).map(({ sources, ...rest }) => ({
     ...rest,
     sources: [...sources],

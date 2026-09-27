@@ -339,6 +339,8 @@ export type SemanticSearchResult = {
 export type FetchSemanticSearchOptions = {
   q: string;
   limit?: number;
+  /** Feedback #141: pages further into the same ranked result set. */
+  offset?: number;
   signal?: AbortSignal;
   /** Restrict the search to these sources; omit to use all of them. */
   searchSources?: SearchSource[];
