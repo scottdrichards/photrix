@@ -15,21 +15,6 @@
   box-shadow: var(--shadow-sm, 0 4px 14px rgba(0, 0, 0, 0.18));
 }
 
-.selectionBar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-m);
-  width: 100%;
-  padding-inline: var(--space-s);
-}
-
-.selectionCount {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--fg1);
-  margin-inline-end: auto;
-}
-
 .toggleContainer {
   display: flex;
   align-items: center;
