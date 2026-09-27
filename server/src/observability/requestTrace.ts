@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { logger } from "./logger.ts";
+import { redactRequestPath } from "./privacy.ts";
 import {
   context as otelContext,
   ROOT_CONTEXT,
@@ -52,14 +53,9 @@ const requestTraceStorage = new AsyncLocalStorage<RequestTraceContext>();
 
 const getTracer = () => trace.getTracer("photrix-server");
 
-const getRequestPathname = (url: string): string => {
-  try {
-    return new URL(url, "http://localhost").pathname;
-  } catch {
-    const [pathname] = url.split("?");
-    return pathname || "/";
-  }
-};
+// Logged, traced and exposed-as-diagnostics paths all go through the privacy
+// redactor: the raw URL carries search text and the library path being viewed.
+const getRequestPathname = (url: string): string => redactRequestPath(url);
 
 const getRequestRootSpanName = (method: string, url: string): string => {
   const normalizedMethod = method.trim().toUpperCase() || "UNKNOWN";
