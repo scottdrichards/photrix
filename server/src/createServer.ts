@@ -10,7 +10,10 @@ import { networkProbeRequestHandler } from "./requestHandlers/networkProbeReques
 import { dayPhotoRequestHandler } from "./requestHandlers/dayPhotoRequestHandler.ts";
 import { diagnosticsEventsRequestHandler } from "./requestHandlers/diagnosticsRequestHandler.ts";
 import { videoNegotiationRequestHandler } from "./requestHandlers/video/videoNegotiation.ts";
-import { searchRequestHandler } from "./requestHandlers/searchRequestHandler.ts";
+import {
+  searchRequestHandler,
+  searchStatusRequestHandler,
+} from "./requestHandlers/searchRequestHandler.ts";
 import { searchInterpretHandler } from "./requestHandlers/searchInterpretHandler.ts";
 import {
   authLoginHandler,
@@ -225,8 +228,11 @@ export const createServer = (
           // Exclude polling and health endpoints (especially the long-lived status
           // stream) entirely so routine checks don't keep the backlog paused.
           const pathname = req.url.split("?", 1)[0];
+          // /api/search/status is polled by the search UI while a query runs;
+          // it only reads in-process flags, so it must not count as activity.
           const tracksActivity =
             !req.url.startsWith("/api/status") &&
+            pathname !== "/api/search/status" &&
             !req.url.startsWith("/api/health") &&
             !req.url.startsWith("/api/network-probe");
           // Asset serving is a GET under /api/files/ whose path has no trailing
@@ -513,6 +519,11 @@ export const createServer = (
               return;
             }
             await searchInterpretHandler(req, res, { database });
+            return;
+          }
+
+          if (pathname === "/api/search/status" && req.method === "GET") {
+            searchStatusRequestHandler(res);
             return;
           }
 

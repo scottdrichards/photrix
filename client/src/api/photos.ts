@@ -1,6 +1,7 @@
 import { serializeSort } from "../../../shared/filter-contract/src";
 import { buildFilters, filtersToParam } from "./filters";
-import { fetchJsonOrThrow } from "./http";
+import { fetchJsonOrThrow, fetchWithDiagnostics } from "./http";
+import { SearchUnavailableError, type SearchSourceStatus } from "./searchStatus";
 import { buildFilesQueryUrl, buildFileUrl, createPhotoItem, DEFAULT_METADATA_KEYS } from "./photoItem";
 import type {
   ApiPhotoResponse,
@@ -294,6 +295,7 @@ export const fetchDateHistogram = async ({
 export const fetchSemanticSearch = async ({
   q,
   limit = 50,
+  offset = 0,
   signal,
   searchSources,
   includeSubfolders = false,
@@ -309,10 +311,13 @@ export const fetchSemanticSearch = async ({
   cameraModelFilter,
   lensFilter,
   sortBy,
-}: FetchSemanticSearchOptions): Promise<FetchPhotosResult & { query: string }> => {
+}: FetchSemanticSearchOptions): Promise<
+  FetchPhotosResult & { query: string; sourceStatus?: SearchSourceStatus }
+> => {
   const params = new URLSearchParams();
   params.set("q", q.trim());
   params.set("limit", String(limit));
+  if (offset > 0) params.set("offset", String(offset));
   if (includeSubfolders) params.set("includeSubfolders", "true");
   if (path) params.set("path", path);
   // Only send `sources` when a subset is selected; absent means "all sources".
@@ -337,12 +342,25 @@ export const fetchSemanticSearch = async ({
     items: (import("./types").ApiPhotoItem & { similarity: number; sources?: import("./types").SearchSource[] })[];
     total: number;
     query: string;
+    sourceStatus?: SearchSourceStatus;
   };
-  const payload = await fetchJsonOrThrow<SemanticSearchResult>(
+  const response = await fetchWithDiagnostics(
     `/api/search?${params.toString()}`,
     "semantic search",
     { signal },
   );
+  if (response.status === 503) {
+    // Every model-backed source failed and nothing else matched. The body says
+    // which sources failed and why, which is what the UI shows the user.
+    const body = (await response.json().catch(() => ({}))) as {
+      sourceStatus?: SearchSourceStatus;
+    };
+    throw new SearchUnavailableError(body.sourceStatus ?? {});
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to semantic search (status ${response.status})`);
+  }
+  const payload = (await response.json()) as SemanticSearchResult;
 
   return {
     items: payload.items.map((item) => ({
@@ -353,6 +371,7 @@ export const fetchSemanticSearch = async ({
     page: 1,
     pageSize: limit,
     query: payload.query,
+    sourceStatus: payload.sourceStatus,
   };
 };
 

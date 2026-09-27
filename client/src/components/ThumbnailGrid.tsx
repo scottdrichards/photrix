@@ -1,12 +1,18 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { QuestionCircle20Filled, QuestionCircle20Regular } from "@fluentui/react-icons";
-import type { MomentClusterMember, PhotoItem } from "../api";
-import { fetchMomentClusterDetail, fetchPhotos, fetchSemanticSearch } from "../api";
+import type { MomentClusterMember, PhotoItem, SearchSource, SearchSourceStatus } from "../api";
+import {
+  fetchMomentClusterDetail,
+  fetchPhotos,
+  fetchSemanticSearch,
+  SearchUnavailableError,
+} from "../api";
 import { Spinner } from "../Spinner";
 import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { ThumbnailTile } from "./ThumbnailTile";
 import { PhotoStackModal } from "./PhotoStackModal";
+import { SearchStatus } from "./SearchStatus";
 import { SelectionActionBar } from "./SelectionActionBar";
 import { SortControl } from "./SortControl";
 import { SortDockPortal } from "./SortDockPortal";
@@ -17,6 +23,14 @@ import css from "./ThumbnailGrid.module.css";
 
 const PAGE_SIZE = 200;
 /**
+ * Feedback #141: search used to hard-cap at one screenful (the server's
+ * default `limit`) with no way to see more. Paginating it the same way the
+ * plain library grid does needs a page size in actual request terms (limit +
+ * offset), unlike PAGE_SIZE above which only applies to the library grid's
+ * own page/pageSize API shape.
+ */
+const SEARCH_PAGE_SIZE = 50;
+/**
  * How far below the last loaded tile the next page is requested. The sentinel
  * sits at the very end of the grid, so this is the entire warning the fetch
  * gets: at 200px the user reached the bottom of the content and *then* waited
@@ -26,6 +40,7 @@ const PAGE_SIZE = 200;
  */
 const LOAD_MORE_MARGIN_PX = 2000;
 const numberFormatter = new Intl.NumberFormat();
+const ALL_SEARCH_SOURCES: readonly SearchSource[] = ["image", "audio", "transcript"];
 
 type ThumbnailGridProps = {
   view: "library" | "people";
@@ -46,6 +61,11 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Per-source outcome of the current search (which modalities answered, which
+  // timed out and why), shown by SearchStatus. Null outside search.
+  const [searchOutcome, setSearchOutcome] = useState<SearchSourceStatus | null>(null);
+  // Bumped by SearchStatus's Retry to re-run the same search.
+  const [retryNonce, setRetryNonce] = useState(0);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   // Feedback #112: per-tile "why did this match" icons (image/audio/
   // transcript source badges) are debug clutter for ordinary search
@@ -154,10 +174,15 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
     const { semanticQuery, ...filterOptions } = filter;
 
     setLoading(true);
+    // A new query starts clean: an error from an earlier search must not stay
+    // on screen over this one's results.
+    setError(null);
 
     const fetchPromise = semanticQuery
       ? fetchSemanticSearch({
           q: semanticQuery,
+          limit: SEARCH_PAGE_SIZE,
+          offset: (page - 1) * SEARCH_PAGE_SIZE,
           signal: abortController.signal,
           ...filterOptions,
         })
@@ -170,8 +195,13 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
 
     fetchPromise
       .then((result) => {
+        if (page === 1) {
+          setSearchOutcome(
+            semanticQuery && "sourceStatus" in result ? (result.sourceStatus ?? null) : null,
+          );
+        }
         setData((previousData) => {
-          if (semanticQuery || page === 1 || !previousData) {
+          if (page === 1 || !previousData) {
             return { ...result, filterUsed: filter };
           }
 
@@ -191,6 +221,14 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
       .catch((err) => {
         if (err === "disposed") return;
         if (err.name === "AbortError") return;
+        if (err instanceof SearchUnavailableError) {
+          // Nothing to show yet because the models are loading. Clear the old
+          // results (they belong to a different query) and let SearchStatus
+          // explain which source is missing and offer a retry.
+          setSearchOutcome(err.sourceStatus);
+          setData({ items: [], total: 0, filterUsed: filter });
+          return;
+        }
         setError(
           semanticQuery
             ? "Search models are still loading. Try again in a few seconds."
@@ -198,13 +236,16 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
         );
       })
       .finally(() => {
-        setLoading(false);
+        // An aborted fetch settles *after* its replacement has started, so
+        // clearing `loading` here would mark the newer, still-running query as
+        // finished — editing a search mid-flight made the grid look idle.
+        if (!abortController.signal.aborted) setLoading(false);
       });
 
     return () => {
       abortController.abort(abortOnDisposed);
     };
-  }, [filter, page]);
+  }, [filter, page, retryNonce]);
 
   useEffect(() => {
     setItems(data?.items ?? []);
@@ -216,7 +257,7 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
 
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
-    if (!sentinel || loading || filter.semanticQuery) {
+    if (!sentinel || loading) {
       return;
     }
     const observer = new IntersectionObserver(
@@ -237,19 +278,26 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
     return () => {
       observer.disconnect();
     };
-  }, [loading, data?.items.length, data?.total, filter.semanticQuery]);
+  }, [loading, data?.items.length, data?.total]);
 
   const isStale = loading && !!data && page === 1;
+  const searchFailedSomewhere = Object.values(searchOutcome ?? {}).some(
+    (outcome) => outcome?.status === "failed",
+  );
+  const handleRetrySearch = () => {
+    setPage(1);
+    setRetryNonce((n) => n + 1);
+  };
   const emptyMessage = filter.semanticQuery
     ? "No results found for your search."
     : "No photos yet. Upload some to get started.";
-  // Feedback #113: a semantic search's `total` (see searchRequestHandler) can
-  // now legitimately exceed the single page of items actually rendered,
-  // since semantic search has no "load more" (the sentinel below is gated
-  // off for it) — say "Showing 50 of 312" so it's clear more results exist
-  // than are on screen. The plain "{N} results" case was dropped: the header
-  // subtitle already shows the live total (in its own accent color), so
-  // repeating it here was redundant.
+  // Feedback #113/#141: a semantic search's `total` (see searchRequestHandler)
+  // can exceed the items rendered so far -- scrolling to the sentinel below
+  // now loads the next page (#141; it used to be capped with no way to see
+  // more) — say "Showing 50 of 312" so it's clear there's more to scroll to.
+  // The plain "{N} results" case was dropped: the header subtitle already
+  // shows the live total (in its own accent color), so repeating it here was
+  // redundant.
   const resultCountLabel =
     data && filter.semanticQuery && data.items.length < data.total
       ? `Showing ${numberFormatter.format(data.items.length)} of ${numberFormatter.format(data.total)} results`
@@ -269,6 +317,14 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
           pinned to the bottom-right — see SortDockPortal. */}
       <SortDockPortal>{data && <SortControl />}</SortDockPortal>
       {error ? <h3>{error}</h3> : null}
+      {filter.semanticQuery && (
+        <SearchStatus
+          searching={loading && page === 1}
+          outcome={loading && page === 1 ? null : searchOutcome}
+          enabledSources={filter.searchSources ?? ALL_SEARCH_SOURCES}
+          onRetry={handleRetrySearch}
+        />
+      )}
       {data ? (
         <div className={css.statusRow} aria-live="polite">
           {resultCountLabel && <span>{resultCountLabel}</span>}
@@ -385,13 +441,17 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
             />
           );
         })}
-        {!filter.semanticQuery && data && data.items.length < data.total && (
+        {data && data.items.length < data.total && (
           <div ref={loadMoreSentinelRef} className={css.sentinel}>
             {loading && <Spinner size="extra-tiny" />}
           </div>
         )}
       </div>
-      {!loading && data && data.items.length === 0 && <h3>{emptyMessage}</h3>}
+      {/* When a source failed, SearchStatus already explains the gap, and
+          "no results found" would claim a certainty the search doesn't have. */}
+      {!loading && data && data.items.length === 0 && !searchFailedSomewhere && (
+        <h3>{emptyMessage}</h3>
+      )}
       <SelectionActionBar />
       <PhotoStackModal
         clusterId={expandedStackClusterId}
