@@ -984,6 +984,13 @@ describe("FullscreenViewer", () => {
       expect(screen.getByRole("img", { name: "1.jpg" })).toBeInTheDocument();
       expect(container.querySelector("video")).toBeNull();
 
+      // Feedback #136: the toggle used to give no visual sign of which
+      // state it was in.
+      expect(screen.getByRole("button", { name: "Play live photo" })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
+
       fireEvent.click(screen.getByRole("button", { name: "Play live photo" }));
 
       expect(screen.queryByRole("img", { name: "1.jpg" })).not.toBeInTheDocument();
@@ -991,6 +998,10 @@ describe("FullscreenViewer", () => {
         container.querySelector("video[src='http://localhost/a/1.MOV']"),
       ).not.toBeNull();
       expect(screen.getByRole("button", { name: "Show photo" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show photo" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
     });
 
     it("clicking live photo button again switches back to the still image", () => {

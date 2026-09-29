@@ -1,17 +1,30 @@
-import { Dismiss24Regular } from "@fluentui/react-icons";
+import { useMemo, useState } from "react";
+import { ArrowDownload24Regular, Dismiss24Regular, Share24Regular } from "@fluentui/react-icons";
 import { updatePhotoMetadata } from "../api";
 import { useSelectionContext } from "./selection/SelectionContext";
+import { ShareOptionsModal } from "./ShareOptionsModal";
 import { StarRating } from "./StarRating";
 import { TagEditor } from "./TagEditor";
 import css from "./SelectionActionBar.module.css";
 
 /**
  * Floating bar shown while items are checked in selection mode. Applies a star
- * rating or a label to every checked photo at once (optimistic + persisted).
+ * rating or a label to every checked photo at once (optimistic + persisted),
+ * and — feedback #142 — is also the one place Share and Download live for the
+ * selection: they used to sit in a second, independent floating bar
+ * (ViewToggle's own "N selected" pill) with no connection to this one, so a
+ * selection had two different bars both claiming to say how many items were
+ * checked.
  */
 export function SelectionActionBar() {
   const { selectionMode, checkedPaths, items, applyMetadataOverride, exitSelectionMode } =
     useSelectionContext();
+  const [exportMode, setExportMode] = useState<"share" | "download" | null>(null);
+
+  const selectedPhotos = useMemo(
+    () => items.filter((item) => checkedPaths.has(item.path)),
+    [items, checkedPaths],
+  );
 
   if (!selectionMode || checkedPaths.size === 0) return null;
 
@@ -48,32 +61,60 @@ export function SelectionActionBar() {
   };
 
   return (
-    <div className={css.bar} role="toolbar" aria-label="Selection tagging actions">
-      <span className={css.count}>{checkedPaths.size} selected</span>
-      <span className={css.divider} aria-hidden="true" />
-      <StarRating
-        value={commonRating}
-        onChange={setRating}
-        label="Rate selected photos"
-      />
-      <span className={css.divider} aria-hidden="true" />
-      <TagEditor
-        tags={[]}
-        onChange={(next) => {
-          const added = next[next.length - 1];
-          if (added) addLabel(added);
-        }}
-        placeholder="Label selected…"
-      />
-      <button
-        type="button"
-        className={css.close}
-        onClick={exitSelectionMode}
-        aria-label="Exit selection"
-        title="Exit selection"
-      >
-        <Dismiss24Regular />
-      </button>
-    </div>
+    <>
+      {exportMode && (
+        <ShareOptionsModal
+          photos={selectedPhotos}
+          mode={exportMode}
+          onClose={() => setExportMode(null)}
+        />
+      )}
+      <div className={css.bar} role="toolbar" aria-label="Selection tagging actions">
+        <span className={css.count}>{checkedPaths.size} selected</span>
+        <span className={css.divider} aria-hidden="true" />
+        <StarRating
+          value={commonRating}
+          onChange={setRating}
+          label="Rate selected photos"
+        />
+        <span className={css.divider} aria-hidden="true" />
+        <TagEditor
+          tags={[]}
+          onChange={(next) => {
+            const added = next[next.length - 1];
+            if (added) addLabel(added);
+          }}
+          placeholder="Label selected…"
+        />
+        <span className={css.divider} aria-hidden="true" />
+        <button
+          type="button"
+          className={css.iconAction}
+          onClick={() => setExportMode("share")}
+          aria-label="Share selected"
+          title="Share selected"
+        >
+          <Share24Regular fontSize={18} />
+        </button>
+        <button
+          type="button"
+          className={css.iconAction}
+          onClick={() => setExportMode("download")}
+          aria-label="Download selected"
+          title="Download selected"
+        >
+          <ArrowDownload24Regular fontSize={18} />
+        </button>
+        <button
+          type="button"
+          className={css.close}
+          onClick={exitSelectionMode}
+          aria-label="Exit selection"
+          title="Exit selection"
+        >
+          <Dismiss24Regular />
+        </button>
+      </div>
+    </>
   );
 }

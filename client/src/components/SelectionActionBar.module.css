@@ -29,6 +29,26 @@
   background: rgba(255, 255, 255, 0.22);
 }
 
+/* Feedback #142: Share/Download used to live in a separate floating bar
+   (ViewToggle's own selection pill); same icon-only circular treatment as
+   .close below so they read as one family of actions in this bar. */
+.iconAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.iconAction:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
 .close {
   display: inline-flex;
   align-items: center;

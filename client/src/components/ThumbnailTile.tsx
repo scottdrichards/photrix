@@ -741,6 +741,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           autoPlay
           preload="none"
           onEnded={livePhoto.handleEnded}
+          onPlaying={livePhoto.handlePlaying}
           aria-hidden="true"
         />
       ) : null}

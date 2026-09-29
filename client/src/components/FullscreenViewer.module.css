@@ -383,6 +383,12 @@
   background-color: var(--viewer-overlay-bg-hover);
 }
 
+/* Feedback #136: the toggle had no visible on/off state at all. */
+.livePhotoButtonActive {
+  color: var(--brand, #2563eb);
+  background-color: var(--viewer-overlay-bg-hover);
+}
+
 .navButton {
   position: absolute;
   top: 50%;

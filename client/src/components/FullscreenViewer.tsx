@@ -8,6 +8,7 @@ import {
   Dismiss24Regular,
   ImageEdit24Regular,
   Info24Regular,
+  Live24Filled,
   Live24Regular,
   Print24Regular,
   ScanPerson24Regular,
@@ -1377,11 +1378,18 @@ export function FullscreenViewer() {
                 <button
                   type="button"
                   onClick={() => setShowLiveVideo((v) => !v)}
-                  className={css.livePhotoButton}
+                  // Feedback #136: this toggled the still/live view with no
+                  // visual sign of which one was current -- the icon never
+                  // changed, only the (invisible-until-hover) title/aria-label
+                  // text did. Filled + an active background when live video
+                  // is showing, matching the same on/off pattern the grid's
+                  // own live badge already uses.
+                  className={`${css.livePhotoButton} ${showLiveVideo ? css.livePhotoButtonActive : ""}`}
+                  aria-pressed={showLiveVideo}
                   aria-label={showLiveVideo ? "Show photo" : "Play live photo"}
                   title={showLiveVideo ? "Show photo" : "Play live photo"}
                 >
-                  <Live24Regular />
+                  {showLiveVideo ? <Live24Filled /> : <Live24Regular />}
                 </button>
               )}
               {!editMode && currentIndex > 0 && (
@@ -1485,6 +1493,14 @@ export function FullscreenViewer() {
                   loop
                   playsInline
                   muted
+                  // Feedback #136: with no preload hint, some mobile browsers
+                  // default to fetching only metadata and don't start
+                  // downloading the actual clip until autoplay kicks in --
+                  // this is a single clip the user explicitly asked to see
+                  // (unlike the grid's ambient previews, which deliberately
+                  // preload="none" to avoid fetching clips nobody asked for),
+                  // so eagerly fetching it is the right tradeoff here.
+                  preload="auto"
                   className={css.media}
                 />
               ) : editMode ? (

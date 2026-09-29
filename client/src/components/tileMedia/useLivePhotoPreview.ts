@@ -10,6 +10,17 @@ import {
 const AMBIENT_MAX_MS = 3200;
 /** Must match the CSS opacity transition so the element outlives its fade-out. */
 const FADE_MS = 420;
+/**
+ * Feedback #136: on some mobile browsers (reported on Edge/Android) a plain
+ * `<video autoPlay>` can silently fail to actually start — no rejected
+ * play() promise to catch, since nothing here calls .play() explicitly, the
+ * clip just never paints a frame. Without this, the badge (isVisible, below)
+ * still flips to its "playing" look and stays that way indefinitely, because
+ * it was driven by "we asked the video to play", not "the video is actually
+ * playing". If the video hasn't fired `playing` within this window, treat it
+ * as a blocked autoplay and stop instead of leaving a stuck, lying badge.
+ */
+const PLAY_CONFIRM_TIMEOUT_MS = 1500;
 
 type Options = {
   livePhotoUrl: string | undefined;
@@ -27,6 +38,8 @@ export type LivePhotoPreview = {
   isVisible: boolean;
   /** Hand back to the element so a clip that finishes early releases its slot. */
   handleEnded: () => void;
+  /** Feedback #136: confirms actual playback started; wire to onPlaying. */
+  handlePlaying: () => void;
 };
 
 /**
@@ -47,6 +60,9 @@ export const useLivePhotoPreview = ({
   const [mode, setMode] = useState<"hover" | "ambient" | null>(null);
   const [isMounted, setIsMounted] = useState(false);
   const releaseRef = useRef<(() => void) | null>(null);
+  // Feedback #136 — see PLAY_CONFIRM_TIMEOUT_MS above.
+  const hasStartedPlayingRef = useRef(false);
+  const playWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Only held while playing because the user deliberately hovered (not for
   // the unattended idle rotation) — see suppressAmbientPlayback's contract.
   const deliberateReleaseRef = useRef<(() => void) | null>(null);
@@ -61,6 +77,10 @@ export const useLivePhotoPreview = ({
     if (unmountRef.current !== null) {
       clearTimeout(unmountRef.current);
       unmountRef.current = null;
+    }
+    if (playWatchdogRef.current !== null) {
+      clearTimeout(playWatchdogRef.current);
+      playWatchdogRef.current = null;
     }
   };
 
@@ -79,6 +99,7 @@ export const useLivePhotoPreview = ({
       // Detached element — nothing to pause.
     }
     setMode(null);
+    hasStartedPlayingRef.current = false;
     unmountRef.current = setTimeout(() => {
       unmountRef.current = null;
       const el = videoRef.current;
@@ -92,6 +113,24 @@ export const useLivePhotoPreview = ({
     }, FADE_MS);
   }, []);
 
+  // Feedback #136: arms (or re-arms) the autoplay-confirmation watchdog.
+  // Pulled out of `start` because `clearTimers()` unconditionally clears any
+  // watchdog already running — the hover-takeover branch below calls it too,
+  // and without re-arming here that path would silently disable the
+  // watchdog for the rest of that clip's life instead of giving it a fresh
+  // confirmation window. A no-op once playback is already confirmed.
+  const armPlayWatchdog = useCallback(() => {
+    if (playWatchdogRef.current !== null) {
+      clearTimeout(playWatchdogRef.current);
+      playWatchdogRef.current = null;
+    }
+    if (hasStartedPlayingRef.current) return;
+    playWatchdogRef.current = setTimeout(() => {
+      playWatchdogRef.current = null;
+      if (!hasStartedPlayingRef.current) stop();
+    }, PLAY_CONFIRM_TIMEOUT_MS);
+  }, [stop]);
+
   const start = useCallback(
     (next: "hover" | "ambient") => {
       if (!livePhotoUrl) return;
@@ -101,6 +140,7 @@ export const useLivePhotoPreview = ({
         if (next === "hover") {
           clearTimers();
           setMode("hover");
+          armPlayWatchdog();
           // The rotation started this one unattended, so it never claimed the
           // deliberate-preview slot. The hover takeover means it must now,
           // so any other ambient clip elsewhere stops too.
@@ -133,9 +173,21 @@ export const useLivePhotoPreview = ({
       if (next === "ambient") {
         autoStopRef.current = setTimeout(stop, AMBIENT_MAX_MS);
       }
+      hasStartedPlayingRef.current = false;
+      armPlayWatchdog();
     },
-    [livePhotoUrl, stop],
+    [livePhotoUrl, stop, armPlayWatchdog],
   );
+
+  // Confirms the clip is actually rendering frames, not just requested —
+  // clears the watchdog above. Wire this to the <video>'s onPlaying.
+  const handlePlaying = useCallback(() => {
+    hasStartedPlayingRef.current = true;
+    if (playWatchdogRef.current !== null) {
+      clearTimeout(playWatchdogRef.current);
+      playWatchdogRef.current = null;
+    }
+  }, []);
 
   // Hover is authoritative: entering starts, leaving stops (even a clip the
   // rotation had started, which is the least surprising behaviour).
@@ -174,5 +226,5 @@ export const useLivePhotoPreview = ({
     if (mode === "ambient") stop();
   }, [mode, stop]);
 
-  return { videoRef, isMounted, isVisible: mode !== null, handleEnded };
+  return { videoRef, isMounted, isVisible: mode !== null, handleEnded, handlePlaying };
 };
