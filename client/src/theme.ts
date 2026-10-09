@@ -49,9 +49,14 @@ export const getInitialTheme = (): Theme => {
   return getStoredThemeOverride() ?? getSystemTheme();
 };
 
+// Matches --bg-canvas-start in styles.css, so the browser/installed-app title
+// bar blends into the page instead of following the OS theme.
+const THEME_COLORS: Record<Theme, string> = { light: "#f7f7f7", dark: "#11161d" };
+
 export const applyTheme = (theme: Theme): void => {
   if (typeof document === "undefined") return;
   document.documentElement.dataset.theme = theme;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLORS[theme]);
 };
 
 export const persistThemeOverride = (themeOverride: ThemeOverride): void => {
