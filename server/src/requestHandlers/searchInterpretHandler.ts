@@ -92,7 +92,7 @@ export const searchInterpretHandler = async (
   } catch (error) {
     // Never surface an error status: the client would treat it as a broken
     // search rather than as "no interpretation available".
-    log.warn({ err: error, query }, "interpretation failed");
+    log.warn({ err: error }, "interpretation failed");
     writeJson(res, 200, { interpreted: false, reason: "error" });
     return;
   }

@@ -435,7 +435,8 @@ export const searchRequestHandler = async (
   }
 
   log.info(
-    { q, items: items.length, total, ms: Date.now() - requestStart, timings, stageTimings },
+    // Deliberately no `q`: what people search for is private (see privacy.ts).
+    { items: items.length, total, ms: Date.now() - requestStart, timings, stageTimings },
     "search complete",
   );
 
