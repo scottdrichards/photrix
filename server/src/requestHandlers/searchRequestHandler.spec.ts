@@ -41,15 +41,21 @@ const transcriptRow = {
   similarity: 0.6,
 };
 
+type ModelState = "ready" | "loading" | "cold" | "unavailable";
+
 const loadHandler = async (mocks: {
   embedText?: () => Promise<Float32Array>;
   embedTextWithClap?: () => Promise<Float32Array>;
+  imageState?: ModelState;
+  audioState?: ModelState;
 }) => {
   jest.unstable_mockModule("../imageAnalysis/imageAnalysisWorker.ts", () => ({
     embedText: mocks.embedText ?? (async () => new Float32Array([1])),
+    getImageSearchModelState: () => mocks.imageState ?? "ready",
   }));
   jest.unstable_mockModule("../audioProcessing/clapWorker.ts", () => ({
     embedTextWithClap: mocks.embedTextWithClap ?? (async () => new Float32Array([1])),
+    getAudioSearchModelState: () => mocks.audioState ?? "ready",
   }));
   const { searchRequestHandler } = await import("./searchRequestHandler.ts");
   return searchRequestHandler;
@@ -528,5 +534,95 @@ describe("searchRequestHandler resilience", () => {
     await handler(makeReq("beach", 2, 4), res3, { database });
     const page3 = getJson3();
     expect(page3.items.map((i: { fileName: string }) => i.fileName)).toEqual(["beach4.jpg"]);
+  });
+});
+
+describe("searchRequestHandler source status", () => {
+  const database = () =>
+    ({
+      semanticSearch: jest.fn(async () => []),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => [transcriptRow]),
+    }) as unknown as IndexDatabase;
+
+  it("reports a source that timed out while its model was cold as 'loading'", async () => {
+    const handler = await loadHandler({
+      embedText: () => new Promise<Float32Array>(() => {}),
+      imageState: "cold",
+    });
+    const { res, getJson } = createJsonResponse();
+    await handler(makeReq("beach"), res, { database: database() });
+
+    const { sourceStatus } = getJson();
+    expect(sourceStatus.image).toMatchObject({ status: "failed", reason: "loading" });
+    expect(sourceStatus.audio.status).toBe("ok");
+    expect(sourceStatus.transcript.status).toBe("ok");
+  });
+
+  it("reports a warm model that was too slow as 'timeout', not 'loading'", async () => {
+    const handler = await loadHandler({
+      embedText: () => new Promise<Float32Array>(() => {}),
+      imageState: "ready",
+    });
+    const { res, getJson } = createJsonResponse();
+    await handler(makeReq("beach"), res, { database: database() });
+
+    expect(getJson().sourceStatus.image).toMatchObject({
+      status: "failed",
+      reason: "timeout",
+    });
+  });
+
+  it("marks sources left out of the `sources` param as skipped", async () => {
+    const handler = await loadHandler({});
+    const { res, getJson } = createJsonResponse();
+    const req = makeReq("beach");
+    req.url += "&sources=transcript";
+    await handler(req, res, { database: database() });
+
+    const { sourceStatus } = getJson();
+    expect(sourceStatus.image).toEqual({ status: "skipped" });
+    expect(sourceStatus.audio).toEqual({ status: "skipped" });
+  });
+
+  it("carries the source status on a 503 too", async () => {
+    const handler = await loadHandler({
+      embedText: () => new Promise<Float32Array>(() => {}),
+      embedTextWithClap: () => new Promise<Float32Array>(() => {}),
+      imageState: "loading",
+      audioState: "cold",
+    });
+    const empty = {
+      semanticSearch: jest.fn(async () => []),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => []),
+    } as unknown as IndexDatabase;
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(makeReq("beach"), res, { database: empty });
+
+    expect(getStatus()).toBe(503);
+    expect(getJson().sourceStatus.image.reason).toBe("loading");
+    expect(getJson().sourceStatus.audio.reason).toBe("loading");
+  });
+});
+
+describe("searchStatusRequestHandler", () => {
+  it("reports each source's model state, transcript always ready", async () => {
+    jest.unstable_mockModule("../imageAnalysis/imageAnalysisWorker.ts", () => ({
+      embedText: async () => new Float32Array([1]),
+      getImageSearchModelState: () => "loading",
+    }));
+    jest.unstable_mockModule("../audioProcessing/clapWorker.ts", () => ({
+      embedTextWithClap: async () => new Float32Array([1]),
+      getAudioSearchModelState: () => "unavailable",
+    }));
+    const { searchStatusRequestHandler } = await import("./searchRequestHandler.ts");
+    const { res, getStatus, getJson } = createJsonResponse();
+    searchStatusRequestHandler(res);
+
+    expect(getStatus()).toBe(200);
+    expect(getJson()).toEqual({
+      sources: { image: "loading", audio: "unavailable", transcript: "ready" },
+    });
   });
 });

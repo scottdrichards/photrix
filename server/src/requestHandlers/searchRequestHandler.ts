@@ -7,8 +7,12 @@ import {
   type SortOption,
 } from "../../../shared/filter-contract/src/index.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import { embedText } from "../imageAnalysis/imageAnalysisWorker.ts";
-import { embedTextWithClap } from "../audioProcessing/clapWorker.ts";
+import {
+  embedText,
+  getImageSearchModelState,
+  type SearchModelState,
+} from "../imageAnalysis/imageAnalysisWorker.ts";
+import { embedTextWithClap, getAudioSearchModelState } from "../audioProcessing/clapWorker.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../utils.ts";
 
@@ -38,6 +42,32 @@ const CLIP_MIN_SIMILARITY = Number(
 const CLAP_MIN_SIMILARITY = Number(
   process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.52,
 );
+
+/**
+ * Readiness of the model behind each search source. Transcript search is plain
+ * SQL, so it is always ready. Cheap to call: it reads in-process flags only and
+ * never spawns or wakes a worker.
+ */
+export const getSearchSourceStates = (): Record<SearchSource, SearchModelState> => ({
+  image: getImageSearchModelState(),
+  audio: getAudioSearchModelState(),
+  transcript: "ready",
+});
+
+/**
+ * What happened to one source in a search, so the client can say why a
+ * modality is missing from the results instead of silently showing fewer.
+ * `loading` means it timed out while its model was still being loaded — the
+ * common, self-resolving case — as opposed to a warm model that was too slow.
+ */
+export type SearchSourceOutcome =
+  | { status: "ok"; ms?: number }
+  | { status: "skipped" }
+  | { status: "failed"; reason: "loading" | "timeout" | "error"; ms?: number };
+
+/** GET /api/search/status — per-source model readiness for the search UI. */
+export const searchStatusRequestHandler = (res: http.ServerResponse): void =>
+  writeJson(res, 200, { sources: getSearchSourceStates() });
 
 type Options = {
   database: IndexDatabase;
@@ -104,6 +134,9 @@ export const searchRequestHandler = async (
   }
 
   const requestStart = Date.now();
+  // Snapshot before the embeds start: a failure is "still loading" if the model
+  // wasn't warm when this search began, whatever state it reached by the end.
+  const statesAtStart = getSearchSourceStates();
 
   const rawLimit = parseInt(url.searchParams.get("limit") ?? "50", 10);
   const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, rawLimit)) : 50;
@@ -342,6 +375,31 @@ export const searchRequestHandler = async (
     return kept;
   };
 
+  const outcomeFor = (
+    source: SearchSource,
+    label: string,
+    enabled: boolean,
+    result: PromiseSettledResult<unknown>,
+  ): SearchSourceOutcome => {
+    if (!enabled) return { status: "skipped" };
+    if (result.status === "fulfilled") return { status: "ok", ms: timings[label] };
+    const message =
+      result.reason instanceof Error ? result.reason.message : String(result.reason);
+    const timedOut = message.includes("timed out");
+    const reason =
+      statesAtStart[source] !== "ready" && statesAtStart[source] !== "unavailable"
+        ? "loading"
+        : timedOut
+          ? "timeout"
+          : "error";
+    return { status: "failed", reason, ms: timings[label] };
+  };
+  const sourceStatus: Record<SearchSource, SearchSourceOutcome> = {
+    image: outcomeFor("image", "clip", useImage, clipResult),
+    audio: outcomeFor("audio", "clap", useAudio, clapResult),
+    transcript: outcomeFor("transcript", "transcript", useTranscript, transcriptResult),
+  };
+
   const clipHits = applyFloor("clip", useImage, clipResult, CLIP_MIN_SIMILARITY);
   const clapHits = applyFloor("clap", useAudio, clapResult, CLAP_MIN_SIMILARITY);
   const transcriptHits =
@@ -430,6 +488,7 @@ export const searchRequestHandler = async (
     return writeJson(res, 503, {
       error: "Search workers unavailable",
       message,
+      sourceStatus,
       hint: "Run: npm --prefix server run clip:python:install",
     });
   }
@@ -444,6 +503,7 @@ export const searchRequestHandler = async (
     items,
     total,
     query: q,
+    sourceStatus,
     ...(debug ? { _diagnostics: diagnostics } : {}),
   });
 };

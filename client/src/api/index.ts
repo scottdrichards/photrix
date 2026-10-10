@@ -105,6 +105,13 @@ export { negotiateVideoPlayback, fetchTranscriptSegments } from "./video";
 
 export { interpretSearchQuery } from "./naturalLanguageSearch";
 
+export type {
+  SearchModelState,
+  SearchSourceOutcome,
+  SearchSourceStatus,
+} from "./searchStatus";
+export { fetchSearchStatus, SearchUnavailableError } from "./searchStatus";
+
 export type { FeedbackItem, FeedbackStatus } from "./feedback";
 export { fetchFeedbackItems } from "./feedback";
 
