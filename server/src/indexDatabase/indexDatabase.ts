@@ -5718,6 +5718,33 @@ export class IndexDatabase {
   }
 
   /**
+   * Every photo and video, newest first, for the overnight grid-thumbnail
+   * backfill (imageProcessing/thumbnailBackfill.ts). Which ones still need work
+   * is decided against the cache on disk, not a column here, so a dropped cache
+   * entry is regenerated on the next pass.
+   */
+  async getThumbnailBackfillCandidates(): Promise<
+    Array<{ relativePath: string; mimeType: string; sizeInBytes: number | null }>
+  > {
+    const rows = await this.db.all<{
+      folder: string;
+      fileName: string;
+      mimeType: string;
+      sizeInBytes: number | null;
+    }>(
+      `SELECT folder, fileName, mimeType, sizeInBytes
+       FROM files
+       WHERE mimeType LIKE 'image/%' OR mimeType LIKE 'video/%'
+       ORDER BY dateTaken IS NULL, dateTaken DESC`,
+    );
+    return rows.map((row) => ({
+      relativePath: joinPath(row.folder, row.fileName),
+      mimeType: row.mimeType,
+      sizeInBytes: row.sizeInBytes,
+    }));
+  }
+
+  /**
    * Returns the next background task (image variants or HLS) that needs to be generated.
    * Prioritizes images, then videos. Returns null if nothing needs conversion.
    */

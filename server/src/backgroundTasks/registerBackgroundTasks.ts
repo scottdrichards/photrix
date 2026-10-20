@@ -14,6 +14,7 @@ type BackgroundTaskPlan = {
   momentClustering: Task;
   audioTranscription: Task;
   audioEmbedding: Task;
+  thumbnailBackfill: Task;
 };
 
 export type BackgroundTaskHandle = {
@@ -22,6 +23,8 @@ export type BackgroundTaskHandle = {
    * after the initial backlog was cleared (e.g. by the live filesystem watcher).
    */
   notifyFilesChanged: () => void;
+  /** Queue the grid-thumbnail backfill; it exits at once outside its hour window. */
+  ensureThumbnailBackfill: () => void;
 };
 
 export const registerBackgroundTasks = (
@@ -88,6 +91,10 @@ export const registerBackgroundTasks = (
     audioEmbedding.ensure();
   });
   const fileMetadata = reentrant(tasks.fileMetadata);
+  // Needs only the file list, so it rides along with the entry stages. It
+  // makes progress only inside its overnight window; main.ts also re-ensures
+  // it each time that window opens.
+  const thumbnailBackfill = reentrant(tasks.thumbnailBackfill);
 
   // Each metadata/analysis processor polls the DB for outstanding work, so to
   // react to new or changed files we just make sure the entry stages are queued:
@@ -98,11 +105,15 @@ export const registerBackgroundTasks = (
     fileMetadata.ensure();
     exifMetadata.ensure();
     imageAnalysis.ensure();
+    thumbnailBackfill.ensure();
   };
 
   // Boot: run the full-tree scan; when it drains it kicks off the pipeline.
   const fileSystemScan = reentrant(tasks.fileSystemScan, queuePipeline);
   fileSystemScan.ensure();
 
-  return { notifyFilesChanged: queuePipeline };
+  return {
+    notifyFilesChanged: queuePipeline,
+    ensureThumbnailBackfill: thumbnailBackfill.ensure,
+  };
 };
