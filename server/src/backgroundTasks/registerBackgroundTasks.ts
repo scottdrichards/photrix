@@ -23,8 +23,6 @@ export type BackgroundTaskHandle = {
    * after the initial backlog was cleared (e.g. by the live filesystem watcher).
    */
   notifyFilesChanged: () => void;
-  /** Queue the grid-thumbnail backfill; it exits at once outside its hour window. */
-  ensureThumbnailBackfill: () => void;
 };
 
 export const registerBackgroundTasks = (
@@ -91,9 +89,7 @@ export const registerBackgroundTasks = (
     audioEmbedding.ensure();
   });
   const fileMetadata = reentrant(tasks.fileMetadata);
-  // Needs only the file list, so it rides along with the entry stages. It
-  // makes progress only inside its overnight window; main.ts also re-ensures
-  // it each time that window opens.
+  // Needs only the file list, so it rides along with the entry stages.
   const thumbnailBackfill = reentrant(tasks.thumbnailBackfill);
 
   // Each metadata/analysis processor polls the DB for outstanding work, so to
@@ -112,8 +108,5 @@ export const registerBackgroundTasks = (
   const fileSystemScan = reentrant(tasks.fileSystemScan, queuePipeline);
   fileSystemScan.ensure();
 
-  return {
-    notifyFilesChanged: queuePipeline,
-    ensureThumbnailBackfill: thumbnailBackfill.ensure,
-  };
+  return { notifyFilesChanged: queuePipeline };
 };

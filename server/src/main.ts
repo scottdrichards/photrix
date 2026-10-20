@@ -57,7 +57,6 @@ import { startMcpServer } from "./mcp/mcpServer.ts";
 import {
   processThumbnailBackfill,
   readThumbnailBackfillConfig,
-  startThumbnailBackfillSchedule,
 } from "./imageProcessing/thumbnailBackfill.ts";
 
 const startServer = async () => {
@@ -223,7 +222,7 @@ const startServer = async () => {
   });
 
   const thumbnailBackfillConfig = readThumbnailBackfillConfig();
-  const backgroundTasks = registerBackgroundTasks(taskOrchestrator, {
+  const { notifyFilesChanged } = registerBackgroundTasks(taskOrchestrator, {
     fileSystemScan: {
       name: "File system scan",
       start: () => fileSystemScanFolder(database),
@@ -289,15 +288,11 @@ const startServer = async () => {
       name: "Grid thumbnail backfill",
       start: () => processThumbnailBackfill(database, thumbnailBackfillConfig),
       // One file at a time through the shared conversion pool: about one
-      // decode's worth of CPU, so it fits beside image analysis.
+      // decode's worth of CPU, so it fits beside image analysis. It also
+      // stands aside on its own whenever the machine is busy.
       resources: { cpu: 0.25 },
     },
   });
-  const { notifyFilesChanged, ensureThumbnailBackfill } = backgroundTasks;
-  const stopThumbnailBackfillSchedule = startThumbnailBackfillSchedule(
-    ensureThumbnailBackfill,
-    thumbnailBackfillConfig,
-  );
 
   // Keep the index live: after the initial scan, a recursive watcher tracks
   // creates, deletes, moves, and in-place edits, re-queueing the processing
@@ -328,7 +323,6 @@ const startServer = async () => {
 
     stopFileSystemMonitor();
     stopPeriodicRescan();
-    stopThumbnailBackfillSchedule();
     // Free the GPU on the way out so the next instance isn't starved by our
     // orphaned, still-VRAM-resident workers.
     shutdownComputeWorkers();

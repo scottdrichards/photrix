@@ -25,92 +25,31 @@ const touch = async (filePath: string) => {
   await writeFile(filePath, "x");
 };
 
-describe("parseHourWindow", () => {
-  it("parses same-day and wrapping windows", () => {
-    expect(mod.parseHourWindow("1-7")).toEqual({ startHour: 1, endHour: 7 });
-    expect(mod.parseHourWindow("22-6")).toEqual({ startHour: 22, endHour: 6 });
-    expect(mod.parseHourWindow("22-24")).toEqual({ startHour: 22, endHour: 0 });
-  });
-
-  it("treats 0-24 as any hour and rejects nonsense", () => {
-    expect(mod.parseHourWindow("0-24")).toBeNull();
-    expect(mod.parseHourWindow("5-5")).toBeUndefined();
-    expect(mod.parseHourWindow("25-3")).toBeUndefined();
-    expect(mod.parseHourWindow("night")).toBeUndefined();
-  });
-});
-
-describe("isWithinWindow", () => {
-  const at = (iso: string) => new Date(iso);
-
-  it("reads the hour in the configured zone", () => {
-    const window = { startHour: 1, endHour: 7 };
-    // 20:30 UTC is 05:30 in Tokyo — inside; 23:00 UTC is 08:00 — outside.
-    expect(mod.isWithinWindow(at("2026-10-20T20:30:00Z"), window, "Asia/Tokyo")).toBe(
-      true,
-    );
-    expect(mod.isWithinWindow(at("2026-10-20T23:00:00Z"), window, "Asia/Tokyo")).toBe(
-      false,
-    );
-    expect(mod.isWithinWindow(at("2026-10-20T06:30:00Z"), window, "UTC")).toBe(true);
-    expect(mod.isWithinWindow(at("2026-10-20T07:00:00Z"), window, "UTC")).toBe(false);
-  });
-
-  it("handles windows that wrap midnight", () => {
-    const window = { startHour: 22, endHour: 6 };
-    expect(mod.isWithinWindow(at("2026-10-20T23:00:00Z"), window, "UTC")).toBe(true);
-    expect(mod.isWithinWindow(at("2026-10-20T03:00:00Z"), window, "UTC")).toBe(true);
-    expect(mod.isWithinWindow(at("2026-10-20T12:00:00Z"), window, "UTC")).toBe(false);
-  });
-
-  it("is always open without a window", () => {
-    expect(mod.isWithinWindow(new Date(), null, undefined)).toBe(true);
-  });
-});
-
-describe("msUntilWindowOpens", () => {
-  const window = { startHour: 1, endHour: 7 };
-
-  it("counts to the next opening", () => {
-    expect(mod.msUntilWindowOpens(new Date("2026-10-20T23:30:00Z"), window, "UTC")).toBe(
-      90 * 60_000,
-    );
-  });
-
-  it("points at tomorrow once today's opening has passed or is now", () => {
-    expect(mod.msUntilWindowOpens(new Date("2026-10-20T01:00:00Z"), window, "UTC")).toBe(
-      24 * 60 * 60_000,
-    );
-    expect(mod.msUntilWindowOpens(new Date("2026-10-20T03:00:00Z"), window, "UTC")).toBe(
-      22 * 60 * 60_000,
-    );
-  });
-});
-
 describe("readThumbnailBackfillConfig", () => {
-  it("defaults to 1–7 AM at 25 MB/s", () => {
-    const config = mod.readThumbnailBackfillConfig({});
-    expect(config).toEqual({
+  it("defaults to 10 MB/s, waiting while load is above half the CPUs", () => {
+    expect(mod.readThumbnailBackfillConfig({})).toEqual({
       enabled: true,
-      window: { startHour: 1, endHour: 7 },
-      timeZone: undefined,
-      bytesPerSecond: 25 * 1024 * 1024,
+      bytesPerSecond: 10 * 1024 * 1024,
+      maxLoad: 0.5,
     });
   });
 
   it("honours overrides and falls back on bad values", () => {
-    const config = mod.readThumbnailBackfillConfig({
-      PHOTRIX_THUMBNAIL_BACKFILL: "0",
-      PHOTRIX_THUMBNAIL_BACKFILL_HOURS: "0-24",
-      PHOTRIX_THUMBNAIL_BACKFILL_TZ: "Not/AZone",
-      PHOTRIX_THUMBNAIL_BACKFILL_MB_PER_SEC: "10",
-    });
-    expect(config).toEqual({
-      enabled: false,
-      window: null,
-      timeZone: undefined,
-      bytesPerSecond: 10 * 1024 * 1024,
-    });
+    expect(
+      mod.readThumbnailBackfillConfig({
+        PHOTRIX_THUMBNAIL_BACKFILL: "0",
+        PHOTRIX_THUMBNAIL_BACKFILL_MB_PER_SEC: "25",
+        PHOTRIX_THUMBNAIL_BACKFILL_MAX_LOAD: "-1",
+      }),
+    ).toEqual({ enabled: false, bytesPerSecond: 25 * 1024 * 1024, maxLoad: 0.5 });
+  });
+});
+
+describe("restAfter", () => {
+  it("rests as long as the work took, within a bound", () => {
+    expect(mod.restAfter(300)).toBe(300);
+    expect(mod.restAfter(-5)).toBe(0);
+    expect(mod.restAfter(60_000)).toBe(10_000);
   });
 });
 
@@ -179,5 +118,86 @@ describe("planThumbnailWork", () => {
 
     await touch(cachePath(video, 320, "jpg"));
     expect(await mod.planThumbnailWork(video, "video/mp4", 2_000_000_000)).toBeNull();
+  });
+});
+
+describe("processThumbnailBackfill", () => {
+  type Candidate = { relativePath: string; mimeType: string; sizeInBytes: number | null };
+
+  // Videos whose 320 frame is already cached: the pass checks them and moves
+  // on without touching a converter, which keeps these tests to the loop itself.
+  const cachedVideo = async (name: string): Promise<Candidate> => {
+    await touch(cachePath(join(tempRoot, "library", name), 320, "jpg"));
+    return { relativePath: `/${name}`, mimeType: "video/mp4", sizeInBytes: null };
+  };
+
+  const fakeClock = () => {
+    let clock = 0;
+    const sleeps: number[] = [];
+    return {
+      sleeps,
+      now: () => clock,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+    };
+  };
+
+  const fakeDatabase = (lists: Candidate[][]) => {
+    let calls = 0;
+    const database = {
+      storagePath: join(tempRoot, "library"),
+      getThumbnailBackfillCandidates: async () =>
+        lists[Math.min(calls++, lists.length - 1)],
+    } as unknown as import("../indexDatabase/indexDatabase.ts").IndexDatabase;
+    return { database, calls: () => calls };
+  };
+
+  const config = { enabled: true, bytesPerSecond: 1e9, maxLoad: 0.5 };
+
+  it("waits while the machine is busy", async () => {
+    const clock = fakeClock();
+    const loads = [0.9, 0.8, 0.2];
+    const { database } = fakeDatabase([[await cachedVideo("busy.mp4")]]);
+    const runner = mod.processThumbnailBackfill(database, config, {
+      ...clock,
+      getLoad: () => loads.shift() ?? 0,
+    });
+    await runner.onComplete();
+    expect(clock.sleeps).toEqual([5_000, 5_000]);
+    expect(await runner.getStatus?.()).toMatchObject({
+      itemsProcessed: 1,
+      total: 1,
+      description: "Up to date (0 made)",
+    });
+  });
+
+  it("re-reads the list mid-pass so new files are not left for the next one", async () => {
+    const clock = fakeClock();
+    const [a, b, added] = [
+      await cachedVideo("a.mp4"),
+      await cachedVideo("b.mp4"),
+      await cachedVideo("added.mp4"),
+    ];
+    const { database, calls } = fakeDatabase([
+      [a, b],
+      [added, a, b],
+    ]);
+    // Busy until eleven minutes in, so the refresh is due by the second file.
+    const runner = mod.processThumbnailBackfill(database, config, {
+      ...clock,
+      getLoad: () => (clock.now() < 11 * 60_000 ? 1 : 0),
+    });
+    await runner.onComplete();
+    expect(calls()).toBe(2);
+    expect(await runner.getStatus?.()).toMatchObject({ itemsProcessed: 3, total: 3 });
+  });
+
+  it("does nothing when disabled", async () => {
+    const { database, calls } = fakeDatabase([[]]);
+    const runner = mod.processThumbnailBackfill(database, { ...config, enabled: false });
+    await runner.onComplete();
+    expect(calls()).toBe(0);
   });
 });
