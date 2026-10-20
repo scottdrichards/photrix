@@ -1,5 +1,5 @@
 import { readdir, stat, unlink, utimes } from "fs/promises";
-import { join, resolve } from "path";
+import { basename, join, resolve } from "path";
 import { MEDIA_CACHE_DIR } from "./cacheUtils.ts";
 import { getLogger } from "../observability/logger.ts";
 
@@ -31,6 +31,22 @@ export const parseByteSize = (value: string | undefined): number | null => {
 
 const getMaxBytes = (): number =>
   parseByteSize(process.env.CACHE_MAX_BYTES) ?? DEFAULT_MAX_BYTES;
+
+// Grid thumbnails: the 160 micro tile (embedded-EXIF or decoded), the 320 photo
+// tile and the 320 video frame. The overnight backfill (thumbnailBackfill.ts)
+// makes one set per library file, so their total is bounded by the library
+// (~3 GB for ~190k files), and they sit outside the LRU budget: counted in it,
+// years of full-size views would slowly evict the backfill and grid scrolling
+// would go cold again.
+const GRID_THUMBNAIL_FILE_NAMES = new Set([
+  "160.webp",
+  "160.micro2.webp",
+  "320.webp",
+  "320.jpg",
+]);
+
+export const isGridThumbnail = (filePath: string): boolean =>
+  GRID_THUMBNAIL_FILE_NAMES.has(basename(filePath));
 
 type CacheFile = {
   path: string;
@@ -79,7 +95,8 @@ let evictionInProgress = false;
 
 /**
  * Enforces the media cache size limit by deleting least-recently-used files
- * until the total drops below the configured maximum. LRU is approximated by
+ * until the total drops below the configured maximum. Grid thumbnails are
+ * neither counted nor evicted ({@link isGridThumbnail}). LRU is approximated by
  * the newest of each file's access/modification time (see {@link markCacheAccess}).
  *
  * Safe to call concurrently — overlapping calls are coalesced into one run.
@@ -94,7 +111,9 @@ export const enforceCacheLimit = async (): Promise<{
   evictionInProgress = true;
   try {
     const maxBytes = getMaxBytes();
-    const files = await collectCacheFiles(MEDIA_CACHE_DIR);
+    const files = (await collectCacheFiles(MEDIA_CACHE_DIR)).filter(
+      (f) => !isGridThumbnail(f.path),
+    );
     const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
 
     if (totalBytes <= maxBytes) {

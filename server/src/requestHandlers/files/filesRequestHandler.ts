@@ -10,6 +10,7 @@ import {
   convertImageCrop,
   contentTypeForImageFormat,
   IMAGE_OUTPUT_CONTENT_TYPE,
+  IMAGE_OUTPUT_EXTENSION,
   ImageConversionError,
   type CropBox,
   type ImageOutputFormat,
@@ -21,6 +22,7 @@ import {
   VIDEO_SCRUB_FRAME_COUNT,
 } from "../../videoProcessing/videoUtils.ts";
 import { markCacheAccess } from "../../common/cacheEviction.ts";
+import { getMirroredCachedFilePath } from "../../common/cacheUtils.ts";
 import {
   clampToSupportedHeight,
   clearVariantOutput,
@@ -608,12 +610,17 @@ const tryMicroThumbnail = async (ctx: FileHandlingContext) => {
   if (representation !== "micro" || !isImage) return false;
 
   try {
-    const embeddedPath = await convertEmbeddedThumbnail(
+    // A decoded 160 exists only for files with no usable embedded thumbnail
+    // (made on an earlier request or by the overnight backfill). Checking it
+    // first skips the header read off the share that would just find none again.
+    const decodedPath = getMirroredCachedFilePath(
       normalizedPath,
       MICRO_THUMBNAIL_HEIGHT,
+      IMAGE_OUTPUT_EXTENSION,
     );
     const cachedPath =
-      embeddedPath ??
+      (existsSync(decodedPath) ? decodedPath : null) ??
+      (await convertEmbeddedThumbnail(normalizedPath, MICRO_THUMBNAIL_HEIGHT)) ??
       (await convertImage(normalizedPath, MICRO_THUMBNAIL_HEIGHT, {
         priority: "userBlocked",
       }));

@@ -69,6 +69,10 @@ describe("registerBackgroundTasks", () => {
         name: "Audio embedding (CLAP)",
         start: () => createRunner(Promise.resolve()),
       },
+      thumbnailBackfill: {
+        name: "Grid thumbnail backfill",
+        start: () => createRunner(Promise.resolve()),
+      },
     });
 
     expect(queued.map(({ task }) => task.name)).toEqual(["File system scan"]);
@@ -82,6 +86,7 @@ describe("registerBackgroundTasks", () => {
       "File metadata processing",
       "EXIF metadata processing",
       "Image analysis (faces + CLIP)",
+      "Grid thumbnail backfill",
     ]);
 
     const exifRunner = queued[2]!.task.start();
@@ -93,6 +98,7 @@ describe("registerBackgroundTasks", () => {
       "File metadata processing",
       "EXIF metadata processing",
       "Image analysis (faces + CLIP)",
+      "Grid thumbnail backfill",
       "Audio transcription (Whisper)",
       "Audio embedding (CLAP)",
     ]);
@@ -106,6 +112,7 @@ describe("registerBackgroundTasks", () => {
       "File metadata processing",
       "EXIF metadata processing",
       "Image analysis (faces + CLIP)",
+      "Grid thumbnail backfill",
       "Audio transcription (Whisper)",
       "Audio embedding (CLAP)",
       "Face clustering",
@@ -138,6 +145,7 @@ describe("registerBackgroundTasks", () => {
       momentClustering: immediate("Moment clustering"),
       audioTranscription: immediate("Audio transcription (Whisper)"),
       audioEmbedding: immediate("Audio embedding (CLAP)"),
+      thumbnailBackfill: immediate("Grid thumbnail backfill"),
     });
 
     // Drive the initial run to completion by starting and awaiting each queued
@@ -157,6 +165,7 @@ describe("registerBackgroundTasks", () => {
       "File metadata processing",
       "EXIF metadata processing",
       "Image analysis (faces + CLIP)",
+      "Grid thumbnail backfill",
     ]);
   });
 
@@ -187,6 +196,7 @@ describe("registerBackgroundTasks", () => {
       momentClustering: immediate("Moment clustering"),
       audioTranscription: immediate("Audio transcription (Whisper)"),
       audioEmbedding: immediate("Audio embedding (CLAP)"),
+      thumbnailBackfill: immediate("Grid thumbnail backfill"),
     });
 
     // Complete the scan so the pipeline queues; start file-metadata but leave it

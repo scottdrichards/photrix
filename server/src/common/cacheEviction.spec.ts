@@ -65,6 +65,29 @@ describe("enforceCacheLimit", () => {
     expect(remaining).toEqual(["newer.jpg", "newest.jpg"]);
   });
 
+  it("neither counts nor evicts grid thumbnails", async () => {
+    // Left from the test above: newer.jpg + newest.jpg = 200 bytes.
+    await mkdir(join(mediaDir, "photo"), { recursive: true });
+    for (const name of ["160.webp", "160.micro2.webp", "320.webp", "320.jpg"]) {
+      await writeCacheFile(join("photo", name), 1000, 90_000);
+    }
+    await writeCacheFile(join("photo", "2160.webp"), 100, 50_000);
+    process.env.CACHE_MAX_BYTES = "250";
+
+    const result = await enforceCacheLimit();
+
+    // 300 evictable bytes against a 225 target: only the full-size view goes,
+    // even though all four thumbnails are older and 40x its size together.
+    expect(result.evictedCount).toBe(1);
+    expect(result.totalBytes).toBe(300);
+    expect((await readdir(join(mediaDir, "photo"))).sort()).toEqual([
+      "160.micro2.webp",
+      "160.webp",
+      "320.jpg",
+      "320.webp",
+    ]);
+  });
+
   it("does nothing when under the limit", async () => {
     process.env.CACHE_MAX_BYTES = "10GB";
     const result = await enforceCacheLimit();
