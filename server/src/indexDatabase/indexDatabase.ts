@@ -5718,8 +5718,10 @@ export class IndexDatabase {
   }
 
   /**
-   * Every photo and video, newest first, for the overnight grid-thumbnail
-   * backfill (imageProcessing/thumbnailBackfill.ts). Which ones still need work
+   * Every photo and video for the grid-thumbnail backfill
+   * (imageProcessing/thumbnailBackfill.ts), in the grid's default order (newest
+   * first, by the same sort date and index), so the tiles people scroll to
+   * first are made first. Which ones still need work
    * is decided against the cache on disk, not a column here, so a dropped cache
    * entry is regenerated on the next pass.
    */
@@ -5735,7 +5737,7 @@ export class IndexDatabase {
       `SELECT folder, fileName, mimeType, sizeInBytes
        FROM files
        WHERE mimeType LIKE 'image/%' OR mimeType LIKE 'video/%'
-       ORDER BY dateTaken IS NULL, dateTaken DESC`,
+       ORDER BY ${SORT_DATE_EXPR} DESC, folder, fileName`,
     );
     return rows.map((row) => ({
       relativePath: joinPath(row.folder, row.fileName),

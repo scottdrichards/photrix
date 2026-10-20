@@ -6,6 +6,7 @@ import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
+import { getNormalizedLoad } from "../taskOrchestrator/systemLoad.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
 import { convertImageToMultipleSizes, IMAGE_OUTPUT_EXTENSION } from "./convertImage.ts";
@@ -14,26 +15,31 @@ import { convertEmbeddedThumbnail } from "./embeddedThumbnail.ts";
 const log = getLogger("thumbnailBackfill");
 
 // ---------------------------------------------------------------------------
-// Overnight grid-thumbnail backfill.
+// Grid-thumbnail backfill.
 //
 // Grid tiles are otherwise generated on first view, so scrolling into a folder
 // nobody has opened before decodes every original off the media share while
 // the user waits (3–7 s a screenful, measured 2026-10-20). This pass makes the
 // same files ahead of time: the 160 micro tile and the 320 tile for every
-// photo, and the 320 frame for every video.
+// photo, and the 320 frame for every video. It walks the library in the grid's
+// own default order (newest first), so the tiles people scroll to first are
+// made first.
 //
-// Reading the whole library is ~730 GB off the NAS, so the pass is fenced in
-// three ways:
-//   - an hour window (default 1–7 AM), so it never runs while people are up;
-//   - a byte-rate cap on source reads (default 25 MB/s, a fifth of gigabit);
+// It runs at any hour as the lowest-priority background work there is:
 //   - one file at a time, pausing between files whenever the orchestrator sees
-//     user activity, so a live request never queues behind it for long.
+//     user activity, so a live request never queues behind it for long;
+//   - it holds off entirely while the machine is busy (1-minute load above
+//     half the CPUs) — other background stages, transcodes, other guests;
+//   - after each file it rests as long as the file took, so even on an idle
+//     machine it is working at most about half the time;
+//   - source reads are capped (default 10 MB/s), since the whole library is
+//     ~730 GB off the NAS.
 //
 // What still needs doing is read off the cache on disk rather than a DB
 // column: a cache entry that is deleted (a source file changed, a manual
-// sweep) is simply regenerated on the next night's pass. The thumbnails it
-// makes are exempt from LRU eviction (see cacheEviction.ts), or the 10 GB
-// budget would slowly undo the work.
+// sweep) is simply regenerated on the next pass. The thumbnails it makes are
+// exempt from LRU eviction (see cacheEviction.ts), or the 10 GB budget would
+// slowly undo the work.
 // ---------------------------------------------------------------------------
 
 /** The two grid sizes a photo tile requests: `representation=micro`, then 320. */
@@ -45,137 +51,50 @@ const VIDEO_THUMBNAIL_READ_ESTIMATE_BYTES = 8 * 1024 * 1024;
 /** Used when the index has no size for a photo yet. */
 const DEFAULT_IMAGE_READ_ESTIMATE_BYTES = 5 * 1024 * 1024;
 
-const DEFAULT_HOURS = "1-7";
-const DEFAULT_MB_PER_SECOND = 25;
-
-export type HourWindow = { startHour: number; endHour: number };
+const DEFAULT_MB_PER_SECOND = 10;
+/** 1-minute load average per CPU above which the pass waits for the machine to quieten. */
+const DEFAULT_MAX_LOAD = 0.5;
+const LOAD_POLL_MS = 5_000;
+/** Rest after each file, as a multiple of how long it took. 1 = work at most half the time. */
+const REST_PER_WORK = 1;
+/** Bound on one rest, so a single pathological file can't park the pass. */
+const MAX_REST_MS = 10_000;
+/**
+ * How often a running pass re-reads the file list. The first pass over a large
+ * library takes days; without this, photos added meanwhile — the newest, and
+ * so the first ones anyone scrolls to — would wait for it to finish.
+ */
+const CANDIDATE_REFRESH_MS = 10 * 60_000;
 
 export type ThumbnailBackfillConfig = {
   enabled: boolean;
-  /** null means any hour. Hours are [start, end) and may wrap past midnight. */
-  window: HourWindow | null;
-  /** IANA zone the window is read in; undefined means the process's local time. */
-  timeZone: string | undefined;
   bytesPerSecond: number;
+  /** Normalized 1-minute load (1.0 = every CPU busy) the pass waits beneath. */
+  maxLoad: number;
 };
 
-/**
- * Parses "1-7" (1 AM until 7 AM) or "22-6" (wrapping midnight). "0-24" means
- * any hour. Returns undefined when the value is malformed.
- */
-export const parseHourWindow = (raw: string): HourWindow | null | undefined => {
-  const match = /^\s*(\d{1,2})\s*-\s*(\d{1,2})\s*$/.exec(raw);
-  if (!match) return undefined;
-  const startHour = Number(match[1]);
-  const endHour = Number(match[2]);
-  if (startHour > 23 || endHour > 24 || startHour === endHour) return undefined;
-  if (startHour === 0 && endHour === 24) return null;
-  return { startHour, endHour: endHour % 24 };
+const positiveNumber = (raw: string | undefined, fallback: number): number => {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
 export const readThumbnailBackfillConfig = (
   env: NodeJS.ProcessEnv = process.env,
-): ThumbnailBackfillConfig => {
-  const rawHours = env.PHOTRIX_THUMBNAIL_BACKFILL_HOURS?.trim() || DEFAULT_HOURS;
-  let window = parseHourWindow(rawHours);
-  if (window === undefined) {
-    log.warn(
-      { value: rawHours },
-      "Invalid PHOTRIX_THUMBNAIL_BACKFILL_HOURS; using default",
-    );
-    window = parseHourWindow(DEFAULT_HOURS)!;
-  }
+): ThumbnailBackfillConfig => ({
+  enabled: env.PHOTRIX_THUMBNAIL_BACKFILL !== "0",
+  bytesPerSecond:
+    positiveNumber(env.PHOTRIX_THUMBNAIL_BACKFILL_MB_PER_SEC, DEFAULT_MB_PER_SECOND) *
+    1024 *
+    1024,
+  maxLoad: positiveNumber(env.PHOTRIX_THUMBNAIL_BACKFILL_MAX_LOAD, DEFAULT_MAX_LOAD),
+});
 
-  const timeZone = env.PHOTRIX_THUMBNAIL_BACKFILL_TZ?.trim() || undefined;
-  if (timeZone) {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone });
-    } catch {
-      log.warn({ timeZone }, "Invalid PHOTRIX_THUMBNAIL_BACKFILL_TZ; using local time");
-      return readThumbnailBackfillConfig({ ...env, PHOTRIX_THUMBNAIL_BACKFILL_TZ: "" });
-    }
-  }
+const defaultSleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-  const mbPerSecond = Number(env.PHOTRIX_THUMBNAIL_BACKFILL_MB_PER_SEC);
-  return {
-    enabled: env.PHOTRIX_THUMBNAIL_BACKFILL !== "0",
-    window,
-    timeZone,
-    bytesPerSecond:
-      (Number.isFinite(mbPerSecond) && mbPerSecond > 0
-        ? mbPerSecond
-        : DEFAULT_MB_PER_SECOND) *
-      1024 *
-      1024,
-  };
-};
-
-/** Minutes since local midnight in `timeZone` (or process-local time). */
-const minuteOfDay = (date: Date, timeZone: string | undefined): number => {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "numeric",
-    hourCycle: "h23",
-    timeZone,
-  }).formatToParts(date);
-  const value = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-  return value("hour") * 60 + value("minute");
-};
-
-export const isWithinWindow = (
-  date: Date,
-  window: HourWindow | null,
-  timeZone: string | undefined,
-): boolean => {
-  if (!window) return true;
-  const hour = Math.floor(minuteOfDay(date, timeZone) / 60);
-  return window.startHour < window.endHour
-    ? hour >= window.startHour && hour < window.endHour
-    : hour >= window.startHour || hour < window.endHour;
-};
-
-/**
- * Milliseconds until the window next opens, strictly in the future (so a call
- * made right at the opening minute points at tomorrow's). Across a DST change
- * this can be an hour off; the pass re-checks the window when it starts, and
- * the schedule re-arms from the new local time, so it corrects itself.
- */
-export const msUntilWindowOpens = (
-  date: Date,
-  window: HourWindow,
-  timeZone: string | undefined,
-): number => {
-  const minutesNow = minuteOfDay(date, timeZone);
-  let minutes = (window.startHour * 60 - minutesNow + 24 * 60) % (24 * 60);
-  if (minutes === 0) minutes = 24 * 60;
-  return minutes * 60_000 - date.getSeconds() * 1000 - date.getMilliseconds();
-};
-
-/**
- * Calls `ensure` each time the window opens. The pass itself also runs whenever
- * the pipeline is (re)queued, but outside the window it returns immediately,
- * so this is what actually starts it each night. Returns a stop function.
- */
-export const startThumbnailBackfillSchedule = (
-  ensure: () => void,
-  config: ThumbnailBackfillConfig = readThumbnailBackfillConfig(),
-): (() => void) => {
-  const { window } = config;
-  if (!config.enabled || !window) return () => {};
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const arm = () => {
-    timer = setTimeout(
-      () => {
-        ensure();
-        arm();
-      },
-      msUntilWindowOpens(new Date(), window, config.timeZone),
-    );
-    timer.unref?.();
-  };
-  arm();
-  return () => clearTimeout(timer);
-};
+/** How long to rest after a file that took `workMs` to make. */
+export const restAfter = (workMs: number): number =>
+  Math.min(Math.max(0, workMs) * REST_PER_WORK, MAX_REST_MS);
 
 /**
  * Paces source reads to `bytesPerSecond`: each call waits until the bytes the
@@ -184,8 +103,7 @@ export const startThumbnailBackfillSchedule = (
 export const createReadPacer = (
   bytesPerSecond: number,
   now: () => number = Date.now,
-  sleep: (ms: number) => Promise<void> = (ms) =>
-    new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep: (ms: number) => Promise<void> = defaultSleep,
 ) => {
   let availableAt = 0;
   return async (bytes: number): Promise<void> => {
@@ -259,64 +177,98 @@ export const planThumbnailWork = async (
 
 // Files that failed this process's lifetime (corrupt, unsupported). Kept in
 // memory only, so a restart retries them once — there are few, and a failure
-// costs one read, not a retry loop: each is attempted at most once a night.
+// costs one read, not a retry loop: each is attempted at most once per process.
 const failedPaths = new Set<string>();
+
+export type ThumbnailBackfillDeps = {
+  getLoad: () => number;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+};
+
+const defaultDeps: ThumbnailBackfillDeps = {
+  getLoad: getNormalizedLoad,
+  sleep: defaultSleep,
+  now: Date.now,
+};
 
 export const processThumbnailBackfill = (
   database: IndexDatabase,
   config: ThumbnailBackfillConfig = readThumbnailBackfillConfig(),
-  now: () => Date = () => new Date(),
+  deps: Partial<ThumbnailBackfillDeps> = {},
 ): TaskRunner => {
+  const { getLoad, sleep, now } = { ...defaultDeps, ...deps };
   const ctrl = createTaskController("Thumbnail backfill cancelled");
-  const pace = createReadPacer(config.bytesPerSecond);
-  const inWindow = () => isWithinWindow(now(), config.window, config.timeZone);
+  const pace = createReadPacer(config.bytesPerSecond, now, sleep);
   let total = 0;
   let checked = 0;
   let generated = 0;
   let failed = 0;
   let description = "Starting";
 
+  // Waits out user activity (via the controller) and a busy machine, in either
+  // order: a load wait can end just as a user request starts.
+  const waitForTurn = async () => {
+    for (;;) {
+      ctrl.checkCancelled();
+      await ctrl.waitUntilResumed();
+      ctrl.checkCancelled();
+      if (getLoad() <= config.maxLoad) return;
+      description = "Waiting for the machine to be less busy";
+      await sleep(LOAD_POLL_MS);
+    }
+  };
+
   const completion = (async () => {
-    if (!config.enabled || !inWindow()) {
-      description = config.enabled ? "Waiting for the overnight window" : "Disabled";
+    if (!config.enabled) {
+      description = "Disabled";
       ctrl.markComplete();
       return;
     }
 
-    const candidates = await database.getThumbnailBackfillCandidates();
-    total = candidates.length;
-    description = "Generating grid thumbnails";
-    const startedAt = Date.now();
+    const startedAt = now();
     let readBytes = 0;
+    // Paths this pass has already looked at, so a refreshed list (see
+    // CANDIDATE_REFRESH_MS) resumes where it was and only adds what is new.
+    const done = new Set<string>();
 
-    for (const { relativePath, mimeType, sizeInBytes } of candidates) {
-      ctrl.checkCancelled();
-      await ctrl.waitUntilResumed();
-      ctrl.checkCancelled();
-      if (!inWindow()) {
-        description = "Window closed; resumes tomorrow night";
-        break;
-      }
-      checked += 1;
+    for (let fresh = true; fresh;) {
+      fresh = false;
+      const listedAt = now();
+      const candidates = await database.getThumbnailBackfillCandidates();
+      total = candidates.length;
 
-      const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
-      if (failedPaths.has(fullPath)) continue;
-      const work = await planThumbnailWork(fullPath, mimeType, sizeInBytes);
-      if (!work) continue;
+      for (const { relativePath, mimeType, sizeInBytes } of candidates) {
+        if (done.has(relativePath)) continue;
+        if (now() - listedAt > CANDIDATE_REFRESH_MS) {
+          fresh = true;
+          break;
+        }
+        await waitForTurn();
+        description = "Generating grid thumbnails";
+        done.add(relativePath);
+        checked = done.size;
 
-      await pace(work.readBytes);
-      // The pacing sleep can span the start of a user request; yield to it.
-      await ctrl.waitUntilResumed();
-      ctrl.checkCancelled();
+        const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
+        if (failedPaths.has(fullPath)) continue;
+        const work = await planThumbnailWork(fullPath, mimeType, sizeInBytes);
+        if (!work) continue;
 
-      try {
-        await work.run();
-        generated += 1;
-        readBytes += work.readBytes;
-      } catch (err) {
-        failedPaths.add(fullPath);
-        failed += 1;
-        log.debug({ err, path: relativePath }, "Thumbnail backfill failed for file");
+        await pace(work.readBytes);
+        // The pacing sleep can span the start of a user request; yield to it.
+        await waitForTurn();
+
+        const workStartedAt = now();
+        try {
+          await work.run();
+          generated += 1;
+          readBytes += work.readBytes;
+        } catch (err) {
+          failedPaths.add(fullPath);
+          failed += 1;
+          log.debug({ err, path: relativePath }, "Thumbnail backfill failed for file");
+        }
+        await sleep(restAfter(now() - workStartedAt));
       }
     }
 
@@ -327,11 +279,11 @@ export const processThumbnailBackfill = (
         generated,
         failed,
         readMB: Math.round(readBytes / 1024 / 1024),
-        minutes: Math.round((Date.now() - startedAt) / 60_000),
+        minutes: Math.round((now() - startedAt) / 60_000),
       },
       "Thumbnail backfill pass finished",
     );
-    if (checked === total) description = "Up to date";
+    description = "Up to date";
     ctrl.markComplete();
   })();
 
@@ -344,7 +296,7 @@ export const processThumbnailBackfill = (
         state: ctrl.state,
         itemsProcessed: checked,
         total,
-        portionComplete: total > 0 ? checked / total : undefined,
+        portionComplete: total > 0 ? Math.min(1, checked / total) : undefined,
         description: `${description} (${generated} made${failed ? `, ${failed} failed` : ""})`,
       }),
     onComplete: () => completion,
