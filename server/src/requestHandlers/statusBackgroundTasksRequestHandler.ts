@@ -1,24 +1,10 @@
 import type http from "node:http";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 import { writeJson } from "../utils.ts";
+import { readJsonBody } from "../common/readBody.ts";
 
 type TogglePayload = {
   enabled: boolean;
-};
-
-const readJsonBody = async <T>(req: http.IncomingMessage): Promise<T> => {
-  const chunks: Buffer[] = [];
-
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-
-  const body = Buffer.concat(chunks).toString("utf-8").trim();
-  if (!body) {
-    throw new Error("Request body is required");
-  }
-
-  return JSON.parse(body) as T;
 };
 
 export const statusBackgroundTasksRequestHandler = async (

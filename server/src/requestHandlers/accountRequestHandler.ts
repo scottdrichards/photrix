@@ -22,19 +22,11 @@ import {
 } from "../auth/passkeyService.ts";
 import { classifyIp } from "../auth/ipLocation.ts";
 import { writeJson } from "../utils.ts";
-
-const readBody = (req: http.IncomingMessage): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
-  });
+import { readJsonBody } from "../common/readBody.ts";
 
 const readJson = async <T>(req: http.IncomingMessage): Promise<T | null> => {
   try {
-    const raw = await readBody(req);
-    return (raw ? JSON.parse(raw) : {}) as T;
+    return await readJsonBody<T>(req, { ifEmpty: {} });
   } catch {
     return null;
   }

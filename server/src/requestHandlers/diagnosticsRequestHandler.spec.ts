@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import type http from "node:http";
+import { Readable } from "node:stream";
 import { clearDiagnosticsEvents } from "../observability/diagnosticsStore.ts";
 import { diagnosticsEventsRequestHandler } from "./diagnosticsRequestHandler.ts";
 
@@ -9,18 +10,11 @@ const createMockRequest = (options: {
   body?: string;
   headers?: Record<string, string>;
 }) => {
-  async function* bodyGenerator() {
-    if (options.body) {
-      yield Buffer.from(options.body);
-    }
-  }
-
-  return {
+  return Object.assign(Readable.from(options.body ? [Buffer.from(options.body)] : []), {
     method: options.method,
     url: options.url,
     headers: { host: "localhost", ...(options.headers ?? {}) },
-    [Symbol.asyncIterator]: bodyGenerator,
-  } as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
+  }) as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
 };
 
 const createMockResponse = () => {

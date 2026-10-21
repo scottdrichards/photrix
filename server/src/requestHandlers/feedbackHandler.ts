@@ -1,6 +1,7 @@
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { writeJson } from "../utils.ts";
+import { readJsonBody } from "../common/readBody.ts";
 
 // Claims expire after 1 hour so a crashed agent doesn't lock a suggestion forever.
 const CLAIM_EXPIRY_MS = 60 * 60 * 1000;
@@ -22,14 +23,6 @@ const rowStatus = (row: FeedbackRow, now: number): FeedbackStatus => {
   if (row.claimedAt != null && now - row.claimedAt < CLAIM_EXPIRY_MS) return "active";
   return "open";
 };
-
-const readBody = (req: http.IncomingMessage): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
-  });
 
 export const feedbackHandler = async (
   req: http.IncomingMessage & { url: string },
@@ -63,7 +56,7 @@ export const feedbackHandler = async (
   if (req.method === "POST" && !idParam) {
     let body: { text?: unknown };
     try {
-      body = JSON.parse(await readBody(req)) as { text?: unknown };
+      body = await readJsonBody<{ text?: unknown }>(req);
     } catch {
       writeJson(res, 400, { error: "Invalid JSON" });
       return;
@@ -95,7 +88,7 @@ export const feedbackHandler = async (
 
     let body: { action?: unknown; claimedBy?: unknown };
     try {
-      body = JSON.parse(await readBody(req)) as { action?: unknown; claimedBy?: unknown };
+      body = await readJsonBody<{ action?: unknown; claimedBy?: unknown }>(req);
     } catch {
       writeJson(res, 400, { error: "Invalid JSON" });
       return;

@@ -32,14 +32,7 @@ import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
 import { generateShareDescription } from "../shareDescription/generateShareDescription.ts";
 import { writeJson } from "../utils.ts";
-
-const readBody = (req: http.IncomingMessage): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
-  });
+import { readJsonBody } from "../common/readBody.ts";
 
 export const authLoginHandler = async (
   req: http.IncomingMessage,
@@ -47,7 +40,7 @@ export const authLoginHandler = async (
 ) => {
   let body: { username?: unknown; password?: unknown };
   try {
-    body = JSON.parse(await readBody(req)) as { username?: unknown; password?: unknown };
+    body = await readJsonBody<{ username?: unknown; password?: unknown }>(req);
   } catch {
     writeJson(res, 400, { error: "Invalid JSON" });
     return;
@@ -93,7 +86,7 @@ export const authShareTokenHandler = async (
 
   let body: ShareScope<unknown>;
   try {
-    body = JSON.parse(await readBody(req)) as ShareScope<unknown>;
+    body = await readJsonBody<ShareScope<unknown>>(req);
   } catch {
     writeJson(res, 400, { error: "Invalid JSON" });
     return;
@@ -201,7 +194,7 @@ export const passkeyRegistrationOptionsHandler = async (
 
   let body: { username?: unknown };
   try {
-    body = JSON.parse(await readBody(req)) as { username?: unknown };
+    body = await readJsonBody<{ username?: unknown }>(req);
   } catch {
     writeJson(res, 400, { error: "Invalid JSON" });
     return;
@@ -237,7 +230,7 @@ export const passkeyRegistrationVerifyHandler = async (
 
   let body: { sessionId?: unknown; response?: unknown };
   try {
-    body = JSON.parse(await readBody(req)) as { sessionId?: unknown; response?: unknown };
+    body = await readJsonBody<{ sessionId?: unknown; response?: unknown }>(req);
   } catch {
     writeJson(res, 400, { error: "Invalid JSON" });
     return;
@@ -281,7 +274,7 @@ export const passkeyAuthenticationVerifyHandler = async (
 
   let body: { sessionId?: unknown; response?: unknown };
   try {
-    body = JSON.parse(await readBody(req)) as { sessionId?: unknown; response?: unknown };
+    body = await readJsonBody<{ sessionId?: unknown; response?: unknown }>(req);
   } catch {
     writeJson(res, 400, { error: "Invalid JSON" });
     return;
@@ -311,7 +304,7 @@ export const authLogoutHandler = async (
 ) => {
   let body: { token?: unknown };
   try {
-    body = JSON.parse(await readBody(req)) as { token?: unknown };
+    body = await readJsonBody<{ token?: unknown }>(req);
   } catch {
     writeJson(res, 400, { error: "Invalid JSON" });
     return;

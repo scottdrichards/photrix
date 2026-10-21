@@ -6,6 +6,7 @@ import { loadSearchVocabulary } from "../naturalLanguageSearch/searchVocabulary.
 import { getOllamaUrl } from "../shareDescription/ollamaGenerate.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../utils.ts";
+import { readJsonBody } from "../common/readBody.ts";
 
 const log = getLogger("searchInterpretHandler");
 
@@ -25,23 +26,6 @@ export const clearSearchInterpretationCache = () => cache.clear();
 const cacheKey = (query: string, now: number) =>
   `${new Date(now).toISOString().slice(0, 10)}|${query.trim().toLowerCase()}`;
 
-const readBody = (req: http.IncomingMessage): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new Error("Body too large"));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
-  });
-
 /**
  * POST /api/search/interpret — turn a natural-language query into structured
  * filters.
@@ -58,7 +42,7 @@ export const searchInterpretHandler = async (
 ): Promise<void> => {
   let body: { q?: unknown };
   try {
-    body = JSON.parse(await readBody(req)) as { q?: unknown };
+    body = await readJsonBody<{ q?: unknown }>(req, { maxBytes: MAX_BODY_BYTES });
   } catch {
     writeJson(res, 400, { error: "Invalid JSON" });
     return;

@@ -2,6 +2,7 @@ import http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { buildPhotrixMcpServer } from "./buildServer.ts";
 import { createPhotrixApi, photrixBaseUrl } from "./photrixApi.ts";
+import { readJsonBody } from "../common/readBody.ts";
 
 // Streamable-HTTP MCP server that lets remote AI agents query the Photrix photo
 // library. It proxies every request to the Photrix REST API, so it can live on
@@ -26,23 +27,6 @@ const PORT =
 // PHOTRIX_TOKEN used to authenticate to Photrix). Set to require callers to send
 // `Authorization: Bearer <MCP_AUTH_TOKEN>`.
 const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
-
-const readBody = (req: http.IncomingMessage): Promise<unknown> =>
-  new Promise((resolve, reject) => {
-    let data = "";
-    req.on("data", (chunk: Buffer) => {
-      data += chunk.toString();
-    });
-    req.on("end", () => {
-      if (!data) return resolve(undefined);
-      try {
-        resolve(JSON.parse(data));
-      } catch {
-        reject(new Error("Invalid JSON body"));
-      }
-    });
-    req.on("error", reject);
-  });
 
 const jsonRpcError = (
   res: http.ServerResponse,
@@ -103,7 +87,7 @@ const handleRequest = async (
         : undefined;
     const photrixToken = MCP_AUTH_TOKEN ? undefined : callerBearer;
 
-    const body = await readBody(req);
+    const body = await readJsonBody(req, { ifEmpty: null }).then((b) => b ?? undefined);
     const mcp = buildPhotrixMcpServer(createPhotrixApi(photrixToken));
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
