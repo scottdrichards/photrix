@@ -14,14 +14,26 @@ const CLAP_MIN_SIMILARITY = Number(
   process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.45,
 );
 const SEARCH_TIMEOUT_MS = Number(process.env.PHOTRIX_SEARCH_TIMEOUT_MS) || 15_000;
-const SHARE_FILTER_CACHE_TTL_MS = 5_000;
+// Resolving a semantic share embeds its query text, which gives the same
+// vector every time, so the result can live a while. It used to expire after
+// 5 s, and every request in a cold window ran its own embed: a grid's ~100
+// concurrent tile requests each queued an ML-worker job behind background work
+// and 503'd on SEARCH_TIMEOUT_MS. Concurrent callers now share one in-flight
+// resolution.
+const SHARE_FILTER_CACHE_TTL_MS = 10 * 60_000;
 
 type CachedFilter = {
   expiresAt: number;
-  filter: FilterElement;
+  filter: Promise<FilterElement>;
 };
 
 const resolvedShareFilters = new Map<string, CachedFilter>();
+
+const evictExpiredShareFilters = (now: number) => {
+  for (const [key, entry] of resolvedShareFilters) {
+    if (entry.expiresAt <= now) resolvedShareFilters.delete(key);
+  }
+};
 
 export class ShareScopeError extends Error {
   constructor(
@@ -84,20 +96,35 @@ export const resolveShareFilter = async (
   shareScope: ShareScope<unknown>,
   cacheKey?: string,
 ): Promise<FilterElement> => {
-  if (cacheKey) {
-    const cached = resolvedShareFilters.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.filter;
-    }
+  if (!shareScope.semanticQuery?.trim()) {
+    return (shareScope.filter ?? {}) as FilterElement;
+  }
+  if (!cacheKey) {
+    return resolveSemanticShareFilter(shareScope);
   }
 
+  const now = Date.now();
+  const cached = resolvedShareFilters.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.filter;
+  }
+  evictExpiredShareFilters(now);
+  const filter = resolveSemanticShareFilter(shareScope);
+  const entry = { expiresAt: now + SHARE_FILTER_CACHE_TTL_MS, filter };
+  resolvedShareFilters.set(cacheKey, entry);
+  // A failure isn't cached: the next request retries.
+  filter.catch(() => {
+    if (resolvedShareFilters.get(cacheKey) === entry) resolvedShareFilters.delete(cacheKey);
+  });
+  return filter;
+};
+
+const resolveSemanticShareFilter = async (
+  shareScope: ShareScope<unknown>,
+): Promise<FilterElement> => {
   const baseFilter = (shareScope.filter ?? {}) as FilterElement;
-  const semanticQuery = shareScope.semanticQuery?.trim();
+  const semanticQuery = shareScope.semanticQuery?.trim() ?? "";
   const searchSources = shareScope.searchSources ?? [...SEARCH_SOURCES];
-
-  if (!semanticQuery) {
-    return baseFilter;
-  }
 
   try {
     const semanticFilters = await Promise.all(
@@ -130,16 +157,7 @@ export const resolveShareFilter = async (
       semanticFilters.length === 1
         ? (semanticFilters[0] ?? {})
         : { operation: "or" as const, conditions: semanticFilters };
-    const resolved = combineFilters([baseFilter, semanticFilter]);
-
-    if (cacheKey) {
-      resolvedShareFilters.set(cacheKey, {
-        expiresAt: Date.now() + SHARE_FILTER_CACHE_TTL_MS,
-        filter: resolved,
-      });
-    }
-
-    return resolved;
+    return combineFilters([baseFilter, semanticFilter]);
   } catch (error) {
     throw new ShareScopeError(
       error instanceof Error ? error.message : String(error),
