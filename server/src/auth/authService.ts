@@ -113,12 +113,21 @@ export const initAuthService = async (database: AsyncSqlite): Promise<void> => {
   }
 };
 
+// scrypt is deliberately slow (~50 ms) and synchronous, and every request
+// carrying a share-shaped token decodes it at least once — so deriving the key
+// per call blocked the event loop for real viewers and let anyone stall the
+// server by sending made-up `photrix-share-v1.*` tokens. Derive once per secret.
+let shareTokenKeyCache: { secret: string; key: Buffer } | null = null;
+
 const getShareTokenKey = (): Buffer => {
   const secret = process.env.PHOTRIX_SHARE_TOKEN_SECRET ?? process.env.AUTH_PASSWORD;
   if (!secret) {
     throw new Error("Share token secret is not configured");
   }
-  return scryptSync(secret, "photrix-share-token", 32);
+  if (shareTokenKeyCache?.secret !== secret) {
+    shareTokenKeyCache = { secret, key: scryptSync(secret, "photrix-share-token", 32) };
+  }
+  return shareTokenKeyCache.key;
 };
 
 const isStatelessShareToken = (token: string): boolean =>
@@ -409,7 +418,10 @@ export const listSessions = (username: string): SessionInfo[] =>
 
 export const revokeSessionsForUser = (username: string): void => {
   for (const [token, data] of tokens) {
-    if (data.username === username) tokens.delete(token);
+    if (data.username === username) {
+      tokens.delete(token);
+      sessionLastTouched.delete(token);
+    }
   }
   db?.run("DELETE FROM auth_sessions WHERE username = ?", [username]).catch(() => {});
 };
@@ -419,7 +431,10 @@ export const revokeSessionsForUser = (username: string): void => {
 // etc.) clean up in one action without also signing themselves out.
 export const revokeOtherSessions = (username: string, keepToken: string): void => {
   for (const [token, data] of tokens) {
-    if (data.username === username && token !== keepToken) tokens.delete(token);
+    if (data.username === username && token !== keepToken) {
+      tokens.delete(token);
+      sessionLastTouched.delete(token);
+    }
   }
   db?.run("DELETE FROM auth_sessions WHERE username = ? AND token != ?", [
     username,
