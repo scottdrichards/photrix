@@ -184,9 +184,6 @@ export const issueShareToken = (shareScope: ShareScope<unknown>): string => {
   ].join(".");
 };
 
-export const getShareFilter = (token: string): unknown | null =>
-  decodeShareScopePayload(token)?.filter ?? null;
-
 export const getShareScope = (token: string): ShareScope<unknown> | null =>
   decodeShareScopePayload(token);
 

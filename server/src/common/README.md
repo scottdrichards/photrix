@@ -26,17 +26,6 @@ runs it in **worker threads** and talks to them over request/response messages.
   before the view is created. Keep these guards — a throw here surfaces as an
   opaque SQL error that breaks vector search.
 
-## Work de-duplication — `scheduleWork.ts`
-
-`scheduleWork(key, work)` collapses concurrent callers for the same `key` onto a
-single execution and fans the result out to all waiters. The waiter list is
-detached and the key cleared **before** the waiters are settled, so a caller that
-arrives in the settle microtask window schedules fresh work instead of attaching
-to a batch that has already fired (which would hang forever).
-
-Use it to avoid duplicate expensive work (e.g. converting the same image twice
-when two requests race).
-
 ## Cache paths — `cacheUtils.ts`
 
 Derives on-disk cache locations under `CACHE_DIR` (default `.cache`).

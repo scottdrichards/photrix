@@ -34,11 +34,9 @@ import { getLogger } from "./observability/logger.ts";
 import {
   extractToken,
   getShareScope,
-  initAuthService,
   isAuthEnabled,
   validateToken,
 } from "./auth/authService.ts";
-import { initPasskeyService } from "./auth/passkeyService.ts";
 import { resolveShareFilter, ShareScopeError } from "./auth/shareScope.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
 import { peopleRequestHandler } from "./requestHandlers/peopleRequestHandler.ts";

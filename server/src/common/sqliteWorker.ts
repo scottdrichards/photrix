@@ -107,7 +107,6 @@ type WorkerMessage =
   | { id: number; op: "close" };
 
 const init = workerData as WorkerInit;
-const workerLabel = init.readonly ? "read" : "write";
 const db = new Database(init.dbPath, { readonly: init.readonly ?? false });
 
 // Apply connection-level settings once at startup.
