@@ -55,39 +55,65 @@ type CacheFile = {
   lastUsedMs: number;
 };
 
-const collectCacheFiles = async (dir: string): Promise<CacheFile[]> => {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw err;
-  }
+/** Concurrent `stat` calls during a walk — enough to keep the disk busy, few enough to stay flat. */
+const STAT_CONCURRENCY = 32;
 
+/**
+ * Lists every evictable cache file. Grid thumbnails are skipped by name before
+ * they are ever stat'ed or held, since they are most of the files and none of
+ * them can be evicted.
+ *
+ * Iterative with bounded concurrency on purpose. The recursive version spread
+ * each subtree's results into `push(...)`, which throws "Maximum call stack size
+ * exceeded" once a subtree holds enough files, and it stat'ed every file in the
+ * cache at once; the backfill's ~230k thumbnails broke the first and turned the
+ * second into a large heap spike every five minutes.
+ */
+const collectCacheFiles = async (root: string): Promise<CacheFile[]> => {
   const files: CacheFile[] = [];
-  await Promise.all(
-    entries.map(async (entry) => {
+  const dirs = [root];
+  const pendingFiles: string[] = [];
+
+  const statFile = async (fullPath: string) => {
+    try {
+      const stats = await stat(fullPath);
+      files.push({
+        path: fullPath,
+        size: stats.size,
+        lastUsedMs: Math.max(stats.atimeMs, stats.mtimeMs),
+      });
+    } catch (err) {
+      // File may have been removed between readdir and stat; ignore.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        log.warn({ err, path: fullPath }, "Failed to stat cache file");
+      }
+    }
+  };
+
+  const drainFiles = async () => {
+    while (pendingFiles.length > 0) {
+      await Promise.all(pendingFiles.splice(0, STAT_CONCURRENCY).map(statFile));
+    }
+  };
+
+  for (let dir = dirs.pop(); dir !== undefined; dir = dirs.pop()) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
+    }
+    for (const entry of entries) {
       const fullPath = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        files.push(...(await collectCacheFiles(fullPath)));
-        return;
+      if (entry.isDirectory()) dirs.push(fullPath);
+      else if (entry.isFile() && !GRID_THUMBNAIL_FILE_NAMES.has(entry.name)) {
+        pendingFiles.push(fullPath);
       }
-      if (!entry.isFile()) return;
-      try {
-        const stats = await stat(fullPath);
-        files.push({
-          path: fullPath,
-          size: stats.size,
-          lastUsedMs: Math.max(stats.atimeMs, stats.mtimeMs),
-        });
-      } catch (err) {
-        // File may have been removed between readdir and stat; ignore.
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-          log.warn({ err, path: fullPath }, "Failed to stat cache file");
-        }
-      }
-    }),
-  );
+    }
+    if (pendingFiles.length >= STAT_CONCURRENCY) await drainFiles();
+  }
+  await drainFiles();
   return files;
 };
 
@@ -111,9 +137,7 @@ export const enforceCacheLimit = async (): Promise<{
   evictionInProgress = true;
   try {
     const maxBytes = getMaxBytes();
-    const files = (await collectCacheFiles(MEDIA_CACHE_DIR)).filter(
-      (f) => !isGridThumbnail(f.path),
-    );
+    const files = await collectCacheFiles(MEDIA_CACHE_DIR);
     const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
 
     if (totalBytes <= maxBytes) {

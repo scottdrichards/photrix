@@ -88,6 +88,29 @@ describe("enforceCacheLimit", () => {
     ]);
   });
 
+  it("walks a deep, wide tree and evicts the oldest file anywhere in it", async () => {
+    // Left from above: newer.jpg + newest.jpg = 200 evictable bytes.
+    for (let a = 0; a < 6; a++) {
+      for (let b = 0; b < 6; b++) {
+        const dir = join("deep", `a${a}`, `b${b}`, "c", "d");
+        await mkdir(join(mediaDir, dir), { recursive: true });
+        await writeCacheFile(join(dir, "720.webp"), 10, 5_000);
+      }
+    }
+    const buried = join("deep", "a3", "b2", "c", "d");
+    await writeCacheFile(join(buried, "1080.webp"), 10, 900_000);
+    // 200 + 36 * 10 + 10 = 570. Limit 560 → target 504: the buried oldest file
+    // goes first, then newer.jpg (the next oldest), leaving 460.
+    process.env.CACHE_MAX_BYTES = "560";
+
+    const result = await enforceCacheLimit();
+
+    expect(result.totalBytes).toBe(570);
+    expect(result.evictedCount).toBe(2);
+    expect(await readdir(join(mediaDir, buried))).toEqual(["720.webp"]);
+    expect((await readdir(mediaDir)).sort()).toEqual(["deep", "newest.jpg", "photo"]);
+  });
+
   it("does nothing when under the limit", async () => {
     process.env.CACHE_MAX_BYTES = "10GB";
     const result = await enforceCacheLimit();
