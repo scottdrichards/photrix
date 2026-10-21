@@ -326,6 +326,13 @@ export const createServer = (
           }
 
           if (req.url?.startsWith("/api/diagnostics/events")) {
+            // A share-link viewer's client still reports its own diagnostics
+            // (POST), but may not read back the event buffer, which holds
+            // every other client's sessions and requests.
+            if (shareScope && req.method !== "POST") {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
             await diagnosticsEventsRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
@@ -384,7 +391,13 @@ export const createServer = (
             return;
           }
 
+          // Picks a photo from the whole library for any date, so it is
+          // outside every share's scope.
           if (req.url?.startsWith("/api/day-photo/") && req.method === "GET") {
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
             await dayPhotoRequestHandler(
               req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
               res,
@@ -415,8 +428,12 @@ export const createServer = (
             return;
           }
 
+          // Share views call this too, so scope it rather than forbid it: the
+          // title is computed over the caller's filter ANDed with the share's.
           if (req.url === "/api/page-title" && req.method === "POST") {
-            await pageTitleHandler(req, res, database);
+            const resolvedShareFilter = await getResolvedShareFilter();
+            if (res.writableEnded) return;
+            await pageTitleHandler(req, res, database, resolvedShareFilter);
             return;
           }
 
