@@ -29,7 +29,7 @@ import { processMomentClustering } from "./indexDatabase/processMomentClustering
 import { initAuthService } from "./auth/authService.ts";
 import { initPasskeyService } from "./auth/passkeyService.ts";
 import { measureOperation } from "./observability/requestTrace.ts";
-import { startTelemetry } from "./observability/telemetry.ts";
+import { startTelemetry, stopTelemetry } from "./observability/telemetry.ts";
 import { createTaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import {
   resumeComputeWorkers,
@@ -337,7 +337,8 @@ const startServer = async () => {
         process.exit(1);
       }
       logger.info("Shutdown complete");
-      process.exit(0);
+      // Flush buffered spans; exiting straight away drops the final requests' traces.
+      void stopTelemetry().finally(() => process.exit(0));
     });
   };
 
