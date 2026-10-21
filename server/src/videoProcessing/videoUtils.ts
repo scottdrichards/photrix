@@ -15,6 +15,13 @@ import { getVideoSourceProfile, isHdrColorTransfer } from "./getVideoMetadata.ts
 
 const MAX_CAPTURED_LOG_CHARS = 64_000;
 
+// Thumbnail and scrub frames are one-frame extracts that finish in seconds, but
+// they run detached from any request (nothing ever aborts them) and share the
+// two media-conversion slots with every image conversion. A run wedged on a
+// damaged file or a stalled read from the media share would otherwise hold a
+// slot until the server restarts; two of them stop all conversions.
+const STILL_FRAME_SPAWN_OPTIONS = { timeout: 2 * 60_000, killSignal: "SIGKILL" } as const;
+
 /**
  * Feedback #132/#133: HDR10/HDR10+ (PQ) and HLG source frames encode
  * brightness on a curve a plain SDR viewer doesn't know how to read. A bare
@@ -134,7 +141,7 @@ export const generateVideoThumbnail = async (
             cachedPath,
           ];
 
-          const process = spawn("ffmpeg", args);
+          const process = spawn("ffmpeg", args, STILL_FRAME_SPAWN_OPTIONS);
           const abortBinding = bindChildProcessAbort(process, signal);
 
           let stderr = "";
@@ -273,7 +280,7 @@ export const generateVideoScrubFrame = async (
             cachedPath,
           ];
 
-          const process = spawn("ffmpeg", args);
+          const process = spawn("ffmpeg", args, STILL_FRAME_SPAWN_OPTIONS);
           const abortBinding = bindChildProcessAbort(process, signal);
 
           let stderr = "";

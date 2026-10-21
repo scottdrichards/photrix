@@ -1,6 +1,11 @@
 import { spawn } from "child_process";
 import type { ExifMetadata } from "../indexDatabase/fileRecord.type.ts";
 
+// A probe reads headers and returns in well under a second; one that hangs (a
+// damaged file, a stalled media-share read) would otherwise block whatever is
+// awaiting it — an HLS start, the metadata pass — indefinitely.
+const FFPROBE_SPAWN_OPTIONS = { timeout: 60_000, killSignal: "SIGKILL" } as const;
+
 type FFProbeStream = {
   codec_type?: string;
   width?: number;
@@ -91,14 +96,11 @@ export const getVideoSourceProfile = (
   filePath: string,
 ): Promise<VideoSourceProfile> =>
   new Promise((resolve, reject) => {
-    const proc = spawn("ffprobe", [
-      "-v",
-      "error",
-      "-print_format",
-      "json",
-      "-show_streams",
-      filePath,
-    ]);
+    const proc = spawn(
+      "ffprobe",
+      ["-v", "error", "-print_format", "json", "-show_streams", filePath],
+      FFPROBE_SPAWN_OPTIONS,
+    );
     let stdout = "";
     proc.stdout.on("data", (d) => {
       stdout += d.toString();
@@ -140,7 +142,7 @@ export const getVideoMetadata = async (
       filePath,
     ];
 
-    const process = spawn("ffprobe", args);
+    const process = spawn("ffprobe", args, FFPROBE_SPAWN_OPTIONS);
     let stdout = "";
     let stderr = "";
 
