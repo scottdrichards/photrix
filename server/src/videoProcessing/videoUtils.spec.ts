@@ -6,7 +6,6 @@ import path from "node:path";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import {
   appendWithLimit,
-  generateVideoPreview,
   generateVideoThumbnail,
   pipeChildProcessLogs,
 } from "./videoUtils.ts";
@@ -78,19 +77,6 @@ describe("videoUtils", () => {
     child.stderr?.emit("data", Buffer.from("line-err\n"));
 
     expect(captured).toEqual(["line-err\n"]);
-  });
-
-  it("returns cached preview path without conversion work", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-video-preview-"));
-    const source = path.join(root, "clip.mp4");
-    writeFileSync(source, "video");
-
-    const cached = getMirroredCachedFilePath(source, "preview.320.5s.audio", "mp4");
-    mkdirSync(path.dirname(cached), { recursive: true });
-    writeFileSync(cached, "cached-preview");
-
-    const result = await generateVideoPreview(source, 320, 5_000);
-    expect(result).toBe(cached);
   });
 
   it("returns cached thumbnail path without invoking ffmpeg", async () => {

@@ -358,9 +358,6 @@ export const fetchSemanticSearch = async ({
   };
 };
 
-export const fetchFileUrl = (path: string, params: Record<string, string>): string =>
-  buildFileUrl(path, params);
-
 export type PhotoMetadataPatch = {
   /** 1–5, or null/0 to clear the rating. */
   rating?: number | null;

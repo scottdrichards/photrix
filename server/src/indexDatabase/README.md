@@ -16,7 +16,6 @@ SQLite persistence layer for all indexed file metadata, embeddings, and face dat
 | `faceClusterEngine.ts`                                                        | Incremental DBSCAN face clustering against centroid embeddings                 |
 | `processFaceClustering.ts`                                                    | Orchestrates clustering passes triggered by the task runner                    |
 | `discoverFiles.ts` / `fileSystemScanFolder.ts` / `fileSystemMonitorFolder.ts` | FS walk + inotify watcher                                                      |
-| `dateSort.ts`                                                                 | Helpers for the `sort_date_v2` composite index                                 |
 | `pca.ts`                                                                      | PCA projection for face embedding visualisation                                |
 
 ## Invariants

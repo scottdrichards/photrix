@@ -73,13 +73,8 @@ const parsePositiveNumber = (value: string | undefined, fallback: number): numbe
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const formatDuration = (durationMs: number): string => `${durationMs.toFixed(1)}ms`;
-
 const getSpanLogThresholdMs = (): number =>
   parsePositiveNumber(process.env.PHOTRIX_TRACE_SPAN_MIN_MS, 25);
-
-const getSummarySpanLimit = (): number =>
-  Math.max(1, Math.floor(parsePositiveNumber(process.env.PHOTRIX_TRACE_TOP_SPANS, 8)));
 
 const summarizeByCategory = (spans: RequestSpan[]) => {
   const totals: Record<TraceCategory, number> = {
@@ -189,23 +184,6 @@ export const finishRequestTrace = (statusCode: number): void => {
 
   const totalDuration = nowMs() - context.startMs;
   const categoryTotals = summarizeByCategory(context.spans);
-  const topSpans = [...context.spans]
-    .sort((a, b) => b.durationMs - a.durationMs)
-    .slice(0, getSummarySpanLimit())
-    .map(
-      (span) =>
-        `${span.category}:${span.name}${span.detail ? `(${span.detail})` : ""}=${formatDuration(span.durationMs)}`,
-    );
-
-  const categorySummary = [
-    `db=${formatDuration(categoryTotals.db)}`,
-    `file=${formatDuration(categoryTotals.file)}`,
-    `conversion=${formatDuration(categoryTotals.conversion)}`,
-    `other=${formatDuration(categoryTotals.other)}`,
-  ].join(" ");
-
-  const topSummary = topSpans.length > 0 ? ` | top: ${topSpans.join(", ")}` : "";
-
   context.rootSpan.setAttributes({
     "http.response.status_code": statusCode,
     "photrix.request.total_ms": totalDuration,

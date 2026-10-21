@@ -12,9 +12,6 @@ const gpu = await getGpuAcceleration();
 const getHLSDirectory = (filePath: string, height: StandardHeight): string =>
   getMirroredHLSDirectory(filePath, String(height));
 
-export const getHLSSegmentPath = (hlsDir: string, segmentName: string): string =>
-  join(hlsDir, segmentName);
-
 /**
  * Runs FFmpeg HLS generation with the given args.
  * Returns a promise that resolves on success or rejects with the stderr on failure.

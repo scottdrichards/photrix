@@ -38,7 +38,7 @@ import { FaceAssignPanel } from "./FaceAssignPanel";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { MiniMap } from "./MiniMap";
 import { ShareOptionsModal } from "./ShareOptionsModal";
-import { PhotoEditor, type EditStyle, type EditAdj, DEFAULT_ADJ, computeStyle, isDirty, EditSvgDefs, applyPixelAdj } from "./PhotoEditor";
+import { PhotoEditor, type EditAdj, DEFAULT_ADJ, computeStyle, isDirty, EditSvgDefs, applyPixelAdj } from "./PhotoEditor";
 import { SwipePhotoViewer } from "./SwipePhotoViewer";
 import { isSharedView } from "../hooks/useShareFilter";
 import { cx } from "../cx";

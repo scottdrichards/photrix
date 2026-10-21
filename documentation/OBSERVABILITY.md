@@ -28,7 +28,6 @@ Optional tuning:
 
 ```powershell
 PHOTRIX_TRACE_SPAN_MIN_MS=25
-PHOTRIX_TRACE_TOP_SPANS=8
 ```
 
 ## What appears in traces
