@@ -96,3 +96,26 @@ describe("AsyncSqlite read worker pool", () => {
     }
   });
 });
+
+describe("AsyncSqlite worker death", () => {
+  it("fails every later query instead of hanging, and reports it once", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "async-sqlite-death-spec-"));
+    const db = await AsyncSqlite.open(join(dir, "test.db"), { readPoolSize: 1 });
+    try {
+      await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)");
+      const failures: Error[] = [];
+      db.onFailure((error) => failures.push(error));
+
+      const internals = db as unknown as { readWorkers: Array<{ terminate(): Promise<number> }> };
+      await internals.readWorkers[0].terminate();
+
+      expect(db.failed).toBeInstanceOf(Error);
+      await expect(db.all("SELECT v FROM t")).rejects.toThrow(/worker exited/);
+      await expect(db.run("INSERT INTO t (v) VALUES (?)", "x")).rejects.toThrow(/worker exited/);
+      expect(failures).toHaveLength(1);
+    } finally {
+      await db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -97,6 +97,34 @@ export class AsyncSqlite {
   // whose HTTP request was aborted (client disconnected, superseded map zoom)
   // can be dropped before a synchronous read worker ever runs it.
   private readQueue: ReadQueueEntry[] = [];
+  // A worker that dies is not replaced. Before this was tracked, a dead read
+  // worker went straight back into the idle pool and every later query sent
+  // to it (or to a dead write worker) hung forever, while /api/health still
+  // said ok. Now the first death fails everything from then on, loudly.
+  private closing = false;
+  private failure: Error | null = null;
+  private failureListeners: Array<(error: Error) => void> = [];
+
+  /** The error that killed a worker, or null while every worker is alive. */
+  get failed(): Error | null {
+    return this.failure;
+  }
+
+  /** Called once, when the first worker dies outside of close(). */
+  onFailure(listener: (error: Error) => void): void {
+    this.failureListeners.push(listener);
+  }
+
+  private fail(error: Error): void {
+    if (this.closing) return;
+    if (!this.failure) {
+      this.failure = error;
+      this.rejectAllPending(error);
+      for (const listener of this.failureListeners) listener(error);
+      return;
+    }
+    this.rejectAllPending(this.failure);
+  }
 
   private rejectAllPending(error: Error): void {
     const queued = this.readQueue.splice(0);
@@ -124,23 +152,16 @@ export class AsyncSqlite {
       }
     });
 
-    worker.on("error", (error) => {
-      this.rejectAllPending(error);
+    worker.on("error", (error: Error) => {
+      this.fail(error);
     });
 
     worker.on("messageerror", (error) => {
-      this.rejectAllPending(
-        new Error(`AsyncSqlite ${label} worker message error: ${error.message}`),
-      );
+      this.fail(new Error(`AsyncSqlite ${label} worker message error: ${error.message}`));
     });
 
     worker.on("exit", (code) => {
-      if (this.pending.size === 0) return;
-      this.rejectAllPending(
-        new Error(
-          `AsyncSqlite ${label} worker exited with code ${code} while requests were pending`,
-        ),
-      );
+      this.fail(new Error(`AsyncSqlite ${label} worker exited with code ${code}`));
     });
   }
 
@@ -189,6 +210,10 @@ export class AsyncSqlite {
   ): Promise<T> {
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
+      if (this.failure) {
+        reject(this.failure);
+        return;
+      }
       this.pending.set(id, {
         resolve: resolve as (v: unknown) => void,
         reject,
@@ -227,6 +252,10 @@ export class AsyncSqlite {
     const signal = getRequestAbortSignal();
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
+      if (this.failure) {
+        reject(this.failure);
+        return;
+      }
       if (signal?.aborted) {
         reject(abortError());
         return;
@@ -309,6 +338,7 @@ export class AsyncSqlite {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     // Queued reads will never be dispatched once the worker closes.
     const queued = this.readQueue.splice(0);
     for (const entry of queued) {
@@ -316,7 +346,10 @@ export class AsyncSqlite {
       entry.settle.reject(new Error("AsyncSqlite is closing"));
     }
     const workers = [this.writeWorker, ...this.readWorkers];
-    await Promise.all(workers.map((worker) => this.send<void>(worker, "close")));
+    // After a worker death the survivors can't be asked to close cleanly.
+    if (!this.failure) {
+      await Promise.all(workers.map((worker) => this.send<void>(worker, "close")));
+    }
     await Promise.all(workers.map((worker) => worker.terminate()));
   }
 }

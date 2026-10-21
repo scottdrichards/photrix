@@ -310,6 +310,13 @@ export const createServer = (
           }
 
           if (req.url === "/api/health" && req.method === "GET") {
+            if (database.asyncSqlite?.failed) {
+              writeJson(res, 503, {
+                status: "error",
+                message: "Database worker died; the server is restarting",
+              });
+              return;
+            }
             const payload = database.mediaRootUnavailable
               ? {
                   status: "unloaded",

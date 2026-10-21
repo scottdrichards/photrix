@@ -350,6 +350,12 @@ const startServer = async () => {
   // dropped). node's default is to exit without our cleanup, orphaning the ML
   // workers' VRAM; route it through the same shutdown so they're killed too.
   process.on("SIGHUP", () => shutdown("SIGHUP"));
+  // A dead SQLite worker isn't replaced, so every DB call fails from then on.
+  // Exit and let systemd (Restart=always) bring up a fresh process.
+  database.asyncSqlite.onFailure((err) => {
+    logger.fatal({ err }, "SQLite worker died — restarting");
+    shutdown("sqlite-worker-failure");
+  });
 };
 
 await startTelemetry();
