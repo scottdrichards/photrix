@@ -22,6 +22,14 @@ type LogClientEventOptions = Omit<ClientDiagnosticsEvent, "timestamp" | "clientS
 };
 
 const SESSION_STORAGE_KEY = "photrix_client_session_id";
+// Browsers reject a `keepalive` fetch whose body exceeds 64 KiB. Sending the
+// whole queue in one keepalive request meant that once it grew past that (say
+// after a spell offline) every flush threw, re-queued the batch and retried,
+// forever, while the queue kept growing. So send bounded batches, only ask for
+// keepalive when the body fits, and drop the oldest events past a cap.
+const MAX_PENDING_EVENTS = 500;
+const MAX_BATCH_EVENTS = 50;
+const KEEPALIVE_MAX_BODY_BYTES = 60 * 1024;
 const pendingEvents: ClientDiagnosticsEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let flushInFlight = false;
@@ -65,13 +73,20 @@ const scheduleFlush = (delayMs = 250) => {
   }, delayMs);
 };
 
+const trimPendingEvents = () => {
+  if (pendingEvents.length > MAX_PENDING_EVENTS) {
+    pendingEvents.splice(0, pendingEvents.length - MAX_PENDING_EVENTS);
+  }
+};
+
 export const flushClientDiagnostics = async () => {
   if (flushInFlight || pendingEvents.length === 0) {
     return;
   }
 
   flushInFlight = true;
-  const batch = pendingEvents.splice(0, pendingEvents.length);
+  const batch = pendingEvents.splice(0, MAX_BATCH_EVENTS);
+  const body = JSON.stringify({ events: batch });
 
   try {
     await fetch("/api/diagnostics/events", {
@@ -80,11 +95,12 @@ export const flushClientDiagnostics = async () => {
         "Content-Type": "application/json",
         ...getAuthHeaders(),
       },
-      keepalive: true,
-      body: JSON.stringify({ events: batch }),
+      keepalive: new TextEncoder().encode(body).byteLength <= KEEPALIVE_MAX_BODY_BYTES,
+      body,
     });
   } catch {
     pendingEvents.unshift(...batch);
+    trimPendingEvents();
   } finally {
     flushInFlight = false;
     if (pendingEvents.length > 0) {
@@ -108,6 +124,7 @@ export const logClientEvent = (options: LogClientEventOptions) => {
     ...(options.statusCode != null ? { statusCode: options.statusCode } : {}),
     ...(options.data ? { data: options.data } : {}),
   });
+  trimPendingEvents();
 
   if (options.immediate) {
     void flushClientDiagnostics();
