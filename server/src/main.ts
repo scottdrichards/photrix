@@ -30,6 +30,7 @@ import { initAuthService } from "./auth/authService.ts";
 import { initPasskeyService } from "./auth/passkeyService.ts";
 import { measureOperation } from "./observability/requestTrace.ts";
 import { startTelemetry, stopTelemetry } from "./observability/telemetry.ts";
+import { startMemoryLog } from "./observability/memoryLog.ts";
 import { createTaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import {
   resumeComputeWorkers,
@@ -68,6 +69,7 @@ const startServer = async () => {
   // our own workers spawn (below) so it can't kill them.
   await reapOrphanedComputeWorkers();
 
+  startMemoryLog();
   await initializeCacheDirectories();
   startCacheEviction();
 
