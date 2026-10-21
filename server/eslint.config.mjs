@@ -19,7 +19,8 @@ export default tseslint.config(
       },
       parserOptions: {
         sourceType: "module",
-        projectService: true,
+        project: "./tsconfig.eslint.json",
+        tsconfigRootDir: import.meta.dirname,
       },
     },
     rules: {
@@ -41,6 +42,14 @@ export default tseslint.config(
     },
     rules: {
       ...sharedTestRules,
+      // jest mocks are untyped by nature; these flag nearly every mock call.
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-call": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      "@typescript-eslint/no-unsafe-argument": "off",
+      "@typescript-eslint/no-unsafe-return": "off",
+      "@typescript-eslint/unbound-method": "off",
+      "@typescript-eslint/require-await": "off",
     },
   },
   eslintConfigPrettier,
