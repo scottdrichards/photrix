@@ -1,30 +1,7 @@
 import type * as http from "http";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import { writeJson } from "../../utils.ts";
-
-const readJsonBody = (req: http.IncomingMessage): Promise<unknown> =>
-  new Promise((resolve, reject) => {
-    let body = "";
-    let size = 0;
-    req.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      // Tag/rating payloads are tiny; reject anything unreasonable outright.
-      if (size > 64 * 1024) {
-        reject(new Error("Body too large"));
-        req.destroy();
-        return;
-      }
-      body += chunk.toString();
-    });
-    req.on("end", () => {
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        reject(new Error("Invalid JSON"));
-      }
-    });
-    req.on("error", reject);
-  });
+import { readJsonBody } from "../../common/readBody.ts";
 
 /**
  * PATCH /api/files/{path} — update the user-editable tagging fields (star
@@ -46,7 +23,7 @@ export const updateFileMetadataHandler = async (
 
   let body: unknown;
   try {
-    body = await readJsonBody(req);
+    body = await readJsonBody(req, { maxBytes: 64 * 1024, ifEmpty: {} });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid JSON body";
     writeJson(res, 400, { error: message });

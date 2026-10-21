@@ -2,22 +2,7 @@ import type * as http from "http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { writeJson } from "../utils.ts";
 import { invalidateNamedCentroidCache } from "./faceIdentifyRequestHandler.ts";
-
-const readJsonBody = (req: http.IncomingMessage): Promise<unknown> =>
-  new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (chunk: Buffer) => {
-      body += chunk.toString();
-    });
-    req.on("end", () => {
-      try {
-        resolve(JSON.parse(body));
-      } catch {
-        reject(new Error("Invalid JSON"));
-      }
-    });
-    req.on("error", reject);
-  });
+import { readJsonBody } from "../common/readBody.ts";
 
 export const peopleRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,

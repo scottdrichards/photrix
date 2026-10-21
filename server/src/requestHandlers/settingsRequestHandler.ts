@@ -2,22 +2,7 @@ import type * as http from "http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "../indexDatabase/indexDatabase.type.ts";
 import { writeJson } from "../utils.ts";
-
-const readJsonBody = (req: http.IncomingMessage): Promise<unknown> =>
-  new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (chunk: Buffer) => {
-      body += chunk.toString();
-    });
-    req.on("end", () => {
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        reject(new Error("Invalid JSON"));
-      }
-    });
-    req.on("error", reject);
-  });
+import { readJsonBody } from "../common/readBody.ts";
 
 /**
  * Single-user app settings (feedback #95). Currently just the default
@@ -42,7 +27,7 @@ export const settingsRequestHandler = async (
   if (url.pathname === "/api/settings/default-exclusion" && req.method === "POST") {
     let body: unknown;
     try {
-      body = await readJsonBody(req);
+      body = await readJsonBody(req, { ifEmpty: {} });
     } catch {
       writeJson(res, 400, { error: "Invalid JSON body" });
       return;
