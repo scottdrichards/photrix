@@ -1263,5 +1263,7 @@ describe("PeopleView", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "face-149.jpg" })).toBeInTheDocument();
     });
-  });
+    // Mounting 150 face cards takes ~4 s in jsdom on its own, so the 5 s
+    // default times out whenever the full suite runs in parallel.
+  }, 15_000);
 });
