@@ -801,6 +801,24 @@ export class IndexDatabase {
    * future writeback task, same as rating/tags). The file itself is never
    * touched — this is a DB-only edit.
    */
+  /**
+   * Stores a generated AI description (feedback #148). A single-column UPDATE,
+   * like updateUserMetadata, so a slow generation landing late can never
+   * clobber columns another writer changed meanwhile. Not a user edit, so it
+   * leaves userMetadataDirtyAt alone.
+   */
+  async setAiDescription(relativePath: string, aiDescription: string): Promise<boolean> {
+    const { folder, fileName } = splitPath(relativePath);
+    const result = await this.runWithRetry(() =>
+      this.db.run("UPDATE files SET aiDescription = ? WHERE folder = ? AND fileName = ?", [
+        aiDescription,
+        folder,
+        fileName,
+      ]),
+    );
+    return result.changes > 0;
+  }
+
   async updateUserMetadata(
     relativePath: string,
     patch: {

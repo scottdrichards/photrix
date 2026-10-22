@@ -5,7 +5,10 @@ import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { decodeRequestPath } from "../common/decodeRequestPath.ts";
 import { getRequestAbortSignal } from "../common/requestAbort.ts";
 import { getCachedPhotoCaption, setCachedPhotoCaption } from "../photoCaption/photoCaptionCache.ts";
-import { generatePhotoCaption } from "../photoCaption/generatePhotoCaption.ts";
+import {
+  generatePhotoCaption,
+  generatePhotoDescription,
+} from "../photoCaption/generatePhotoCaption.ts";
 import { convertImage } from "../imageProcessing/convertImage.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../utils.ts";
@@ -33,6 +36,76 @@ type Options = {
 const isPathInsideStorage = (storageRoot: string, targetPath: string): boolean => {
   const relativeToStorage = path.relative(storageRoot, targetPath);
   return !relativeToStorage.startsWith("..") && !path.isAbsolute(relativeToStorage);
+};
+
+/**
+ * GET /api/photos/caption?path=<folder+fileName>&kind=description — the long,
+ * untruncated description for the file-info panel (feedback #148), as a
+ * server-sent event stream so the viewer can show it as it is written:
+ * `{delta}` events, then one `{description}` (the cleaned whole) or `{error}`.
+ *
+ * Stored in the file's `aiDescription` column once complete, so it then
+ * arrives with the rest of the photo's metadata and is never generated twice.
+ */
+const describePhoto = async (
+  res: http.ServerResponse,
+  { database }: Pick<Options, "database">,
+  subPath: string,
+  normalizedPath: string,
+): Promise<void> => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders?.();
+  const send = (payload: unknown) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  try {
+    const fileRecord = await database.getFileRecord(subPath).catch(() => undefined);
+    if (fileRecord?.aiDescription) {
+      send({ description: fileRecord.aiDescription });
+      return;
+    }
+    if (fileRecord?.mimeType && !fileRecord.mimeType.startsWith("image/")) {
+      send({ description: null });
+      return;
+    }
+
+    const [peopleFaces, resizedImagePath] = await Promise.all([
+      database.getPeopleFacesForFile(subPath).catch(() => []),
+      convertImage(normalizedPath, CAPTION_IMAGE_HEIGHT, { format: "jpeg" }),
+    ]);
+    const imageBytes = await readFile(resizedImagePath);
+    const peopleNames = [...new Set(peopleFaces.map((f) => f.name).filter((n): n is string => !!n))];
+    const description = await generatePhotoDescription(
+      imageBytes.toString("base64"),
+      {
+        peopleNames,
+        dateTaken: fileRecord?.dateTaken ?? null,
+        folder: fileRecord?.folder ?? path.dirname(subPath),
+      },
+      {
+        // Closing the panel or moving to another photo drops the connection,
+        // which stops the generation instead of finishing it for nobody.
+        signal: getRequestAbortSignal(),
+        onDelta: (delta) => send({ delta }),
+      },
+    );
+    if (fileRecord) {
+      await database.setAiDescription(subPath, description).catch((error: unknown) => {
+        log.warn({ err: error, subPath }, "Failed to store AI description");
+      });
+    }
+    send({ description });
+  } catch (error) {
+    log.warn({ err: error, subPath }, "Photo description generation failed");
+    send({ error: "Description generation failed" });
+  } finally {
+    if (!res.writableEnded) res.end();
+  }
 };
 
 /**
@@ -64,6 +137,11 @@ export const photoCaptionRequestHandler = async (
   const normalizedPath = path.join(storageRoot, subPath);
   if (!isPathInsideStorage(storageRoot, normalizedPath)) {
     writeJson(res, 403, { error: "Access denied" });
+    return;
+  }
+
+  if (url.searchParams.get("kind") === "description") {
+    await describePhoto(res, { database }, subPath, normalizedPath);
     return;
   }
 

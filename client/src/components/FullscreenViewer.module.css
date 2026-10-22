@@ -605,47 +605,34 @@
   }
 }
 
-/* AI caption toast: slides down from the top of the viewer's media
-   container, holds briefly, then the component unmounts it (see the
-   auto-dismiss timer in FullscreenViewer.tsx) — no exit animation needed
-   since it's simply removed from the DOM. */
-@keyframes aiCaptionSlideDown {
-  from {
-    transform: translate(-50%, -100%);
+/* A description still being written (feedback #148) keeps its line breaks and
+   ends in a soft blinking caret so it reads as in-progress, not truncated. */
+.infoDescriptionLong {
+  white-space: pre-line;
+}
+
+.infoDescriptionWriting::after {
+  content: "▍";
+  margin-left: 1px;
+  animation: infoCaretBlink 1s steps(1) infinite;
+}
+
+@keyframes infoCaretBlink {
+  50% {
     opacity: 0;
-  }
-  to {
-    transform: translate(-50%, 0);
-    opacity: 1;
   }
 }
 
-.aiCaptionToast {
-  position: absolute;
-  top: var(--space-md, 16px);
-  left: 50%;
-  z-index: 20;
-  max-width: min(80%, 32rem);
-  padding: 0.5rem 1rem;
+.infoDescriptionRetry {
+  margin-top: var(--space-xs);
+  padding: 2px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 999px;
-  background: var(--viewer-overlay-bg, rgba(12, 14, 18, 0.72));
-  color: var(--viewer-overlay-fg, rgba(255, 255, 255, 0.96));
-  border: 1px solid var(--viewer-overlay-border, rgba(255, 255, 255, 0.18));
-  backdrop-filter: blur(8px);
-  font-size: 0.9rem;
-  text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-  /* Feedback #128: the animation shorthand had no fill-mode, which defaults
-     to `none` -- once it finished, the transform reverted to unset instead
-     of staying at the keyframes' `to` state (translate(-50%, 0)). That left
-     the box positioned by `left: 50%` alone, i.e. its *left edge* (not its
-     center) sitting at the horizontal midpoint, with all the content
-     hanging off to the right of it. `forwards` keeps the toast at the
-     keyframes' end state once the animation completes. */
-  animation: aiCaptionSlideDown 0.35s ease-out forwards;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 @media print {
@@ -679,7 +666,6 @@
   .navButton,
   .taggingBar,
   .infoSidebar,
-  .aiCaptionToast,
   .cropOverlayContainer,
   .faceBackdropLayer,
   .faceFrameLayer {

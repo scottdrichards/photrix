@@ -1,5 +1,5 @@
 import { getLogger } from "../observability/logger.ts";
-import { ollamaGenerate } from "../shareDescription/ollamaGenerate.ts";
+import { ollamaGenerate, ollamaGenerateStream } from "../shareDescription/ollamaGenerate.ts";
 
 const log = getLogger("generatePhotoCaption");
 
@@ -201,4 +201,74 @@ export const generatePhotoCaption = async (
     throw new Error("Caption model returned no usable description after retry");
   }
   return applyNamedPeople(cleaned, facts.peopleNames);
+};
+
+// Feedback #148: the long form, shown in the viewer's file-info panel. Asked
+// for in plain "describe" terms, which moondream follows well (it is the
+// tight-format instruction it ignores), and never truncated.
+const DESCRIPTION_SYSTEM_PROMPT = `Describe this family photo in detail for a photo album. Cover who is in it, what they are doing, the setting, notable objects, clothing, lighting and mood. Start directly with the subject — never with "This image shows" or similar. If people are named in the metadata, refer to them only by those first names; never guess or invent a name. Describe only what the image shows.`;
+
+// Generous enough for a full paragraph; the token budget, not the prompt, is
+// what used to cut descriptions off. The total deadline is long because a
+// contended GPU pushes moondream onto CPU (~0.3 tokens/s measured 2026-10-22);
+// the stream's idle timeout is what catches a genuinely stuck model.
+const DESCRIPTION_NUM_PREDICT = 512;
+const descriptionTimeoutMs =
+  Number(process.env.PHOTRIX_OLLAMA_DESCRIPTION_TIMEOUT_MS) || 600_000;
+
+/**
+ * Tidies a long description without shortening it: strips the "This image
+ * shows" preamble and wrapping quotes, keeps paragraph breaks, and collapses
+ * every other run of whitespace.
+ */
+export const cleanDescription = (raw: string): string | null => {
+  const paragraphs = raw
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  if (paragraphs.length === 0) return null;
+  paragraphs[0] = paragraphs[0].replace(/^["'“]+/, "").replace(INTRO_PHRASE, "").trim();
+  const last = paragraphs.length - 1;
+  paragraphs[last] = paragraphs[last].replace(/["'”]+$/, "").trim();
+  const text = paragraphs.filter(Boolean).join("\n\n");
+  if (!/[a-z]{2,}/i.test(text)) return null;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+};
+
+/**
+ * A detailed, untruncated AI description of a photo, streamed: `onDelta`
+ * receives the raw text as the model writes it, and the cleaned whole is
+ * returned at the end. Throws when the model gives nothing usable. No retry —
+ * the viewer has already shown the partial text, so a failure is surfaced and
+ * retried by the user rather than silently restarted underneath them.
+ */
+export const generatePhotoDescription = async (
+  imageBase64: string,
+  facts: PhotoCaptionFacts,
+  options: { signal?: AbortSignal; onDelta?: (text: string) => void } = {},
+): Promise<string> => {
+  const parts: string[] = [];
+  if (facts.peopleNames.length > 0) parts.push(`people=[${facts.peopleNames.join(", ")}]`);
+  if (facts.dateTaken) parts.push(`date=${facts.dateTaken.toISOString().slice(0, 10)}`);
+  const metadataLine = parts.length > 0 ? `Photo metadata: ${parts.join("; ")}. ` : "";
+
+  const raw = await ollamaGenerateStream(
+    DESCRIPTION_SYSTEM_PROMPT,
+    `${metadataLine}Describe this photo in detail.`,
+    options.onDelta ?? (() => {}),
+    {
+      images: [imageBase64],
+      model: visionModel,
+      numPredict: DESCRIPTION_NUM_PREDICT,
+      temperature: 0.4,
+      timeoutMs: descriptionTimeoutMs,
+      signal: options.signal,
+    },
+  );
+  const cleaned = raw ? cleanDescription(raw) : null;
+  if (!cleaned) {
+    log.warn({ raw, model: visionModel }, "Unusable photo description from Ollama");
+    throw new Error("Description model returned nothing usable");
+  }
+  return cleaned;
 };
