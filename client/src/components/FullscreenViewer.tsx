@@ -26,6 +26,7 @@ import {
   fetchPhotoCaption,
   fetchTranscriptSegments,
   negotiateVideoPlayback,
+  streamPhotoDescription,
   setFaceVerdicts,
   updatePhotoMetadata,
 } from "../api";
@@ -357,12 +358,15 @@ export function FullscreenViewer() {
   // fetch logic.
   const [activeFaceAssign, setActiveFaceAssign] = useState<NamedFace | null>(null);
   const [facesRefreshToken, setFacesRefreshToken] = useState(0);
-  // AI caption (<=6 words, from the vision model on Ollama): drives both the
-  // slide-down toast and a temporary document.title override while this
-  // photo is open. `toastKey` bumps on every new caption so the CSS
-  // slide-down animation replays even if the same photo re-fetches.
-  const [aiCaption, setAiCaption] = useState<{ text: string; toastKey: number } | null>(null);
-  const captionToastKeyRef = useRef(0);
+  // The AI caption (a short line from the vision model on Ollama) only sets
+  // document.title while the photo is open; the long description lives in
+  // the file-info panel (feedback #148).
+  const [aiDescription, setAiDescription] = useState<{
+    path: string;
+    text: string;
+    status: "writing" | "done" | "error";
+  } | null>(null);
+  const [aiDescriptionRetry, setAiDescriptionRetry] = useState(0);
   const previousDocumentTitleRef = useRef<string | null>(null);
   const [exportMode, setExportMode] = useState<"share" | "download" | null>(null);
   const [showCaptions, setShowCaptions] = useState(false);
@@ -486,15 +490,14 @@ export function FullscreenViewer() {
     setActiveFaceAssign(null);
   }, [photo?.path]);
 
-  // AI caption: fired on every photo open, shown as a slide-down toast and
-  // (while this photo stays open) the tab title. A real generation takes
+  // AI caption: fired on every photo open, used as the tab title while this
+  // photo stays open. A real generation takes
   // ~90-100s on the current Ollama host, and users flip through photos far
   // faster than that — so this must be cancelled (not just ignored) the
   // moment the photo changes or the viewer closes, or a slow response for a
   // long-since-abandoned photo could land after a later one already has its
   // own caption showing.
   useEffect(() => {
-    setAiCaption(null);
     if (!photo) {
       // Viewer closed: hand the tab title back to whatever owned it before
       // (usePageTitle's filter-derived title, or the static "Photrix"
@@ -530,10 +533,7 @@ export function FullscreenViewer() {
     const abortController = new AbortController();
     fetchPhotoCaption(photo.path, abortController.signal)
       .then((caption) => {
-        if (!caption) return;
-        captionToastKeyRef.current += 1;
-        setAiCaption({ text: caption, toastKey: captionToastKeyRef.current });
-        document.title = caption;
+        if (caption) document.title = caption;
       })
       .catch(() => {
         // Aborted (photo changed / viewer closed) or network error — no
@@ -543,14 +543,42 @@ export function FullscreenViewer() {
     return () => abortController.abort();
   }, [photo?.path, photo?.mediaType]);
 
-  // Auto-dismiss the toast a few seconds after it appears (it's a passing
-  // notification, not persistent UI) — the tab title is unaffected, it stays
-  // the caption until the photo changes or the viewer closes.
+  // Feedback #148: the long AI description lives in the file-info panel and
+  // is written on demand — only while the panel is open, streamed in as the
+  // model produces it, and stored server-side so it is never generated twice.
+  // Closing the panel or moving on aborts the stream, which stops generation.
+  const storedAiDescription =
+    typeof photo?.metadata?.aiDescription === "string" ? photo.metadata.aiDescription : null;
   useEffect(() => {
-    if (!aiCaption) return;
-    const timer = setTimeout(() => setAiCaption(null), 6000);
-    return () => clearTimeout(timer);
-  }, [aiCaption?.toastKey]);
+    if (!showFileInfo || !photo || photo.mediaType === "video" || storedAiDescription) return;
+    if (aiDescription?.path === photo.path && aiDescription.status === "done") return;
+
+    const path = photo.path;
+    const abortController = new AbortController();
+    setAiDescription({ path, text: "", status: "writing" });
+    streamPhotoDescription(
+      path,
+      (delta) =>
+        setAiDescription((current) =>
+          current?.path === path ? { ...current, text: current.text + delta } : current,
+        ),
+      abortController.signal,
+    )
+      .then((description) =>
+        setAiDescription({ path, text: description ?? "", status: "done" }),
+      )
+      .catch(() => {
+        if (abortController.signal.aborted) return;
+        setAiDescription((current) =>
+          current?.path === path ? { ...current, status: "error" } : current,
+        );
+      });
+
+    return () => abortController.abort();
+    // aiDescription is read only to skip a finished one; including it would
+    // restart the stream on every delta.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showFileInfo, photo?.path, photo?.mediaType, storedAiDescription, aiDescriptionRetry]);
 
   // Fetch transcript segments for videos
   useEffect(() => {
@@ -1264,11 +1292,6 @@ export function FullscreenViewer() {
 
   const faceToggleDisabled =
     photo?.mediaType === "video" || (!hasFaceOverlayData && peopleFaces.length === 0);
-  const aiCaptionToast = aiCaption ? (
-    <div key={aiCaption.toastKey} className={css.aiCaptionToast} role="status">
-      {aiCaption.text}
-    </div>
-  ) : null;
 
   const zoomStyle = {
     "--zoom-origin-x": `${photoZoom.originXPercent}%`,
@@ -1580,7 +1603,6 @@ export function FullscreenViewer() {
                     } as React.CSSProperties
                   }
                 >
-                  {aiCaptionToast}
                   {/* Thumbnail shown until canvas is ready */}
                   <div
                     className={css.thumbnailClip}
@@ -1660,7 +1682,6 @@ export function FullscreenViewer() {
                   onPrev={selectPrevious}
                   onClose={() => setSelected(null)}
                 >
-                  {aiCaptionToast}
                   {showFaces && (
                     <FaceOverlay
                       regionsRaw={photo.metadata?.regions}
@@ -1745,11 +1766,48 @@ export function FullscreenViewer() {
                   />
                 )}
 
-                {/* AI-generated description */}
-                {Boolean(meta?.aiDescription) && (
+                {/* AI-generated description (feedback #148): stored, or being
+                    written right now — see the streamPhotoDescription effect. */}
+                {photo.mediaType !== "video" && (
                   <>
-                    <h4 className={css.infoSubtitle}>AI Description</h4>
-                    <p className={css.infoDescription}>{String(meta?.aiDescription)}</p>
+                    <h4 className={css.infoSubtitle}>AI description</h4>
+                    {storedAiDescription ? (
+                      <p className={cx(css.infoDescription, css.infoDescriptionLong)}>
+                        {storedAiDescription}
+                      </p>
+                    ) : aiDescription?.path === photo.path && aiDescription.status === "error" ? (
+                      <>
+                        <p className={css.infoEmpty}>
+                          {aiDescription.text
+                            ? `${aiDescription.text.trim()}…`
+                            : "Couldn't write a description."}
+                        </p>
+                        <button
+                          type="button"
+                          className={css.infoDescriptionRetry}
+                          onClick={() => setAiDescriptionRetry((n) => n + 1)}
+                        >
+                          Retry
+                        </button>
+                      </>
+                    ) : aiDescription?.path === photo.path && aiDescription.text ? (
+                      <p
+                        className={cx(
+                          css.infoDescription,
+                          css.infoDescriptionLong,
+                          aiDescription.status === "writing" && css.infoDescriptionWriting,
+                        )}
+                        aria-busy={aiDescription.status === "writing"}
+                      >
+                        {aiDescription.status === "done"
+                          ? aiDescription.text
+                          : aiDescription.text.trimStart()}
+                      </p>
+                    ) : (
+                      <p className={css.infoEmpty} aria-busy="true">
+                        Writing a description…
+                      </p>
+                    )}
                   </>
                 )}
 

@@ -16,6 +16,7 @@ const createClientOperationIdMock = vi.fn(() => "client-op-1");
 
 const {
   fetchPhotoCaptionMock,
+  streamPhotoDescriptionMock,
   hlsIsSupportedMock,
   hlsLoadSourceMock,
   hlsAttachMediaMock,
@@ -28,6 +29,10 @@ const {
   hlsInstances,
 } = vi.hoisted(() => ({
   fetchPhotoCaptionMock: vi.fn(() => Promise.resolve(null as string | null)),
+  streamPhotoDescriptionMock: vi.fn(
+    (_path: string, _onDelta: (text: string) => void): Promise<string | null> =>
+      new Promise<string | null>(() => {}),
+  ),
   hlsIsSupportedMock: vi.fn(() => false),
   hlsLoadSourceMock: vi.fn(),
   hlsAttachMediaMock: vi.fn(),
@@ -57,6 +62,8 @@ vi.mock("../api", () => ({
   fetchPeopleFacesForFile: () => Promise.resolve([]),
   fetchPhotoCaption: (...args: unknown[]) =>
     (fetchPhotoCaptionMock as (...a: unknown[]) => unknown)(...args),
+  streamPhotoDescription: (...args: unknown[]) =>
+    (streamPhotoDescriptionMock as (...a: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../diagnostics", () => ({
@@ -136,6 +143,8 @@ describe("FullscreenViewer", () => {
     vi.restoreAllMocks();
     fetchPhotoCaptionMock.mockReset();
     fetchPhotoCaptionMock.mockResolvedValue(null);
+    streamPhotoDescriptionMock.mockReset();
+    streamPhotoDescriptionMock.mockImplementation(() => new Promise<string | null>(() => {}));
     probeVideoPlaybackProfileMock.mockReset();
     probeVideoPlaybackProfileMock.mockResolvedValue({
       bandwidthMbps: 20,
@@ -286,7 +295,7 @@ describe("FullscreenViewer", () => {
     expect(screen.queryByRole("button", { name: "Print item" })).not.toBeInTheDocument();
   });
 
-  it("renders the AI caption toast inside the photo frame instead of the full viewer container", async () => {
+  it("puts the AI caption in the tab title without a toast (feedback #148)", async () => {
     fetchPhotoCaptionMock.mockResolvedValue("Sunset at the beach");
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto(),
@@ -296,14 +305,42 @@ describe("FullscreenViewer", () => {
       selectPrevious: vi.fn(),
     });
 
-    const { container } = render(<FullscreenViewer />);
+    render(<FullscreenViewer />);
 
-    const toast = await screen.findByRole("status");
-    const swipeBox = container.querySelector(`.${swipeCss.box}`);
+    await waitFor(() => expect(document.title).toBe("Sunset at the beach"));
+    expect(screen.queryByText("Sunset at the beach")).toBeNull();
+  });
 
-    expect(swipeBox).not.toBeNull();
-    expect(toast.parentElement).toBe(swipeBox);
-    expect(toast.closest(`.${css.container}`)).not.toBe(toast.parentElement);
+  it("streams the AI description into the file info panel only once it is open (feedback #148)", async () => {
+    let finish: (value: string) => void = () => {};
+    streamPhotoDescriptionMock.mockImplementation(
+      (_path: string, onDelta: (text: string) => void) => {
+        onDelta("Two girls hug ");
+        onDelta("in a red armchair.");
+        return new Promise<string>((resolve) => {
+          finish = resolve;
+        });
+      },
+    );
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto(),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    render(<FullscreenViewer />);
+    expect(streamPhotoDescriptionMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show file info" }));
+    expect(await screen.findByText("Two girls hug in a red armchair.")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+
+    React.act(() => finish("Two girls hug in a red armchair beside a door."));
+    expect(await screen.findByText("Two girls hug in a red armchair beside a door.")).toBeInTheDocument();
   });
 
   it("shows file info and keeps the info panel open across close/open", () => {

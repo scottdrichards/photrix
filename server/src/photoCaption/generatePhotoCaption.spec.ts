@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
-import { applyNamedPeople, cleanCaption } from "./generatePhotoCaption.ts";
+import { applyNamedPeople, cleanCaption, cleanDescription } from "./generatePhotoCaption.ts";
 
 describe("applyNamedPeople", () => {
   it("replaces a vision-model's guessed subject with the named face cluster", () => {
@@ -47,5 +47,25 @@ describe("cleanCaption", () => {
 
   it("rejects numeric and punctuation-only model output", () => {
     expect(cleanCaption("!!! 202 6 8 3")).toBeNull();
+  });
+});
+
+describe("cleanDescription (feedback #148)", () => {
+  it("keeps a long description whole instead of truncating it like a caption", () => {
+    const sentence = "Two girls in velvet dresses hug in a red armchair beside a wooden door. ";
+    const raw = `\nThe image shows ${sentence.repeat(6)}`;
+    const cleaned = cleanDescription(raw);
+    expect(cleaned?.startsWith("Two girls in velvet dresses")).toBe(true);
+    expect(cleaned?.split(/\s+/).length).toBeGreaterThan(60);
+  });
+
+  it("keeps paragraph breaks but collapses other whitespace", () => {
+    expect(cleanDescription('"a  child\nplays.\n\nThe sun   is low."')).toBe(
+      "A child plays.\n\nThe sun is low.",
+    );
+  });
+
+  it("rejects output with no words", () => {
+    expect(cleanDescription("  \n 12 34 ")).toBeNull();
   });
 });
