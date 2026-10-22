@@ -5,6 +5,11 @@
   /* We drive all panning/zooming/swiping ourselves via pointer events, so
      suppress the browser's native touch scrolling and pinch-zoom. */
   touch-action: none;
+  /* A mouse press beside the image jitters a pixel or two before release, which
+     the browser reads as a drag-select and paints the image as selected.
+     Nothing in the viewer is text to copy. */
+  user-select: none;
+  -webkit-user-select: none;
   z-index: 0;
 }
 
