@@ -30,6 +30,7 @@ import { TopRailPortal } from "./TopRailPortal";
 import { ViewToggle } from "./ViewToggle";
 import { isSharedView } from "../hooks/useShareFilter";
 import css from "./PeopleView.module.css";
+import { FACE_SORT_LABELS, sortFaces, type FaceSort } from "./faceSort";
 
 // Share-link viewers are read-only: they may browse people but never rename,
 // merge, or separate clusters (the server rejects those writes too). Computed
@@ -346,8 +347,19 @@ const PersonDetail = ({
   useEffect(() => {
     setReviewing(false);
   }, [cluster.id]);
-  const visibleFaces = (selectedFaceGroup?.faces ?? cluster.faces).filter(
-    (face) => !excludedFaceIds.has(face.faceId),
+  // Memoised, not recomputed per render: the effects below depend on this
+  // array's identity, and pushing a fresh one into the selection context on
+  // every render re-rendered this view forever (~90% of a core while idle).
+  const [faceSort, setFaceSort] = useState<FaceSort>("match");
+  const visibleFaces = useMemo(
+    () =>
+      sortFaces(
+        (selectedFaceGroup?.faces ?? cluster.faces).filter(
+          (face) => !excludedFaceIds.has(face.faceId),
+        ),
+        faceSort,
+      ),
+    [selectedFaceGroup?.faces, cluster.faces, excludedFaceIds, faceSort],
   );
 
   useEffect(() => {
@@ -569,15 +581,32 @@ const PersonDetail = ({
               <span className={css.selectedFacesMeta}>{selectedFaceGroupLabel}</span>
             ) : null}
           </div>
-          {selectedFaceGroup ? (
-            <button
-              type="button"
-              className={css.clearFaceFilterButton}
-              onClick={onClearSelectedFaceGroup}
-            >
-              Show all faces
-            </button>
-          ) : null}
+          <div className={css.faceGridControls}>
+            <label className={css.faceSortLabel}>
+              Sort
+              <select
+                className={css.faceSortSelect}
+                value={faceSort}
+                aria-label="Sort faces"
+                onChange={(e) => setFaceSort(e.target.value as FaceSort)}
+              >
+                {(Object.keys(FACE_SORT_LABELS) as FaceSort[]).map((value) => (
+                  <option key={value} value={value}>
+                    {FACE_SORT_LABELS[value]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedFaceGroup ? (
+              <button
+                type="button"
+                className={css.clearFaceFilterButton}
+                onClick={onClearSelectedFaceGroup}
+              >
+                Show all faces
+              </button>
+            ) : null}
+          </div>
         </div>
         {selectedFaceGroupLoading || loadingFaces ? (
           <div className={css.spinnerWrap}>
