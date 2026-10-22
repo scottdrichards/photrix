@@ -54,8 +54,9 @@ export const streamPhotoDescription = async (
     const events = buffered.split("\n\n");
     buffered = events.pop() ?? "";
     for (const event of events) {
-      const data = event.replace(/^data: /, "");
-      if (!data.trim()) continue;
+      // ": waiting" heartbeats are SSE comments, not data.
+      if (!event.startsWith("data: ")) continue;
+      const data = event.slice("data: ".length);
       const payload = JSON.parse(data) as {
         delta?: string;
         description?: string | null;

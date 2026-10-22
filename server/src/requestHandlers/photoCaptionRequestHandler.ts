@@ -62,6 +62,14 @@ const describePhoto = async (
   const send = (payload: unknown) => {
     if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
+  // An SSE comment every 15 s while the model is silent (a queued or
+  // CPU-bound model can take minutes to emit its first token). Without a body
+  // byte the proxies hold back even the response headers, and an idle
+  // connection is one a proxy may eventually drop.
+  res.write(": started\n\n");
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write(": waiting\n\n");
+  }, 15_000);
 
   try {
     const fileRecord = await database.getFileRecord(subPath).catch(() => undefined);
@@ -104,6 +112,7 @@ const describePhoto = async (
     log.warn({ err: error, subPath }, "Photo description generation failed");
     send({ error: "Description generation failed" });
   } finally {
+    clearInterval(heartbeat);
     if (!res.writableEnded) res.end();
   }
 };
