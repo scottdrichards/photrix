@@ -131,14 +131,16 @@ export const ollamaGenerate = async (
  * same best-effort terms).
  *
  * A long vision answer can take minutes when the GPU is contended, so the
- * deadline is an *idle* timeout — how long the model may go silent — rather
- * than a cap on the whole generation. `timeoutMs` still bounds the total.
+ * deadline is an *idle* timeout — how long the model may go silent once it
+ * has started — rather than a cap on the whole generation. Before the first
+ * token the wait is `firstTokenTimeoutMs` instead: on CPU, behind a queue,
+ * the image prompt alone has taken over 90 s. `timeoutMs` bounds the total.
  */
 export const ollamaGenerateStream = async (
   system: string,
   prompt: string,
   onDelta: (text: string) => void,
-  options: OllamaGenerateOptions & { idleTimeoutMs?: number } = {},
+  options: OllamaGenerateOptions & { idleTimeoutMs?: number; firstTokenTimeoutMs?: number } = {},
 ): Promise<string | null> => {
   const ollamaUrl = getOllamaUrl();
   if (!ollamaUrl) return null;
@@ -146,7 +148,7 @@ export const ollamaGenerateStream = async (
   const effectiveModel = options.model ?? model;
   const idle = new AbortController();
   const idleTimeoutMs = options.idleTimeoutMs ?? 90_000;
-  let idleTimer = setTimeout(() => idle.abort(), idleTimeoutMs);
+  let idleTimer = setTimeout(() => idle.abort(), options.firstTokenTimeoutMs ?? 300_000);
   const bumpIdle = () => {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => idle.abort(), idleTimeoutMs);
@@ -193,11 +195,11 @@ export const ollamaGenerateStream = async (
       }
     };
     for await (const bytes of res.body as unknown as AsyncIterable<Uint8Array>) {
-      bumpIdle();
       buffered += decoder.decode(bytes, { stream: true });
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
       lines.forEach(handleLine);
+      if (text) bumpIdle();
     }
     handleLine(buffered);
     return text.trim() || null;
