@@ -25,6 +25,7 @@ const {
   hlsStartLoadMock,
   hlsRecoverMediaErrorMock,
   hlsEventHandlers,
+  hlsInstances,
 } = vi.hoisted(() => ({
   fetchPhotoCaptionMock: vi.fn(() => Promise.resolve(null as string | null)),
   hlsIsSupportedMock: vi.fn(() => false),
@@ -36,6 +37,7 @@ const {
   hlsStartLoadMock: vi.fn(),
   hlsRecoverMediaErrorMock: vi.fn(),
   hlsEventHandlers: new Map<string, (...args: unknown[]) => void>(),
+  hlsInstances: [] as { levels: { height: number }[]; currentLevel: number; nextLevel: number }[],
 }));
 
 const useSelectionContextMock = vi.fn();
@@ -85,6 +87,10 @@ vi.mock("hls.js", () => ({
     media = null;
     levels = [{ height: 720 }];
     currentLevel = -1;
+    nextLevel = -1;
+    constructor() {
+      hlsInstances.push(this);
+    }
     loadSource = hlsLoadSourceMock;
     attachMedia = hlsAttachMediaMock;
     on = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
@@ -153,6 +159,8 @@ describe("FullscreenViewer", () => {
     hlsStartLoadMock.mockReset();
     hlsRecoverMediaErrorMock.mockReset();
     hlsEventHandlers.clear();
+    hlsInstances.length = 0;
+    window.localStorage.clear();
   });
 
   it("renders selected image and closes via close button", () => {
@@ -815,6 +823,61 @@ describe("FullscreenViewer", () => {
       expect(video?.getAttribute("src")).toBeNull();
       expect(screen.getByTestId("video-status")).toHaveTextContent("HLS");
     });
+  });
+
+  it("remembers the chosen video quality and switches without a buffer flush (feedback #149)", async () => {
+    hlsIsSupportedMock.mockReturnValue(true);
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "hls",
+      url: "http://localhost/a/clip.m3u8",
+      reason: "Cached HLS available",
+    });
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/clip.mp4",
+        name: "clip.mp4",
+        mediaType: "video",
+        originalUrl: "http://localhost/a/clip.mp4",
+        hlsUrl: "http://localhost/a/clip.m3u8",
+        metadata: { sizeInBytes: 2_000_000, duration: 2, videoCodec: "hevc" },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    const parseManifest = async (levels: { height: number }[]) => {
+      await waitFor(() => expect(hlsEventHandlers.has("manifestParsed")).toBe(true));
+      const hls = hlsInstances[hlsInstances.length - 1];
+      hls.levels = levels;
+      // Several listeners subscribe to MANIFEST_PARSED (the ABR guard too), and
+      // hlsEventHandlers keeps only the last one, so fire them all.
+      const handlers = hlsOnMock.mock.calls
+        .filter(([event]) => event === "manifestParsed")
+        .map(([, handler]) => handler as () => void);
+      React.act(() => handlers.forEach((handler) => handler()));
+      return hls;
+    };
+
+    const first = render(<FullscreenViewer />);
+    const firstHls = await parseManifest([{ height: 360 }, { height: 720 }, { height: 1080 }]);
+    expect(firstHls.currentLevel).toBe(-1);
+
+    fireEvent.change(await screen.findByLabelText("Video quality"), { target: { value: "1" } });
+    // nextLevel switches at the next fragment; currentLevel would flush the buffer.
+    expect(firstHls.nextLevel).toBe(1);
+    expect(firstHls.currentLevel).toBe(-1);
+    first.unmount();
+
+    // A different video with a shorter ladder starts at the closest rung at or
+    // below the remembered 720p.
+    hlsEventHandlers.clear();
+    hlsOnMock.mockClear();
+    render(<FullscreenViewer />);
+    const secondHls = await parseManifest([{ height: 480 }, { height: 540 }]);
+    expect(secondHls.currentLevel).toBe(1);
+    expect(await screen.findByLabelText("Video quality")).toHaveValue("1");
   });
 
   it("marks playback unavailable — never raw — after repeated HLS network failures", async () => {

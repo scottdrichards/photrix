@@ -210,6 +210,41 @@ const readMetadataAspectRatio = (metadata: Record<string, unknown> | undefined):
 
 const PREVIEW_MAX_EDGE = 1200;
 
+// The video quality the user last picked, as a height ("auto" or absent means
+// ABR). Stored by height, not level index, because each video has its own
+// ladder of variants.
+const VIDEO_QUALITY_KEY = "photrix.videoQuality";
+
+const readPreferredVideoHeight = (): number | null => {
+  try {
+    const height = Number(window.localStorage.getItem(VIDEO_QUALITY_KEY));
+    return Number.isFinite(height) && height > 0 ? height : null;
+  } catch {
+    return null;
+  }
+};
+
+const writePreferredVideoHeight = (height: number | null): void => {
+  try {
+    window.localStorage.setItem(VIDEO_QUALITY_KEY, height ? String(height) : "auto");
+  } catch {
+    // A remembered quality is a convenience; never let storage break playback.
+  }
+};
+
+// The tallest variant at or below the preferred height, else the shortest one,
+// so a 1080p preference still applies to a video whose top rung is 720p.
+const pickLevelForHeight = (levels: { height: number }[], preferred: number): number => {
+  let best = -1;
+  levels.forEach((level, index) => {
+    if (level.height <= preferred && (best < 0 || level.height > levels[best].height)) {
+      best = index;
+    }
+  });
+  if (best >= 0) return best;
+  return levels.reduce((low, level, index) => (level.height < levels[low].height ? index : low), 0);
+};
+
 // Draws the full, uncropped, unrotated image (pixel adjustments only — tone,
 // color, dehaze, clarity/sharpness convolution, vignette). Rotation, flip,
 // and crop are applied afterward as CSS on the canvas element itself, so the
@@ -776,6 +811,14 @@ export function FullscreenViewer() {
               setHlsLevels(
                 hls.levels.map((level, index) => ({ index, height: level.height })),
               );
+              // Feedback #149: start at the quality the user last chose. Nothing
+              // is buffered yet, so locking the level here costs no flush.
+              const preferredHeight = readPreferredVideoHeight();
+              if (preferredHeight && hls.levels.length > 1) {
+                const level = pickLevelForHeight(hls.levels, preferredHeight);
+                hls.currentLevel = level;
+                setManualLevel(level);
+              }
             }
             logClientEvent({
               level: "info",
@@ -1273,9 +1316,16 @@ export function FullscreenViewer() {
                       onChange={(e) => {
                         const level = Number(e.target.value);
                         setManualLevel(level);
+                        writePreferredVideoHeight(
+                          hlsLevels.find((l) => l.index === level)?.height ?? null,
+                        );
                         const hls = hlsRef.current;
                         // -1 re-enables ABR (auto); a level index locks to that quality.
-                        if (hls) hls.currentLevel = level;
+                        // `nextLevel`, not `currentLevel`: currentLevel flushes the
+                        // whole buffer and stalls until the new variant arrives
+                        // (feedback #149); nextLevel keeps playing what's buffered
+                        // and switches at the next fragment.
+                        if (hls) hls.nextLevel = level;
                       }}
                     >
                       <option value={-1}>
