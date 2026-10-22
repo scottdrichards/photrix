@@ -346,8 +346,15 @@ const PersonDetail = ({
   useEffect(() => {
     setReviewing(false);
   }, [cluster.id]);
-  const visibleFaces = (selectedFaceGroup?.faces ?? cluster.faces).filter(
-    (face) => !excludedFaceIds.has(face.faceId),
+  // Memoised, not recomputed per render: the effects below depend on this
+  // array's identity, and pushing a fresh one into the selection context on
+  // every render re-rendered this view forever (~90% of a core while idle).
+  const visibleFaces = useMemo(
+    () =>
+      (selectedFaceGroup?.faces ?? cluster.faces).filter(
+        (face) => !excludedFaceIds.has(face.faceId),
+      ),
+    [selectedFaceGroup?.faces, cluster.faces, excludedFaceIds],
   );
 
   useEffect(() => {
