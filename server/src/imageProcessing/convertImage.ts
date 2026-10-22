@@ -141,8 +141,17 @@ const resolvePythonInvocationUncached = async (): Promise<PythonInvocation> => {
     );
   }
 
-  const candidates: PythonInvocation[] =
+  // The server's own virtualenv (server/.venv, where `pip install -r
+  // requirements.txt` is documented to go) comes first: a system python rarely
+  // has Pillow and pillow-heif, so without this every checkout that doesn't set
+  // PHOTRIX_PYTHON — tests included — fails image conversion.
+  const projectVenvPython =
     process.platform === "win32"
+      ? resolve(process.cwd(), ".venv", "Scripts", "python.exe")
+      : resolve(process.cwd(), ".venv", "bin", "python");
+  const candidates: PythonInvocation[] = [
+    { command: projectVenvPython, baseArgs: [] },
+    ...(process.platform === "win32"
       ? [
           { command: "py", baseArgs: [] },
           { command: "python", baseArgs: [] },
@@ -150,7 +159,8 @@ const resolvePythonInvocationUncached = async (): Promise<PythonInvocation> => {
       : [
           { command: "python3", baseArgs: [] },
           { command: "python", baseArgs: [] },
-        ];
+        ]),
+  ];
 
   // Record why each candidate was rejected so a total failure names the actual
   // problem (interpreter absent vs present-but-missing-modules) instead of a
