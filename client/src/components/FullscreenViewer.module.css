@@ -253,6 +253,45 @@
   backdrop-filter: blur(2px);
 }
 
+.faceLabel[data-armed] {
+  z-index: 1; /* above a neighbouring label on a tightly packed group photo */
+  border-color: rgba(255, 110, 110, 0.95);
+}
+
+.faceLabel:has(.faceRejectButton) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 3px;
+}
+
+.faceLabelName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The one clickable part of a named label (feedback #145). The label layer is
+   pointer-events: none, so only this opts back in. */
+.faceRejectButton {
+  pointer-events: auto;
+  cursor: pointer;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.faceRejectButton:hover,
+.faceLabel[data-armed] .faceRejectButton {
+  background: rgba(220, 60, 60, 0.9);
+}
+
 /* Same anchoring as .faceLabel, but a real button: an unnamed face gets a
    "Who is this?" chip instead of nothing, opening FaceAssignPanel. Needs its
    own pointer-events override since the shared .faceLabelLayer parent sets
