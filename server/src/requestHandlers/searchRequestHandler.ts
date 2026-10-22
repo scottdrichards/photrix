@@ -132,11 +132,15 @@ export const searchRequestHandler = async (
   // Not the literal count of every photo in the library that matches (each
   // source is still its own top-N, not a full scan-and-count), but a much
   // more informative number than a number that was always exactly `limit`.
-  const CANDIDATE_LIMIT = Math.max(offset + limit, 500);
-
   // Result ordering. Defaults to relevance (RRF rank). date/rating reorder the
   // top-N most-relevant hits by that field rather than re-selecting the library.
   const sort = parseSort(url.searchParams.get("sort"));
+  // Feedback #147: a date/rating sort reorders the whole candidate set before
+  // paging, so that set must be identical on every page. Growing it with
+  // `offset` (as relevance paging safely can) would shift which hits exist
+  // between requests and break the ordering across page boundaries.
+  const reordered = Boolean(sort && sort.field !== "relevance");
+  const CANDIDATE_LIMIT = reordered ? 1000 : Math.max(offset + limit, 500);
 
   const path = url.searchParams.get("path") ?? "";
   const includeSubfolders = url.searchParams.get("includeSubfolders") === "true";
@@ -405,10 +409,11 @@ export const searchRequestHandler = async (
   // is a meaningfully larger, truer number than `items.length` without
   // costing much more than the scan the search was doing anyway.
   const total = fused.size;
-  const ranked = [...fused.values()]
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(offset, offset + limit);
-  const items = sortSearchResults(ranked, sort).map(({ sources, ...rest }) => ({
+  // Sort the full set, then page it. Slicing first would only order each page
+  // within itself, so infinite scroll restarted the date order every page.
+  const ranked = [...fused.values()].sort((a, b) => b.similarity - a.similarity);
+  const page = sortSearchResults(ranked, sort).slice(offset, offset + limit);
+  const items = page.map(({ sources, ...rest }) => ({
     ...rest,
     sources: [...sources],
   }));

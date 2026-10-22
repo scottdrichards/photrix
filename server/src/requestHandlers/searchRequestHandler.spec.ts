@@ -413,6 +413,56 @@ describe("searchRequestHandler resilience", () => {
     ]);
   });
 
+  it("orders by date across pages, not just within each page (feedback #147)", async () => {
+    const handler = await loadHandler({
+      embedTextWithClap: async () => {
+        throw new Error("clap down");
+      },
+    });
+
+    // Relevance order deliberately disagrees with date order, so sorting each
+    // page on its own would put 2021 ahead of 2024 on page one.
+    const hit = (fileName: string, similarity: number, date: string) => ({
+      folder: "/a/",
+      fileName,
+      mimeType: "image/jpeg",
+      similarity,
+      dateTaken: new Date(date),
+    });
+    const imageHits = [
+      hit("2021.jpg", 0.9, "2021-01-01"),
+      hit("2020.jpg", 0.8, "2020-01-01"),
+      hit("2024.jpg", 0.7, "2024-01-01"),
+      hit("2023.jpg", 0.6, "2023-01-01"),
+    ];
+
+    const database = {
+      semanticSearch: jest.fn(async () => imageHits),
+      audioSemanticSearch: jest.fn(async () => []),
+      audioTranscriptSearch: jest.fn(async () => []),
+    } as unknown as IndexDatabase;
+
+    const fetchPage = async (offset: number) => {
+      const req = {
+        url: `/api/search?q=beach&sort=date:desc&limit=2&offset=${offset}`,
+        headers: { host: "localhost" },
+      } as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
+      const { res, getJson } = createJsonResponse();
+      await handler(req, res, { database });
+      return getJson().items.map((i: { fileName: string }) => i.fileName);
+    };
+
+    expect([...(await fetchPage(0)), ...(await fetchPage(2))]).toEqual([
+      "2024.jpg",
+      "2023.jpg",
+      "2021.jpg",
+      "2020.jpg",
+    ]);
+    // Same candidate set for both pages, regardless of offset.
+    const limits = (database.semanticSearch as jest.Mock).mock.calls.map((c) => c[2]);
+    expect(new Set(limits).size).toBe(1);
+  });
+
   it("keeps relevance (RRF) order when no sort is given", async () => {
     const handler = await loadHandler({
       embedTextWithClap: async () => {
