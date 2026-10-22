@@ -4,6 +4,7 @@ import {
   type ShareScope,
 } from "../../../shared/filter-contract/src/index.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
+import { FilterCompileError, filterToSQL } from "../indexDatabase/filterToSQL.ts";
 import { embedText } from "../imageAnalysis/imageAnalysisWorker.ts";
 import { embedTextWithClap } from "../audioProcessing/clapWorker.ts";
 
@@ -92,7 +93,39 @@ export const combineFilters = (conditions: FilterElement[]): FilterElement => {
   return { operation: "and", conditions: nonEmptyConditions };
 };
 
+/**
+ * Refuses a share whose filter doesn't actually scope anything.
+ *
+ * Every query ANDs the share filter in, so a share filter that compiles to no
+ * WHERE at all (`{}`, a root folder, a clause that can't be compiled) grants the
+ * whole library while every `if (shareFilter)` check believes a scope is in
+ * force. Compiled strictly, so a clause that would be dropped fails instead.
+ */
+export const assertShareFilterIsScoped = (filter: FilterElement): void => {
+  let where: string;
+  try {
+    ({ where } = filterToSQL(filter, { strict: true }));
+  } catch (error) {
+    if (error instanceof FilterCompileError) {
+      throw new ShareScopeError(`Invalid share filter: ${error.message}`, 403);
+    }
+    throw error;
+  }
+  if (!where) {
+    throw new ShareScopeError("This share link has no scope", 403);
+  }
+};
+
 export const resolveShareFilter = async (
+  shareScope: ShareScope<unknown>,
+  cacheKey?: string,
+): Promise<FilterElement> => {
+  const filter = await resolveUncheckedShareFilter(shareScope, cacheKey);
+  assertShareFilterIsScoped(filter);
+  return filter;
+};
+
+const resolveUncheckedShareFilter = async (
   shareScope: ShareScope<unknown>,
   cacheKey?: string,
 ): Promise<FilterElement> => {

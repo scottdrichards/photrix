@@ -156,15 +156,23 @@ const ShareButton = () => {
     setModal({ url, copied });
   };
 
+  const shareScope = buildShareScope({
+    ...filter,
+    path: filter.path,
+    includeSubfolders: filter.includeSubfolders,
+  });
+  // The server refuses a link that scopes nothing — it would be the whole
+  // library — so say why here instead of failing silently on click.
+  const isUnscoped =
+    !shareScope.semanticQuery &&
+    typeof shareScope.filter === "object" &&
+    shareScope.filter !== null &&
+    Object.keys(shareScope.filter).length === 0;
+
   const handleShare = async () => {
-    if (loading) return;
+    if (loading || isUnscoped) return;
     setLoading(true);
     try {
-      const shareScope = buildShareScope({
-        ...filter,
-        path: filter.path,
-        includeSubfolders: filter.includeSubfolders,
-      });
 
       // Size the share before minting. A failure here must not block sharing —
       // the count is a guardrail, not a gate — so fall through to the normal
@@ -206,10 +214,14 @@ const ShareButton = () => {
   return (
     <>
       <button
-        title="Share current view"
+        title={
+          isUnscoped
+            ? "Open a folder, add a filter or search to share"
+            : "Share current view"
+        }
         className="btn btn-subtle"
         onClick={() => void handleShare()}
-        disabled={loading}
+        disabled={loading || isUnscoped}
       >
         <Share24Regular fontSize={20} />
         <span className={css.btnLabel}>{loading ? "Sharing…" : "Share"}</span>

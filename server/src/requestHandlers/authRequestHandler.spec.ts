@@ -136,6 +136,43 @@ describe("authShareTokenHandler", () => {
     authService.revokeToken(authToken);
   });
 
+  it.each([
+    ["an empty filter", {}],
+    ["a root folder", { folder: { folder: "/", recursive: true } }],
+    ["an injected field name", { "1) OR (1": "x" }],
+  ])("refuses a share scoped by %s", async (_label, filter) => {
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret";
+    const authService = await import("../auth/authService.ts");
+    const authToken = authService.issueToken();
+    const handler = await loadShareHandler();
+    const { res, getStatus, getJson } = createJsonResponse();
+
+    await handler(makeReq(authToken, { filter }), res, fakeDatabase);
+
+    expect(getStatus()).toBe(400);
+    expect(getJson().token).toBeUndefined();
+
+    authService.revokeToken(authToken);
+  });
+
+  it("refuses an injected field name on a semantic share", async () => {
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret";
+    const authService = await import("../auth/authService.ts");
+    const authToken = authService.issueToken();
+    const handler = await loadShareHandler();
+    const { res, getStatus } = createJsonResponse();
+
+    await handler(
+      makeReq(authToken, { filter: { "1) OR (1": "x" }, semanticQuery: "sunset" }),
+      res,
+      fakeDatabase,
+    );
+
+    expect(getStatus()).toBe(400);
+
+    authService.revokeToken(authToken);
+  });
+
   it("dryRun reports the share size without minting a token", async () => {
     process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret";
     const authService = await import("../auth/authService.ts");

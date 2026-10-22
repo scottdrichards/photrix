@@ -6,7 +6,7 @@ const embedTextWithClap = jest.fn<(q: string) => Promise<Float32Array>>();
 jest.unstable_mockModule("../imageAnalysis/imageAnalysisWorker.ts", () => ({ embedText }));
 jest.unstable_mockModule("../audioProcessing/clapWorker.ts", () => ({ embedTextWithClap }));
 
-const { resolveShareFilter } = await import("./shareScope.ts");
+const { resolveShareFilter, ShareScopeError } = await import("./shareScope.ts");
 
 describe("resolveShareFilter", () => {
   beforeEach(() => {
@@ -42,5 +42,23 @@ describe("resolveShareFilter", () => {
     await expect(resolveShareFilter(scope, "t2")).rejects.toThrow("worker busy");
     await expect(resolveShareFilter(scope, "t2")).resolves.toBeTruthy();
     expect(embedText).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["an empty filter", {}],
+    ["a root folder", { folder: { folder: "/", recursive: true } }],
+    ["an empty logical filter", { operation: "and", conditions: [] }],
+    ["an uncompilable clause", { semanticImage: { queryVector: [], minSimilarity: 0.2 } }],
+    ["an injected field name", { "1) OR (1": "x" }],
+  ])("refuses a share scoped by %s", async (_label, filter) => {
+    const result = resolveShareFilter({ filter }, `t-${_label}`);
+    await expect(result).rejects.toBeInstanceOf(ShareScopeError);
+    await expect(result).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("refuses a semantic share whose resolved filter still drops a clause", async () => {
+    embedText.mockResolvedValueOnce(new Float32Array([]));
+    const scope = { filter: {}, semanticQuery: "x", searchSources: ["image" as const] };
+    await expect(resolveShareFilter(scope, "t3")).rejects.toMatchObject({ statusCode: 403 });
   });
 });

@@ -3,8 +3,14 @@ import { EventEmitter } from "node:events";
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 
+const tripScope = {
+  filter: { folder: { folder: "/trip/", recursive: true } },
+  description: "Trip Favorites",
+};
+let currentScope: Record<string, unknown> = tripScope;
+
 jest.unstable_mockModule("../auth/authService.ts", () => ({
-  getShareScope: () => ({ filter: {}, description: "Trip Favorites" }),
+  getShareScope: () => currentScope,
   getShareLinkLabel: () => Promise.resolve(null),
 }));
 
@@ -17,7 +23,10 @@ type PreviewFile = {
   rating?: number;
 };
 
-const renderPreview = async (files: PreviewFile[], namedPeople: Record<string, number>) => {
+const renderPreviewPage = async (
+  files: PreviewFile[],
+  namedPeople: Record<string, number>,
+) => {
   const req = new EventEmitter() as http.IncomingMessage & EventEmitter;
   req.url = "/share?token=t";
   req.headers = { host: "photos.example.com" };
@@ -37,7 +46,11 @@ const renderPreview = async (files: PreviewFile[], namedPeople: Record<string, n
   } as unknown as IndexDatabase;
 
   await sharePreviewHandler(req, res, database);
+  return { body, database };
+};
 
+const renderPreview = async (files: PreviewFile[], namedPeople: Record<string, number>) => {
+  const { body } = await renderPreviewPage(files, namedPeople);
   // The mosaic <img> order is the ranking; og:image tags follow the same order.
   return [...body.matchAll(/<img src="[^"]*\/api\/files\/([^?"]+)\?/g)].map(([, path]) =>
     decodeURIComponent(path),
@@ -89,5 +102,27 @@ describe("sharePreviewHandler preview ranking", () => {
       {},
     );
     expect(order).toEqual(["trip/a.jpg", "trip/b.jpg", "trip/c.jpg", "trip/d.jpg"]);
+  });
+});
+
+describe("sharePreviewHandler scope", () => {
+  it("queries with the share's own filter", async () => {
+    currentScope = tripScope;
+    const { database } = await renderPreviewPage([photo("a.jpg", 5)], {});
+    expect(database.queryFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ filter: tripScope.filter }),
+    );
+  });
+
+  it("shows no count or images for a share that scopes nothing", async () => {
+    currentScope = { filter: {}, description: "Everything" };
+    try {
+      const { body, database } = await renderPreviewPage([photo("a.jpg", 5)], {});
+      expect(database.queryFiles).not.toHaveBeenCalled();
+      expect(body).not.toContain("/api/files/");
+      expect(body).toContain('content="Shared · Shared via Photrix"');
+    } finally {
+      currentScope = tripScope;
+    }
   });
 });

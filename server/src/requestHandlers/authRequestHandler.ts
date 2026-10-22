@@ -23,6 +23,7 @@ import {
   verifyPasskeyRegistration,
 } from "../auth/passkeyService.ts";
 import {
+  assertShareFilterIsScoped,
   normalizeShareSearchSources,
   resolveShareFilter,
   ShareScopeError,
@@ -30,6 +31,7 @@ import {
 import { clientIpFromRequest } from "../auth/ipLocation.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
+import { FilterCompileError, filterToSQL } from "../indexDatabase/filterToSQL.ts";
 import { generateShareDescription } from "../shareDescription/generateShareDescription.ts";
 import { writeJson } from "../utils.ts";
 import { readJsonBody } from "../common/readBody.ts";
@@ -100,6 +102,29 @@ export const authShareTokenHandler = async (
   }
 
   const semanticQuery = body.semanticQuery?.trim();
+
+  // `{}` is not null but scopes nothing. A semantic share may have an empty base
+  // filter (its query is the scope, resolved per request), but its base filter
+  // must still compile; every other share must restrict something. Enforcement
+  // checks the resolved filter again on each request.
+  try {
+    if (semanticQuery) {
+      filterToSQL(body.filter, { strict: true });
+    } else {
+      assertShareFilterIsScoped(body.filter);
+    }
+  } catch (error) {
+    if (error instanceof FilterCompileError || error instanceof ShareScopeError) {
+      writeJson(res, 400, {
+        error:
+          error instanceof FilterCompileError
+            ? `Invalid share filter: ${error.message}`
+            : "A share link must be limited to a folder, a filter or a search",
+      });
+      return;
+    }
+    throw error;
+  }
   const searchSources = normalizeShareSearchSources(body.searchSources);
   if (body.searchSources !== undefined && searchSources === null) {
     writeJson(res, 400, {

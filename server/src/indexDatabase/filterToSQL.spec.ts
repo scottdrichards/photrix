@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import Database from "better-sqlite3";
-import { filterToSQL } from "./filterToSQL.ts";
+import { FilterCompileError, filterToSQL } from "./filterToSQL.ts";
 import { tables } from "./tables.ts";
 
 describe("filterToSQL", () => {
@@ -403,5 +403,66 @@ describe("filterToSQL", () => {
 
     expect(result.where).toBe("audioTranscript LIKE ? ESCAPE '\\'");
     expect(result.params).toEqual(["%sunset%"]);
+  });
+
+  describe("field names", () => {
+    it("refuses a key that is not a filterable field instead of interpolating it", () => {
+      for (const key of ["1) OR (1", "(SELECT 1 FROM sqlite_master) OR 1", "nope"]) {
+        expect(() => filterToSQL({ [key]: "x" })).toThrow(FilterCompileError);
+      }
+    });
+
+    it("refuses an injected key nested inside a logical filter", () => {
+      expect(() =>
+        filterToSQL({
+          operation: "and",
+          conditions: [{ folder: "/a/" }, { "1 OR mimeType": 1 }],
+        } as never),
+      ).toThrow(FilterCompileError);
+    });
+
+    it("accepts every files column and derived field", () => {
+      for (const { name } of tables.files.columns) {
+        expect(() => filterToSQL({ [name]: null })).not.toThrow();
+      }
+      expect(filterToSQL({ relativePath: "/a/b.jpg" }).where).toBe("(folder || fileName) = ?");
+    });
+  });
+
+  describe("strict mode", () => {
+    const badVector = { semanticImage: { queryVector: [], minSimilarity: 0.2 } };
+
+    it("drops an uncompilable clause by default", () => {
+      expect(filterToSQL({ ...badVector, rating: 5 }).where).toBe("rating = ?");
+    });
+
+    it("throws on an uncompilable clause instead of widening", () => {
+      expect(() => filterToSQL({ ...badVector, rating: 5 }, { strict: true })).toThrow(
+        FilterCompileError,
+      );
+    });
+
+    it("throws on a not filter with nothing to negate", () => {
+      expect(() =>
+        filterToSQL({ operation: "not", conditions: [{}] }, { strict: true }),
+      ).toThrow(FilterCompileError);
+    });
+
+    it("throws on an unknown operation", () => {
+      expect(() =>
+        filterToSQL({ operation: "xor", conditions: [{ rating: 5 }] } as never),
+      ).toThrow(FilterCompileError);
+    });
+
+    it("treats a root folder and an empty search as no constraint, not an error", () => {
+      expect(
+        filterToSQL({ folder: { folder: "/", recursive: true } }, { strict: true }),
+      ).toEqual({ where: "", params: [] });
+      expect(filterToSQL({ cameraMake: { includes: "" } }, { strict: true })).toEqual({
+        where: "",
+        params: [],
+      });
+      expect(filterToSQL({ hasFaces: null }, { strict: true })).toEqual({ where: "", params: [] });
+    });
   });
 });

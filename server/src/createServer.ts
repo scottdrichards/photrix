@@ -38,6 +38,7 @@ import {
   validateToken,
 } from "./auth/authService.ts";
 import { resolveShareFilter, ShareScopeError } from "./auth/shareScope.ts";
+import { FilterCompileError } from "./indexDatabase/filterToSQL.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
 import { peopleRequestHandler } from "./requestHandlers/peopleRequestHandler.ts";
 import { settingsRequestHandler } from "./requestHandlers/settingsRequestHandler.ts";
@@ -666,6 +667,10 @@ export const createServer = (
             // The client already disconnected; there is no one to answer and
             // nothing actually failed.
             res.destroy();
+            return;
+          }
+          if (error instanceof FilterCompileError && !res.headersSent) {
+            writeJson(res, 400, { error: `Invalid filter: ${error.message}` });
             return;
           }
           if (!res.headersSent) {

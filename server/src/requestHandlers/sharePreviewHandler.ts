@@ -1,7 +1,7 @@
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getShareLinkLabel, getShareScope } from "../auth/authService.ts";
-import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
+import { resolveShareFilter } from "../auth/shareScope.ts";
 
 const escapeHtml = (s: string): string =>
   s
@@ -51,15 +51,18 @@ export const sharePreviewHandler = async (
     shareScope.semanticQuery ??
     "Shared photos";
 
-  // Fetch preview images using the base filter (no ML resolution needed for bots).
-  const baseFilter = (shareScope.filter ?? {}) as FilterElement;
   let previewPaths: string[] = [];
   let totalCount = 0;
   try {
+    // The same resolution every API request makes. The base filter alone is
+    // wider than a semantic share (often `{}`, the whole library), and this page
+    // is unauthenticated: it once advertised the library's total and out-of-scope
+    // file paths in og: tags. If resolution fails, show nothing.
+    const shareFilter = await resolveShareFilter(shareScope, token);
     // Over-fetch by rating so there is a pool of top-rated candidates to break
     // ties within; the lead image is what most unfurlers actually show.
     const result = await database.queryFiles({
-      filter: baseFilter,
+      filter: shareFilter,
       metadata: ["mimeType", "rating"],
       pageSize: PREVIEW_CANDIDATE_COUNT,
       sort: { field: "rating", direction: "desc" },

@@ -7,6 +7,7 @@ import type {
 import { encodeEmbedding } from "./embeddingCodec.ts";
 import { normalizeFolderPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
+import { tables } from "./tables.ts";
 import {
   faceAttributeConditions,
   isFaceAttributeKey,
@@ -20,13 +21,51 @@ type SQLPart = {
 
 const stringArrayJsonFields = new Set(["tags", "aiTags", "personInImage"]);
 
+/** Fields with their own branch in `constraintToSQL`; none is a `files` column. */
+const derivedFields = new Set([
+  "relativePath",
+  "hasFaces",
+  "faceCluster",
+  "faceMatch",
+  "personTag",
+  "semanticImage",
+  "semanticAudio",
+  "transcriptSearch",
+]);
+
+// A filter key is interpolated into the SQL as a column name, and filters come
+// straight from request JSON, share-token callers included. Only a real column
+// may get that far: any other key is SQL, not a field.
+const filterableFields = new Set([
+  ...tables.files.columns.map((column) => column.name),
+  ...derivedFields,
+]);
+
+/** A constraint that legitimately matches everything, as opposed to an invalid one. */
+const UNCONSTRAINED = Symbol("unconstrained");
+
+export class FilterCompileError extends Error {}
+
+export type FilterToSQLOptions = {
+  /**
+   * Throw on a clause that can't be compiled instead of dropping it. A dropped
+   * clause widens the result, which a search can live with and a share cannot.
+   */
+  strict?: boolean;
+};
+
 /**
  * Converts a FilterElement to SQL WHERE clause and parameters.
  * Returns empty string for no filter.
+ *
+ * Always throws `FilterCompileError` on a key that is not a filterable field.
  */
-export const filterToSQL = (filter: FilterElement): SQLPart => {
+export const filterToSQL = (
+  filter: FilterElement,
+  options: FilterToSQLOptions = {},
+): SQLPart => {
   const parts: SQLPart[] = [];
-  buildFilterSQL(filter, parts);
+  buildFilterSQL(filter, parts, options.strict === true);
 
   if (parts.length === 0) {
     return { where: "", params: [] };
@@ -42,25 +81,45 @@ export const filterToSQL = (filter: FilterElement): SQLPart => {
   return { where, params };
 };
 
-const buildFilterSQL = (filter: FilterElement, results: SQLPart[]): void => {
+const buildFilterSQL = (
+  filter: FilterElement,
+  results: SQLPart[],
+  strict: boolean,
+): void => {
+  if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
+    if (strict) throw new FilterCompileError("A filter must be an object");
+    return;
+  }
+
   if ("operation" in filter) {
+    if (!Array.isArray(filter.conditions)) {
+      throw new FilterCompileError("A logical filter needs a conditions array");
+    }
+
     if (filter.operation === "not") {
       // Only conditions[0] is meaningful — see the LogicalFilter doc comment.
       const [target] = filter.conditions;
-      if (!target) return;
       const subParts: SQLPart[] = [];
-      buildFilterSQL(target, subParts);
-      if (subParts.length === 0) return;
+      if (target) buildFilterSQL(target, subParts, strict);
+      if (subParts.length === 0) {
+        // NOT of "everything" is "nothing"; skipping it would mean everything.
+        if (strict) throw new FilterCompileError("A not filter needs a condition");
+        return;
+      }
       const where = subParts.map((p) => `(${p.where})`).join(" AND ");
       const params = subParts.flatMap((p) => p.params);
       results.push({ where: `NOT (${where})`, params });
       return;
     }
 
+    if (filter.operation !== "and" && filter.operation !== "or") {
+      throw new FilterCompileError(`Unknown filter operation: ${String(filter.operation)}`);
+    }
+
     // Logical filter (AND/OR)
     const subParts: SQLPart[] = [];
     for (const condition of filter.conditions) {
-      buildFilterSQL(condition, subParts);
+      buildFilterSQL(condition, subParts, strict);
     }
 
     if (subParts.length === 0) return;
@@ -76,14 +135,21 @@ const buildFilterSQL = (filter: FilterElement, results: SQLPart[]): void => {
   const conditions = filter as FilterCondition;
 
   for (const [key, constraint] of Object.entries(conditions)) {
+    if (!filterableFields.has(key)) {
+      throw new FilterCompileError(`Unknown filter field: ${key}`);
+    }
+
     if (constraint === undefined) {
       // No constraint on this field
       continue;
     }
 
     const sql = constraintToSQL(key as FilterField, constraint);
+    if (sql === UNCONSTRAINED) continue;
     if (sql) {
       results.push(sql);
+    } else if (strict) {
+      throw new FilterCompileError(`Can't compile the ${key} filter`);
     }
   }
 };
@@ -162,8 +228,13 @@ const faceMatchConstraintToSQL = (constraint: unknown): SQLPart | null => {
 const constraintToSQL = (
   field: FilterField,
   constraint: FilterCondition[FilterField],
-): SQLPart | null => {
+): SQLPart | typeof UNCONSTRAINED | null => {
   const fieldName = String(field);
+
+  // On a column, null means IS NULL (below); on a derived field it means "not set".
+  if (constraint === null && fieldName !== "relativePath" && derivedFields.has(fieldName)) {
+    return UNCONSTRAINED;
+  }
 
   if (fieldName === "hasFaces") {
     if (constraint === true) {
@@ -434,7 +505,7 @@ const constraintToSQL = (
 
       if (folderConstraint.recursive) {
         if (normalizedFolder === "/") {
-          return null;
+          return UNCONSTRAINED;
         }
 
         return {
@@ -486,7 +557,7 @@ const stringSearchToSQL = (
     notStartsWith?: string;
   },
   isStringArrayJsonField = false,
-): SQLPart => {
+): SQLPart | typeof UNCONSTRAINED => {
   if (search.startsWith) {
     const likePrefix = `${escapeLikeLiteral(search.startsWith)}%`;
     if (isStringArrayJsonField) {
@@ -555,10 +626,7 @@ const stringSearchToSQL = (
     };
   }
 
-  return {
-    where: "1=1",
-    params: [],
-  };
+  return UNCONSTRAINED;
 };
 
 const globToLike = (glob: string): string => {
