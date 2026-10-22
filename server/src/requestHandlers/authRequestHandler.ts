@@ -29,6 +29,7 @@ import {
   ShareScopeError,
 } from "../auth/shareScope.ts";
 import { clientIpFromRequest } from "../auth/ipLocation.ts";
+import { LoginThrottledError, throttleLogin } from "../auth/loginThrottle.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
 import { FilterCompileError, filterToSQL } from "../indexDatabase/filterToSQL.ts";
@@ -53,7 +54,21 @@ export const authLoginHandler = async (
     return;
   }
 
-  const token = validateCredentials(body.username, body.password, clientIpFromRequest(req));
+  const { username, password } = body;
+  const clientIp = clientIpFromRequest(req);
+  let token: string | null;
+  try {
+    token = await throttleLogin(clientIp, () =>
+      validateCredentials(username, password, clientIp),
+    );
+  } catch (error) {
+    if (error instanceof LoginThrottledError) {
+      res.setHeader("Retry-After", String(error.retryAfterSeconds));
+      writeJson(res, 429, { error: "Too many login attempts, try again later" });
+      return;
+    }
+    throw error;
+  }
   if (!token) {
     writeJson(res, 401, { error: "Invalid username or password" });
     return;

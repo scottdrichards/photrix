@@ -3,6 +3,7 @@ import {
   createDecipheriv,
   createHash,
   randomBytes,
+  scrypt,
   scryptSync,
   timingSafeEqual,
 } from "node:crypto";
@@ -26,8 +27,20 @@ const API_TOKEN_PREFIX = "photrix-mcp-v1";
 
 type AccountConfig = { username: string; password: string };
 
+const PASSWORD_SALT = "photrix-account-v1";
+const PASSWORD_KEY_LENGTH = 32;
+
 const hashPassword = (password: string): Buffer =>
-  scryptSync(password, "photrix-account-v1", 32);
+  scryptSync(password, PASSWORD_SALT, PASSWORD_KEY_LENGTH);
+
+// Login hashes an attacker-chosen password on every request, so it must not
+// block the event loop: the sync form stalled every request ~50 ms per attempt.
+const hashPasswordAsync = (password: string): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    scrypt(password, PASSWORD_SALT, PASSWORD_KEY_LENGTH, (error, key) =>
+      error ? reject(error) : resolve(key),
+    );
+  });
 
 const loadAccounts = (): Map<string, Buffer> => {
   const map = new Map<string, Buffer>();
@@ -198,14 +211,14 @@ export const getShareScope = (token: string): ShareScope<unknown> | null =>
 
 export const isShareToken = (token: string): boolean => isStatelessShareToken(token);
 
-export const validateCredentials = (
+export const validateCredentials = async (
   username: string,
   password: string,
   ip: string | null = null,
-): string | null => {
+): Promise<string | null> => {
   const storedHash = accounts.get(username.toLowerCase());
   if (!storedHash) return null;
-  const inputHash = hashPassword(password);
+  const inputHash = await hashPasswordAsync(password);
   if (!timingSafeEqual(storedHash, inputHash)) return null;
   return issueToken(username, ip);
 };
