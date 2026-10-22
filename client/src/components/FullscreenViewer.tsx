@@ -26,6 +26,7 @@ import {
   fetchPhotoCaption,
   fetchTranscriptSegments,
   negotiateVideoPlayback,
+  setFaceVerdicts,
   updatePhotoMetadata,
 } from "../api";
 import type { PhotoPersonFace } from "../api/types";
@@ -462,6 +463,22 @@ export function FullscreenViewer() {
 
     return () => abortController.abort();
   }, [photo?.path, photo?.mediaType, facesRefreshToken]);
+
+  // Feedback #145: "this isn't {name}" from the viewer. A rejected verdict
+  // pulls the face out of that person; the refetch then shows it unnamed, with
+  // the usual "Who is this?" chip for naming it correctly.
+  const handleRejectFace = (face: NamedFace) => {
+    setFaceVerdicts([face.faceId], "rejected")
+      .then(() => setFacesRefreshToken((token) => token + 1))
+      .catch((error: unknown) => {
+        logClientEvent({
+          level: "warn",
+          event: "faces.reject.failed",
+          message: `Could not remove ${face.name ?? "face"} from ${photo?.path ?? "photo"}`,
+          data: { faceId: face.faceId, error: String(error) },
+        });
+      });
+  };
 
   // Closes any open "Who is this?" panel when the viewer moves to a
   // different photo, rather than leaving it open against the wrong face.
@@ -1618,6 +1635,7 @@ export function FullscreenViewer() {
                       aspectRatio={photoAspectRatio}
                       namedFaces={peopleFaces}
                       onAssignFace={READ_ONLY ? undefined : setActiveFaceAssign}
+                      onRejectFace={READ_ONLY ? undefined : handleRejectFace}
                     />
                   )}
                   <div ref={setCropContainerEl} className={css.cropOverlayContainer} />
@@ -1650,6 +1668,7 @@ export function FullscreenViewer() {
                       aspectRatio={photoAspectRatio}
                       namedFaces={peopleFaces}
                       onAssignFace={READ_ONLY ? undefined : setActiveFaceAssign}
+                      onRejectFace={READ_ONLY ? undefined : handleRejectFace}
                     />
                   )}
                 </SwipePhotoViewer>
