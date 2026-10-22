@@ -59,6 +59,7 @@ const database = {
   raiseConversionPriority: () => {},
   // Reached only when a request resolves to a folder listing rather than a file.
   queryFiles: async () => ({ items: [], total: 0, page: 1, pageSize: 200 }),
+  getDefaultExclusionFilter: async () => null,
 } as unknown as IndexDatabase;
 
 const requestFile = async (storageRoot: string, requestUrl: string) => {

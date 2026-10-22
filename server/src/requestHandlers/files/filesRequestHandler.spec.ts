@@ -91,7 +91,7 @@ describe("filesEndpointRequestHandler", () => {
       } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
       res,
       {
-        database: { queryFiles, raiseConversionPriority } as unknown as IndexDatabase,
+        database: { queryFiles, raiseConversionPriority, getDefaultExclusionFilter: async () => null } as unknown as IndexDatabase,
         storageRoot: os.tmpdir(),
         orchestrator,
       },
@@ -123,7 +123,7 @@ describe("filesEndpointRequestHandler", () => {
       } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
       res,
       {
-        database: { queryFiles } as unknown as IndexDatabase,
+        database: { queryFiles, getDefaultExclusionFilter: async () => null } as unknown as IndexDatabase,
         storageRoot: os.tmpdir(),
         orchestrator,
       },

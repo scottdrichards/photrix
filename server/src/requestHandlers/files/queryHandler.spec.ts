@@ -33,6 +33,8 @@ describe("queryHandler", () => {
         minDate: new Date("2024-01-01T00:00:00.000Z"),
         maxDate: new Date("2024-12-31T00:00:00.000Z"),
       })),
+      // No standing exclusion filter configured.
+      getDefaultExclusionFilter: async () => null,
     } as unknown as IndexDatabase;
 
     await queryHandler(
@@ -61,6 +63,8 @@ describe("queryHandler", () => {
     };
     const database = {
       getDateHistogram: jest.fn(() => histogram),
+      // No standing exclusion filter configured.
+      getDefaultExclusionFilter: async () => null,
     } as unknown as IndexDatabase;
 
     await queryHandler(
@@ -97,6 +101,8 @@ describe("queryHandler", () => {
         totalFaces: 2,
         totalClusters: 1,
       })),
+      // No standing exclusion filter configured.
+      getDefaultExclusionFilter: async () => null,
     } as unknown as IndexDatabase;
 
     await queryHandler(
@@ -153,6 +159,8 @@ describe("queryHandler", () => {
           },
         ],
       })),
+      // No standing exclusion filter configured.
+      getDefaultExclusionFilter: async () => null,
     } as unknown as IndexDatabase;
 
     await queryHandler(
@@ -178,6 +186,8 @@ describe("queryHandler", () => {
         ],
         total: 1,
       })),
+      // No standing exclusion filter configured.
+      getDefaultExclusionFilter: async () => null,
     } as unknown as IndexDatabase;
 
     await queryHandler(
@@ -208,6 +218,8 @@ describe("queryHandler", () => {
         page: 1,
         pageSize: 10,
       })),
+      // No standing exclusion filter configured.
+      getDefaultExclusionFilter: async () => null,
     } as unknown as IndexDatabase;
 
     await queryHandler(
@@ -240,6 +252,8 @@ describe("queryHandler", () => {
         page: 1,
         pageSize: 1,
       })),
+      // No standing exclusion filter configured.
+      getDefaultExclusionFilter: async () => null,
     } as unknown as IndexDatabase;
 
     await queryHandler(new URL("http://localhost/api/files/"), "/", database, res);

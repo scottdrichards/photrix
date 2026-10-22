@@ -9,11 +9,15 @@ import { runWithRequestAbortSignal } from "./requestAbort.ts";
 const queryWithSignal = <T>(signal: AbortSignal, fn: () => Promise<T>): Promise<T> =>
   runWithRequestAbortSignal(signal, fn);
 
-// Burns a few hundred ms inside the synchronous read worker so queries queued
-// behind it are demonstrably not yet running.
+// Busies the synchronous read worker so queries queued behind it are
+// demonstrably not yet running. About a second on a loaded dev box; it was 5M
+// rows (~4 s there), which made every test waiting on it race jest's 5 s limit.
+const SLOW_QUERY_ROWS = 1_000_000;
 const SLOW_QUERY = `WITH RECURSIVE c(x) AS (
-  SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 5000000
+  SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ${SLOW_QUERY_ROWS}
 ) SELECT COUNT(*) AS n FROM c`;
+// For tests that wait for SLOW_QUERY to finish: the box may be busy.
+const SLOW_TEST_TIMEOUT_MS = 20_000;
 
 describe("AsyncSqlite read queue abort", () => {
   let dir: string;
@@ -58,8 +62,8 @@ describe("AsyncSqlite read queue abort", () => {
     await expect(abortedQuery).rejects.toMatchObject({ name: "AbortError" });
 
     await expect(survivor).resolves.toEqual([{ v: "hello" }]);
-    await expect(slow).resolves.toEqual([{ n: 5000000 }]);
-  });
+    await expect(slow).resolves.toEqual([{ n: SLOW_QUERY_ROWS }]);
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("unblocks the caller when the running read aborts, then continues the queue", async () => {
     const running = new AbortController();
@@ -71,7 +75,7 @@ describe("AsyncSqlite read queue abort", () => {
     running.abort();
     await expect(runningQuery).rejects.toMatchObject({ name: "AbortError" });
     await expect(next).resolves.toEqual([{ v: "hello" }]);
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 });
 
 describe("AsyncSqlite read worker pool", () => {
@@ -89,12 +93,12 @@ describe("AsyncSqlite read worker pool", () => {
         fast.then(() => "fast"),
       ]);
       expect(winner).toBe("fast");
-      await expect(slow).resolves.toEqual([{ n: 5000000 }]);
+      await expect(slow).resolves.toEqual([{ n: SLOW_QUERY_ROWS }]);
     } finally {
       await db.close();
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 });
 
 describe("AsyncSqlite worker death", () => {

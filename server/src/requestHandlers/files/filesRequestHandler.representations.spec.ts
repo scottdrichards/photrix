@@ -9,6 +9,11 @@ import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";
 import { getMirroredCachedFilePath } from "../../common/cacheUtils.ts";
 
+// A module mocked in one test stays mocked for every later test in this file
+// (resetModules doesn't unregister it), so a partial mock must keep the real
+// module's other exports or every later import of it fails.
+const actualVideoMetadata = await import("../../videoProcessing/getVideoMetadata.ts");
+
 const baseOrchestrator: TaskOrchestrator = {
   setPerformBackgroundTasks: () => {},
   getPerformBackgroundTasks: () => true,
@@ -408,6 +413,7 @@ describe("filesRequestHandler representation paths", () => {
 
     // No duration in the DB and ffprobe fails → knownDuration stays undefined.
     jest.unstable_mockModule("../../videoProcessing/getVideoMetadata.ts", () => ({
+      ...actualVideoMetadata,
       getVideoMetadata: jest.fn(async () => {
         throw new Error("ffprobe failed");
       }),
