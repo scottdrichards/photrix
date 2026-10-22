@@ -25,10 +25,11 @@ type ApiFaceRep = {
   dimensionHeight: number | null;
   regions: string | null;
   faceId: number;
+  dateTaken?: string | null;
 };
 
 const toClusterFace = (face: ApiFaceRep): ClusterFace => {
-  const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions, faceId } = face;
+  const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions, faceId, dateTaken } = face;
   return {
     photo: createPhotoItem({
       folder: relativePath.slice(0, relativePath.length - fileName.length),
@@ -37,6 +38,7 @@ const toClusterFace = (face: ApiFaceRep): ClusterFace => {
       dimensionWidth: dimensionWidth ?? undefined,
       dimensionHeight: dimensionHeight ?? undefined,
       ...(regions != null ? { regions } : {}),
+      ...(dateTaken !== undefined ? { dateTaken } : {}),
       faceTableBoxes: [box],
     }),
     box,

@@ -388,6 +388,7 @@ const faceRowToClusterFace = (row: {
   dimensionWidth: number | null;
   dimensionHeight: number | null;
   regions: string | null;
+  dateTaken?: number | null;
 }): FaceClusterFace => ({
   path: joinPath(row.folder, row.fileName),
   fileName: row.fileName,
@@ -402,6 +403,9 @@ const faceRowToClusterFace = (row: {
   dimensionHeight: row.dimensionHeight,
   regions: row.regions,
   faceId: row.id,
+  ...(row.dateTaken !== undefined
+    ? { dateTaken: row.dateTaken === null ? null : new Date(row.dateTaken).toISOString() }
+    : {}),
 });
 
 const formatYearRangeLabel = (
@@ -2673,6 +2677,7 @@ export class IndexDatabase {
       dimensionWidth: number | null;
       dimensionHeight: number | null;
       regions: string | null;
+      dateTaken: number | null;
     }>(
       `${limitedCTE}
        SELECT
@@ -2686,7 +2691,8 @@ export class IndexDatabase {
          files.mimeType,
          files.dimensionsWidth AS dimensionWidth,
          files.dimensionsHeight AS dimensionHeight,
-         files.regions
+         files.regions,
+         files.dateTaken
        FROM limited
        JOIN faces
          ON faces.id = limited.id

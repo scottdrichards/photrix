@@ -150,6 +150,8 @@ export type FaceClusterFace = {
    * nothing before #90 needed to address one face independent of its photo.
    */
   faceId: number;
+  /** ISO capture time, on the person-detail faces only (feedback #144: sort by date). */
+  dateTaken?: string | null;
 };
 
 export type FaceClusterSummary = {
