@@ -124,3 +124,89 @@ export const ollamaGenerate = async (
     return null;
   }
 };
+
+/**
+ * Streaming form of `ollamaGenerate`: calls `onDelta` with each fragment as the
+ * model produces it, and resolves with the whole answer (or `null`, on the
+ * same best-effort terms).
+ *
+ * A long vision answer can take minutes when the GPU is contended, so the
+ * deadline is an *idle* timeout — how long the model may go silent once it
+ * has started — rather than a cap on the whole generation. Before the first
+ * token the wait is `firstTokenTimeoutMs` instead: on CPU, behind a queue,
+ * the image prompt alone has taken over 90 s. `timeoutMs` bounds the total.
+ */
+export const ollamaGenerateStream = async (
+  system: string,
+  prompt: string,
+  onDelta: (text: string) => void,
+  options: OllamaGenerateOptions & { idleTimeoutMs?: number; firstTokenTimeoutMs?: number } = {},
+): Promise<string | null> => {
+  const ollamaUrl = getOllamaUrl();
+  if (!ollamaUrl) return null;
+
+  const effectiveModel = options.model ?? model;
+  const idle = new AbortController();
+  const idleTimeoutMs = options.idleTimeoutMs ?? 90_000;
+  let idleTimer = setTimeout(() => idle.abort(), options.firstTokenTimeoutMs ?? 300_000);
+  const bumpIdle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => idle.abort(), idleTimeoutMs);
+  };
+  const signals = [idle.signal, AbortSignal.timeout(options.timeoutMs ?? 600_000)];
+  if (options.signal) signals.push(options.signal);
+  const signal = AbortSignal.any(signals);
+
+  try {
+    const res = await fetch(`${ollamaUrl}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: effectiveModel,
+        system,
+        prompt,
+        stream: true,
+        think: false,
+        keep_alive: keepAlive,
+        ...(options.images ? { images: options.images } : {}),
+        options: {
+          temperature: options.temperature ?? 0.2,
+          num_predict: options.numPredict ?? 40,
+          ...(options.numCtx ? { num_ctx: options.numCtx } : {}),
+        },
+      }),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      log.warn({ status: res.status, model: effectiveModel }, "Ollama stream request failed");
+      return null;
+    }
+
+    // Ollama streams NDJSON: one {"response": "...", "done": bool} per line.
+    const decoder = new TextDecoder();
+    let buffered = "";
+    let text = "";
+    const handleLine = (line: string) => {
+      if (!line.trim()) return;
+      const chunk = JSON.parse(line) as { response?: string };
+      if (chunk.response) {
+        text += chunk.response;
+        onDelta(chunk.response);
+      }
+    };
+    for await (const bytes of res.body as unknown as AsyncIterable<Uint8Array>) {
+      buffered += decoder.decode(bytes, { stream: true });
+      const lines = buffered.split("\n");
+      buffered = lines.pop() ?? "";
+      lines.forEach(handleLine);
+      if (text) bumpIdle();
+    }
+    handleLine(buffered);
+    return text.trim() || null;
+  } catch (error) {
+    log.warn({ err: error, model: effectiveModel }, "Ollama stream failed");
+    return null;
+  } finally {
+    clearTimeout(idleTimer);
+  }
+};

@@ -1,4 +1,4 @@
-import { type SVGProps, useMemo } from "react";
+import { type SVGProps, useEffect, useMemo, useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import css from "./FullscreenViewer.module.css";
 
@@ -25,10 +25,9 @@ type FaceOverlayProps = {
   aspectRatio: number;
   /**
    * Detected faces with resolved People names, rendered as labels. A *named*
-   * face's label is not clickable — it sits on top of the zoomable photo and
-   * clicking it has no special behavior of its own (it just falls through to
-   * the same zoom click as the rest of the image), so it deliberately has no
-   * cursor or click handler of its own. An *unnamed* face instead renders a
+   * face's label itself is not clickable — clicks on it fall through to the
+   * same zoom click as the rest of the image. Only its "✕" (see
+   * `onRejectFace`) takes the pointer. An *unnamed* face instead renders a
    * real "Who is this?" button — see `onAssignFace`.
    */
   namedFaces?: NamedFace[];
@@ -39,7 +38,16 @@ type FaceOverlayProps = {
    * disabled) in a read-only/shared view — see FullscreenViewer's `READ_ONLY`.
    */
   onAssignFace?: (face: NamedFace) => void;
+  /**
+   * Feedback #145: when provided, every named label carries a "✕" that says
+   * "this isn't {name}". The first click only arms it; a second click on the
+   * same face commits, so a stray tap on a crowded photo can't detach anyone.
+   * Omitted in a read-only/shared view, like `onAssignFace`.
+   */
+  onRejectFace?: (face: NamedFace) => void;
 };
+
+const ARMED_REJECT_TIMEOUT_MS = 4000;
 
 const unwrapJsonString = (value: unknown): unknown => {
   let current = value;
@@ -231,7 +239,15 @@ export function FaceOverlay({
   aspectRatio,
   namedFaces,
   onAssignFace,
+  onRejectFace,
 }: FaceOverlayProps) {
+  const [armedRejectFaceId, setArmedRejectFaceId] = useState<number | null>(null);
+  useEffect(() => {
+    if (armedRejectFaceId === null) return;
+    const timer = setTimeout(() => setArmedRejectFaceId(null), ARMED_REJECT_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [armedRejectFaceId]);
+
   const exifFaceRegions = useMemo(() => parseFaceRegions(regionsRaw), [regionsRaw]);
   const tableFaceRegions = useMemo(
     () => parseFaceTableBoxes(faceTableBoxesRaw),
@@ -300,18 +316,42 @@ export function FaceOverlay({
       </svg>
       {(nameLabels.length > 0 || unnamedFaces.length > 0) && (
         <div className={css.faceLabelLayer}>
-          {nameLabels.map((face, index) => (
-            <span
-              key={index}
-              className={css.faceLabel}
-              style={{
-                left: `${face.box.x * 100}%`,
-                top: `${(face.box.y - face.box.height / 2) * 100}%`,
-              }}
-            >
-              {face.name}
-            </span>
-          ))}
+          {nameLabels.map((face, index) => {
+            const armed = armedRejectFaceId === face.faceId;
+            return (
+              <span
+                key={index}
+                className={css.faceLabel}
+                data-armed={armed || undefined}
+                style={{
+                  left: `${face.box.x * 100}%`,
+                  top: `${(face.box.y - face.box.height / 2) * 100}%`,
+                }}
+              >
+                <span className={css.faceLabelName}>{armed ? `Not ${face.name}?` : face.name}</span>
+                {onRejectFace && (
+                  <button
+                    type="button"
+                    className={css.faceRejectButton}
+                    aria-label={armed ? `Confirm: not ${face.name}` : `Not ${face.name}`}
+                    title={armed ? "Click again to remove" : `Not ${face.name}`}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (armed) {
+                        setArmedRejectFaceId(null);
+                        onRejectFace(face);
+                      } else {
+                        setArmedRejectFaceId(face.faceId);
+                      }
+                    }}
+                  >
+                    {armed ? "✓" : "✕"}
+                  </button>
+                )}
+              </span>
+            );
+          })}
           {unnamedFaces.map((face, index) => (
             <button
               key={index}

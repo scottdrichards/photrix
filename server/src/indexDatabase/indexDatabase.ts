@@ -388,6 +388,7 @@ const faceRowToClusterFace = (row: {
   dimensionWidth: number | null;
   dimensionHeight: number | null;
   regions: string | null;
+  dateTaken?: number | null;
 }): FaceClusterFace => ({
   path: joinPath(row.folder, row.fileName),
   fileName: row.fileName,
@@ -402,6 +403,9 @@ const faceRowToClusterFace = (row: {
   dimensionHeight: row.dimensionHeight,
   regions: row.regions,
   faceId: row.id,
+  ...(row.dateTaken !== undefined
+    ? { dateTaken: row.dateTaken === null ? null : new Date(row.dateTaken).toISOString() }
+    : {}),
 });
 
 const formatYearRangeLabel = (
@@ -797,6 +801,24 @@ export class IndexDatabase {
    * future writeback task, same as rating/tags). The file itself is never
    * touched — this is a DB-only edit.
    */
+  /**
+   * Stores a generated AI description (feedback #148). A single-column UPDATE,
+   * like updateUserMetadata, so a slow generation landing late can never
+   * clobber columns another writer changed meanwhile. Not a user edit, so it
+   * leaves userMetadataDirtyAt alone.
+   */
+  async setAiDescription(relativePath: string, aiDescription: string): Promise<boolean> {
+    const { folder, fileName } = splitPath(relativePath);
+    const result = await this.runWithRetry(() =>
+      this.db.run("UPDATE files SET aiDescription = ? WHERE folder = ? AND fileName = ?", [
+        aiDescription,
+        folder,
+        fileName,
+      ]),
+    );
+    return result.changes > 0;
+  }
+
   async updateUserMetadata(
     relativePath: string,
     patch: {
@@ -2673,6 +2695,7 @@ export class IndexDatabase {
       dimensionWidth: number | null;
       dimensionHeight: number | null;
       regions: string | null;
+      dateTaken: number | null;
     }>(
       `${limitedCTE}
        SELECT
@@ -2686,7 +2709,8 @@ export class IndexDatabase {
          files.mimeType,
          files.dimensionsWidth AS dimensionWidth,
          files.dimensionsHeight AS dimensionHeight,
-         files.regions
+         files.regions,
+         files.dateTaken
        FROM limited
        JOIN faces
          ON faces.id = limited.id
