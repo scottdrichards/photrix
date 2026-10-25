@@ -1,7 +1,16 @@
 insightface==1.0.1
 onnxruntime==1.27.0
-# Face detection on GPU: replace `onnxruntime` with `onnxruntime-gpu==1.27.0`.
-# Was already present transitively (insightface depends on it) — pinned
+# Face detection on GPU: `npm run face:python:install:gpu` swaps this for
+# `onnxruntime-gpu==1.26.0`. It can't be listed here, because insightface and
+# faster-whisper depend on `onnxruntime` by name and both packages share one
+# import namespace — so re-running a plain install of this file afterwards
+# reinstalls the CPU package over the GPU one; run the gpu script again.
+# 1.26.0 is deliberate: it is the last release built against CUDA 12, which is
+# what the torch pin below brings in (cudart 12.6, cuDNN 9.10.2.21). 1.28+ are
+# built against CUDA 13, which has no kernels for Pascal (sm_61) at all. cuDNN
+# must stay at torch's 9.10.x — 9.27 fails the first convolution on Pascal.
+# The worker falls back to CPU per call if the GPU is full (face_runtime.py).
+# onnxruntime was already present transitively (insightface depends on it) — pinned
 # explicitly since detect_horizon.py (feedback #66's auto-straighten
 # suggestion) now imports it directly.
 opencv-python-headless>=4.9

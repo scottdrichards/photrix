@@ -31,7 +31,8 @@ Any attribute that cannot be judged for a face is simply absent, which the Node
 side stores as NULL ("unknown") rather than as a low score.
 
 Models are loaded lazily on first use so a library with only faces enabled never
-pays to load CLIP (and vice versa). Requests are processed sequentially: running
+pays to load CLIP (and vice versa). Face models run on the configured provider
+(argv[1]) with a per-call CPU fallback when the GPU is full — see face_runtime.py. Requests are processed sequentially: running
 both heavy models per image is already CPU-bound, and serial processing keeps the
 worker from pegging a shared box — the Node side controls how many files are in
 flight.
@@ -50,6 +51,7 @@ from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 
 from face_attributes import compute_face_attributes
+from face_runtime import CPU_PROVIDER, FaceRuntime, is_gpu_resource_error
 from worker_memory import trim_heap
 
 # Local files can be legitimately large (panoramas, high-res cameras); both
@@ -71,7 +73,21 @@ ort.set_default_logger_severity(4)
 
 register_heif_opener()
 
-FACE_PROVIDER = (sys.argv[1] if len(sys.argv) > 1 else "CPUExecutionProvider").strip()
+FACE_PROVIDER = (sys.argv[1] if len(sys.argv) > 1 else CPU_PROVIDER).strip()
+
+# Only the modules something reads: detection + recognition for faces and
+# clustering, the two landmark models for face_attributes. genderage is unused,
+# and skipping it saves a model load and its GPU memory.
+FACE_MODULES = ["detection", "recognition", "landmark_2d_106", "landmark_3d_68"]
+
+# HEURISTIC rather than the default EXHAUSTIVE conv-algorithm search: exhaustive
+# benchmarks every algorithm with large scratch buffers on first run, which a
+# small, shared GPU can't spare. kSameAsRequested stops the CUDA arena from
+# doubling past what the models actually use.
+CUDA_PROVIDER_OPTIONS = {
+    "cudnn_conv_algo_search": "HEURISTIC",
+    "arena_extend_strategy": "kSameAsRequested",
+}
 CLIP_DEVICE = (sys.argv[2] if len(sys.argv) > 2 else "cpu").strip().lower()
 
 # Lock held during any CLIP forward pass so the text-embedding thread and the
@@ -107,7 +123,6 @@ def send(payload: dict) -> None:
 # Lazy model loading
 # --------------------------------------------------------------------------- #
 
-_face_app = None
 _clip = None  # (model, preprocess, tokenizer, torch, device)
 
 
@@ -134,10 +149,46 @@ def _purge_insightface_cache(model_name: str) -> None:
                 path.unlink()
 
 
-def _create_face_app(allow_redownload: bool = True):
+_cuda_dlls_preloaded = False
+
+
+def _preload_cuda_dlls() -> None:
+    """Load the CUDA/cuDNN libraries that pip installed (alongside torch) so the
+    GPU build of onnxruntime finds them without a system CUDA install. Without
+    this, the CUDA provider can't load and every session quietly lands on CPU
+    unless torch happened to load those libraries first."""
+    global _cuda_dlls_preloaded
+    if _cuda_dlls_preloaded:
+        return
+    _cuda_dlls_preloaded = True
+    preload = getattr(ort, "preload_dlls", None)
+    if preload is None:
+        return
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            preload(cuda=True, cudnn=True, msvc=False)
+    except Exception as exc:  # noqa: BLE001 - a failed preload just means CPU
+        print(f"onnxruntime CUDA library preload failed: {exc}", file=sys.stderr)
+
+
+def _create_face_app(provider: str, allow_redownload: bool = True):
     from insightface.app import FaceAnalysis
 
-    ctx_id = -1 if FACE_PROVIDER == "CPUExecutionProvider" else 0
+    on_cpu = provider == CPU_PROVIDER
+    if on_cpu:
+        providers, provider_options = [CPU_PROVIDER], [{}]
+    else:
+        # CLIP outranks the face models for GPU memory (search depends on it;
+        # faces can run on CPU), so make sure it has claimed its share first.
+        # A CLIP load failure must not stop the faces from loading.
+        if CLIP_DEVICE == "cuda":
+            try:
+                _get_clip()
+            except Exception as exc:  # noqa: BLE001 - CLIP retries on its own use
+                print(f"CLIP load before face models failed: {exc}", file=sys.stderr)
+        _preload_cuda_dlls()
+        options = CUDA_PROVIDER_OPTIONS if provider == "CUDAExecutionProvider" else {}
+        providers, provider_options = [provider, CPU_PROVIDER], [options, {}]
 
     devnull = open(os.devnull, "w")
     old_stderr = sys.stderr
@@ -145,24 +196,38 @@ def _create_face_app(allow_redownload: bool = True):
         sys.stderr = devnull
         with contextlib.redirect_stdout(sys.stderr):
             try:
-                app = FaceAnalysis(name="buffalo_l", providers=[FACE_PROVIDER])
-                app.prepare(ctx_id=ctx_id)
+                app = FaceAnalysis(
+                    name="buffalo_l",
+                    allowed_modules=FACE_MODULES,
+                    providers=providers,
+                    provider_options=provider_options,
+                )
+                app.prepare(ctx_id=-1 if on_cpu else 0)
             except Exception as exc:
                 if allow_redownload and "INVALID_PROTOBUF" in str(exc):
                     _purge_insightface_cache("buffalo_l")
-                    return _create_face_app(allow_redownload=False)
+                    return _create_face_app(provider, allow_redownload=False)
                 raise
     finally:
         sys.stderr = old_stderr
         devnull.close()
+
+    if not on_cpu:
+        # ORT drops to CPU on its own when the GPU provider can't load at all
+        # (missing libraries), which would look fine and run 10x slower. Say so.
+        active = app.det_model.session.get_providers()[0]
+        if active == provider:
+            print(f"face models loaded on {provider}", file=sys.stderr)
+        else:
+            print(
+                f"face models asked for {provider} but are running on {active}",
+                file=sys.stderr,
+            )
     return app
 
 
-def _get_face_app():
-    global _face_app
-    if _face_app is None:
-        _face_app = _create_face_app()
-    return _face_app
+# GPU-first with a per-call CPU fallback; models load on first use.
+_faces = FaceRuntime(FACE_PROVIDER, _create_face_app)
 
 
 def _create_clip():
@@ -186,10 +251,40 @@ def _create_clip():
     return model, preprocess, tokenizer, torch, device
 
 
+# Serialises the first CLIP load: the text thread and the image loop can both
+# ask for it at once, and two copies on a small card is an OOM, not a waste.
+_clip_load_lock = threading.Lock()
+
+
+def _clip_first(step):
+    """Run a CLIP step with priority over the face models for GPU memory.
+
+    Search depends on CLIP; the face models have a CPU fallback. So when a CLIP
+    load or forward pass runs out of GPU memory while the face models hold part
+    of the card, the face models give it up (and stay on CPU for their cooldown)
+    and the step is retried once.
+    """
+    try:
+        return step()
+    except Exception as exc:  # noqa: BLE001 - re-raised unless the retry applies
+        if CLIP_DEVICE != "cuda" or not is_gpu_resource_error(exc):
+            raise
+        if not _faces.gpu_loaded:
+            raise
+        _faces.yield_gpu(f"CLIP needs the GPU: {exc}")
+        torch = sys.modules.get("torch")
+        if torch is not None:
+            with contextlib.suppress(Exception):
+                torch.cuda.empty_cache()
+        return step()
+
+
 def _get_clip():
     global _clip
     if _clip is None:
-        _clip = _create_clip()
+        with _clip_load_lock:
+            if _clip is None:
+                _clip = _clip_first(_create_clip)
     return _clip
 
 
@@ -229,14 +324,16 @@ def _normalize_box(bbox, width: int, height: int) -> dict:
 
 
 def _detect_faces(rgb: Image.Image) -> list[dict]:
-    app = _get_face_app()
     width, height = rgb.size
     rgb_array = np.asarray(rgb)
     # InsightFace expects a BGR numpy array.
     bgr = rgb_array[:, :, ::-1].copy()
 
-    with contextlib.redirect_stdout(sys.stderr):
-        faces = app.get(bgr)
+    def detect(app):
+        with contextlib.redirect_stdout(sys.stderr):
+            return app.get(bgr)
+
+    faces = _faces.run(detect)
 
     result: list[dict] = []
     for face in faces:
@@ -276,57 +373,68 @@ def _face_attributes_for_boxes(rgb: Image.Image, requested: list) -> list[dict]:
     """
     from insightface.app.common import Face
 
-    app = _get_face_app()
     width, height = rgb.size
     rgb_array = np.asarray(rgb)
     bgr = rgb_array[:, :, ::-1].copy()
 
-    landmark_models = [
-        (name, model)
-        for name, model in app.models.items()
-        if name.startswith("landmark_")
-    ]
+    def score(app) -> list[dict]:
+        landmark_models = [
+            model for name, model in app.models.items() if name.startswith("landmark_")
+        ]
+        results: list[dict] = []
+        for item in requested:
+            face_id = item.get("id")
+            box = item.get("box") or {}
+            try:
+                x1 = float(box["x"]) * width
+                y1 = float(box["y"]) * height
+                x2 = x1 + float(box["width"]) * width
+                y2 = y1 + float(box["height"]) * height
+            except (KeyError, TypeError, ValueError):
+                results.append({"id": face_id})
+                continue
 
-    results: list[dict] = []
-    for item in requested:
-        face_id = item.get("id")
-        box = item.get("box") or {}
-        try:
-            x1 = float(box["x"]) * width
-            y1 = float(box["y"]) * height
-            x2 = x1 + float(box["width"]) * width
-            y2 = y1 + float(box["height"]) * height
-        except (KeyError, TypeError, ValueError):
-            results.append({"id": face_id})
-            continue
+            face = Face(bbox=np.array([x1, y1, x2, y2], dtype=np.float32), det_score=1.0)
+            try:
+                with contextlib.redirect_stdout(sys.stderr):
+                    for model in landmark_models:
+                        model.get(bgr, face)
+            except Exception as exc:  # noqa: BLE001 - fall through to crop-only stats
+                # A GPU failure must reach the runtime so the whole request is
+                # redone on CPU, not quietly downgraded to crop-only stats.
+                if is_gpu_resource_error(exc):
+                    raise
+                print(f"landmark pass failed: {exc}", file=sys.stderr)
+            results.append({"id": face_id, **_safe_face_attributes(rgb_array, face)})
+        return results
 
-        face = Face(bbox=np.array([x1, y1, x2, y2], dtype=np.float32), det_score=1.0)
-        try:
-            with contextlib.redirect_stdout(sys.stderr):
-                for _name, model in landmark_models:
-                    model.get(bgr, face)
-        except Exception as exc:  # noqa: BLE001 - fall through to crop-only stats
-            print(f"landmark pass failed: {exc}", file=sys.stderr)
-        results.append({"id": face_id, **_safe_face_attributes(rgb_array, face)})
-    return results
+    return _faces.run(score)
 
 
 def _embed_image(rgb: Image.Image) -> list[float]:
     model, preprocess, _tokenizer, torch, device = _get_clip()
-    tensor = preprocess(rgb).unsqueeze(0).to(device)
-    with _clip_lock, torch.no_grad():
-        features = model.encode_image(tensor)
-        features = features / features.norm(dim=-1, keepdim=True)
-    return features[0].cpu().float().tolist()
+
+    def step() -> list[float]:
+        tensor = preprocess(rgb).unsqueeze(0).to(device)
+        with _clip_lock, torch.no_grad():
+            features = model.encode_image(tensor)
+            features = features / features.norm(dim=-1, keepdim=True)
+        return features[0].cpu().float().tolist()
+
+    return _clip_first(step)
 
 
 def _embed_text(text: str) -> list[float]:
     model, _preprocess, tokenizer, torch, device = _get_clip()
-    tokens = tokenizer([text]).to(device)
-    with _clip_lock, torch.no_grad():
-        features = model.encode_text(tokens)
-        features = features / features.norm(dim=-1, keepdim=True)
-    return features[0].cpu().float().tolist()
+
+    def step() -> list[float]:
+        tokens = tokenizer([text]).to(device)
+        with _clip_lock, torch.no_grad():
+            features = model.encode_text(tokens)
+            features = features / features.norm(dim=-1, keepdim=True)
+        return features[0].cpu().float().tolist()
+
+    return _clip_first(step)
 
 
 def _run_text_worker() -> None:

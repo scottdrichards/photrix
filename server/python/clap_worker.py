@@ -25,7 +25,15 @@ import sys
 
 import numpy as np
 
+from gpu_memory import free_gpu_mib, has_room, min_free_mib
 from worker_memory import trim_heap
+
+# CLAP holds ~850 MiB on the GPU. It shares a small card with CLIP and the face
+# models, which outrank it (search needs CLIP; the face models are faster on the
+# GPU), so it only takes the GPU when this much is free and otherwise runs on
+# CPU. Checked with nvidia-smi before torch is imported: a CPU fallback that had
+# already created a CUDA context would still hold a few hundred MiB of the card.
+CLAP_MIN_FREE_GPU_MIB = min_free_mib("PHOTRIX_CLAP_MIN_FREE_GPU_MIB", 1024)
 
 
 def send(payload: dict) -> None:
@@ -118,17 +126,39 @@ def embed_text(model, processor, text: str, device: str) -> list:
     return features.cpu().float().numpy()[0].tolist()
 
 
+def _place_model(model, torch):
+    """Move the model to the GPU if it fits, else keep it on CPU."""
+    if not torch.cuda.is_available():
+        return model, "cpu"
+    try:
+        return model.to("cuda"), "cuda"
+    except RuntimeError as exc:  # torch.OutOfMemoryError subclasses RuntimeError
+        if "out of memory" not in str(exc).lower():
+            raise
+        print(f"CLAP: GPU out of memory, running on CPU: {exc}", file=sys.stderr)
+        model = model.to("cpu")
+        torch.cuda.empty_cache()
+        return model, "cpu"
+
+
 def main():
     try:
+        free = free_gpu_mib()
+        if not has_room(free, CLAP_MIN_FREE_GPU_MIB):
+            print(
+                f"CLAP: {free} MiB GPU free, under {CLAP_MIN_FREE_GPU_MIB}; running on CPU",
+                file=sys.stderr,
+            )
+            # Before torch loads, so this process never creates a CUDA context.
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
         import torch
         from transformers import ClapModel, ClapProcessor
-
-        device = "cuda" if torch.cuda.is_available() else "cpu"
 
         hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
         model = ClapModel.from_pretrained(MODEL_ID, cache_dir=hf_home)
         processor = ClapProcessor.from_pretrained(MODEL_ID, cache_dir=hf_home)
-        model = model.to(device)
+        model, device = _place_model(model, torch)
         model.eval()
     except Exception as e:
         send({"type": "error", "error": f"Failed to load CLAP model: {e}"})

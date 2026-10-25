@@ -11,7 +11,7 @@
     "db:vacuum": "node scripts/vacuum-db.mjs",
     "mcp": "tsx src/mcp/main.ts",
     "face:python:install": "python -m pip install -r python/requirements.txt",
-    "face:python:install:gpu": "python -m pip install -r python/requirements.txt && python -m pip uninstall -y onnxruntime && python -m pip install onnxruntime-gpu==1.27.0",
+    "face:python:install:gpu": "python -m pip install -r python/requirements.txt && python -m pip uninstall -y onnxruntime onnxruntime-gpu && python -m pip install onnxruntime-gpu==1.26.0",
     "clip:python:install": "python -m pip install open_clip_torch",
     "clip:python:install:gpu": "python -m pip install open_clip_torch && python -m pip install torch --index-url https://download.pytorch.org/whl/cu121",
     "typecheck": "tsc --noEmit",
