@@ -363,12 +363,11 @@ export const videoNegotiationRequestHandler = async (
     reclaimGpuForUser();
   }
 
-  const fileName = path.basename(videoPath);
   const metadata = await deps.getFileMetadata(videoPath);
   const gpuAvailable = gpu !== null;
 
+  // No file name: which videos get played is private viewing history.
   const logData = {
-    file: fileName,
     mode: result.mode,
     reason: result.reason,
     videoCodec: metadata?.videoCodec ?? "unknown",

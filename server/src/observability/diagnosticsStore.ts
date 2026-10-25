@@ -1,3 +1,4 @@
+import { redactRequestPath, scrubDiagnostics } from "./privacy.ts";
 import { getCurrentRequestLogFields } from "./requestTrace.ts";
 
 const MAX_EVENTS = 2_000;
@@ -53,6 +54,10 @@ const buildEvent = (
   input: DiagnosticsEventInput,
 ): DiagnosticsEvent => {
   const requestFields = source === "server" ? getCurrentRequestLogFields() : {};
+  // Client events arrive with raw request URLs, and both sides describe video
+  // playback by library path; none of that is kept (see privacy.ts).
+  const { message, data } = scrubDiagnostics(input.message, input.data);
+  const url = input.url ?? requestFields.url;
 
   return {
     id: String(nextId++),
@@ -60,7 +65,7 @@ const buildEvent = (
     source,
     level: input.level,
     event: input.event,
-    ...(input.message ? { message: input.message } : {}),
+    ...(message ? { message } : {}),
     ...((input.requestId ?? requestFields.requestId)
       ? { requestId: input.requestId ?? requestFields.requestId }
       : {}),
@@ -76,9 +81,9 @@ const buildEvent = (
     ...((input.method ?? requestFields.method)
       ? { method: input.method ?? requestFields.method }
       : {}),
-    ...((input.url ?? requestFields.url) ? { url: input.url ?? requestFields.url } : {}),
+    ...(url ? { url: redactRequestPath(url) } : {}),
     ...(input.statusCode != null ? { statusCode: input.statusCode } : {}),
-    ...(input.data ? { data: input.data } : {}),
+    ...(data ? { data } : {}),
   };
 };
 
