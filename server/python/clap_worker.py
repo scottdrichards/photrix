@@ -25,15 +25,8 @@ import sys
 
 import numpy as np
 
-from gpu_memory import free_gpu_mib, has_room, min_free_mib
+from gpu_memory import clap_gpu_plan, gpu_memory_mib
 from worker_memory import trim_heap
-
-# CLAP holds ~850 MiB on the GPU. It shares a small card with CLIP and the face
-# models, which outrank it (search needs CLIP; the face models are faster on the
-# GPU), so it only takes the GPU when this much is free and otherwise runs on
-# CPU. Checked with nvidia-smi before torch is imported: a CPU fallback that had
-# already created a CUDA context would still hold a few hundred MiB of the card.
-CLAP_MIN_FREE_GPU_MIB = min_free_mib("PHOTRIX_CLAP_MIN_FREE_GPU_MIB", 1024)
 
 
 def send(payload: dict) -> None:
@@ -143,13 +136,14 @@ def _place_model(model, torch):
 
 def main():
     try:
-        free = free_gpu_mib()
-        if not has_room(free, CLAP_MIN_FREE_GPU_MIB):
-            print(
-                f"CLAP: {free} MiB GPU free, under {CLAP_MIN_FREE_GPU_MIB}; running on CPU",
-                file=sys.stderr,
-            )
-            # Before torch loads, so this process never creates a CUDA context.
+        # CLAP (~850 MiB on the GPU) shares the card with CLIP and the face
+        # models, which outrank it: search needs CLIP, and the face models are
+        # far faster on the GPU. Decided with nvidia-smi before torch is
+        # imported, because a CPU fallback that had already created a CUDA
+        # context would still hold a few hundred MiB of the card.
+        use_gpu, reason = clap_gpu_plan(os.environ, *gpu_memory_mib())
+        if not use_gpu:
+            print(f"CLAP: running on CPU: {reason}", file=sys.stderr)
             os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
         import torch
