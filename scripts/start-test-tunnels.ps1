@@ -1,6 +1,7 @@
 param(
   [string]$DeployUser = "deploy",
-  [string]$DeployHost = "192.168.1.97",
+  [Parameter(Mandatory = $true)]
+  [string]$DeployHost,
   [string]$IdentityFile = "$HOME/.ssh/id_ed25519"
 )
 
