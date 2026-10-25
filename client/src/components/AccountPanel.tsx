@@ -21,6 +21,7 @@ import {
 import { clearToken, isPasskeyAvailable, registerPasskey } from "../auth";
 import { buildShareUrl } from "../hooks/useShareFilter";
 import css from "./AccountPanel.module.css";
+import { InstallAppSection } from "./InstallAppSection";
 
 type Props = {
   isOpen: boolean;
@@ -191,6 +192,12 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
         </header>
 
         {error && <p className={css.error}>{error}</p>}
+
+        <InstallAppSection
+          sectionClassName={css.section}
+          titleClassName={css.sectionTitle}
+          hintClassName={css.hint}
+        />
 
         {/* --- MCP keys --- */}
         <section className={css.section}>
