@@ -27,6 +27,9 @@ const serverEnv = {
 
 export default defineConfig({
   testDir: "./tests",
+  // A fresh checkout's first page load waits for Vite to compile the whole
+  // client, which alone can pass Playwright's 30 s default on a busy machine.
+  timeout: 120_000,
   globalSetup: "./globalSetup.ts",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
