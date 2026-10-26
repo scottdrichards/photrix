@@ -24,6 +24,9 @@ const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
     const db = new IndexDatabase(mediaRoot);
     await db.init();
     await db.startupMaintenance;
+    // The vector index loads in the background too; let it finish before the
+    // test (and its cleanup, which deletes the database directory) runs.
+    await db.vectorIndexLoaded;
     await testFn(db);
   } finally {
     rmSync(mediaRoot, { recursive: true, force: true });
