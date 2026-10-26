@@ -55,12 +55,22 @@ export const getInitialTheme = (): Theme => {
 // its theme, which may be a user override of the system one, both get it.
 export const THEME_COLORS: Record<Theme, string> = { light: "#f7f7f7", dark: "#11161d" };
 
+// An installed app's system bars take the manifest's background_color, read
+// once at install; no manifest field can follow dark mode. So the page points
+// at the manifest matching the theme it is showing, and the app is installed
+// with that colour. Both manifests share an `id`, so they are one app.
+export const MANIFEST_HREFS: Record<Theme, string> = {
+  light: "/manifest.webmanifest",
+  dark: "/manifest-dark.webmanifest",
+};
+
 export const applyTheme = (theme: Theme): void => {
   if (typeof document === "undefined") return;
   document.documentElement.dataset.theme = theme;
   document
     .querySelectorAll('meta[name="theme-color"]')
     .forEach((meta) => meta.setAttribute("content", THEME_COLORS[theme]));
+  document.querySelector('link[rel="manifest"]')?.setAttribute("href", MANIFEST_HREFS[theme]);
 };
 
 export const persistThemeOverride = (themeOverride: ThemeOverride): void => {
