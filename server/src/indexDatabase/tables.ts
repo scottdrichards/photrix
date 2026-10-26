@@ -117,7 +117,7 @@ export const tables = {
       { name: "momentClusterId", type: "INTEGER", indexExpression: true },
       // 1 when this file is the chosen representative of its momentClusterId
       // (the one the collapsed gallery view shows). Exactly one member per
-      // cluster should carry this; see indexDatabase.setMomentClusterRepresentative.
+      // cluster should carry this; see indexDatabase.moments.setMomentClusterRepresentative.
       { name: "momentClusterRepresentative", type: "INTEGER", default: 0 },
       // Laplacian-variance blur/sharpness score (see imageProcessing/sharpness.ts),
       // computed once by the moment-clustering task and stored so representative

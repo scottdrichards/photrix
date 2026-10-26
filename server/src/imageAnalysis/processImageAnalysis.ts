@@ -63,7 +63,7 @@ export const processImageAnalysis = (
       return;
     }
     if (result.faces) {
-      await database.saveFaceDetectionResult(relativePath, result.faces);
+      await database.faces.saveFaceDetectionResult(relativePath, result.faces);
       await database.addOrUpdateFileData(relativePath, {
         regions: faceDetectionsToRegions(result.faces),
       });
@@ -79,11 +79,11 @@ export const processImageAnalysis = (
         { err: result.embeddingError, path: relativePath },
         "Image embedding failed",
       );
-      await database.saveImageEmbeddingError(relativePath);
+      await database.analysis.saveImageEmbeddingError(relativePath);
       return;
     }
     if (result.embedding) {
-      await database.saveImageEmbedding(relativePath, result.embedding);
+      await database.analysis.saveImageEmbedding(relativePath, result.embedding);
     }
   };
 
@@ -93,13 +93,13 @@ export const processImageAnalysis = (
     while (true) {
       ctrl.checkCancelled();
 
-      const items = await database.getImagesNeedingAnalysis(DB_BATCH_SIZE);
+      const items = await database.analysis.getImagesNeedingAnalysis(DB_BATCH_SIZE);
       if (!items.length) {
         // If upstream tasks (EXIF, file-info) haven't finished yet, images may
         // still be waiting for their prerequisites. Pause/wait rather than
         // declaring complete so newly-eligible images are picked up once those
         // tasks stamp their ProcessedAt fields.
-        const prereqsPending = await database.hasImagesPendingAnalysisPrerequisites();
+        const prereqsPending = await database.analysis.hasImagesPendingAnalysisPrerequisites();
         if (!prereqsPending) {
           ctrl.markComplete();
           return;
@@ -148,7 +148,7 @@ export const processImageAnalysis = (
                   { err: error, path: relativePath },
                   "Image analysis failed permanently (corrupt/unreadable file)",
                 );
-                await database.saveImageAnalysisDecodeError(relativePath);
+                await database.analysis.saveImageAnalysisDecodeError(relativePath);
               } else {
                 // Transient failure (worker timeout, crash). Mark per-stage so
                 // the file is retried after the rest of the backlog.
@@ -159,7 +159,7 @@ export const processImageAnalysis = (
                   });
                 }
                 if (needsEmbedding) {
-                  await database.saveImageEmbeddingError(relativePath);
+                  await database.analysis.saveImageEmbeddingError(relativePath);
                 }
               }
             }
@@ -177,7 +177,7 @@ export const processImageAnalysis = (
       const counts = await database.getStatusCounts();
       const facesTotal = counts.imageEntries;
       const facesDone = Math.max(0, facesTotal - counts.missingFaceDetection);
-      const [embedTotal, embedDone] = await database.getEmbeddingProgress();
+      const [embedTotal, embedDone] = await database.analysis.getEmbeddingProgress();
 
       const stages = [
         counts.missingFaceDetection > 0 ? "faces" : null,

@@ -32,7 +32,7 @@ const log = getLogger("photoCaptionRequestHandler");
 // Names make a caption better but aren't needed for one, so a failed lookup is
 // logged and the caption is written without them.
 const peopleFacesOrNone = async (database: IndexDatabase, subPath: string) => {
-  const faces = await attempt(database.getPeopleFacesForFile(subPath));
+  const faces = await attempt(database.faces.getPeopleFacesForFile(subPath));
   if (faces.ok) return faces.value;
   log.warn({ err: faces.error }, "Could not look up people for a caption; captioning without names");
   return [];

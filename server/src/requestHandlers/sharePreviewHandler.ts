@@ -75,7 +75,7 @@ export const sharePreviewHandler = async (
       const candidates = result.items.filter(
         (f) => !f.mimeType?.startsWith("video/") && !VIDEO_EXTENSIONS.test(f.fileName),
       );
-      const namedPeople = await database.countNamedPeopleForFiles(candidates);
+      const namedPeople = await database.faces.countNamedPeopleForFiles(candidates);
       const items = candidates
         .map((f) => ({
           file: f,

@@ -28,12 +28,12 @@ export const processFaceClustering = (database: IndexDatabase): TaskRunner => {
       await ctrl.waitUntilResumed();
       ctrl.checkCancelled();
 
-      const processed = await database.clusterPendingFaces(BATCH_SIZE);
+      const processed = await database.faceClusters.clusterPendingFaces(BATCH_SIZE);
       if (!processed) break;
       totalAssigned += processed;
     }
 
-    await database.pruneEmptyFaceClusters();
+    await database.faceClusters.pruneEmptyFaceClusters();
     if (totalAssigned > 0) {
       log.info({ totalAssigned }, "Face clustering backlog drained");
     }
@@ -44,7 +44,7 @@ export const processFaceClustering = (database: IndexDatabase): TaskRunner => {
     // resets every faces.clusterId, which used to silently put every manually
     // excluded face back into the cluster it had been pulled out of. Cheap when
     // there is nothing to do — one indexed read of faceVerdicts.
-    const reapplied = await database.reapplyFaceVerdicts();
+    const reapplied = await database.faceClusters.reapplyFaceVerdicts();
     if (reapplied > 0) {
       log.info({ reapplied }, "Re-applied manual face verdicts after clustering");
     }
@@ -60,7 +60,7 @@ export const processFaceClustering = (database: IndexDatabase): TaskRunner => {
       await ctrl.waitUntilResumed();
       ctrl.checkCancelled();
 
-      const refreshed = await database.refreshStaleClusterSimilarities();
+      const refreshed = await database.faceClusters.refreshStaleClusterSimilarities();
       if (!refreshed) break;
       totalRefreshed += refreshed;
     }
@@ -76,7 +76,7 @@ export const processFaceClustering = (database: IndexDatabase): TaskRunner => {
     resume: ctrl.resume,
     cancel: ctrl.cancel,
     getStatus: async () => {
-      const { assigned, pending } = await database.getFaceClusteringProgress();
+      const { assigned, pending } = await database.faceClusters.getFaceClusteringProgress();
       const total = assigned + pending;
       return {
         state: ctrl.state,

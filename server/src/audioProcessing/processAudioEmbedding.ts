@@ -26,7 +26,7 @@ export const processAudioEmbedding = (
     while (true) {
       ctrl.checkCancelled();
 
-      const items = await database.getFilesNeedingAudioEmbedding(DB_BATCH_SIZE);
+      const items = await database.analysis.getFilesNeedingAudioEmbedding(DB_BATCH_SIZE);
       if (!items.length) {
         ctrl.markComplete();
         return;
@@ -50,12 +50,12 @@ export const processAudioEmbedding = (
                 { path: relativePath },
                 "Audio embedding skipped: file not found at storage path",
               );
-              await database.markAudioEmbeddingSkipped(relativePath);
+              await database.analysis.markAudioEmbeddingSkipped(relativePath);
               return;
             }
             try {
               const embedding = await embedAudio(fullPath);
-              await database.saveAudioEmbedding(relativePath, embedding);
+              await database.analysis.saveAudioEmbedding(relativePath, embedding);
             } catch (error) {
               if (isWorkerEvictedError(error)) {
                 // The worker was killed by us (GPU reclaimed for playback /
@@ -68,7 +68,7 @@ export const processAudioEmbedding = (
                 return;
               }
               log.warn({ err: error, path: relativePath }, "Audio embedding failed");
-              await database.saveAudioEmbeddingError(relativePath);
+              await database.analysis.saveAudioEmbeddingError(relativePath);
             }
           }),
         );
@@ -81,7 +81,7 @@ export const processAudioEmbedding = (
     resume: ctrl.resume,
     cancel: ctrl.cancel,
     getStatus: async () => {
-      const [total, done] = await database.getAudioEmbeddingProgress();
+      const [total, done] = await database.analysis.getAudioEmbeddingProgress();
       return {
         state: ctrl.state,
         itemsProcessed: done,

@@ -184,7 +184,7 @@ describe("IndexDatabase", () => {
         facesProcessedAt: new Date().toISOString(),
         embeddingProcessedAt: new Date().toISOString(),
       });
-      await db.saveFaceDetectionResult("edited.jpg", [
+      await db.faces.saveFaceDetectionResult("edited.jpg", [
         {
           box: { x: 0, y: 0, width: 10, height: 10 },
           confidence: 0.9,
@@ -203,7 +203,7 @@ describe("IndexDatabase", () => {
       // Value columns are left in place until reprocessing overwrites them.
       expect(record?.dateTaken).toBeDefined();
       // Old face detections are dropped.
-      const faces = await db.getFacesForFile("edited.jpg");
+      const faces = await db.faces.getFacesForFile("edited.jpg");
       expect(faces).toHaveLength(0);
     });
   });
@@ -569,7 +569,7 @@ describe("IndexDatabase", () => {
 
         const embedding1 = makeEmbedding(1);
         const embedding2 = makeEmbedding(2);
-        await db.saveFaceDetectionResult(
+        await db.faces.saveFaceDetectionResult(
           "portraits/two.jpg",
           [
             {
@@ -586,7 +586,7 @@ describe("IndexDatabase", () => {
           new Date("2026-03-15T12:00:00.000Z"),
         );
 
-        const rows = await db.getFacesForFile("portraits/two.jpg");
+        const rows = await db.faces.getFacesForFile("portraits/two.jpg");
 
         expect(rows).toHaveLength(2);
         expect(rows[0]?.box).toEqual({ x: 0.25, y: 0.4, width: 0.3, height: 0.4 });
@@ -630,13 +630,13 @@ describe("IndexDatabase", () => {
     it("stores an empty face list as scanned-no-faces", async () => {
       await withTempDb(async (db) => {
         await db.addFile(createRecord("empty.jpg"));
-        await db.saveFaceDetectionResult(
+        await db.faces.saveFaceDetectionResult(
           "empty.jpg",
           [],
           new Date("2026-04-01T00:00:00.000Z"),
         );
 
-        const rows = await db.getFacesForFile("empty.jpg");
+        const rows = await db.faces.getFacesForFile("empty.jpg");
         expect(rows).toEqual([]);
 
         const record = await db.getFileRecord("empty.jpg");
@@ -648,7 +648,7 @@ describe("IndexDatabase", () => {
       await withTempDb(async (db) => {
         await db.addFile(createRecord("metadata-faces.jpg"));
 
-        await db.saveFacesFromMetadataRegions("metadata-faces.jpg", [
+        await db.faces.saveFacesFromMetadataRegions("metadata-faces.jpg", [
           {
             name: "Scott",
             area: { x: 0.2, y: 0.3, width: 0.1, height: 0.1 },
@@ -663,7 +663,7 @@ describe("IndexDatabase", () => {
           },
         ]);
 
-        const rows = await db.getFacesForFile("metadata-faces.jpg");
+        const rows = await db.faces.getFacesForFile("metadata-faces.jpg");
         expect(rows).toHaveLength(3);
         expect(rows[0]?.box).toEqual({ x: 0.2, y: 0.3, width: 0.1, height: 0.1 });
         expect(rows[1]?.box).toEqual({ x: 0.6, y: 0.4, width: 0.15, height: 0.15 });
@@ -678,16 +678,16 @@ describe("IndexDatabase", () => {
       await withTempDb(async (db) => {
         await db.addFile(createRecord("rescan.jpg"));
 
-        await db.saveFaceDetectionResult("rescan.jpg", [
+        await db.faces.saveFaceDetectionResult("rescan.jpg", [
           {
             box: { x: 0, y: 0, width: 0.1, height: 0.1 },
             confidence: 0.5,
             embedding: makeEmbedding(10),
           },
         ]);
-        expect(await db.getFacesForFile("rescan.jpg")).toHaveLength(1);
+        expect(await db.faces.getFacesForFile("rescan.jpg")).toHaveLength(1);
 
-        await db.saveFaceDetectionResult("rescan.jpg", [
+        await db.faces.saveFaceDetectionResult("rescan.jpg", [
           {
             box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
             confidence: 0.8,
@@ -700,7 +700,7 @@ describe("IndexDatabase", () => {
           },
         ]);
 
-        const rows = await db.getFacesForFile("rescan.jpg");
+        const rows = await db.faces.getFacesForFile("rescan.jpg");
         expect(rows).toHaveLength(2);
         expect(rows[0]?.confidence).toBeCloseTo(0.8, 5);
         expect(rows[1]?.confidence).toBeCloseTo(0.9, 5);
@@ -711,7 +711,7 @@ describe("IndexDatabase", () => {
       await withTempDb(async (db) => {
         await db.addFile(createRecord("quality/group.jpg"));
 
-        await db.saveFaceDetectionResult("quality/group.jpg", [
+        await db.faces.saveFaceDetectionResult("quality/group.jpg", [
           {
             box: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
             confidence: 0.9,
@@ -737,7 +737,7 @@ describe("IndexDatabase", () => {
       await withTempDb(async (db) => {
         await db.addFile(createRecord("quality/unscored.jpg"));
 
-        await db.saveFaceDetectionResult("quality/unscored.jpg", [
+        await db.faces.saveFaceDetectionResult("quality/unscored.jpg", [
           {
             box: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
             confidence: 0.9,
@@ -755,7 +755,7 @@ describe("IndexDatabase", () => {
       await withTempDb(async (db) => {
         await db.addFile(createRecord("quality/rescan.jpg"));
 
-        await db.saveFaceDetectionResult("quality/rescan.jpg", [
+        await db.faces.saveFaceDetectionResult("quality/rescan.jpg", [
           {
             box: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
             confidence: 0.9,
@@ -769,7 +769,7 @@ describe("IndexDatabase", () => {
 
         // A re-scan without attributes replaces the old (scored) face with a
         // fresh unscored one — the stale score must not survive it.
-        await db.saveFaceDetectionResult("quality/rescan.jpg", [
+        await db.faces.saveFaceDetectionResult("quality/rescan.jpg", [
           {
             box: { x: 0.2, y: 0.2, width: 0.1, height: 0.1 },
             confidence: 0.9,
@@ -788,7 +788,7 @@ describe("IndexDatabase", () => {
 
         // Simulates a face detected before the attribute feature existed:
         // no attributes yet, so no quality signal.
-        await db.saveFaceDetectionResult("quality/backfill.jpg", [
+        await db.faces.saveFaceDetectionResult("quality/backfill.jpg", [
           {
             box: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
             confidence: 0.9,
@@ -799,10 +799,10 @@ describe("IndexDatabase", () => {
           (await db.getFileRecord("quality/backfill.jpg"))?.photoQualityScore,
         ).toBeUndefined();
 
-        const faces = await db.getFaceBoxesForAttributes("quality/backfill.jpg");
+        const faces = await db.faces.getFaceBoxesForAttributes("quality/backfill.jpg");
         expect(faces).toHaveLength(1);
 
-        await db.saveFaceAttributes([
+        await db.faces.saveFaceAttributes([
           {
             id: faces[0].id,
             attributes: { smile: 0.4, eyesOpen: 0.6, focus: 0.8, exposure: 0.6 },
@@ -818,7 +818,7 @@ describe("IndexDatabase", () => {
       await withTempDb(async (db) => {
         const withScore = async (name: string, score: number) => {
           await db.addFile(createRecord(name));
-          await db.saveFaceDetectionResult(name, [
+          await db.faces.saveFaceDetectionResult(name, [
             {
               box: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
               confidence: 0.9,
@@ -877,7 +877,7 @@ describe("IndexDatabase", () => {
         expect(before.imageEntries).toBe(2);
         expect(before.missingFaceDetection).toBe(2);
 
-        await db.saveFaceDetectionResult("a.jpg", []);
+        await db.faces.saveFaceDetectionResult("a.jpg", []);
 
         const after = await db.getStatusCounts();
         expect(after.missingFaceDetection).toBe(1);
@@ -899,28 +899,28 @@ describe("IndexDatabase", () => {
         await db.addFile(createRecord("people/a-3.jpg", { dimensionsWidth: 2000 }));
         await db.addFile(createRecord("people/b-1.jpg", { dimensionsWidth: 2000 }));
 
-        await db.saveFaceDetectionResult("people/a-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/a-1.jpg", [
           {
             box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
             confidence: 0.9,
             embedding: unit([1, 0, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/a-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/a-2.jpg", [
           {
             box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
             confidence: 0.9,
             embedding: unit([0.98, 0.05, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/a-3.jpg", [
+        await db.faces.saveFaceDetectionResult("people/a-3.jpg", [
           {
             box: { x: 0.3, y: 0.3, width: 0.2, height: 0.2 },
             confidence: 0.9,
             embedding: unit([0.97, 0.06, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/b-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/b-1.jpg", [
           {
             box: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 },
             confidence: 0.9,
@@ -931,7 +931,7 @@ describe("IndexDatabase", () => {
         // Test queryFaceClusters returns summaries without faces.
         // Clusters with fewer than MIN_FACE_CLUSTER_SIZE (2) faces are excluded,
         // so the b-cluster (1 face) is filtered out.
-        const result = await db.queryFaceClusters({ filter: {} });
+        const result = await db.faceClusters.queryFaceClusters({ filter: {} });
 
         expect(result.totalFaces).toBe(3);
         expect(result.totalClusters).toBe(1);
@@ -941,7 +941,7 @@ describe("IndexDatabase", () => {
         expect(result.clusters[0]?.faces).toBeUndefined();
 
         // Test getFaceClusterDetail returns full cluster with faces
-        const detailResult = await db.getFaceClusterDetail({
+        const detailResult = await db.faceClusters.getFaceClusterDetail({
           filter: {},
           clusterId: result.clusters[0].id,
         });
@@ -971,22 +971,22 @@ describe("IndexDatabase", () => {
         await db.addFile(createRecord("gate/a-2.jpg", { dimensionsWidth: 2000 }));
         await db.addFile(createRecord("gate/low.jpg", { dimensionsWidth: 2000 }));
 
-        await db.saveFaceDetectionResult("gate/a-1.jpg", [
+        await db.faces.saveFaceDetectionResult("gate/a-1.jpg", [
           { box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, confidence: 0.9, embedding },
         ]);
-        await db.saveFaceDetectionResult("gate/a-2.jpg", [
+        await db.faces.saveFaceDetectionResult("gate/a-2.jpg", [
           { box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 }, confidence: 0.9, embedding },
         ]);
-        await db.saveFaceDetectionResult("gate/low.jpg", [
+        await db.faces.saveFaceDetectionResult("gate/low.jpg", [
           { box: { x: 0.3, y: 0.3, width: 0.2, height: 0.2 }, confidence: 0.5, embedding },
         ]);
 
-        const result = await db.queryFaceClusters({ filter: {} });
+        const result = await db.faceClusters.queryFaceClusters({ filter: {} });
         expect(result.totalClusters).toBe(1);
         expect(result.clusters[0]?.count).toBe(2);
 
         // The low-confidence face is excluded from clustering, not deleted.
-        expect(await db.getFacesForFile("gate/low.jpg")).toHaveLength(1);
+        expect(await db.faces.getFacesForFile("gate/low.jpg")).toHaveLength(1);
       });
     });
 
@@ -1008,7 +1008,7 @@ describe("IndexDatabase", () => {
         const nearVec = unit([1, 1]);
 
         await db.addFile(createRecord("drift/seed.jpg", { dimensionsWidth: 2000 }));
-        await db.saveFaceDetectionResult("drift/seed.jpg", [
+        await db.faces.saveFaceDetectionResult("drift/seed.jpg", [
           {
             box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
             confidence: 0.9,
@@ -1018,7 +1018,7 @@ describe("IndexDatabase", () => {
         for (let i = 0; i < 9; i += 1) {
           const path = `drift/near-${i}.jpg`;
           await db.addFile(createRecord(path, { dimensionsWidth: 2000 }));
-          await db.saveFaceDetectionResult(path, [
+          await db.faces.saveFaceDetectionResult(path, [
             {
               box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
               confidence: 0.9,
@@ -1030,23 +1030,23 @@ describe("IndexDatabase", () => {
         // Before refresh: the seed's stored similarity is a trivial 1.0 (it was
         // scored against its own centroid), so it wins as representative even
         // though the centroid has moved onto the near faces.
-        const before = await db.queryFaceClusters({ filter: {} });
+        const before = await db.faceClusters.queryFaceClusters({ filter: {} });
         expect(before.clusters).toHaveLength(1);
         expect(before.clusters[0]?.count).toBe(10);
         expect(before.clusters[0]?.representative.path).toBe("/drift/seed.jpg");
 
-        const refreshed = await db.refreshStaleClusterSimilarities();
+        const refreshed = await db.faceClusters.refreshStaleClusterSimilarities();
         expect(refreshed).toBe(1);
 
         // After refresh: rescored against the current centroid, a near face
         // (cosine ~1.0) outranks the seed (cosine ~0.71).
-        const after = await db.queryFaceClusters({ filter: {} });
+        const after = await db.faceClusters.queryFaceClusters({ filter: {} });
         expect(after.clusters[0]?.count).toBe(10);
         expect(after.clusters[0]?.representative.path).not.toBe("/drift/seed.jpg");
         expect(after.clusters[0]?.representative.path).toMatch(/^\/drift\/near-\d\.jpg$/);
 
         // A second refresh with no further growth is a no-op.
-        await expect(db.refreshStaleClusterSimilarities()).resolves.toBe(0);
+        await expect(db.faceClusters.refreshStaleClusterSimilarities()).resolves.toBe(0);
       });
     });
 
@@ -1067,43 +1067,43 @@ describe("IndexDatabase", () => {
         const seedVec = unit([1, 0, 0]);
         const nearVec = unit([1, 1, 0]);
         await db.addFile(createRecord("main/seed.jpg", { dimensionsWidth: 2000 }));
-        await db.saveFaceDetectionResult("main/seed.jpg", [
+        await db.faces.saveFaceDetectionResult("main/seed.jpg", [
           { box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: seedVec },
         ]);
         for (let i = 0; i < 9; i += 1) {
           const path = `main/near-${i}.jpg`;
           await db.addFile(createRecord(path, { dimensionsWidth: 2000 }));
-          await db.saveFaceDetectionResult(path, [
+          await db.faces.saveFaceDetectionResult(path, [
             { box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: nearVec },
           ]);
         }
-        await expect(db.refreshStaleClusterSimilarities()).resolves.toBe(1);
+        await expect(db.faceClusters.refreshStaleClusterSimilarities()).resolves.toBe(1);
 
         // A tiny sub-cluster on an orthogonal axis: it never joins main (so it
         // stays separate), and its seed keeps the artificial clusterSimilarity of
         // 1.0. Two faces so it clears the single-face hidden-cluster floor.
         await db.addFile(createRecord("bg/seed.jpg", { dimensionsWidth: 2000 }));
-        await db.saveFaceDetectionResult("bg/seed.jpg", [
+        await db.faces.saveFaceDetectionResult("bg/seed.jpg", [
           { box: { x: 0.5, y: 0.5, width: 0.03, height: 0.03 }, confidence: 0.9, embedding: unit([0, 0, 1]) },
         ]);
         await db.addFile(createRecord("bg/second.jpg", { dimensionsWidth: 2000 }));
-        await db.saveFaceDetectionResult("bg/second.jpg", [
+        await db.faces.saveFaceDetectionResult("bg/second.jpg", [
           { box: { x: 0.5, y: 0.5, width: 0.03, height: 0.03 }, confidence: 0.9, embedding: unit([0, 0.02, 1]) },
         ]);
 
-        const before = await db.queryFaceClusters({ filter: {} });
+        const before = await db.faceClusters.queryFaceClusters({ filter: {} });
         const main = before.clusters.find((c) => c.representative.path.startsWith("/main/"));
         const bg = before.clusters.find((c) => c.representative.path.startsWith("/bg/"));
         expect(main).toBeDefined();
         expect(bg).toBeDefined();
 
-        await expect(db.mergeClusters(bg!.id, main!.id)).resolves.toBe(true);
+        await expect(db.faceClusters.mergeClusters(bg!.id, main!.id)).resolves.toBe(true);
 
         // The bg seed's 1.0 (scored against its own centroid) would otherwise
         // outrank main's best (~0.997) and become the person's representative and
         // first detail face. After rescore-on-merge the bg faces are scored
         // against main's centroid (~0) and drop to the back.
-        const detail = await db.getFaceClusterDetail({ filter: {}, clusterId: main!.id });
+        const detail = await db.faceClusters.getFaceClusterDetail({ filter: {}, clusterId: main!.id });
         expect(detail.cluster?.representative.path).toMatch(/^\/main\/near-\d\.jpg$/);
         expect(detail.cluster?.faces[0]?.path).toMatch(/^\/main\//);
         const paths = detail.cluster?.faces.map((f) => f.path) ?? [];
@@ -1125,38 +1125,38 @@ describe("IndexDatabase", () => {
         };
 
         await db.addFile(createRecord("main2/a.jpg", { dimensionsWidth: 2000 }));
-        await db.saveFaceDetectionResult("main2/a.jpg", [
+        await db.faces.saveFaceDetectionResult("main2/a.jpg", [
           { box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([1, 0, 0]) },
         ]);
         await db.addFile(createRecord("main2/b.jpg", { dimensionsWidth: 2000 }));
-        await db.saveFaceDetectionResult("main2/b.jpg", [
+        await db.faces.saveFaceDetectionResult("main2/b.jpg", [
           { box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([1, 0.01, 0]) },
         ]);
 
         await db.addFile(createRecord("bg2/seed.jpg", { dimensionsWidth: 2000 }));
-        await db.saveFaceDetectionResult("bg2/seed.jpg", [
+        await db.faces.saveFaceDetectionResult("bg2/seed.jpg", [
           { box: { x: 0.5, y: 0.5, width: 0.03, height: 0.03 }, confidence: 0.9, embedding: unit([0, 0, 1]) },
         ]);
         await db.addFile(createRecord("bg2/second.jpg", { dimensionsWidth: 2000 }));
-        await db.saveFaceDetectionResult("bg2/second.jpg", [
+        await db.faces.saveFaceDetectionResult("bg2/second.jpg", [
           { box: { x: 0.5, y: 0.5, width: 0.03, height: 0.03 }, confidence: 0.9, embedding: unit([0, 0.02, 1]) },
         ]);
 
-        const before = await db.queryFaceClusters({ filter: {} });
+        const before = await db.faceClusters.queryFaceClusters({ filter: {} });
         const main = before.clusters.find((c) => c.representative.path.startsWith("/main2/"));
         const bg = before.clusters.find((c) => c.representative.path.startsWith("/bg2/"));
         expect(main).toBeDefined();
         expect(bg).toBeDefined();
 
-        await expect(db.mergeClusters(bg!.id, main!.id)).resolves.toBe(true);
+        await expect(db.faceClusters.mergeClusters(bg!.id, main!.id)).resolves.toBe(true);
 
         // Without exactCluster, asking for the merged-away sub-cluster's id
         // resolves up to the canonical person and returns every face.
-        const merged = await db.getFaceClusterDetail({ filter: {}, clusterId: bg!.id });
+        const merged = await db.faceClusters.getFaceClusterDetail({ filter: {}, clusterId: bg!.id });
         expect(merged.cluster?.faces).toHaveLength(4);
 
         // With exactCluster, the same id returns only its own two faces.
-        const exact = await db.getFaceClusterDetail({
+        const exact = await db.faceClusters.getFaceClusterDetail({
           filter: {},
           clusterId: bg!.id,
           exactCluster: true,
@@ -1180,14 +1180,14 @@ describe("IndexDatabase", () => {
         await db.addFile(createRecord("people/named-1.jpg", { dimensionsWidth: 2000 }));
         await db.addFile(createRecord("people/named-2.jpg", { dimensionsWidth: 2000 }));
 
-        await db.saveFaceDetectionResult("people/named-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/named-1.jpg", [
           {
             box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
             confidence: 0.9,
             embedding: unit([1, 0, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/named-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/named-2.jpg", [
           {
             box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
             confidence: 0.9,
@@ -1195,23 +1195,23 @@ describe("IndexDatabase", () => {
           },
         ]);
 
-        const initial = await db.queryFaceClusters({ filter: {} });
+        const initial = await db.faceClusters.queryFaceClusters({ filter: {} });
         const clusterId = initial.clusters[0]?.id;
 
         expect(clusterId).toBeDefined();
-        await expect(db.renameCluster(clusterId, "Taylor")).resolves.toBe(true);
+        await expect(db.faceClusters.renameCluster(clusterId, "Taylor")).resolves.toBe(true);
 
-        const renamed = await db.queryFaceClusters({ filter: {} });
+        const renamed = await db.faceClusters.queryFaceClusters({ filter: {} });
         expect(renamed.clusters[0]?.name).toBe("Taylor");
 
-        const detail = await db.getFaceClusterDetail({
+        const detail = await db.faceClusters.getFaceClusterDetail({
           filter: {},
           clusterId: clusterId,
         });
         expect(detail.cluster?.name).toBe("Taylor");
 
-        await expect(db.renameCluster(clusterId, null)).resolves.toBe(true);
-        const cleared = await db.getFaceClusterDetail({
+        await expect(db.faceClusters.renameCluster(clusterId, null)).resolves.toBe(true);
+        const cleared = await db.faceClusters.getFaceClusterDetail({
           filter: {},
           clusterId: clusterId,
         });
@@ -1232,14 +1232,14 @@ describe("IndexDatabase", () => {
         await db.addFile(createRecord("people/overlay-1.jpg", { dimensionsWidth: 2000 }));
         await db.addFile(createRecord("people/overlay-2.jpg", { dimensionsWidth: 2000 }));
 
-        await db.saveFaceDetectionResult("people/overlay-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/overlay-1.jpg", [
           {
             box: { x: 0.25, y: 0.35, width: 0.2, height: 0.2 },
             confidence: 0.9,
             embedding: unit([1, 0, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/overlay-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/overlay-2.jpg", [
           {
             box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
             confidence: 0.9,
@@ -1247,12 +1247,12 @@ describe("IndexDatabase", () => {
           },
         ]);
 
-        const clusters = await db.queryFaceClusters({ filter: {} });
+        const clusters = await db.faceClusters.queryFaceClusters({ filter: {} });
         const clusterId = clusters.clusters[0]?.id;
         expect(clusterId).toBeDefined();
-        await db.renameCluster(clusterId, "Riley");
+        await db.faceClusters.renameCluster(clusterId, "Riley");
 
-        const faces = await db.getPeopleFacesForFile("people/overlay-1.jpg");
+        const faces = await db.faces.getPeopleFacesForFile("people/overlay-1.jpg");
         expect(faces).toHaveLength(1);
         // Boxes are stored as normalized centre coordinates (x + width/2), matching
         // getFacesForFile and the client's faceTableBoxes handling.
@@ -1269,7 +1269,7 @@ describe("IndexDatabase", () => {
 
         // Files with no detected faces yield an empty list, not an error.
         await db.addFile(createRecord("people/no-faces.jpg", { dimensionsWidth: 2000 }));
-        expect(await db.getPeopleFacesForFile("people/no-faces.jpg")).toEqual([]);
+        expect(await db.faces.getPeopleFacesForFile("people/no-faces.jpg")).toEqual([]);
       });
     });
 
@@ -1285,30 +1285,30 @@ describe("IndexDatabase", () => {
 
         await db.addFile(createRecord("people/named-1.jpg", { dimensionsWidth: 2000 }));
         await db.addFile(createRecord("people/named-2.jpg", { dimensionsWidth: 2000 }));
-        await db.saveFaceDetectionResult("people/named-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/named-1.jpg", [
           { box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([1, 0, 0]) },
         ]);
-        await db.saveFaceDetectionResult("people/named-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/named-2.jpg", [
           { box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([0, 1, 0]) },
         ]);
 
         // getPeopleFacesForFile (not queryFaceClusters, which hides singleton
         // clusters from the People grid) is how the real face-assign panel
         // learns a face's clusterId, so use the same path here.
-        const first = (await db.getPeopleFacesForFile("people/named-1.jpg"))[0].personId;
-        const second = (await db.getPeopleFacesForFile("people/named-2.jpg"))[0].personId;
+        const first = (await db.faces.getPeopleFacesForFile("people/named-1.jpg"))[0].personId;
+        const second = (await db.faces.getPeopleFacesForFile("people/named-2.jpg"))[0].personId;
         expect(first).not.toBe(second);
 
         // Unnamed clusters never show up in the autocomplete list.
-        expect(await db.listNamedPeople()).toEqual([]);
+        expect(await db.faces.listNamedPeople()).toEqual([]);
 
-        await db.renameCluster(first, "Bob");
-        expect(await db.listNamedPeople()).toEqual([{ id: first, name: "Bob" }]);
+        await db.faceClusters.renameCluster(first, "Bob");
+        expect(await db.faces.listNamedPeople()).toEqual([{ id: first, name: "Bob" }]);
 
         // Sorted by name, case-insensitively ("amy" before "Bob" despite the
         // lowercase 'a' sorting after 'B' in a plain byte-order comparison).
-        await db.renameCluster(second, "amy");
-        expect(await db.listNamedPeople()).toEqual([
+        await db.faceClusters.renameCluster(second, "amy");
+        expect(await db.faces.listNamedPeople()).toEqual([
           { id: second, name: "amy" },
           { id: first, name: "Bob" },
         ]);
@@ -1327,18 +1327,18 @@ describe("IndexDatabase", () => {
 
         await db.addFile(createRecord("people/preview-1.jpg", { dimensionsWidth: 2000 }));
         await db.addFile(createRecord("people/preview-2.jpg", { dimensionsWidth: 2000 }));
-        await db.saveFaceDetectionResult("people/preview-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/preview-1.jpg", [
           { box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([1, 0, 0]) },
         ]);
-        await db.saveFaceDetectionResult("people/preview-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/preview-2.jpg", [
           { box: { x: 0.3, y: 0.3, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: unit([0.99, 0.01, 0]) },
         ]);
 
-        const facesInFile1 = await db.getPeopleFacesForFile("people/preview-1.jpg");
+        const facesInFile1 = await db.faces.getPeopleFacesForFile("people/preview-1.jpg");
         const ownFaceId = facesInFile1[0].faceId;
         const clusterId = facesInFile1[0].personId;
 
-        const full = await db.getClusterFacePreview(clusterId);
+        const full = await db.faces.getClusterFacePreview(clusterId);
         // Paths come back with a leading slash, matching every other
         // ApiFaceRep-shaped result (see faceRowToClusterFace / joinPath).
         expect(full.map((f) => f.path).sort()).toEqual([
@@ -1346,14 +1346,14 @@ describe("IndexDatabase", () => {
           "/people/preview-2.jpg",
         ]);
 
-        const excludingOwn = await db.getClusterFacePreview(clusterId, {
+        const excludingOwn = await db.faces.getClusterFacePreview(clusterId, {
           excludeFaceId: ownFaceId,
         });
         expect(excludingOwn).toHaveLength(1);
         expect(excludingOwn[0]?.path).toBe("/people/preview-2.jpg");
 
         // An unknown/invalid cluster id yields an empty list, not an error.
-        expect(await db.getClusterFacePreview("person-999999")).toEqual([]);
+        expect(await db.faces.getClusterFacePreview("person-999999")).toEqual([]);
       });
     });
 
@@ -1388,56 +1388,56 @@ describe("IndexDatabase", () => {
         await db.addFile(createRecord("people/taylor-1.jpg", { dimensionsWidth: 2000 }));
         await db.addFile(createRecord("people/taylor-2.jpg", { dimensionsWidth: 2000 }));
 
-        await db.saveFaceDetectionResult("people/alex-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/alex-1.jpg", [
           {
             box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
             confidence: 0.99,
             embedding: unit([1, 0, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/alex-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/alex-2.jpg", [
           {
             box: { x: 0.12, y: 0.1, width: 0.2, height: 0.2 },
             confidence: 0.99,
             embedding: unit([0.99, 0.01, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/jordan-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/jordan-1.jpg", [
           {
             box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
             confidence: 0.99,
             embedding: unit([0, 1, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/jordan-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/jordan-2.jpg", [
           {
             box: { x: 0.22, y: 0.2, width: 0.2, height: 0.2 },
             confidence: 0.99,
             embedding: unit([0.01, 0.99, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/casey-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/casey-1.jpg", [
           {
             box: { x: 0.3, y: 0.3, width: 0.2, height: 0.2 },
             confidence: 0.99,
             embedding: unit([0.55, 0.4, 0.73]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/casey-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/casey-2.jpg", [
           {
             box: { x: 0.32, y: 0.3, width: 0.2, height: 0.2 },
             confidence: 0.99,
             embedding: unit([0.57, 0.38, 0.72]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/taylor-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/taylor-1.jpg", [
           {
             box: { x: 0.38, y: 0.34, width: 0.2, height: 0.2 },
             confidence: 0.99,
             embedding: unit([-1, 0, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/taylor-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/taylor-2.jpg", [
           {
             box: { x: 0.4, y: 0.34, width: 0.2, height: 0.2 },
             confidence: 0.99,
@@ -1445,7 +1445,7 @@ describe("IndexDatabase", () => {
           },
         ]);
 
-        const initial = await db.queryFaceClusters({ filter: {} });
+        const initial = await db.faceClusters.queryFaceClusters({ filter: {} });
 
         const alex = initial.clusters.find((cluster) =>
           cluster.representative.path.includes("/people/alex-"),
@@ -1468,12 +1468,12 @@ describe("IndexDatabase", () => {
         expect(taylor).toBeDefined();
 
         await expect(
-          db.renameCluster(jordan!.id, "Scott Douglas Richards"),
+          db.faceClusters.renameCluster(jordan!.id, "Scott Douglas Richards"),
         ).resolves.toBe(true);
-        await expect(db.renameCluster(taylor!.id, "Taylor")).resolves.toBe(true);
-        await expect(db.mergeClusters(jordan!.id, alex!.id)).resolves.toBe(true);
+        await expect(db.faceClusters.renameCluster(taylor!.id, "Taylor")).resolves.toBe(true);
+        await expect(db.faceClusters.mergeClusters(jordan!.id, alex!.id)).resolves.toBe(true);
 
-        const detail = await db.getFaceClusterDetail({
+        const detail = await db.faceClusters.getFaceClusterDetail({
           filter: {},
           clusterId: alex!.id,
         });
@@ -1516,28 +1516,28 @@ describe("IndexDatabase", () => {
         await db.addFile(createRecord("people/jordan-1.jpg", { dimensionsWidth: 2000 }));
         await db.addFile(createRecord("people/jordan-2.jpg", { dimensionsWidth: 2000 }));
 
-        await db.saveFaceDetectionResult("people/alex-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/alex-1.jpg", [
           {
             box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
             confidence: 0.99,
             embedding: unit([1, 0, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/alex-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/alex-2.jpg", [
           {
             box: { x: 0.12, y: 0.1, width: 0.2, height: 0.2 },
             confidence: 0.99,
             embedding: unit([0.99, 0.01, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/jordan-1.jpg", [
+        await db.faces.saveFaceDetectionResult("people/jordan-1.jpg", [
           {
             box: { x: 0.2, y: 0.2, width: 0.2, height: 0.2 },
             confidence: 0.99,
             embedding: unit([0, 1, 0]),
           },
         ]);
-        await db.saveFaceDetectionResult("people/jordan-2.jpg", [
+        await db.faces.saveFaceDetectionResult("people/jordan-2.jpg", [
           {
             box: { x: 0.22, y: 0.2, width: 0.2, height: 0.2 },
             confidence: 0.99,
@@ -1545,7 +1545,7 @@ describe("IndexDatabase", () => {
           },
         ]);
 
-        const initial = await db.queryFaceClusters({ filter: {} });
+        const initial = await db.faceClusters.queryFaceClusters({ filter: {} });
         const alex = initial.clusters.find((cluster) =>
           cluster.representative.path.includes("/people/alex-"),
         );
@@ -1556,15 +1556,15 @@ describe("IndexDatabase", () => {
         expect(alex).toBeDefined();
         expect(jordan).toBeDefined();
 
-        await expect(db.renameCluster(alex!.id, "Alex")).resolves.toBe(true);
-        await expect(db.mergeClusters(jordan!.id, alex!.id)).resolves.toBe(true);
-        await expect(db.separateCluster(jordan!.id)).resolves.toBe(true);
+        await expect(db.faceClusters.renameCluster(alex!.id, "Alex")).resolves.toBe(true);
+        await expect(db.faceClusters.mergeClusters(jordan!.id, alex!.id)).resolves.toBe(true);
+        await expect(db.faceClusters.separateCluster(jordan!.id)).resolves.toBe(true);
 
-        const alexDetail = await db.getFaceClusterDetail({
+        const alexDetail = await db.faceClusters.getFaceClusterDetail({
           filter: {},
           clusterId: alex!.id,
         });
-        const jordanDetail = await db.getFaceClusterDetail({
+        const jordanDetail = await db.faceClusters.getFaceClusterDetail({
           filter: {},
           clusterId: jordan!.id,
         });
@@ -1594,7 +1594,7 @@ describe("IndexDatabase", () => {
               dimensionsHeight: 1500,
             }),
           );
-          await db.saveFaceDetectionResult(
+          await db.faces.saveFaceDetectionResult(
             relativePath,
             Array.from({ length: count }, (_, index) => ({
               box: {
@@ -1615,7 +1615,7 @@ describe("IndexDatabase", () => {
         }
         await addCluster("people/excluded.jpg", 12, 99);
 
-        const overview = await db.getFaceClustersPCA();
+        const overview = await db.faceClusters.getFaceClustersPCA();
 
         expect(overview.points).toHaveLength(12);
         expect(overview.points.every((point) => point.count >= 100)).toBe(true);
@@ -1624,7 +1624,7 @@ describe("IndexDatabase", () => {
         const focusedClusterId = overview.points.find((point) => point.count === 120)?.id;
         expect(focusedClusterId).toBeDefined();
 
-        const focused = await db.getFaceClustersPCA(focusedClusterId);
+        const focused = await db.faceClusters.getFaceClustersPCA(focusedClusterId);
         expect(focused.points).toHaveLength(11);
 
         const centerPoint = focused.points.find((point) => point.id === focusedClusterId);
@@ -1644,7 +1644,7 @@ describe("IndexDatabase", () => {
       transcript: string,
     ) => {
       await db.addFile(createRecord(relativePath, { mimeType: "video/mp4" }));
-      await db.saveAudioTranscription(relativePath, [
+      await db.analysis.saveAudioTranscription(relativePath, [
         { start: 0, end: 1, text: transcript },
       ]);
     };
@@ -1654,7 +1654,7 @@ describe("IndexDatabase", () => {
         await addVideoWithTranscript(db, "cat.mp4", "the cat meows at dinner time");
         await addVideoWithTranscript(db, "vacation.mp4", "our family vacation montage");
 
-        const results = await db.audioTranscriptSearch("cat", {}, 10);
+        const results = await db.analysis.audioTranscriptSearch("cat", {}, 10);
 
         expect(results.map((r) => r.fileName)).toEqual(["cat.mp4"]);
       });
@@ -1673,7 +1673,7 @@ describe("IndexDatabase", () => {
           "the birthday party made everyone happy",
         );
 
-        const results = await db.audioTranscriptSearch("happy birthday", {}, 10);
+        const results = await db.analysis.audioTranscriptSearch("happy birthday", {}, 10);
 
         expect(results.map((r) => r.fileName)).toEqual(["exact.mp4", "loose.mp4"]);
         expect(results[0]?.similarity).toBeGreaterThan(results[1]?.similarity ?? 0);
@@ -1686,7 +1686,7 @@ describe("IndexDatabase", () => {
       embedding: number[],
     ) => {
       await db.addFile(createRecord(relativePath, { mimeType: "image/jpeg" }));
-      await db.saveImageEmbedding(relativePath, Float32Array.from(embedding));
+      await db.analysis.saveImageEmbedding(relativePath, Float32Array.from(embedding));
     };
 
     it("ranks images by cosine similarity to the query vector", async () => {
@@ -1696,7 +1696,7 @@ describe("IndexDatabase", () => {
         await addImageWithEmbedding(db, "partial.jpg", [0.7071, 0.7071, 0, 0]);
         await addImageWithEmbedding(db, "orthogonal.jpg", [0, 1, 0, 0]);
 
-        const results = await db.semanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 10);
+        const results = await db.analysis.semanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 10);
 
         expect(results.map((r) => r.fileName)).toEqual([
           "match.jpg",
@@ -1715,7 +1715,7 @@ describe("IndexDatabase", () => {
         await addImageWithEmbedding(db, "b.jpg", [0.9, 0.1, 0, 0]);
         await addImageWithEmbedding(db, "c.jpg", [0.8, 0.2, 0, 0]);
 
-        const results = await db.semanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 2);
+        const results = await db.analysis.semanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 2);
 
         expect(results).toHaveLength(2);
         expect(results[0]?.fileName).toBe("a.jpg");
@@ -1727,7 +1727,7 @@ describe("IndexDatabase", () => {
         await addImageWithEmbedding(db, "embedded.jpg", [1, 0, 0, 0]);
         await db.addFile(createRecord("plain.jpg", { mimeType: "image/jpeg" }));
 
-        const results = await db.semanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 10);
+        const results = await db.analysis.semanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 10);
 
         expect(results.map((r) => r.fileName)).toEqual(["embedded.jpg"]);
       });
@@ -1738,7 +1738,7 @@ describe("IndexDatabase", () => {
         await addImageWithEmbedding(db, "elsewhere/best.jpg", [1, 0, 0, 0]);
         await addImageWithEmbedding(db, "trip/good.jpg", [0.9, 0.1, 0, 0]);
 
-        const results = await db.semanticSearch(
+        const results = await db.analysis.semanticSearch(
           Float32Array.from([1, 0, 0, 0]),
           { folder: { folder: "trip", recursive: true } },
           10,
@@ -1754,11 +1754,11 @@ describe("IndexDatabase", () => {
         // considers, so the answer can only come from ranking the allowed set.
         const decoys = Array.from({ length: 2_100 }, (_, i) => `decoys/${i}.jpg`);
         await db.addPaths(decoys);
-        for (const path of decoys) await db.saveImageEmbedding(path, Float32Array.from([1, 0.01, 0, 0]));
+        for (const path of decoys) await db.analysis.saveImageEmbedding(path, Float32Array.from([1, 0.01, 0, 0]));
         await addImageWithEmbedding(db, "trip/a.jpg", [0.6, 0.4, 0, 0]);
         await addImageWithEmbedding(db, "trip/b.jpg", [0.2, 0.8, 0, 0]);
 
-        const results = await db.semanticSearch(
+        const results = await db.analysis.semanticSearch(
           Float32Array.from([1, 0, 0, 0]),
           { folder: { folder: "trip", recursive: true } },
           10,
@@ -1775,7 +1775,7 @@ describe("IndexDatabase", () => {
 
         await db.moveFile("old.jpg", "renamed.jpg");
         await db.removeFile("gone.jpg");
-        const results = await db.semanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 10);
+        const results = await db.analysis.semanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 10);
 
         expect(results.map((r) => r.fileName)).toEqual(["renamed.jpg"]);
       });
@@ -1784,11 +1784,11 @@ describe("IndexDatabase", () => {
     it("ranks audio-bearing files for audio search and skips everything else", async () => {
       await withTempDb(async (db) => {
         await db.addFile(createRecord("song.mp3", { mimeType: "audio/mpeg" }));
-        await db.saveAudioEmbedding("song.mp3", Float32Array.from([1, 0, 0, 0]));
+        await db.analysis.saveAudioEmbedding("song.mp3", Float32Array.from([1, 0, 0, 0]));
         await db.addFile(createRecord("silent.jpg", { mimeType: "image/jpeg" }));
-        await db.saveAudioEmbedding("silent.jpg", Float32Array.from([1, 0, 0, 0]));
+        await db.analysis.saveAudioEmbedding("silent.jpg", Float32Array.from([1, 0, 0, 0]));
 
-        const results = await db.audioSemanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 10);
+        const results = await db.analysis.audioSemanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 10);
 
         expect(results.map((r) => r.fileName)).toEqual(["song.mp3"]);
         expect(results[0]?.similarity).toBeCloseTo(1, 5);
@@ -1956,13 +1956,13 @@ describe("IndexDatabase", () => {
         await db.addFile(createRecord("burst/b.jpg"));
         await db.addFile(createRecord("burst/c.jpg"));
 
-        const clusterId = await db.createMomentCluster();
-        await db.promoteFileToMomentCluster("/burst/", "a.jpg", clusterId);
-        await db.saveMomentClusteringBatch([
+        const clusterId = await db.moments.createMomentCluster();
+        await db.moments.promoteFileToMomentCluster("/burst/", "a.jpg", clusterId);
+        await db.moments.saveMomentClusteringBatch([
           { folder: "/burst/", fileName: "b.jpg", momentClusterId: clusterId, sharpnessScore: 10 },
           { folder: "/burst/", fileName: "c.jpg", momentClusterId: clusterId, sharpnessScore: 20 },
         ]);
-        const set = await db.setMomentClusterRepresentative(String(clusterId), "/burst/a.jpg");
+        const set = await db.moments.setMomentClusterRepresentative(String(clusterId), "/burst/a.jpg");
         expect(set).toBe(true);
 
         const collapsed = await db.queryFiles({

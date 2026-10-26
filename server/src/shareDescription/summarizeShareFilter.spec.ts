@@ -4,10 +4,12 @@ import { summarizeShareFilter } from "./summarizeShareFilter.ts";
 
 const databaseWithNames = (names: Record<number, string>) =>
   ({
-    getFaceClusterNames: (ids: number[]) =>
-      Promise.resolve(
-        new Map(ids.flatMap((id) => (names[id] ? [[id, names[id]] as const] : []))),
-      ),
+    faces: {
+      getFaceClusterNames: (ids: number[]) =>
+        Promise.resolve(
+          new Map(ids.flatMap((id) => (names[id] ? [[id, names[id]] as const] : []))),
+        ),
+    },
   }) as unknown as IndexDatabase;
 
 const emptyDatabase = databaseWithNames({});

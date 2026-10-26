@@ -9,6 +9,7 @@ import { scheduleMediaConversion } from "../common/mediaConversionScheduler.ts";
 import { createAbortError, getRequestAbortSignal } from "../common/requestAbort.ts";
 import { getLogger } from "../observability/logger.ts";
 import { logFailure } from "../common/logFailure.ts";
+import { clamp01 } from "../common/clamp01.ts";
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 
 const log = getLogger("convertImage");
@@ -613,8 +614,6 @@ const cropToken = (crop: CropBox): string => {
   const q = (n: number) => Math.round(clamp01(n) * 1e5).toString();
   return `crop_${q(crop.x)}_${q(crop.y)}_${q(crop.width)}_${q(crop.height)}`;
 };
-
-const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
 
 /**
  * Creates a converted image cropped to `crop` (normalized top-left fractions of

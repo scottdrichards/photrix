@@ -30,7 +30,7 @@ export const processAudioTranscription = (
     while (true) {
       ctrl.checkCancelled();
 
-      const items = await database.getFilesNeedingAudioTranscription(DB_BATCH_SIZE);
+      const items = await database.analysis.getFilesNeedingAudioTranscription(DB_BATCH_SIZE);
       if (!items.length) {
         ctrl.markComplete();
         return;
@@ -49,7 +49,7 @@ export const processAudioTranscription = (
             );
             try {
               const segments = await transcribe(fullPath, durationSeconds);
-              await database.saveAudioTranscription(relativePath, segments);
+              await database.analysis.saveAudioTranscription(relativePath, segments);
             } catch (error) {
               if (isWorkerEvictedError(error)) {
                 // The worker was killed by us (GPU reclaimed for playback /
@@ -62,7 +62,7 @@ export const processAudioTranscription = (
                 return;
               }
               log.warn({ err: error, path: relativePath }, "Audio transcription failed");
-              await database.saveAudioTranscriptionError(relativePath);
+              await database.analysis.saveAudioTranscriptionError(relativePath);
             }
           }),
         );
@@ -75,7 +75,7 @@ export const processAudioTranscription = (
     resume: ctrl.resume,
     cancel: ctrl.cancel,
     getStatus: async () => {
-      const [total, done] = await database.getAudioTranscriptionProgress();
+      const [total, done] = await database.analysis.getAudioTranscriptionProgress();
       return {
         state: ctrl.state,
         itemsProcessed: done,

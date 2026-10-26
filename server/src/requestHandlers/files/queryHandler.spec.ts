@@ -82,27 +82,29 @@ describe("queryHandler", () => {
   it("returns people aggregate response", async () => {
     const { res, getBody } = createMockResponse();
     const database = {
-      queryFaceClusters: jest.fn(() => ({
-        clusters: [
-          {
-            id: "person-1",
-            count: 2,
-            representative: {
-              path: "/a.jpg",
-              fileName: "a.jpg",
-              box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-              mimeType: "image/jpeg",
-              dimensionWidth: 1000,
-              dimensionHeight: 800,
-            },
-            faces: [],
-          },
-        ],
-        totalFaces: 2,
-        totalClusters: 1,
-      })),
-      // No standing exclusion filter configured.
       getDefaultExclusionFilter: async () => null,
+      faceClusters: {
+        queryFaceClusters: jest.fn(() => ({
+          clusters: [
+            {
+              id: "person-1",
+              count: 2,
+              representative: {
+                path: "/a.jpg",
+                fileName: "a.jpg",
+                box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+                mimeType: "image/jpeg",
+                dimensionWidth: 1000,
+                dimensionHeight: 800,
+              },
+              faces: [],
+            },
+          ],
+          totalFaces: 2,
+          totalClusters: 1,
+        })),
+        // No standing exclusion filter configured.,
+      },
     } as unknown as IndexDatabase;
 
     await queryHandler(
@@ -112,7 +114,7 @@ describe("queryHandler", () => {
       res,
     );
 
-    expect(database.queryFaceClusters).toHaveBeenCalled();
+    expect(database.faceClusters.queryFaceClusters).toHaveBeenCalled();
     expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
     expect(JSON.parse(getBody())).toEqual({
       clusters: [
@@ -138,29 +140,31 @@ describe("queryHandler", () => {
   it("passes the optional cluster id through for face PCA", async () => {
     const { res, getBody } = createMockResponse();
     const database = {
-      getFaceClustersPCA: jest.fn(async () => ({
-        points: [
-          {
-            id: "person-7",
-            count: 120,
-            name: null,
-            representative: {
-              path: "/a.jpg",
-              fileName: "a.jpg",
-              box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-              mimeType: "image/jpeg",
-              dimensionWidth: 1000,
-              dimensionHeight: 800,
-            },
-            x: 0,
-            y: 0,
-            z: 0,
-            focused: true,
-          },
-        ],
-      })),
-      // No standing exclusion filter configured.
       getDefaultExclusionFilter: async () => null,
+      faceClusters: {
+        getFaceClustersPCA: jest.fn(async () => ({
+          points: [
+            {
+              id: "person-7",
+              count: 120,
+              name: null,
+              representative: {
+                path: "/a.jpg",
+                fileName: "a.jpg",
+                box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+                mimeType: "image/jpeg",
+                dimensionWidth: 1000,
+                dimensionHeight: 800,
+              },
+              x: 0,
+              y: 0,
+              z: 0,
+              focused: true,
+            },
+          ],
+        })),
+        // No standing exclusion filter configured.,
+      },
     } as unknown as IndexDatabase;
 
     await queryHandler(
@@ -172,7 +176,7 @@ describe("queryHandler", () => {
       res,
     );
 
-    expect(database.getFaceClustersPCA).toHaveBeenCalledWith("person-7");
+    expect(database.faceClusters.getFaceClustersPCA).toHaveBeenCalledWith("person-7");
     expect((res.writeHead as jest.Mock).mock.calls[0]?.[0]).toBe(200);
     expect(JSON.parse(getBody()).points[0]?.focused).toBe(true);
   });

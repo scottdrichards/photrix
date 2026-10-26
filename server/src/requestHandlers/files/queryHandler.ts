@@ -121,13 +121,13 @@ export const queryHandler = async (
   }
 
   if (aggregate === "people") {
-    const people = await database.queryFaceClusters({ filter });
+    const people = await database.faceClusters.queryFaceClusters({ filter });
     writeJson(res, 200, people);
     return;
   }
 
   if (aggregate === "faceCentroidsPCA") {
-    const result = await database.getFaceClustersPCA(
+    const result = await database.faceClusters.getFaceClustersPCA(
       url.searchParams.get("clusterId") ?? undefined,
     );
     writeJson(res, 200, result);
@@ -140,7 +140,7 @@ export const queryHandler = async (
       writeJson(res, 400, { error: "Missing path parameter" });
       return;
     }
-    const faces = await database.getPeopleFacesForFile(stripLeadingSlash(filePath));
+    const faces = await database.faces.getPeopleFacesForFile(stripLeadingSlash(filePath));
     writeJson(res, 200, { faces });
     return;
   }
@@ -155,7 +155,7 @@ export const queryHandler = async (
     // faces, not the merged person it belongs to — see the comment on
     // getFaceClusterDetail's `exactCluster` option.
     const exactCluster = url.searchParams.get("exactCluster") === "true";
-    const detail = await database.getFaceClusterDetail({ filter, clusterId, exactCluster });
+    const detail = await database.faceClusters.getFaceClusterDetail({ filter, clusterId, exactCluster });
     writeJson(res, 200, detail);
     return;
   }
@@ -166,7 +166,7 @@ export const queryHandler = async (
       writeJson(res, 400, { error: "Missing clusterId parameter" });
       return;
     }
-    const detail = await database.getMomentClusterDetail(clusterId);
+    const detail = await database.moments.getMomentClusterDetail(clusterId);
     writeJson(res, 200, { cluster: detail });
     return;
   }

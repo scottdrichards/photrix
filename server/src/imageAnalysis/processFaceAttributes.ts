@@ -45,7 +45,7 @@ export const processFaceAttributes = (
   const ctrl = createTaskController("Face attribute processing cancelled");
 
   const processFile = async (relativePath: string) => {
-    const faces = await database.getFaceBoxesForAttributes(relativePath);
+    const faces = await database.faces.getFaceBoxesForAttributes(relativePath);
     if (faces.length === 0) return;
 
     const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
@@ -70,7 +70,7 @@ export const processFaceAttributes = (
           { err: error, path: relativePath },
           "Face attribute source image unreadable; recording attributes as unknown",
         );
-        await database.saveFaceAttributes(
+        await database.faces.saveFaceAttributes(
           faces.map(({ id }) => ({ id, attributes: {} })),
         );
         return;
@@ -85,14 +85,14 @@ export const processFaceAttributes = (
       id,
       attributes: derived.get(id) ?? {},
     }));
-    await database.saveFaceAttributes(results);
+    await database.faces.saveFaceAttributes(results);
   };
 
   const completion: Promise<void> = (async () => {
     while (true) {
       ctrl.checkCancelled();
 
-      const paths = await database.getFilesNeedingFaceAttributes(DB_BATCH_SIZE);
+      const paths = await database.faces.getFilesNeedingFaceAttributes(DB_BATCH_SIZE);
       if (!paths.length) {
         ctrl.markComplete();
         return;
@@ -118,9 +118,9 @@ export const processFaceAttributes = (
               );
               const marked = await attempt(
                 database
-                  .getFaceBoxesForAttributes(relativePath)
+                  .faces.getFaceBoxesForAttributes(relativePath)
                   .then((faces) =>
-                    database.saveFaceAttributes(faces.map(({ id }) => ({ id, attributes: {} }))),
+                    database.faces.saveFaceAttributes(faces.map(({ id }) => ({ id, attributes: {} }))),
                   ),
               );
               if (!marked.ok) {
@@ -142,8 +142,8 @@ export const processFaceAttributes = (
     cancel: ctrl.cancel,
     getStatus: async () => {
       const [total, pending] = await Promise.all([
-        database.countFacesTotal(),
-        database.countFacesNeedingAttributes(),
+        database.faces.countFacesTotal(),
+        database.faces.countFacesNeedingAttributes(),
       ]);
       const done = Math.max(0, total - pending);
       return {

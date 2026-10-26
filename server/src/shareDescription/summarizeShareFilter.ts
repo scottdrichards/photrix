@@ -234,7 +234,7 @@ export const summarizeShareFilter = async (
   }
 
   if (clusterIds.size > 0) {
-    const names = await database.getFaceClusterNames([...clusterIds]);
+    const names = await database.faces.getFaceClusterNames([...clusterIds]);
     const people = [...clusterIds]
       .map((id) => names.get(id))
       .filter((name): name is string => Boolean(name));

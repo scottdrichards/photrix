@@ -1,3 +1,5 @@
+import { clamp01 } from "../common/clamp01.ts";
+
 /**
  * Pure review/repair logic for face clusters.
  *
@@ -200,8 +202,6 @@ export const haversineKm = (
     Math.cos(aLat * toRad) * Math.cos(bLat * toRad) * Math.sin(dLon / 2) ** 2;
   return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(h)));
 };
-
-const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
 const formatKm = (km: number): string =>
   km >= 100 ? `${Math.round(km)}` : km.toFixed(1);

@@ -50,30 +50,36 @@ const makeDb = (
 
   const db = {
     storagePath: path.join(os.tmpdir(), "photrix-analysis-test"),
-    getImagesNeedingAnalysis: jest.fn(async () => {
-      if (served) return [];
-      served = true;
-      return rows;
-    }),
-    hasImagesPendingAnalysisPrerequisites: jest.fn(async () => false),
-    saveFaceDetectionResult: jest.fn(async (relativePath: string, faces: unknown[]) => {
-      calls.faceSaves.push({ relativePath, faces });
-    }),
     addOrUpdateFileData: jest.fn(
       async (relativePath: string, data: Record<string, unknown>) => {
         calls.regionWrites.push({ relativePath, data });
       },
     ),
-    saveImageEmbedding: jest.fn(async (relativePath: string, embedding: Float32Array) => {
-      calls.embeddingSaves.push({ relativePath, embedding });
-    }),
-    saveImageEmbeddingError: jest.fn(async (relativePath: string) => {
-      calls.embeddingErrors.push(relativePath);
-    }),
-    saveImageAnalysisDecodeError: jest.fn(async (relativePath: string) => {
-      calls.decodeErrors.push(relativePath);
-    }),
     ...overrides,
+    analysis: {
+      getImagesNeedingAnalysis: jest.fn(async () => {
+        if (served) return [];
+        served = true;
+        return rows;
+      }),
+      hasImagesPendingAnalysisPrerequisites: jest.fn(async () => false),
+      saveImageEmbedding: jest.fn(async (relativePath: string, embedding: Float32Array) => {
+        calls.embeddingSaves.push({ relativePath, embedding });
+      }),
+      saveImageEmbeddingError: jest.fn(async (relativePath: string) => {
+        calls.embeddingErrors.push(relativePath);
+      }),
+      saveImageAnalysisDecodeError: jest.fn(async (relativePath: string) => {
+        calls.decodeErrors.push(relativePath);
+      }),
+      ...(overrides.analysis as object),
+    },
+    faces: {
+      saveFaceDetectionResult: jest.fn(async (relativePath: string, faces: unknown[]) => {
+        calls.faceSaves.push({ relativePath, faces });
+      }),
+      ...(overrides.faces as object),
+    },
   } as unknown as IndexDatabase;
 
   return { db, calls };
@@ -252,7 +258,9 @@ describe("processImageAnalysis", () => {
         missingThumbnails: 0,
         missingFaceDetection: 3,
       }),
-      getEmbeddingProgress: async () => [8, 8] as [number, number],
+      analysis: {
+        getEmbeddingProgress: async () => [8, 8] as [number, number],
+      },
     });
 
     const runner = processImageAnalysis(db, analyze);

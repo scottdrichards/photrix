@@ -25,15 +25,18 @@ const createDb = (
   let served = false;
   return {
     storagePath: path.join(os.tmpdir(), "photrix-audio-transcription-test"),
-    getFilesNeedingAudioTranscription: jest.fn(async () => {
-      if (served) return [];
-      served = true;
-      return rows;
-    }),
-    saveAudioTranscription: jest.fn(async () => undefined),
-    saveAudioTranscriptionError: jest.fn(async () => undefined),
-    getAudioTranscriptionProgress: jest.fn(async () => [rows.length, 0]),
     ...overrides,
+    analysis: {
+      getFilesNeedingAudioTranscription: jest.fn(async () => {
+        if (served) return [];
+        served = true;
+        return rows;
+      }),
+      saveAudioTranscription: jest.fn(async () => undefined),
+      saveAudioTranscriptionError: jest.fn(async () => undefined),
+      getAudioTranscriptionProgress: jest.fn(async () => [rows.length, 0]),
+      ...(overrides.analysis as object),
+    },
   } as unknown as IndexDatabase;
 };
 
@@ -103,7 +106,7 @@ describe("processAudioTranscription", () => {
     const { processAudioTranscription } = await import("./processAudioTranscription.ts");
     await processAudioTranscription(db, transcribe).onComplete();
 
-    expect(db.saveAudioTranscriptionError).toHaveBeenCalledWith("/huge.mp4");
-    expect(db.saveAudioTranscription).not.toHaveBeenCalled();
+    expect(db.analysis.saveAudioTranscriptionError).toHaveBeenCalledWith("/huge.mp4");
+    expect(db.analysis.saveAudioTranscription).not.toHaveBeenCalled();
   });
 });

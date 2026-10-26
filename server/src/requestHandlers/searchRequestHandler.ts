@@ -159,7 +159,7 @@ export const searchRequestHandler = async (
   // audioTranscriptSearch) is a single `ORDER BY similarity LIMIT ?` scan
   // that already evaluates every row's similarity before truncating — the
   // expensive part is the scan, not the row count kept afterward (see
-  // IndexDatabase.semanticSearch's comment) — so asking each source for a
+  // AnalysisStore.semanticSearch's comment) — so asking each source for a
   // much larger candidate set costs relatively little and lets `total`
   // reflect real matches within that larger set rather than just `limit`.
   // Not the literal count of every photo in the library that matches (each
@@ -309,7 +309,7 @@ export const searchRequestHandler = async (
             const queryVector = await timeStage("clipEmbed", embedText(q));
             return timeStage(
               "clipScan",
-              database.semanticSearch(queryVector, dbFilter, CANDIDATE_LIMIT),
+              database.analysis.semanticSearch(queryVector, dbFilter, CANDIDATE_LIMIT),
             );
           })(),
         )
@@ -321,13 +321,13 @@ export const searchRequestHandler = async (
             const queryVector = await timeStage("clapEmbed", embedTextWithClap(q));
             return timeStage(
               "clapScan",
-              database.audioSemanticSearch(queryVector, dbFilter, CANDIDATE_LIMIT),
+              database.analysis.audioSemanticSearch(queryVector, dbFilter, CANDIDATE_LIMIT),
             );
           })(),
         )
       : noResults,
     useTranscript
-      ? timed("transcript", database.audioTranscriptSearch(q, dbFilter, CANDIDATE_LIMIT))
+      ? timed("transcript", database.analysis.audioTranscriptSearch(q, dbFilter, CANDIDATE_LIMIT))
       : noResults,
   ]);
 

@@ -55,7 +55,7 @@ type ChainState = {
  * Backfills moment-cluster assignments (burst shots / near-duplicate frames)
  * onto images that don't have one yet: a single pass over files in
  * capture-time order — **newest-first** as of 2026-08-12 (see
- * IndexDatabase.getMomentClusteringBatch's doc comment for why) — chaining
+ * MomentStore.getMomentClusteringBatch's doc comment for why) — chaining
  * each photo onto the currently-open cluster when it is both close in time
  * (MOMENT_WINDOW_MS) and visually similar (MOMENT_VISUAL_SIMILARITY_THRESHOLD,
  * over the CLIP embedding already stored by image analysis — no new embedding
@@ -82,11 +82,11 @@ export const processMomentClustering = (database: IndexDatabase): TaskRunner => 
       await ctrl.waitUntilResumed();
       ctrl.checkCancelled();
 
-      const files = await database.getMomentClusteringBatch(BATCH_SIZE);
+      const files = await database.moments.getMomentClusteringBatch(BATCH_SIZE);
       if (files.length === 0) break;
 
       if (!chain) {
-        const seed = await database.getMomentClusteringSweepSeedState(files[0].dateTaken);
+        const seed = await database.moments.getMomentClusteringSweepSeedState(files[0].dateTaken);
         chain = seed
           ? {
               clusterId: seed.clusterId,
@@ -137,8 +137,8 @@ export const processMomentClustering = (database: IndexDatabase): TaskRunner => 
             // Second member confirms this is a real cluster — create it and
             // retroactively assign the chain's first member (already written,
             // possibly in an earlier batch or a prior run) to it too.
-            const clusterId = await database.createMomentCluster();
-            await database.promoteFileToMomentCluster(
+            const clusterId = await database.moments.createMomentCluster();
+            await database.moments.promoteFileToMomentCluster(
               chain.lastFolder,
               chain.lastFileName,
               clusterId,
@@ -175,16 +175,16 @@ export const processMomentClustering = (database: IndexDatabase): TaskRunner => 
         });
       }
 
-      await database.saveMomentClusteringBatch(updates);
+      await database.moments.saveMomentClusteringBatch(updates);
 
       // Persist the open chain's centroid so a restart (or the next batch,
       // which re-derives its seed from the DB) picks up exactly where this
       // left off.
       if (chain?.clusterId !== null && chain) {
-        await database.saveMomentClusterCentroid(chain.clusterId, chain.centroidSum, chain.weight);
+        await database.moments.saveMomentClusterCentroid(chain.clusterId, chain.centroidSum, chain.weight);
       }
       for (const clusterId of touchedClusterIds) {
-        await database.recomputeMomentClusterRepresentative(clusterId);
+        await database.moments.recomputeMomentClusterRepresentative(clusterId);
       }
 
       totalProcessed += files.length;
@@ -196,12 +196,12 @@ export const processMomentClustering = (database: IndexDatabase): TaskRunner => 
       // can't wait for a full-backlog drain that may never happen in one run.
       if (batchesSinceLastPrune >= PRUNE_SINGLETONS_EVERY_N_BATCHES) {
         batchesSinceLastPrune = 0;
-        totalPruned += await database.pruneSingletonMomentClusters();
+        totalPruned += await database.moments.pruneSingletonMomentClusters();
       }
     }
 
     // Final sweep in case the backlog drained between periodic prunes.
-    totalPruned += await database.pruneSingletonMomentClusters();
+    totalPruned += await database.moments.pruneSingletonMomentClusters();
 
     if (totalProcessed > 0 || totalPruned > 0) {
       log.info({ totalProcessed, totalPruned }, "Moment clustering backlog drained");
@@ -214,7 +214,7 @@ export const processMomentClustering = (database: IndexDatabase): TaskRunner => 
     resume: ctrl.resume,
     cancel: ctrl.cancel,
     getStatus: async () => {
-      const { processed, pending } = await database.getMomentClusteringProgress();
+      const { processed, pending } = await database.moments.getMomentClusteringProgress();
       const total = processed + pending;
       return {
         state: ctrl.state,

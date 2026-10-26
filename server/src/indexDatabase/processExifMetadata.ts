@@ -99,7 +99,7 @@ export const processExifMetadata = (database: IndexDatabase): TaskRunner => {
                 exifProcessedAt: now.toISOString(),
               });
               if (Array.isArray(exif.regions) && exif.regions.length > 0) {
-                await database.saveFacesFromMetadataRegions(
+                await database.faces.saveFacesFromMetadataRegions(
                   entry.relativePath,
                   exif.regions,
                   now,
