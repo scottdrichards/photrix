@@ -152,6 +152,12 @@ export type FaceClusterFace = {
   faceId: number;
   /** ISO capture time, on the person-detail faces only (feedback #144: sort by date). */
   dateTaken?: string | null;
+  /**
+   * Video faces only: which frame (ms into the video) the box belongs to. A
+   * face crop of a video has to name its frame, so the client passes this back
+   * as the crop request's `t`. Absent for still photos.
+   */
+  frameTimeMs?: number;
 };
 
 export type FaceClusterSummary = {

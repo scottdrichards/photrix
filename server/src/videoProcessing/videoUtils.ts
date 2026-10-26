@@ -329,3 +329,98 @@ export const generateVideoScrubFrame = async (
   );
   return cachedPath;
 };
+
+/** Normalized top-left box (0..1) of the upright frame — same shape as the image `CropBox`. */
+export type VideoFrameCrop = { x: number; y: number; width: number; height: number };
+
+const cropFilter = ({ x, y, width, height }: VideoFrameCrop): string => {
+  // Keep the box inside the frame; ffmpeg rejects a crop that overruns it.
+  const w = Math.min(width, 1 - x);
+  const h = Math.min(height, 1 - y);
+  const f = (n: number) => n.toFixed(5);
+  return `crop=w=iw*${f(w)}:h=ih*${f(h)}:x=iw*${f(x)}:y=ih*${f(y)}`;
+};
+
+/**
+ * A crop of one frame of a video: the face crop for a face found in a video
+ * (`faces.frameTimeMs`). Cached per frame, box and height, so each People tile
+ * pays for its seek once.
+ *
+ * Always a CPU decode, never `hwaccelArgs`: the face boxes were measured on
+ * upright CPU frames, and ffmpeg's auto-rotate does nothing to VAAPI frames, so
+ * a hardware decode of a portrait video would crop the wrong region.
+ */
+export const generateVideoFrameCrop = async (
+  filePath: string,
+  timeMs: number,
+  crop: VideoFrameCrop,
+  height: StandardHeight,
+): Promise<string> => {
+  await stat(filePath);
+  const q = (n: number) => Math.round(Math.min(1, Math.max(0, n)) * 1e5);
+  const cachedPath = getMirroredCachedFilePath(
+    filePath,
+    `frame.${Math.round(timeMs)}.${height}.crop_${q(crop.x)}_${q(crop.y)}_${q(crop.width)}_${q(crop.height)}`,
+    "jpg",
+  );
+  const exists = () =>
+    access(cachedPath).then(
+      () => true,
+      () => false,
+    );
+  if (await exists()) return cachedPath;
+
+  await runWithoutRequestAbortSignal(() =>
+    scheduleMediaConversion(`video-frame-crop:${cachedPath}`, async (signal) => {
+      if (await exists()) return;
+      const isHdr = await probeIsHdr(filePath);
+      await mkdir(dirname(cachedPath), { recursive: true });
+
+      const generate = (useTonemap: boolean) =>
+        new Promise<void>((resolve, reject) => {
+          const filters = [
+            ...(useTonemap ? [HDR_TO_SDR_LIBPLACEBO] : []),
+            cropFilter(crop),
+            `scale=-2:${height === "original" ? -1 : height}`,
+          ];
+          const args = [
+            "-y",
+            "-ss",
+            (timeMs / 1_000).toFixed(3),
+            "-i",
+            filePath,
+            "-frames:v",
+            "1",
+            "-vf",
+            filters.join(","),
+            cachedPath,
+          ];
+          const child = spawn("ffmpeg", args, STILL_FRAME_SPAWN_OPTIONS);
+          const abortBinding = bindChildProcessAbort(child, signal);
+          let stderr = "";
+          pipeChildProcessLogs(child, (chunk) => {
+            stderr = appendWithLimit(stderr, chunk);
+          });
+          child.on("close", (code) => {
+            abortBinding.cleanup();
+            if (abortBinding.wasAborted()) reject(createAbortError());
+            else if (code === 0) resolve();
+            else reject(new Error(`Video frame crop failed: ${stderr}`));
+          });
+          child.on("error", (error) => {
+            abortBinding.cleanup();
+            reject(abortBinding.wasAborted() ? createAbortError() : error);
+          });
+        });
+
+      try {
+        await generate(isHdr);
+      } catch (err) {
+        // Same fallback as the thumbnails: no tonemap beats no crop.
+        if (!isHdr) throw err;
+        await generate(false);
+      }
+    }),
+  );
+  return cachedPath;
+};

@@ -9,6 +9,7 @@ type BackgroundTaskPlan = {
   fileMetadata: Task;
   exifMetadata: Task;
   imageAnalysis: Task;
+  videoFaceAnalysis: Task;
   faceAttributes: Task;
   faceClustering: Task;
   momentClustering: Task;
@@ -84,9 +85,15 @@ export const registerBackgroundTasks = (
     faceAttributes.ensure();
     momentClustering.ensure();
   });
+  // Needs each video's duration (from EXIF) to choose its frames, and its new
+  // faces need clustering like any others.
+  const videoFaceAnalysis = reentrant(tasks.videoFaceAnalysis, () => {
+    faceClustering.ensure();
+  });
   const exifMetadata = reentrant(tasks.exifMetadata, () => {
     audioTranscription.ensure();
     audioEmbedding.ensure();
+    videoFaceAnalysis.ensure();
   });
   const fileMetadata = reentrant(tasks.fileMetadata);
   // Needs only the file list, so it rides along with the entry stages.

@@ -177,6 +177,22 @@ export const tables = {
           "mimeType LIKE 'image/%' AND facesProcessedAt IS NULL AND analysisDecodeErrorAt IS NULL",
       },
       {
+        // Lets the video queue skip a Live Photo's movie half with one probe
+        // ("is any still in this folder paired with this file?") instead of a
+        // scan of every file per video. Only paired stills are in it.
+        name: "live_photo_pairs",
+        expression: "folder, livePhotoVideoFileName",
+        where: "livePhotoVideoFileName IS NOT NULL",
+      },
+      {
+        // The video face-detection queue (see processVideoFaceAnalysis.ts).
+        // Partial, so it shrinks to nothing as the backlog drains.
+        name: "idx_videos_needing_faces",
+        expression: "dateTaken, folder, fileName",
+        where:
+          "mimeType LIKE 'video/%' AND facesProcessedAt IS NULL AND analysisDecodeErrorAt IS NULL",
+      },
+      {
         // Covering index for getDateRange/getDateHistogram: MIN/MAX and the
         // per-bucket GROUP BY run over dateTaken while the trailing
         // folder/fileName let filter EXISTS probes (which correlate on those
@@ -256,6 +272,11 @@ export const tables = {
       // resetStaleFaceAttributes). Stamped even when every score came back
       // unknown, so an unjudgeable face is not retried forever.
       { name: "faceAttrVersion", type: "INTEGER" },
+      // Video faces only: the offset into the video (ms from the start) of the
+      // frame this face was detected on. The box is normalized against that
+      // upright frame. NULL for every still photo. Face crops of a video face
+      // need it, because a crop of a video is a crop of one of its frames.
+      { name: "frameTimeMs", type: "INTEGER" },
     ],
     compositeIndexes: [
       {

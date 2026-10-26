@@ -49,6 +49,10 @@ describe("registerBackgroundTasks", () => {
         name: "Image analysis (faces + CLIP)",
         start: () => createRunner(analysis.promise),
       },
+      videoFaceAnalysis: {
+        name: "Video faces",
+        start: () => createRunner(Promise.resolve()),
+      },
       faceAttributes: {
         name: "Face attributes (photo ready)",
         start: () => createRunner(Promise.resolve()),
@@ -101,6 +105,7 @@ describe("registerBackgroundTasks", () => {
       "Grid thumbnail backfill",
       "Audio transcription (Whisper)",
       "Audio embedding (CLAP)",
+      "Video faces",
     ]);
 
     const analysisRunner = queued[3]!.task.start();
@@ -115,6 +120,7 @@ describe("registerBackgroundTasks", () => {
       "Grid thumbnail backfill",
       "Audio transcription (Whisper)",
       "Audio embedding (CLAP)",
+      "Video faces",
       "Face clustering",
       "Face attributes (photo ready)",
       "Moment clustering",
@@ -140,6 +146,7 @@ describe("registerBackgroundTasks", () => {
       fileMetadata: immediate("File metadata processing"),
       exifMetadata: immediate("EXIF metadata processing"),
       imageAnalysis: immediate("Image analysis (faces + CLIP)"),
+      videoFaceAnalysis: immediate("Video faces"),
       faceAttributes: immediate("Face attributes (photo ready)"),
       faceClustering: immediate("Face clustering"),
       momentClustering: immediate("Moment clustering"),
@@ -169,6 +176,42 @@ describe("registerBackgroundTasks", () => {
     ]);
   });
 
+  it("clusters the faces a video pass found once it drains", async () => {
+    const queued: Array<{ queue: string; task: Task }> = [];
+    const taskOrchestrator = {
+      addTask: (task: Task, queue: string) => {
+        queued.push({ task, queue });
+      },
+    } as TaskOrchestrator;
+    const immediate = (name: string): Task => ({
+      name,
+      start: () => createRunner(Promise.resolve()),
+    });
+
+    registerBackgroundTasks(taskOrchestrator, {
+      fileSystemScan: immediate("File system scan"),
+      fileMetadata: immediate("File metadata processing"),
+      exifMetadata: immediate("EXIF metadata processing"),
+      imageAnalysis: immediate("Image analysis (faces + CLIP)"),
+      videoFaceAnalysis: immediate("Video faces"),
+      faceAttributes: immediate("Face attributes (photo ready)"),
+      faceClustering: immediate("Face clustering"),
+      momentClustering: immediate("Moment clustering"),
+      audioTranscription: immediate("Audio transcription (Whisper)"),
+      audioEmbedding: immediate("Audio embedding (CLAP)"),
+      thumbnailBackfill: immediate("Grid thumbnail backfill"),
+    });
+
+    const startNamed = (name: string) =>
+      queued.find(({ task }) => task.name === name)!.task.start().onComplete();
+    await startNamed("File system scan");
+    await startNamed("EXIF metadata processing");
+    expect(queued.map(({ task }) => task.name)).not.toContain("Face clustering");
+
+    await startNamed("Video faces");
+    expect(queued.map(({ task }) => task.name)).toContain("Face clustering");
+  });
+
   it("does not re-queue a stage that is still running", async () => {
     const queued: Array<{ queue: string; task: Task }> = [];
     const taskOrchestrator = {
@@ -191,6 +234,7 @@ describe("registerBackgroundTasks", () => {
       },
       exifMetadata: immediate("EXIF metadata processing"),
       imageAnalysis: immediate("Image analysis (faces + CLIP)"),
+      videoFaceAnalysis: immediate("Video faces"),
       faceAttributes: immediate("Face attributes (photo ready)"),
       faceClustering: immediate("Face clustering"),
       momentClustering: immediate("Moment clustering"),

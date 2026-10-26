@@ -19,6 +19,7 @@ import { convertEmbeddedThumbnail } from "../../imageProcessing/embeddedThumbnai
 import {
   generateVideoThumbnail,
   generateVideoScrubFrame,
+  generateVideoFrameCrop,
   VIDEO_SCRUB_FRAME_COUNT,
 } from "../../videoProcessing/videoUtils.ts";
 import { markCacheAccess } from "../../common/cacheEviction.ts";
@@ -245,6 +246,8 @@ type FileHandlingContext = {
   isImage: boolean;
   isVideo: boolean;
   crop: CropBox | null;
+  /** `t`: which frame of a video a `crop` is of, in ms. Only set for videos. */
+  frameTimeMs: number | null;
   database: IndexDatabase;
   taskOrchestrator: TaskOrchestrator;
 };
@@ -268,6 +271,19 @@ const parseCrop = (raw: string | null): CropBox | null => {
     throw new Error("crop x and y must be in [0, 1)");
   }
   return { x, y, width, height };
+};
+
+/**
+ * Parses `t`, the frame of a video that a `crop` refers to, in ms from the
+ * start. Returns null when absent; throws when malformed.
+ */
+const parseFrameTime = (raw: string | null): number | null => {
+  if (raw === null) return null;
+  const ms = Number(raw);
+  if (!Number.isFinite(ms) || ms < 0) {
+    throw new Error("t must be a non-negative number of milliseconds");
+  }
+  return Math.round(ms);
 };
 
 const serveVideoThumb = async (ctx: FileHandlingContext, height: StandardHeight) => {
@@ -573,6 +589,24 @@ const tryHLSStream = async (
   }
 };
 
+/** A face crop of a face found in a video: one frame, cropped. */
+const tryVideoFrameCrop = async (ctx: FileHandlingContext) => {
+  const { crop, isVideo, frameTimeMs, normalizedPath, height, res } = ctx;
+  if (!crop || !isVideo || frameTimeMs === null) return false;
+  try {
+    const cachedPath = await generateVideoFrameCrop(normalizedPath, frameTimeMs, crop, height);
+    const cachedStats = await stat(cachedPath);
+    streamCachedFile(res, cachedPath, { contentType: "image/jpeg", size: cachedStats.size });
+  } catch (error) {
+    // Includes a `t` past the end, where ffmpeg succeeds but writes nothing.
+    writeJson(res, 422, {
+      error: "Could not crop video frame",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return true;
+};
+
 const tryImageCrop = async (ctx: FileHandlingContext) => {
   const { crop, isImage, normalizedPath, height, res } = ctx;
   if (!crop || !isImage) return false;
@@ -735,10 +769,23 @@ const fileHandler = async (
       message: error instanceof Error ? error.message : String(error),
     });
   }
-  if (crop && !isImage) {
+  let frameTimeMs: number | null;
+  try {
+    frameTimeMs = parseFrameTime(url.searchParams.get("t"));
+  } catch (error) {
+    return writeJson(res, 400, {
+      error: "Invalid t",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  // A video has no single picture to crop; `t` names the frame (a face found
+  // in a video carries it — see faces.frameTimeMs).
+  if (crop && !isImage && !(isVideo && frameTimeMs !== null)) {
     return writeJson(res, 415, {
       error: "Unsupported Media Type",
-      message: "Crop is only supported for image files",
+      message: isVideo
+        ? "Cropping a video needs t, the frame time in ms"
+        : "Crop is only supported for image and video files",
     });
   }
 
@@ -754,6 +801,7 @@ const fileHandler = async (
     isImage,
     isVideo,
     crop,
+    frameTimeMs: isVideo ? frameTimeMs : null,
     database,
     taskOrchestrator,
   };
@@ -850,7 +898,15 @@ const fileHandler = async (
   const hlsHandled = await tryHLSStream({ ...handlingContext, url });
   if (hlsHandled) return;
 
-  const handlers = [tryVideoThumbnail, tryImageCrop, tryMicroThumbnail, tryImageVariant];
+  // tryVideoFrameCrop must precede tryVideoThumbnail, which would otherwise
+  // answer a sized video request with the whole first frame.
+  const handlers = [
+    tryVideoFrameCrop,
+    tryVideoThumbnail,
+    tryImageCrop,
+    tryMicroThumbnail,
+    tryImageVariant,
+  ];
   for (const handler of handlers) {
     const handled = await handler(handlingContext);
     if (handled) return;

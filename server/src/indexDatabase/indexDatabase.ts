@@ -376,7 +376,7 @@ const dotFaceClusterVectors = (
   return sum;
 };
 
-const faceRowToClusterFace = (row: {
+export const faceRowToClusterFace = (row: {
   id: number;
   folder: string;
   fileName: string;
@@ -389,6 +389,9 @@ const faceRowToClusterFace = (row: {
   dimensionHeight: number | null;
   regions: string | null;
   dateTaken?: number | null;
+  // Every query feeding this mapper must SELECT faces.frameTimeMs: without it a
+  // video face's crop has no frame to come from (videoFaces.spec.ts).
+  frameTimeMs: number | null;
 }): FaceClusterFace => ({
   path: joinPath(row.folder, row.fileName),
   fileName: row.fileName,
@@ -403,6 +406,7 @@ const faceRowToClusterFace = (row: {
   dimensionHeight: row.dimensionHeight,
   regions: row.regions,
   faceId: row.id,
+  ...(typeof row.frameTimeMs === "number" ? { frameTimeMs: row.frameTimeMs } : {}),
   ...(row.dateTaken !== undefined
     ? { dateTaken: row.dateTaken === null ? null : new Date(row.dateTaken).toISOString() }
     : {}),
@@ -1145,6 +1149,8 @@ export class IndexDatabase {
       confidence: number;
       embedding: Float64Array;
       attributes?: FaceAttributes;
+      /** Video faces only — see `faces.frameTimeMs`. */
+      frameTimeMs?: number;
     }>,
     detectedAt: Date = new Date(),
   ): Promise<void> {
@@ -1179,8 +1185,9 @@ export class IndexDatabase {
       statements.push({
         sql: `INSERT INTO faces
                 (folder, fileName, boxX, boxY, boxWidth, boxHeight, confidence, detectedAt,
-                 smileScore, eyesOpenScore, focusScore, exposureScore, faceAttrVersion)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 smileScore, eyesOpenScore, focusScore, exposureScore, faceAttrVersion,
+                 frameTimeMs)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         params: [
           folder,
           fileName,
@@ -1195,6 +1202,7 @@ export class IndexDatabase {
           attributes?.focus ?? null,
           attributes?.exposure ?? null,
           attributes ? FACE_ATTRIBUTE_VERSION : null,
+          face.frameTimeMs ?? null,
         ],
       });
     }
@@ -1677,6 +1685,7 @@ export class IndexDatabase {
       boxY: number;
       boxWidth: number;
       boxHeight: number;
+      frameTimeMs: number | null;
       mimeType: string | null;
       dimensionWidth: number | null;
       dimensionHeight: number | null;
@@ -1690,6 +1699,7 @@ export class IndexDatabase {
          faces.boxY,
          faces.boxWidth,
          faces.boxHeight,
+         faces.frameTimeMs,
          files.mimeType,
          files.dimensionsWidth AS dimensionWidth,
          files.dimensionsHeight AS dimensionHeight,
@@ -2524,6 +2534,7 @@ export class IndexDatabase {
         boxY: number;
         boxWidth: number;
         boxHeight: number;
+        frameTimeMs: number | null;
         mimeType: string | null;
         dimensionWidth: number | null;
         dimensionHeight: number | null;
@@ -2537,6 +2548,7 @@ export class IndexDatabase {
            faces.boxY,
            faces.boxWidth,
            faces.boxHeight,
+           faces.frameTimeMs,
            files.mimeType,
            files.dimensionsWidth AS dimensionWidth,
            files.dimensionsHeight AS dimensionHeight,
@@ -2691,6 +2703,7 @@ export class IndexDatabase {
       boxY: number;
       boxWidth: number;
       boxHeight: number;
+      frameTimeMs: number | null;
       mimeType: string | null;
       dimensionWidth: number | null;
       dimensionHeight: number | null;
@@ -2706,6 +2719,7 @@ export class IndexDatabase {
          faces.boxY,
          faces.boxWidth,
          faces.boxHeight,
+         faces.frameTimeMs,
          files.mimeType,
          files.dimensionsWidth AS dimensionWidth,
          files.dimensionsHeight AS dimensionHeight,
@@ -2841,6 +2855,7 @@ export class IndexDatabase {
         boxY: number;
         boxWidth: number;
         boxHeight: number;
+        frameTimeMs: number | null;
         mimeType: string | null;
         dimensionWidth: number | null;
         dimensionHeight: number | null;
@@ -2854,6 +2869,7 @@ export class IndexDatabase {
            faces.boxY,
            faces.boxWidth,
            faces.boxHeight,
+           faces.frameTimeMs,
            files.mimeType,
            files.dimensionsWidth AS dimensionWidth,
            files.dimensionsHeight AS dimensionHeight,
@@ -3180,6 +3196,7 @@ export class IndexDatabase {
       boxY: number;
       boxWidth: number;
       boxHeight: number;
+      frameTimeMs: number | null;
       mimeType: string | null;
       dimensionWidth: number | null;
       dimensionHeight: number | null;
@@ -3196,6 +3213,7 @@ export class IndexDatabase {
              faces.id AS id,
              faces.folder, faces.fileName,
              faces.boxX, faces.boxY, faces.boxWidth, faces.boxHeight,
+             faces.frameTimeMs,
              files.mimeType,
              files.dimensionsWidth AS dimensionWidth,
              files.dimensionsHeight AS dimensionHeight,
@@ -3908,6 +3926,7 @@ export class IndexDatabase {
       boxY: number;
       boxWidth: number;
       boxHeight: number;
+      frameTimeMs: number | null;
       mimeType: string | null;
       dimensionWidth: number | null;
       dimensionHeight: number | null;
@@ -3921,6 +3940,7 @@ export class IndexDatabase {
       `SELECT f.id AS id, f.folder AS folder, f.fileName AS fileName,
               f.boxX AS boxX, f.boxY AS boxY, f.boxWidth AS boxWidth,
               f.boxHeight AS boxHeight,
+              f.frameTimeMs AS frameTimeMs,
               files.mimeType AS mimeType,
               files.dimensionsWidth AS dimensionWidth,
               files.dimensionsHeight AS dimensionHeight,
@@ -4537,6 +4557,7 @@ export class IndexDatabase {
       boxY: number;
       boxWidth: number;
       boxHeight: number;
+      frameTimeMs: number | null;
       mimeType: string | null;
       dimensionWidth: number | null;
       dimensionHeight: number | null;
@@ -4545,6 +4566,7 @@ export class IndexDatabase {
       `SELECT f.id AS id, f.folder AS folder, f.fileName AS fileName,
               f.boxX AS boxX, f.boxY AS boxY, f.boxWidth AS boxWidth,
               f.boxHeight AS boxHeight,
+              f.frameTimeMs AS frameTimeMs,
               files.mimeType AS mimeType,
               files.dimensionsWidth AS dimensionWidth,
               files.dimensionsHeight AS dimensionHeight,
@@ -5116,6 +5138,70 @@ export class IndexDatabase {
       needsFaces: row.needsFaces === 1,
       needsEmbedding: row.needsEmbedding === 1,
     }));
+  }
+
+  /**
+   * A failed video is not retried for this long. Every attempt reads the video
+   * off the media share, so retrying failures in a loop turns a few bad files
+   * into terabytes of reads — the audio-transcription queue did exactly that
+   * when its only backoff was an ORDER BY.
+   */
+  static readonly VIDEO_FACE_RETRY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1_000;
+
+  /**
+   * Videos that still need face detection, newest first. Leaves out the movie
+   * half of a Live Photo pair: its still already carries those faces, so
+   * scanning it too would show every face twice.
+   */
+  private static readonly VIDEOS_NEEDING_FACES_WHERE = `
+         mimeType LIKE 'video/%'
+         AND facesProcessedAt IS NULL
+         AND analysisDecodeErrorAt IS NULL
+         AND exifProcessedAt IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM files AS still
+           WHERE still.folder = files.folder
+             AND still.livePhotoVideoFileName = files.fileName
+         )`;
+
+  async getVideosNeedingFaceAnalysis(
+    limit = 20,
+  ): Promise<Array<{ relativePath: string; durationSeconds?: number }>> {
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT folder, fileName, duration FROM files
+       WHERE ${IndexDatabase.VIDEOS_NEEDING_FACES_WHERE}
+         AND (facesLastErrorAt IS NULL OR facesLastErrorAt < ?)
+       ORDER BY facesLastErrorAt IS NOT NULL, dateTaken DESC NULLS LAST,
+                folder DESC, fileName DESC
+       LIMIT ?`,
+      Date.now() - IndexDatabase.VIDEO_FACE_RETRY_COOLDOWN_MS,
+      limit,
+    );
+    return rows.map((row) => ({
+      relativePath: joinPath(row.folder as string, row.fileName as string),
+      durationSeconds: typeof row.duration === "number" ? row.duration : undefined,
+    }));
+  }
+
+  /** Starts the retry cooldown for a video whose face pass failed. */
+  async saveVideoFaceAnalysisError(relativePath: string): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    await this.db.run(
+      "UPDATE files SET facesLastErrorAt = ? WHERE folder = ? AND fileName = ?",
+      Date.now(),
+      folder,
+      fileName,
+    );
+  }
+
+  /** `remaining` counts videos still queued, including ones cooling down after a failure. */
+  async getVideoFaceAnalysisProgress(): Promise<{ total: number; remaining: number }> {
+    const row = await this.db.get<{ total: number; remaining: number }>(
+      `SELECT
+         (SELECT COUNT(*) FROM files WHERE mimeType LIKE 'video/%') AS total,
+         (SELECT COUNT(*) FROM files WHERE ${IndexDatabase.VIDEOS_NEEDING_FACES_WHERE}) AS remaining`,
+    );
+    return { total: row?.total ?? 0, remaining: row?.remaining ?? 0 };
   }
 
   /** True when images exist that are waiting for upstream EXIF/info tasks to run before analysis can start. */

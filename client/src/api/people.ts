@@ -26,10 +26,11 @@ type ApiFaceRep = {
   regions: string | null;
   faceId: number;
   dateTaken?: string | null;
+  frameTimeMs?: number;
 };
 
 const toClusterFace = (face: ApiFaceRep): ClusterFace => {
-  const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions, faceId, dateTaken } = face;
+  const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions, faceId, dateTaken, frameTimeMs } = face;
   return {
     photo: createPhotoItem({
       folder: relativePath.slice(0, relativePath.length - fileName.length),
@@ -43,6 +44,7 @@ const toClusterFace = (face: ApiFaceRep): ClusterFace => {
     }),
     box,
     faceId,
+    ...(typeof frameTimeMs === "number" ? { frameTimeMs } : {}),
   };
 };
 
@@ -300,6 +302,9 @@ export const fetchFaceClustersPCA = async ({
       }),
       box: p.representative.box,
       faceId: p.representative.faceId,
+      ...(typeof p.representative.frameTimeMs === "number"
+        ? { frameTimeMs: p.representative.frameTimeMs }
+        : {}),
     },
     x: p.x,
     y: p.y,
@@ -323,6 +328,8 @@ export const buildFaceCropUrl = (face: ClusterFace, size = 320): string => {
   return buildFileUrl(face.photo.path, {
     crop: `${x},${y},${w},${h}`,
     height: String(size),
+    // A face found in a video is on one frame of it; the server crops that frame.
+    ...(face.frameTimeMs !== undefined ? { t: String(face.frameTimeMs) } : {}),
   });
 };
 

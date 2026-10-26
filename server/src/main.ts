@@ -18,6 +18,8 @@ import {
 } from "./imageAnalysis/imageAnalysisWorker.ts";
 import { processImageAnalysis } from "./imageAnalysis/processImageAnalysis.ts";
 import { processFaceAttributes } from "./imageAnalysis/processFaceAttributes.ts";
+import { processVideoFaceAnalysis } from "./videoFaceAnalysis/processVideoFaceAnalysis.ts";
+import { extractAnalysisFrames } from "./videoProcessing/extractAnalysisFrames.ts";
 import { fileSystemScanFolder } from "./indexDatabase/fileSystemScanFolder.ts";
 import { fileSystemMonitorFolder } from "./indexDatabase/fileSystemMonitorFolder.ts";
 import { startPeriodicRescan } from "./indexDatabase/fileSystemRescanRecent.ts";
@@ -246,6 +248,13 @@ const startServer = async () => {
     imageAnalysis: {
       name: "Image analysis (faces + CLIP)",
       start: () => processImageAnalysis(database, analyzeImage),
+      type: "imageAnalysis",
+    },
+    videoFaceAnalysis: {
+      name: "Video faces",
+      start: () => processVideoFaceAnalysis(database, analyzeImage, extractAnalysisFrames),
+      // Same shared Python worker as image analysis, plus a CPU ffmpeg decode,
+      // so it books the same budget and the two never run at once.
       type: "imageAnalysis",
     },
     faceAttributes: {

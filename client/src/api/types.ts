@@ -112,6 +112,8 @@ export type ClusterFace = {
   box: FaceBox;
   /** feedback #90 — targets this exact detection for exclude-from-cluster. */
   faceId: number;
+  /** Faces found in a video: the frame (ms into it) the box is on. Absent for photos. */
+  frameTimeMs?: number;
 };
 
 /**
