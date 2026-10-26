@@ -17,7 +17,10 @@ type ClientDiagnosticsEvent = {
   data?: Record<string, unknown>;
 };
 
-type LogClientEventOptions = Omit<ClientDiagnosticsEvent, "timestamp" | "clientSessionId"> & {
+type LogClientEventOptions = Omit<
+  ClientDiagnosticsEvent,
+  "timestamp" | "clientSessionId"
+> & {
   immediate?: boolean;
 };
 
@@ -80,27 +83,32 @@ const trimPendingEvents = () => {
 };
 
 export const flushClientDiagnostics = async () => {
-  if (flushInFlight || pendingEvents.length === 0) {
+  if (flushInFlight) {
     return;
   }
 
   flushInFlight = true;
-  const batch = pendingEvents.splice(0, MAX_BATCH_EVENTS);
-  const body = JSON.stringify({ events: batch });
-
   try {
-    await fetch("/api/diagnostics/events", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...getAuthHeaders(),
-      },
-      keepalive: new TextEncoder().encode(body).byteLength <= KEEPALIVE_MAX_BODY_BYTES,
-      body,
-    });
-  } catch {
-    pendingEvents.unshift(...batch);
-    trimPendingEvents();
+    while (pendingEvents.length > 0) {
+      const batch = pendingEvents.splice(0, MAX_BATCH_EVENTS);
+      const body = JSON.stringify({ events: batch });
+      try {
+        await fetch("/api/diagnostics/events", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeaders(),
+          },
+          keepalive:
+            new TextEncoder().encode(body).byteLength <= KEEPALIVE_MAX_BODY_BYTES,
+          body,
+        });
+      } catch {
+        pendingEvents.unshift(...batch);
+        trimPendingEvents();
+        break;
+      }
+    }
   } finally {
     flushInFlight = false;
     if (pendingEvents.length > 0) {
@@ -117,7 +125,9 @@ export const logClientEvent = (options: LogClientEventOptions) => {
     event: options.event,
     ...(options.message ? { message: options.message } : {}),
     ...(options.requestId ? { requestId: options.requestId } : {}),
-    ...(options.clientOperationId ? { clientOperationId: options.clientOperationId } : {}),
+    ...(options.clientOperationId
+      ? { clientOperationId: options.clientOperationId }
+      : {}),
     ...(options.clientRequestId ? { clientRequestId: options.clientRequestId } : {}),
     ...(options.method ? { method: options.method } : {}),
     ...(options.url ? { url: options.url } : {}),

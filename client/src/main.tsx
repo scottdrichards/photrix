@@ -4,8 +4,10 @@ import "./styles.css";
 import App from "./App";
 import { applyTheme, getInitialTheme } from "./theme";
 import { initInstall, registerServiceWorker } from "./install";
+import { startClientPerfMonitor } from "./clientPerf";
 
 applyTheme(getInitialTheme());
+startClientPerfMonitor();
 
 // Installable as an app (PWA). The service worker only runs in production builds:
 // under the Vite dev server it would intercept dev navigations for no benefit.

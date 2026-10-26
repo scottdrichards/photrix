@@ -44,7 +44,12 @@ const {
   hlsStartLoadMock: vi.fn(),
   hlsRecoverMediaErrorMock: vi.fn(),
   hlsEventHandlers: new Map<string, (...args: unknown[]) => void>(),
-  hlsInstances: [] as { levels: { height: number }[]; currentLevel: number; nextLevel: number }[],
+  hlsInstances: [] as {
+    levels: { height: number }[];
+    currentLevel: number;
+    nextLevel: number;
+    config: Record<string, unknown>;
+  }[],
 }));
 
 const useSelectionContextMock = vi.fn();
@@ -98,7 +103,7 @@ vi.mock("hls.js", () => ({
     levels = [{ height: 720 }];
     currentLevel = -1;
     nextLevel = -1;
-    constructor() {
+    constructor(public config: Record<string, unknown>) {
       hlsInstances.push(this);
     }
     loadSource = hlsLoadSourceMock;
@@ -149,7 +154,9 @@ describe("FullscreenViewer", () => {
     fetchPeopleFacesForFileMock.mockReset();
     fetchPeopleFacesForFileMock.mockResolvedValue([]);
     streamPhotoDescriptionMock.mockReset();
-    streamPhotoDescriptionMock.mockImplementation(() => new Promise<string | null>(() => {}));
+    streamPhotoDescriptionMock.mockImplementation(
+      () => new Promise<string | null>(() => {}),
+    );
     probeVideoPlaybackProfileMock.mockReset();
     probeVideoPlaybackProfileMock.mockResolvedValue({
       bandwidthMbps: 20,
@@ -237,7 +244,9 @@ describe("FullscreenViewer", () => {
     expect(screen.getByText("Original")).toBeInTheDocument();
     expect(screen.getByText("Web-safe, original size")).toBeInTheDocument();
     expect(screen.getByText("Smaller size")).toBeInTheDocument();
-    expect(previewDialog?.querySelector('[role="dialog"][aria-label="Share 1 item"]')).toBeTruthy();
+    expect(
+      previewDialog?.querySelector('[role="dialog"][aria-label="Share 1 item"]'),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -345,7 +354,9 @@ describe("FullscreenViewer", () => {
     );
 
     React.act(() => finish("Two girls hug in a red armchair beside a door."));
-    expect(await screen.findByText("Two girls hug in a red armchair beside a door.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Two girls hug in a red armchair beside a door."),
+    ).toBeInTheDocument();
   });
 
   it("shows file info and keeps the info panel open across close/open", () => {
@@ -423,7 +434,9 @@ describe("FullscreenViewer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit photo" }));
 
-    expect(screen.getByRole("complementary", { name: "Photo editor" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "Photo editor" }),
+    ).toBeInTheDocument();
     const editingContainer = container.querySelector(`.${css.container}`);
     expect(editingContainer?.className).toContain(css.containerEditing);
   });
@@ -664,15 +677,45 @@ describe("FullscreenViewer", () => {
     expect(track).not.toBeNull();
 
     // Swipe left → next. Navigation commits once the slide transition ends.
-    fireEvent.pointerDown(viewport, { pointerId: 1, pointerType: "touch", clientX: 200, clientY: 100 });
-    fireEvent.pointerMove(viewport, { pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100 });
-    fireEvent.pointerUp(viewport, { pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100 });
+    fireEvent.pointerDown(viewport, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 200,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(viewport, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(viewport, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 100,
+      clientY: 100,
+    });
     fireEvent.transitionEnd(track, { propertyName: "transform" });
 
     // Swipe right → previous.
-    fireEvent.pointerDown(viewport, { pointerId: 2, pointerType: "touch", clientX: 100, clientY: 100 });
-    fireEvent.pointerMove(viewport, { pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100 });
-    fireEvent.pointerUp(viewport, { pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100 });
+    fireEvent.pointerDown(viewport, {
+      pointerId: 2,
+      pointerType: "touch",
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(viewport, {
+      pointerId: 2,
+      pointerType: "touch",
+      clientX: 200,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(viewport, {
+      pointerId: 2,
+      pointerType: "touch",
+      clientX: 200,
+      clientY: 100,
+    });
     fireEvent.transitionEnd(track, { propertyName: "transform" });
 
     expect(selectNext).toHaveBeenCalledTimes(1);
@@ -796,6 +839,115 @@ describe("FullscreenViewer", () => {
     expect(play).toHaveBeenCalled();
   });
 
+  const selectVideo = (overrides: Partial<PhotoItem> = {}) =>
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/clip.mp4",
+        name: "clip.mp4",
+        mediaType: "video",
+        ...overrides,
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+  it("says what the player is doing while a video loads, and gets out of the way once it plays", async () => {
+    let finishProbe: (profile: unknown) => void = () => {};
+    probeVideoPlaybackProfileMock.mockReturnValue(
+      new Promise((resolve) => {
+        finishProbe = resolve;
+      }),
+    );
+    hlsIsSupportedMock.mockReturnValue(true);
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "hls",
+      url: "http://localhost/a/clip.m3u8",
+      reason: "Hardware-accelerated HLS encoding available",
+    });
+    selectVideo();
+
+    const { container } = render(<FullscreenViewer />);
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Checking your connection",
+    );
+    finishProbe({ bandwidthMbps: 5, hevcSupported: false });
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Starting stream"),
+    );
+
+    fireEvent(container.querySelector("video")!, new Event("playing"));
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+
+    fireEvent(container.querySelector("video")!, new Event("waiting"));
+    expect(await screen.findByRole("status")).toHaveTextContent("Buffering");
+  });
+
+  it("starts HLS at the quality the measured connection supports instead of climbing from the lowest", async () => {
+    hlsIsSupportedMock.mockReturnValue(true);
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "hls",
+      url: "http://localhost/a/clip.m3u8",
+      reason: "Hardware-accelerated HLS encoding available",
+    });
+    selectVideo();
+
+    render(<FullscreenViewer />);
+
+    await waitFor(() => expect(hlsInstances).toHaveLength(1));
+    expect(hlsInstances[0].config).toMatchObject({
+      abrEwmaDefaultEstimate: 20_000_000,
+      testBandwidth: false,
+    });
+    expect(hlsInstances[0].config).not.toHaveProperty("startLevel");
+  });
+
+  it("explains why a video can't play and offers a retry", async () => {
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "error",
+      reason: "Connection too slow for the original and no GPU to transcode",
+    });
+    selectVideo();
+
+    render(<FullscreenViewer />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Connection too slow for the original and no GPU to transcode",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(negotiateVideoPlaybackMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("logs a playback summary (startup time, stalls) when the video is closed", async () => {
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "direct",
+      url: "http://localhost/a/clip.mp4",
+      reason: "Direct playback — connection can carry the original",
+    });
+    selectVideo();
+
+    const { container, unmount } = render(<FullscreenViewer />);
+    await waitFor(() =>
+      expect(screen.getByTestId("video-status")).toHaveTextContent("Original"),
+    );
+    const video = container.querySelector("video")!;
+    fireEvent(video, new Event("playing"));
+    fireEvent(video, new Event("waiting"));
+    fireEvent(video, new Event("playing"));
+    unmount();
+
+    const summary = logClientEventMock.mock.calls
+      .map(([event]) => event as { event: string; data: Record<string, unknown> })
+      .find((event) => event.event === "video.playback.summary");
+    expect(summary?.data).toMatchObject({
+      mode: "direct",
+      stalls: 1,
+      timeToFirstFrameMs: expect.any(Number),
+    });
+  });
+
   it("logs media element waiting and stalled events for videos", async () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto({
@@ -865,7 +1017,7 @@ describe("FullscreenViewer", () => {
       // Plays the token-bearing client URL directly; no HLS involved.
       expect(video?.getAttribute("src")).toBe("http://localhost/a/fast.mp4?token=abc");
       expect(hlsLoadSourceMock).not.toHaveBeenCalled();
-      expect(screen.getByTestId("video-status")).toHaveTextContent("Raw Video");
+      expect(screen.getByTestId("video-status")).toHaveTextContent("Original");
     });
   });
 
@@ -904,7 +1056,7 @@ describe("FullscreenViewer", () => {
       expect(hlsLoadSourceMock).toHaveBeenCalledWith("http://localhost/a/standard.m3u8");
       expect(hlsAttachMediaMock).toHaveBeenCalledWith(video);
       expect(video?.getAttribute("src")).toBeNull();
-      expect(screen.getByTestId("video-status")).toHaveTextContent("HLS");
+      expect(screen.getByTestId("video-status")).toHaveTextContent("Streaming");
     });
   });
 
@@ -944,10 +1096,16 @@ describe("FullscreenViewer", () => {
     };
 
     const first = render(<FullscreenViewer />);
-    const firstHls = await parseManifest([{ height: 360 }, { height: 720 }, { height: 1080 }]);
+    const firstHls = await parseManifest([
+      { height: 360 },
+      { height: 720 },
+      { height: 1080 },
+    ]);
     expect(firstHls.currentLevel).toBe(-1);
 
-    fireEvent.change(await screen.findByLabelText("Video quality"), { target: { value: "1" } });
+    fireEvent.change(await screen.findByLabelText("Video quality"), {
+      target: { value: "1" },
+    });
     // nextLevel switches at the next fragment; currentLevel would flush the buffer.
     expect(firstHls.nextLevel).toBe(1);
     expect(firstHls.currentLevel).toBe(-1);
@@ -1021,9 +1179,7 @@ describe("FullscreenViewer", () => {
     await waitFor(() => {
       // No raw fallback: an unrecoverable HLS error fails visibly.
       expect(video?.getAttribute("src")).toBeNull();
-      expect(screen.getByTestId("video-status")).toHaveTextContent(
-        "Playback Unavailable",
-      );
+      expect(screen.getByRole("alert")).toHaveTextContent("Can't play this video");
     });
   });
 
@@ -1059,9 +1215,7 @@ describe("FullscreenViewer", () => {
     await waitFor(() => {
       // The raw original is never loaded, even for a codec the browser might play.
       expect(video?.getAttribute("src")).toBeNull();
-      expect(screen.getByTestId("video-status")).toHaveTextContent(
-        "Playback Unavailable",
-      );
+      expect(screen.getByRole("alert")).toHaveTextContent("Can't play this video");
     });
   });
 

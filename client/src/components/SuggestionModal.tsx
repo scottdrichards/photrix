@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { getAuthHeaders } from "../auth";
+import { fetchWithDiagnostics } from "../api/http";
+import { flushClientDiagnostics, getClientSessionId } from "../diagnostics";
 import css from "./SuggestionModal.module.css";
 
 type Props = {
@@ -10,7 +11,7 @@ export const SuggestionModal = ({ onClose }: Props) => {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState("");
-  const [status, setStatus] = useState<"idle" | "submitting" | "sent">("idle");
+  const [status, setStatus] = useState<"idle" | "submitting" | "sent" | "failed">("idle");
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -23,18 +24,22 @@ export const SuggestionModal = ({ onClose }: Props) => {
   }, []);
 
   const submit = async () => {
-    if (!text.trim() || status !== "idle") return;
+    if (!text.trim() || status === "submitting") return;
     setStatus("submitting");
     try {
-      await fetch("/api/feedback", {
+      // The server saves this session's diagnostics with the suggestion, so make
+      // sure the browser's latest events (e.g. the video that just froze) are there.
+      await flushClientDiagnostics();
+      const response = await fetchWithDiagnostics("/api/feedback", "send suggestion", {
         method: "POST",
-        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, clientSessionId: getClientSessionId() }),
       });
+      if (!response.ok) throw new Error(`status ${response.status}`);
       setStatus("sent");
       setTimeout(onClose, 1500);
     } catch {
-      setStatus("idle");
+      setStatus("failed");
     }
   };
 
@@ -71,6 +76,11 @@ export const SuggestionModal = ({ onClose }: Props) => {
                 }
               }}
             />
+            <p className={css.hint}>
+              {status === "failed"
+                ? "Couldn't send. Your text is still here; try again."
+                : "Recent performance and error diagnostics from this browser are attached (no photo names or searches)."}
+            </p>
             <div className={css.actions}>
               <button className="btn btn-subtle" onClick={onClose}>
                 Cancel
