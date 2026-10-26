@@ -100,7 +100,7 @@ const onWorkerLine = (
   }
 
   const arr = new Float32Array(
-    (message as { id: number; embedding: number[] }).embedding,
+    (message).embedding,
   );
   request.resolve(arr);
 };

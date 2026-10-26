@@ -611,14 +611,14 @@ describe("IndexDatabase", () => {
           }
           return dot / (Math.sqrt(magA) * Math.sqrt(magB));
         };
-        expect(cosine(rows[0]!.embedding, Float64Array.from(embedding1))).toBeGreaterThan(
+        expect(cosine(rows[0].embedding, Float64Array.from(embedding1))).toBeGreaterThan(
           0.9999,
         );
-        expect(cosine(rows[1]!.embedding, Float64Array.from(embedding2))).toBeGreaterThan(
+        expect(cosine(rows[1].embedding, Float64Array.from(embedding2))).toBeGreaterThan(
           0.9999,
         );
         // ...and the two faces stay distinguishable from each other.
-        expect(cosine(rows[0]!.embedding, Float64Array.from(embedding2))).toBeLessThan(
+        expect(cosine(rows[0].embedding, Float64Array.from(embedding2))).toBeLessThan(
           0.9999,
         );
 
@@ -804,7 +804,7 @@ describe("IndexDatabase", () => {
 
         await db.saveFaceAttributes([
           {
-            id: faces[0]!.id,
+            id: faces[0].id,
             attributes: { smile: 0.4, eyesOpen: 0.6, focus: 0.8, exposure: 0.6 },
           },
         ]);
@@ -943,12 +943,12 @@ describe("IndexDatabase", () => {
         // Test getFaceClusterDetail returns full cluster with faces
         const detailResult = await db.getFaceClusterDetail({
           filter: {},
-          clusterId: result.clusters[0]!.id,
+          clusterId: result.clusters[0].id,
         });
 
         expect(detailResult.cluster).not.toBeNull();
         expect(detailResult.cluster?.faces).toHaveLength(3);
-        expect(detailResult.cluster?.id).toBe(result.clusters[0]!.id);
+        expect(detailResult.cluster?.id).toBe(result.clusters[0].id);
       });
     });
 
@@ -1199,21 +1199,21 @@ describe("IndexDatabase", () => {
         const clusterId = initial.clusters[0]?.id;
 
         expect(clusterId).toBeDefined();
-        await expect(db.renameCluster(clusterId!, "Taylor")).resolves.toBe(true);
+        await expect(db.renameCluster(clusterId, "Taylor")).resolves.toBe(true);
 
         const renamed = await db.queryFaceClusters({ filter: {} });
         expect(renamed.clusters[0]?.name).toBe("Taylor");
 
         const detail = await db.getFaceClusterDetail({
           filter: {},
-          clusterId: clusterId!,
+          clusterId: clusterId,
         });
         expect(detail.cluster?.name).toBe("Taylor");
 
-        await expect(db.renameCluster(clusterId!, null)).resolves.toBe(true);
+        await expect(db.renameCluster(clusterId, null)).resolves.toBe(true);
         const cleared = await db.getFaceClusterDetail({
           filter: {},
-          clusterId: clusterId!,
+          clusterId: clusterId,
         });
         expect(cleared.cluster?.name).toBeNull();
       });
@@ -1250,7 +1250,7 @@ describe("IndexDatabase", () => {
         const clusters = await db.queryFaceClusters({ filter: {} });
         const clusterId = clusters.clusters[0]?.id;
         expect(clusterId).toBeDefined();
-        await db.renameCluster(clusterId!, "Riley");
+        await db.renameCluster(clusterId, "Riley");
 
         const faces = await db.getPeopleFacesForFile("people/overlay-1.jpg");
         expect(faces).toHaveLength(1);
@@ -1295,8 +1295,8 @@ describe("IndexDatabase", () => {
         // getPeopleFacesForFile (not queryFaceClusters, which hides singleton
         // clusters from the People grid) is how the real face-assign panel
         // learns a face's clusterId, so use the same path here.
-        const first = (await db.getPeopleFacesForFile("people/named-1.jpg"))[0]!.personId;
-        const second = (await db.getPeopleFacesForFile("people/named-2.jpg"))[0]!.personId;
+        const first = (await db.getPeopleFacesForFile("people/named-1.jpg"))[0].personId;
+        const second = (await db.getPeopleFacesForFile("people/named-2.jpg"))[0].personId;
         expect(first).not.toBe(second);
 
         // Unnamed clusters never show up in the autocomplete list.
@@ -1335,8 +1335,8 @@ describe("IndexDatabase", () => {
         ]);
 
         const facesInFile1 = await db.getPeopleFacesForFile("people/preview-1.jpg");
-        const ownFaceId = facesInFile1[0]!.faceId;
-        const clusterId = facesInFile1[0]!.personId;
+        const ownFaceId = facesInFile1[0].faceId;
+        const clusterId = facesInFile1[0].personId;
 
         const full = await db.getClusterFacePreview(clusterId);
         // Paths come back with a leading slash, matching every other
@@ -1915,7 +1915,7 @@ describe("IndexDatabase", () => {
 
         // Default collapse: only the representative shows up at all.
         expect(collapsed.items).toHaveLength(1);
-        const rep = collapsed.items[0]!;
+        const rep = collapsed.items[0];
         expect(rep.fileName).toBe("a.jpg");
         expect(rep.momentClusterRepresentative).toBe(true);
         expect(rep.momentClusterSize).toBe(3);

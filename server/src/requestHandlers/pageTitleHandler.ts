@@ -23,7 +23,7 @@ export const pageTitleHandler = async (
   const callerFilter: FilterElement = body.filter ?? {};
   const title = await generateShareDescription({
     filter: shareFilter
-      ? combineFilters([shareFilter as FilterElement, callerFilter])
+      ? combineFilters([shareFilter, callerFilter])
       : callerFilter,
     semanticQuery: typeof body.semanticQuery === "string" ? body.semanticQuery : undefined,
     database,

@@ -77,7 +77,7 @@ export const updateFileMetadataHandler = async (
         return;
       }
     }
-    patch.editAdj = editAdj as string | null;
+    patch.editAdj = editAdj;
   }
 
   if ("description" in body) {
@@ -85,7 +85,7 @@ export const updateFileMetadataHandler = async (
       writeJson(res, 400, { error: "description must be a string or null" });
       return;
     }
-    patch.description = description as string | null;
+    patch.description = description;
   }
 
   if (

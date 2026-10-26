@@ -467,7 +467,7 @@ export const getExifMetadataFromFile = async (
   }
 
   if (mimeType.startsWith("video/")) {
-    return (await getVideoMetadata(fullPath)) as ExifMetadata;
+    return (await getVideoMetadata(fullPath));
   }
 
   if (!mimeType.startsWith("image/")) {
@@ -477,7 +477,7 @@ export const getExifMetadataFromFile = async (
   const { rawData, quicktimeBrand } = await parseRawExifData(fullPath);
   if (quicktimeBrand) {
     try {
-      return (await getVideoMetadata(fullPath)) as ExifMetadata;
+      return (await getVideoMetadata(fullPath));
     } catch {
       return {};
     }
@@ -505,7 +505,7 @@ export const getExifMetadataFromFile = async (
     }
   }
 
-  return metadata as ExifMetadata;
+  return metadata;
 };
 
 /**

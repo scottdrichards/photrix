@@ -44,7 +44,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "npm run start",
+      command: "bun run start",
       cwd: "../server",
       url: `http://localhost:${API_PORT}/api/health`,
       env: serverEnv,
@@ -54,7 +54,7 @@ export default defineConfig({
       stderr: "pipe",
     },
     {
-      command: `npm run dev -- --port ${CLIENT_PORT} --strictPort`,
+      command: `bun run dev --port ${CLIENT_PORT} --strictPort`,
       cwd: "../client",
       url: CLIENT_URL,
       env: { PHOTRIX_API_TARGET: `http://localhost:${API_PORT}` },

@@ -18,10 +18,10 @@ describe("sharePreviewHandler redirect", () => {
 
     let body = "";
     const res = {
-      writeHead: jest.fn(() => res as unknown as http.ServerResponse),
+      writeHead: jest.fn(() => res),
       end: jest.fn((chunk?: string) => {
         if (chunk) body += chunk;
-        return res as unknown as http.ServerResponse;
+        return res;
       }),
     } as unknown as http.ServerResponse;
 

@@ -132,7 +132,7 @@ const buildFilterSQL = (
   }
 
   // Filter condition - one or more field constraints
-  const conditions = filter as FilterCondition;
+  const conditions = filter;
 
   for (const [key, constraint] of Object.entries(conditions)) {
     if (!filterableFields.has(key)) {
@@ -499,7 +499,7 @@ const constraintToSQL = (
       constraint !== null &&
       "folder" in constraint
     ) {
-      const folderConstraint = constraint as { folder: string; recursive?: boolean };
+      const folderConstraint = constraint;
       const normalizedFolder = normalizeFolderPath(folderConstraint.folder);
       const escapedFolder = escapeLikeLiteral(normalizedFolder);
 

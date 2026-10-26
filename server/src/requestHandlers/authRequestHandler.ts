@@ -191,7 +191,7 @@ export const authShareTokenHandler = async (
     typeof rawLabel === "string" && rawLabel.trim()
       ? rawLabel.trim()
       : await generateShareDescription({
-          filter: body.filter as FilterElement,
+          filter: body.filter,
           ...(semanticQuery ? { semanticQuery } : {}),
           database,
         });

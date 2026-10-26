@@ -41,7 +41,7 @@ const createMockResponse = () => {
       if (chunk) {
         body += chunk;
       }
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
     // The SSE stream path registers a `res.on("error", …)` listener; the stream
     // tests drive lifecycle via `req` events, so a no-op listener is enough.

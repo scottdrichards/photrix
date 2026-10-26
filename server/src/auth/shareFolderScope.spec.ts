@@ -6,7 +6,7 @@ import {
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
 
 const folderShare = (folder: string, recursive = true): FilterElement =>
-  ({ folder: { folder, recursive } }) as unknown as FilterElement;
+  ({ folder: { folder, recursive } });
 
 describe("extractShareFolderRoots", () => {
   it("finds the root of a folder share", () => {
@@ -69,11 +69,11 @@ describe("extractShareFolderRoots", () => {
   });
 
   it("is unbounded for a share that is not folder-based", () => {
-    expect(extractShareFolderRoots({} as FilterElement)).toBeNull();
-    expect(extractShareFolderRoots({ rating: 5 } as unknown as FilterElement)).toBeNull();
+    expect(extractShareFolderRoots({})).toBeNull();
+    expect(extractShareFolderRoots({ rating: 5 })).toBeNull();
     // A StringSearch on folder is not a folder-tree bound.
     expect(
-      extractShareFolderRoots({ folder: { includes: "2009" } } as unknown as FilterElement),
+      extractShareFolderRoots({ folder: { includes: "2009" } }),
     ).toBeNull();
   });
 });

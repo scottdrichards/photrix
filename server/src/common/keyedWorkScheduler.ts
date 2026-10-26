@@ -97,7 +97,7 @@ export const createKeyedWorkScheduler = (maxConcurrent: number) => {
 
       void next.work(next.controller.signal).then(
         (result) => {
-          const waiters = next.waiters as PendingEntry<typeof result>[];
+          const waiters = next.waiters;
           if (workByKey.get(next.key) === next) {
             workByKey.delete(next.key);
           }

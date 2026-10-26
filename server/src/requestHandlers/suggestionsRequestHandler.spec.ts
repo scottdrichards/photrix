@@ -12,7 +12,7 @@ const createMockResponse = () => {
       if (chunk) {
         body += chunk;
       }
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
   } as unknown as http.ServerResponse;
 

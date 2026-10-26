@@ -18,12 +18,12 @@ export function computePCA3D(
     ];
 
   // Center the data
-  const mean = new Float32Array(D) as Float32Array<ArrayBuffer>;
+  const mean = new Float32Array(D);
   for (const v of vectors) for (let d = 0; d < D; d++) mean[d] += v[d];
   for (let d = 0; d < D; d++) mean[d] /= N;
 
   const residuals: Float32Array<ArrayBuffer>[] = vectors.map((v) => {
-    const c = new Float32Array(D) as Float32Array<ArrayBuffer>;
+    const c = new Float32Array(D);
     for (let d = 0; d < D; d++) c[d] = v[d] - mean[d];
     return c;
   });
@@ -37,7 +37,7 @@ export function computePCA3D(
   const normalize = (v: Float32Array<ArrayBuffer>): Float32Array<ArrayBuffer> => {
     const mag = Math.sqrt(dot(v, v));
     if (mag < 1e-10) return v;
-    const out = new Float32Array(v.length) as Float32Array<ArrayBuffer>;
+    const out = new Float32Array(v.length);
     for (let i = 0; i < v.length; i++) out[i] = v[i] / mag;
     return out;
   };
@@ -56,7 +56,7 @@ export function computePCA3D(
     // Power iteration: pc ← normalize(X^T (X pc))
     for (let iter = 0; iter < 60; iter++) {
       const scores = residuals.map((r) => dot(r, pc));
-      const newPc = new Float32Array(D) as Float32Array<ArrayBuffer>;
+      const newPc = new Float32Array(D);
       for (let i = 0; i < N; i++) {
         const s = scores[i];
         const r = residuals[i];
@@ -76,7 +76,7 @@ export function computePCA3D(
 
   // Project centered vectors onto the 3 components
   const centered: Float32Array<ArrayBuffer>[] = vectors.map((v) => {
-    const c = new Float32Array(D) as Float32Array<ArrayBuffer>;
+    const c = new Float32Array(D);
     for (let d = 0; d < D; d++) c[d] = v[d] - mean[d];
     return c;
   });
