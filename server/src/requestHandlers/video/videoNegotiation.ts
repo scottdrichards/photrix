@@ -319,7 +319,7 @@ export const videoNegotiationRequestHandler = async (
   if (shareFilter) {
     const allowed = await database.fileMatchesFilter(
       videoPath,
-      shareFilter as FilterElement,
+      shareFilter,
     );
     if (!allowed) {
       return writeJson(res, 403, { error: "Access denied" });

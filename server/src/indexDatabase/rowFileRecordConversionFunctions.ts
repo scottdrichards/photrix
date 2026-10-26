@@ -10,7 +10,7 @@ export const rowToFileRecord = (
 ): FileRecord => {
   const date = (v: string | number | null) =>
     v === null || v === undefined ? undefined : new Date(v);
-  const json = (v: string) => JSON.parse(v);
+  const json = (v: string) => JSON.parse(v) as unknown;
   const processedAtToIso = (v: string | number | null) =>
     v === null || v === undefined ? undefined : new Date(v).toISOString();
   // `flash` is stored as INTEGER 0/1 (see fileRecordToColumnNamesAndValues).

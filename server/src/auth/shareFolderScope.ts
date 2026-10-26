@@ -92,7 +92,7 @@ export const extractShareFolderRoots = (
     return bounded.reduce(intersectRoots);
   }
 
-  const root = folderRootFromCondition(filter as Record<string, unknown>);
+  const root = folderRootFromCondition(filter);
   return root ? [root] : null;
 };
 

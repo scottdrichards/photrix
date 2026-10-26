@@ -41,7 +41,7 @@ const createMockResponse = () => {
       if (chunk) {
         body += chunk;
       }
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
     // The SSE stream path registers a `res.on("error", …)` listener; the stream
     // tests drive lifecycle via `req` events, so a no-op listener is enough.
@@ -248,7 +248,7 @@ describe("statusRequestHandler", () => {
     const req = new EventEmitter() as http.IncomingMessage;
     const { res, getWrites } = createMockResponse();
 
-    statusRequestHandler(req, res, {
+    void statusRequestHandler(req, res, {
       stream: true,
       taskOrchestrator: alwaysEnabledOrchestrator,
     });
@@ -285,7 +285,7 @@ describe("statusRequestHandler", () => {
       },
     };
 
-    statusRequestHandler(req, res, {
+    void statusRequestHandler(req, res, {
       stream: true,
       taskOrchestrator,
     });

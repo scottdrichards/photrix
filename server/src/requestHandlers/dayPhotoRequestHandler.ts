@@ -28,7 +28,7 @@ const runGenerateScript = (date: string): Promise<void> =>
       timeout: GENERATE_TIMEOUT_MS,
     });
     let stderr = "";
-    child.stderr.on("data", (chunk) => {
+    child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
     child.on("error", rejectPromise);

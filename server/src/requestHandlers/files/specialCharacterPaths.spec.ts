@@ -35,11 +35,11 @@ const createMockResponse = () => {
     headersSent: false,
     writeHead: jest.fn(() => {
       (res as { headersSent: boolean }).headersSent = true;
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
     end: jest.fn((chunk?: string) => {
       if (chunk) body += chunk;
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
     write: jest.fn(() => true),
   } as unknown as http.ServerResponse;
@@ -71,7 +71,7 @@ const requestFile = async (storageRoot: string, requestUrl: string) => {
       method: "GET",
     } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
     res,
-    { database, storageRoot, taskOrchestrator: orchestrator } as never,
+    { database, storageRoot, taskOrchestrator: orchestrator },
   );
   return { status: status(), body: getBody() };
 };

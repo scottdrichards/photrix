@@ -721,7 +721,7 @@ const fileHandler = async (
   if (shareFilter) {
     const allowed = await database.fileMatchesFilter(
       subPath,
-      shareFilter as FilterElement,
+      shareFilter,
     );
     if (!allowed) {
       return writeJson(res, 403, { error: "Access denied" });

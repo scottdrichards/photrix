@@ -172,7 +172,7 @@ export const verifyPasskeyRegistration = async (
   const { credential } = verification.registrationInfo;
 
   const transports =
-    (response.response.transports as AuthenticatorTransportFuture[] | undefined) ?? [];
+    (response.response.transports) ?? [];
 
   await db!.run(
     `INSERT OR REPLACE INTO webauthn_credentials

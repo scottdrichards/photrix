@@ -103,7 +103,7 @@ const buildContaminatedPerson = async (db: IndexDatabase) => {
 
   const faces = await db.getPeopleFacesForFile("people/band-0.jpg");
   expect(faces).toHaveLength(1);
-  return faces[0]!.personId;
+  return faces[0].personId;
 };
 
 describe("face cluster review", () => {
@@ -189,7 +189,7 @@ describe("face cluster review", () => {
       const review = (await db.getFaceClusterReview(personId))!;
 
       // Vouch for one of the very faces the cut line would otherwise remove.
-      const doomed = review.faces[BAND_COUNT]!;
+      const doomed = review.faces[BAND_COUNT];
       expect(doomed.fileName).toMatch(/^intruder-/);
       await db.setFaceVerdicts([doomed.faceId], "confirmed");
 
@@ -242,7 +242,7 @@ describe("face cluster review", () => {
       // Rejected by *this* person, not by everyone — it still gets a cluster of
       // its own rather than being dropped on the floor.
       expect(lateFaces).toHaveLength(1);
-      expect(lateFaces[0]!.personId).not.toBe(personId);
+      expect(lateFaces[0].personId).not.toBe(personId);
     });
   });
 
@@ -250,7 +250,7 @@ describe("face cluster review", () => {
     await withTempDb(async (db) => {
       const personId = await buildContaminatedPerson(db);
       const review = (await db.getFaceClusterReview(personId))!;
-      const doomed = review.faces[BAND_COUNT]!;
+      const doomed = review.faces[BAND_COUNT];
       await db.setFaceVerdicts([doomed.faceId], "rejected");
 
       // Simulate what changing FACE_CLUSTER_SIMILARITY_THRESHOLD does: every
@@ -263,7 +263,7 @@ describe("face cluster review", () => {
 
       // Cluster ids are re-derived from scratch, so ask the library where this
       // person lives now rather than assuming the id survived.
-      const rebuiltPersonId = (await db.getPeopleFacesForFile("people/band-0.jpg"))[0]!
+      const rebuiltPersonId = (await db.getPeopleFacesForFile("people/band-0.jpg"))[0]
         .personId;
       const after = await db.getFaceClusterReview(rebuiltPersonId);
       expect(after!.faces.map((face) => face.faceId)).not.toContain(doomed.faceId);

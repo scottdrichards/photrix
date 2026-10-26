@@ -26,7 +26,7 @@ const createSpanRecorder = () => {
     },
   };
 
-  jest.spyOn(trace, "getTracer").mockReturnValue(fakeTracer as Tracer);
+  jest.spyOn(trace, "getTracer").mockReturnValue(fakeTracer);
 
   return { calls };
 };

@@ -81,7 +81,7 @@ const firstName = (name: string): string => name.trim().split(/\s+/)[0] ?? name;
  * cases people actually read naturally. `names` must already be non-empty.
  */
 const joinNames = (names: string[], conjunction: "and" | "or"): string => {
-  if (names.length === 1) return names[0]!;
+  if (names.length === 1) return names[0];
   if (names.length === 2) return `${names[0]} ${conjunction} ${names[1]}`;
   return `${names.slice(0, -1).join(", ")}, ${conjunction} ${names[names.length - 1]}`;
 };

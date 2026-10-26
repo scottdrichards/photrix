@@ -67,7 +67,7 @@ export const createKeyedWorkScheduler = (maxConcurrent: number) => {
         },
         reject: (error) => {
           waiter.cleanup();
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         },
         cleanup: () => {},
       };
@@ -97,7 +97,7 @@ export const createKeyedWorkScheduler = (maxConcurrent: number) => {
 
       void next.work(next.controller.signal).then(
         (result) => {
-          const waiters = next.waiters as PendingEntry<typeof result>[];
+          const waiters = next.waiters;
           if (workByKey.get(next.key) === next) {
             workByKey.delete(next.key);
           }

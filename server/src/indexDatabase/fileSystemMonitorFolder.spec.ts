@@ -42,7 +42,7 @@ const createFakeDb = (storagePath: string) => {
       // Mirror processFileInfo's `new Date(mtimeMs)` so the stored fingerprint
       // matches the one the monitor derives from a live stat.
       modified: new Date(stats.mtimeMs),
-    } as FileRecord);
+    });
   };
 
   const db = {
@@ -105,7 +105,7 @@ describe("fileSystemMonitorFolder", () => {
     await fs.writeFile(path.join(root, "new.txt"), "hello");
 
     await waitFor(() => callsTo("addPaths").length > 0);
-    expect(callsTo("addPaths")[0]!.args[0]).toEqual(["new.txt"]);
+    expect(callsTo("addPaths")[0].args[0]).toEqual(["new.txt"]);
     expect(changes).toBeGreaterThan(0);
   });
 
@@ -124,7 +124,7 @@ describe("fileSystemMonitorFolder", () => {
     await fs.writeFile(filePath, "a much longer second version");
 
     await waitFor(() => monitor.callsTo("markFileForResync").length > 0);
-    expect(monitor.callsTo("markFileForResync")[0]!.args[0]).toBe("photo.txt");
+    expect(monitor.callsTo("markFileForResync")[0].args[0]).toBe("photo.txt");
   });
 
   it("tracks a rename as a move rather than delete + add", async () => {
@@ -138,7 +138,7 @@ describe("fileSystemMonitorFolder", () => {
     await fs.rename(oldPath, path.join(monitor.root, "after.txt"));
 
     await waitFor(() => monitor.callsTo("moveFile").length > 0);
-    const moveCall = monitor.callsTo("moveFile")[0]!;
+    const moveCall = monitor.callsTo("moveFile")[0];
     expect(moveCall.args).toEqual(["before.txt", "after.txt"]);
     // A move must not fall through to a destructive removeFile of the source.
     expect(monitor.callsTo("removeFile")).toHaveLength(0);
@@ -157,6 +157,6 @@ describe("fileSystemMonitorFolder", () => {
     // The delete is buffered briefly to pair with a possible move; with no
     // matching create it commits as a removal.
     await waitFor(() => monitor.callsTo("removeFile").length > 0, { timeoutMs: 5000 });
-    expect(monitor.callsTo("removeFile")[0]!.args[0]).toBe("gone.txt");
+    expect(monitor.callsTo("removeFile")[0].args[0]).toBe("gone.txt");
   });
 });

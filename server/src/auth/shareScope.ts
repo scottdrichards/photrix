@@ -130,7 +130,7 @@ const resolveUncheckedShareFilter = async (
   cacheKey?: string,
 ): Promise<FilterElement> => {
   if (!shareScope.semanticQuery?.trim()) {
-    return (shareScope.filter ?? {}) as FilterElement;
+    return (shareScope.filter ?? {});
   }
   if (!cacheKey) {
     return resolveSemanticShareFilter(shareScope);
@@ -155,7 +155,7 @@ const resolveUncheckedShareFilter = async (
 const resolveSemanticShareFilter = async (
   shareScope: ShareScope<unknown>,
 ): Promise<FilterElement> => {
-  const baseFilter = (shareScope.filter ?? {}) as FilterElement;
+  const baseFilter = (shareScope.filter ?? {});
   const semanticQuery = shareScope.semanticQuery?.trim() ?? "";
   const searchSources = shareScope.searchSources ?? [...SEARCH_SOURCES];
 
