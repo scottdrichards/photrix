@@ -40,6 +40,8 @@ import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes, type NamedFace } fr
 import { VideoPeopleTimeline } from "./VideoPeopleTimeline";
 import { VideoLoadingOverlay, type PlaybackState } from "./VideoLoadingOverlay";
 import { videoPeople } from "./videoPeople";
+import { formatAperture, formatFileSize, formatFocalLength, formatShutterSpeed } from "./formatFileInfo";
+import { formatDuration } from "./tileMedia/formatDuration";
 
 // The people timeline under a video: its rows are this tall, and past this many
 // it scrolls rather than squeezing the video further.
@@ -152,58 +154,6 @@ type VideoStatus = "hls" | "direct" | null;
 // genuinely under-provisioned link recovers quickly.
 const DIRECT_STALL_FALLBACK_MS = 3000;
 
-
-const formatShutterSpeed = (exposureTime: unknown): string | null => {
-  const t =
-    typeof exposureTime === "number" ? exposureTime : parseFloat(String(exposureTime));
-  if (!isFinite(t) || t <= 0) return null;
-  if (t >= 1) return `${t}s`;
-  const denom = Math.round(1 / t);
-  return `1/${denom}s`;
-};
-
-const formatAperture = (aperture: unknown): string | null => {
-  const f = typeof aperture === "number" ? aperture : parseFloat(String(aperture));
-  if (!isFinite(f) || f <= 0) return null;
-  return `f/${f % 1 === 0 ? f.toFixed(0) : f.toFixed(1)}`;
-};
-
-const formatFocalLength = (focalLength: unknown): string | null => {
-  if (typeof focalLength !== "string" && typeof focalLength !== "number") return null;
-  const str = String(focalLength).trim();
-  // Handle rational notation "50/1"
-  const rationalMatch = str.match(/^(\d+)\/(\d+)$/);
-  if (rationalMatch) {
-    const val = parseInt(rationalMatch[1]) / parseInt(rationalMatch[2]);
-    return `${Math.round(val)}mm`;
-  }
-  const num = parseFloat(str);
-  if (!isFinite(num)) return str;
-  return str.includes("mm")
-    ? str
-    : `${num % 1 === 0 ? num.toFixed(0) : num.toFixed(1)}mm`;
-};
-
-const formatFileSize = (bytes: unknown): string | null => {
-  const b = typeof bytes === "number" ? bytes : parseInt(String(bytes));
-  if (!isFinite(b) || b < 0) return null;
-  if (b < 1024) return `${b} B`;
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
-  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-};
-
-const formatDuration = (seconds: unknown): string | null => {
-  const s = typeof seconds === "number" ? seconds : parseFloat(String(seconds));
-  if (!isFinite(s) || s < 0) return null;
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-  return `${m}:${String(sec).padStart(2, "0")}`;
-};
-
-// Size the photo frame from known metadata dimensions so the cached thumbnail
 // placeholder occupies the correct box before the full image reports its size.
 const readMetadataAspectRatio = (metadata: Record<string, unknown> | undefined): number => {
   const width = Number(metadata?.dimensionWidth);
@@ -1666,6 +1616,7 @@ export function FullscreenViewer() {
                       } as React.CSSProperties
                     }
                   >
+                    {/* eslint-disable-next-line jsx-a11y/media-has-caption -- a captions <track> is always rendered below, but conditionally, which the static rule cannot see */}
                     <video
                       ref={videoRef}
                       key={photo.path}
