@@ -93,22 +93,14 @@ export const useLivePhotoPreview = ({
 
     // Halt decoding immediately; the element lingers only long enough to fade.
     const element = videoRef.current;
-    try {
-      element?.pause();
-    } catch {
-      // Detached element — nothing to pause.
-    }
+    element?.pause();
     setMode(null);
     hasStartedPlayingRef.current = false;
     unmountRef.current = setTimeout(() => {
       unmountRef.current = null;
       const el = videoRef.current;
-      try {
-        el?.removeAttribute("src");
-        el?.load();
-      } catch {
-        // Already gone.
-      }
+      el?.removeAttribute("src");
+      el?.load();
       setIsMounted(false);
     }, FADE_MS);
   }, []);

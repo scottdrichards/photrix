@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   ArrowDownload24Regular,
   ChevronLeft48Regular,
@@ -28,7 +28,6 @@ import {
   negotiateVideoPlayback,
   streamPhotoDescription,
   setFaceVerdicts,
-  updatePhotoMetadata,
 } from "../api";
 import type { PhotoPersonFace } from "../api/types";
 import { StarRating } from "./StarRating";
@@ -57,6 +56,13 @@ import { cx } from "../cx";
 import { photoViewTransitionName } from "./viewTransition";
 import { suppressAmbientPlayback } from "./tileMedia/tilePlaybackCoordinator";
 import css from "./FullscreenViewer.module.css";
+import { readStorage, writeStorage } from "../storage";
+import { syncDialogOpenState } from "./syncDialogOpenState";
+import { playVideo } from "./playVideo";
+import { useMetadataSave } from "./selection/useMetadataSave";
+import type { PhotoMetadataOverride } from "./selection/SelectionContext";
+import { logFailure } from "../logFailure";
+import { attemptSync } from "../result";
 
 // Star ratings and tags persist to the DB via PATCH, which the server rejects
 // for share tokens — so hide the tagging bar entirely in a shared view.
@@ -106,43 +112,12 @@ const segmentsToWebVTT = (
   return `WEBVTT\n\n${cues}`;
 };
 
-const safePlay = (video: HTMLVideoElement, _logPrefix: string) => {
-  const playResult = video.play();
-  if (playResult && typeof playResult.catch === "function") {
-    playResult.catch((_err) => {});
-  }
-};
-
+// pause() and load() don't throw: removing src and reloading is what cancels
+// the in-flight range request.
 const clearVideoSource = (video: HTMLVideoElement) => {
-  try {
-    video.pause();
-  } catch {
-    // Ignore best-effort cleanup failures.
-  }
-
-  try {
-    video.removeAttribute("src");
-    video.load();
-  } catch {
-    // Ignore best-effort cleanup failures.
-  }
-};
-
-const syncDialogOpenState = (dialog: HTMLDialogElement, isOpen: boolean) => {
-  try {
-    if (isOpen) {
-      if (!dialog.open) {
-        dialog.showModal();
-      }
-      return;
-    }
-
-    if (dialog.open) {
-      dialog.close();
-    }
-  } catch {
-    // Ignore dialog state races during hot reload or interrupted renders.
-  }
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
 };
 
 type VideoStatus = "hls" | "direct" | null;
@@ -222,21 +197,12 @@ const PREVIEW_MAX_EDGE = 1200;
 const VIDEO_QUALITY_KEY = "photrix.videoQuality";
 
 const readPreferredVideoHeight = (): number | null => {
-  try {
-    const height = Number(window.localStorage.getItem(VIDEO_QUALITY_KEY));
-    return Number.isFinite(height) && height > 0 ? height : null;
-  } catch {
-    return null;
-  }
+  const height = Number(readStorage(VIDEO_QUALITY_KEY));
+  return Number.isFinite(height) && height > 0 ? height : null;
 };
 
-const writePreferredVideoHeight = (height: number | null): void => {
-  try {
-    window.localStorage.setItem(VIDEO_QUALITY_KEY, height ? String(height) : "auto");
-  } catch {
-    // A remembered quality is a convenience; never let storage break playback.
-  }
-};
+const writePreferredVideoHeight = (height: number | null): void =>
+  writeStorage(VIDEO_QUALITY_KEY, height ? String(height) : "auto");
 
 // The tallest variant at or below the preferred height, else the shortest one,
 // so a 1080p preference still applies to a video whose top rung is 720p.
@@ -283,7 +249,6 @@ export function FullscreenViewer() {
     setSelected,
     selectNext,
     selectPrevious,
-    applyMetadataOverride,
   } = useSelectionContext();
   const photo = selectedPhoto;
 
@@ -489,10 +454,8 @@ export function FullscreenViewer() {
         setPeopleFaces(faces);
         setPeopleFacesPath(photo.path);
       })
-      .catch(() => {
-        // Face names are a non-essential enhancement; leave the overlay to fall
-        // back to metadata boxes if the lookup fails or is aborted.
-      });
+      // Names are an enhancement: without them the overlay shows the metadata boxes.
+      .catch(logFailure("viewer.faces.failed", "Could not load face names for the viewer"));
 
     return () => abortController.abort();
   }, [photo?.path, photo?.mediaType, facesRefreshToken]);
@@ -564,10 +527,7 @@ export function FullscreenViewer() {
       .then((caption) => {
         if (caption) document.title = caption;
       })
-      .catch(() => {
-        // Aborted (photo changed / viewer closed) or network error — no
-        // caption for this photo; nothing to show or roll back.
-      });
+      .catch(logFailure("viewer.caption.failed", "Could not load the photo caption"));
 
     return () => abortController.abort();
   }, [photo?.path, photo?.mediaType]);
@@ -628,9 +588,8 @@ export function FullscreenViewer() {
         captionBlobUrlRef.current = url;
         setTranscriptTrackUrl(url);
       })
-      .catch(() => {
-        // No transcript available — caption button stays hidden
-      });
+      // Without a transcript the caption button stays hidden.
+      .catch(logFailure("viewer.transcript.failed", "Could not load the video transcript"));
 
     return () => {
       abortController.abort();
@@ -736,14 +695,8 @@ export function FullscreenViewer() {
           video.addEventListener(
             "loadedmetadata",
             () => {
-              if (!cancelled) {
-                try {
-                  video.currentTime = resumeAt;
-                } catch {
-                  // Seeking may be rejected if the media isn't seekable yet; the
-                  // stream still plays from the start, which is acceptable.
-                }
-              }
+              // Metadata has loaded, so the element accepts a seek.
+              if (!cancelled) video.currentTime = resumeAt;
             },
             { once: true },
           );
@@ -781,7 +734,7 @@ export function FullscreenViewer() {
           // negotiation.url is server-built and token-less; use photo.originalUrl
           // (client-built, token-bearing) for the same file.
           video.src = photo.originalUrl;
-          safePlay(video, "[Video] Autoplay prevented (direct):");
+          playVideo(video);
           return;
         }
 
@@ -898,18 +851,23 @@ export function FullscreenViewer() {
             if (!(dur && Number.isFinite(dur) && dur > 0)) return;
             const media = hls.media as HlsMediaWithSource | null;
             const mediaSource = media?.mediaSource;
-            if (!mediaSource || mediaSource.readyState !== "open" || mediaSource.updating)
+            // A duration change is refused while a SourceBuffer is mid-append.
+            if (
+              !mediaSource ||
+              mediaSource.readyState !== "open" ||
+              [...mediaSource.sourceBuffers].some((buffer) => buffer.updating)
+            )
               return;
             if (media.duration === dur) return;
-            try {
+            // It can also be refused when media past `dur` is already buffered;
+            // that resolves itself, so keep listening and try again later.
+            const applied = attemptSync(() => {
               mediaSource.duration = dur;
-              // Successfully set duration; stop listening to avoid redundant calls
-              hls.off(Hls.Events.MANIFEST_PARSED, manifestParsedHandler);
-              hls.off(Hls.Events.LEVEL_LOADED, applyKnownDuration);
-              hls.off(Hls.Events.BUFFER_APPENDED, applyKnownDuration);
-            } catch {
-              // Setting duration may not be permitted at this moment; keep listening
-            }
+            });
+            if (!applied.ok) return;
+            hls.off(Hls.Events.MANIFEST_PARSED, manifestParsedHandler);
+            hls.off(Hls.Events.LEVEL_LOADED, applyKnownDuration);
+            hls.off(Hls.Events.BUFFER_APPENDED, applyKnownDuration);
           };
 
           const manifestParsedHandler = () => {
@@ -934,7 +892,7 @@ export function FullscreenViewer() {
               clientOperationId,
               data: { path: photo.path, levels: hls.levels.length },
             });
-            safePlay(video, "[HLS] Autoplay prevented:");
+            playVideo(video);
             applyKnownDuration();
           };
 
@@ -1005,7 +963,7 @@ export function FullscreenViewer() {
           video.src = nativeToken
             ? `${hlsUrl}&token=${encodeURIComponent(nativeToken)}`
             : hlsUrl;
-          safePlay(video, "[HLS] Autoplay prevented (native):");
+          playVideo(video);
           return;
         }
 
@@ -1328,26 +1286,36 @@ export function FullscreenViewer() {
 
   const currentRating =
     typeof meta?.rating === "number" && meta.rating > 0 ? meta.rating : 0;
-  const currentTags = Array.isArray(meta?.tags) ? (meta.tags as string[]) : [];
+  const currentTags = useMemo(
+    () => (Array.isArray(meta?.tags) ? (meta.tags as string[]) : []),
+    [meta?.tags],
+  );
 
   // Optimistically apply a tagging change to the selected item, then persist it.
-  // The override survives grid re-pushes; a failed PATCH just logs (the value is
-  // reconciled on the next refetch).
+  // The override survives grid re-pushes; a rejected save puts the previous
+  // value back and shows metadataSaveError.
+  const { save: saveMetadata, error: metadataSaveError } = useMetadataSave();
   const persistTagging = useCallback(
     (patch: { rating?: number; tags?: string[]; description?: string | null }) => {
       const path = photo?.path;
       if (!path) return;
-      const override: { rating?: number | null; tags?: string[]; description?: string | null } =
-        {};
-      if (patch.rating !== undefined) override.rating = patch.rating > 0 ? patch.rating : null;
-      if (patch.tags !== undefined) override.tags = patch.tags;
-      if (patch.description !== undefined) override.description = patch.description;
-      applyMetadataOverride([path], override);
-      void updatePhotoMetadata(path, patch).catch(() => {
-        // Best-effort; optimistic value stays until the next refetch.
-      });
+      const shown: PhotoMetadataOverride = {};
+      const previous: PhotoMetadataOverride = {};
+      if (patch.rating !== undefined) {
+        shown.rating = patch.rating > 0 ? patch.rating : null;
+        previous.rating = currentRating > 0 ? currentRating : null;
+      }
+      if (patch.tags !== undefined) {
+        shown.tags = patch.tags;
+        previous.tags = currentTags;
+      }
+      if (patch.description !== undefined) {
+        shown.description = patch.description;
+        previous.description = typeof meta?.description === "string" ? meta.description : null;
+      }
+      saveMetadata([{ path, patch, shown, previous }]);
     },
-    [photo?.path, applyMetadataOverride],
+    [photo?.path, saveMetadata, currentRating, currentTags, meta?.description],
   );
 
   // Number keys 1–5 set the star rating, 0 clears it — quick tagging while
@@ -1420,9 +1388,8 @@ export function FullscreenViewer() {
     const video = videoRef.current;
     if (!video) return;
     video.currentTime = ms / 1000;
-    void video.play().catch(() => {
-      // Autoplay policy may refuse; the seek itself still happened.
-    });
+    // An autoplay refusal is fine: the seek itself still happened.
+    playVideo(video);
   };
 
   const faceToggleDisabled =
@@ -1866,6 +1833,11 @@ export function FullscreenViewer() {
                     onChange={(rating) => persistTagging({ rating })}
                     label="Star rating"
                   />
+                  {metadataSaveError && (
+                    <span className={css.taggingError} role="alert">
+                      {metadataSaveError}
+                    </span>
+                  )}
                   <span className={css.taggingDivider} aria-hidden="true" />
                   <TagEditor
                     tags={currentTags}
@@ -1890,9 +1862,14 @@ export function FullscreenViewer() {
                   setSavedAdj(adj);
                   setEditMode(false);
                   if (!READ_ONLY) {
-                    void updatePhotoMetadata(photo.path, {
-                      editAdj: isDirty(adj) ? JSON.stringify(adj) : null,
-                    }).catch(() => {});
+                    saveMetadata([
+                      {
+                        path: photo.path,
+                        patch: { editAdj: isDirty(adj) ? JSON.stringify(adj) : null },
+                        shown: {},
+                        previous: {},
+                      },
+                    ]);
                   }
                 }}
               />

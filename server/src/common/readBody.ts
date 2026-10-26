@@ -1,4 +1,6 @@
 import type http from "node:http";
+import { writeJson } from "../utils.ts";
+import { attempt, attemptSync } from "./result.ts";
 
 /** Generous for any JSON this API accepts; endpoints with tiny payloads pass less. */
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -38,6 +40,14 @@ export const readTextBody = (
     req.on("error", reject);
   });
 
+/** A request whose body isn't the JSON the endpoint needs: answer 400. */
+export class InvalidBodyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidBodyError";
+  }
+}
+
 type ReadJsonOptions = {
   maxBytes?: number;
   /** Returned for an empty (or whitespace-only) body. Without it, an empty body is an error. */
@@ -45,8 +55,8 @@ type ReadJsonOptions = {
 };
 
 /**
- * Reads and parses a JSON request body. Rejects with `BodyTooLargeError`, or a
- * plain `Error` for an empty body (unless `ifEmpty` is given) or invalid JSON.
+ * Reads and parses a JSON request body. Rejects with `BodyTooLargeError`, or
+ * `InvalidBodyError` for an empty body (unless `ifEmpty` is given) or invalid JSON.
  */
 export const readJsonBody = async <T = unknown>(
   req: http.IncomingMessage,
@@ -55,11 +65,33 @@ export const readJsonBody = async <T = unknown>(
   const text = (await readTextBody(req, maxBytes)).trim();
   if (!text) {
     if (ifEmpty !== undefined) return ifEmpty as T;
-    throw new Error("Request body is required");
+    throw new InvalidBodyError("Request body is required");
   }
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error("Invalid JSON");
+  const parsed = attemptSync(() => JSON.parse(text) as T);
+  if (!parsed.ok) throw new InvalidBodyError("Invalid JSON");
+  return parsed.value;
+};
+
+/**
+ * `readJsonBody` for a request handler. A malformed request is answered here —
+ * 413 when the body is too large, 400 otherwise, with the reason — and null is
+ * returned, so the handler only has to return. Any other failure (the
+ * connection dropping mid-read) propagates like any other error.
+ */
+export const readJsonRequest = async <T = unknown>(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  options: ReadJsonOptions = {},
+): Promise<T | null> => {
+  const body = await attempt(readJsonBody<T>(req, options));
+  if (body.ok) return body.value;
+  if (body.error instanceof BodyTooLargeError) {
+    writeJson(res, 413, { error: body.error.message });
+    return null;
   }
+  if (body.error instanceof InvalidBodyError) {
+    writeJson(res, 400, { error: body.error.message });
+    return null;
+  }
+  throw body.error;
 };

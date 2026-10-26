@@ -79,6 +79,7 @@ import {
   faceAttributesToQualityInputs,
   type FaceQualityInputs,
 } from "../faceDetection/photoQuality.ts";
+import { attemptSync } from "../common/result.ts";
 
 const log = getLogger("IndexDatabase");
 
@@ -939,17 +940,14 @@ export class IndexDatabase {
       limit,
     );
     return rows.map((row) => {
-      let tags: string[] = [];
-      if (row.tags) {
-        try {
-          const parsed: unknown = JSON.parse(row.tags);
-          if (Array.isArray(parsed)) {
-            tags = parsed.filter((t): t is string => typeof t === "string");
-          }
-        } catch {
-          // Corrupt/legacy value — treat as no tags.
-        }
+      const parsed = row.tags ? attemptSync((): unknown => JSON.parse(row.tags as string)) : null;
+      if (parsed && !parsed.ok) {
+        log.warn({ err: parsed.error, folder: row.folder, fileName: row.fileName }, "Unreadable tags; writing back none");
       }
+      const tags =
+        parsed?.ok && Array.isArray(parsed.value)
+          ? parsed.value.filter((t): t is string => typeof t === "string")
+          : [];
       return {
         path: `${row.folder}${row.fileName}`,
         rating: row.rating,
@@ -3781,13 +3779,15 @@ export class IndexDatabase {
     );
     const all = new Set<string>();
     for (const row of rows) {
-      try {
-        for (const tag of JSON.parse(row.tags) as unknown[]) {
-          if (typeof tag === "string") all.add(tag);
-        }
-      } catch {
-        // Malformed JSON shouldn't happen (only written via setClusterTags),
-        // but skip rather than throw on a suggestions query.
+      // Only setClusterTags writes this column, so a parse failure is a bug:
+      // log it, but don't fail a suggestions query over it.
+      const parsed = attemptSync(() => JSON.parse(row.tags) as unknown[]);
+      if (!parsed.ok) {
+        log.warn({ err: parsed.error }, "Unreadable person tags");
+        continue;
+      }
+      for (const tag of parsed.value) {
+        if (typeof tag === "string") all.add(tag);
       }
     }
     return [...all].sort();

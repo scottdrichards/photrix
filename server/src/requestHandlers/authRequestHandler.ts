@@ -34,19 +34,14 @@ import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { FilterCompileError, filterToSQL } from "../indexDatabase/filterToSQL.ts";
 import { generateShareDescription } from "../shareDescription/generateShareDescription.ts";
 import { writeJson } from "../utils.ts";
-import { readJsonBody } from "../common/readBody.ts";
+import { readJsonRequest } from "../common/readBody.ts";
 
 export const authLoginHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ) => {
-  let body: { username?: unknown; password?: unknown };
-  try {
-    body = await readJsonBody<{ username?: unknown; password?: unknown }>(req);
-  } catch {
-    writeJson(res, 400, { error: "Invalid JSON" });
-    return;
-  }
+  const body = await readJsonRequest<{ username?: unknown; password?: unknown }>(req, res);
+  if (!body) return;
 
   if (typeof body.username !== "string" || typeof body.password !== "string") {
     writeJson(res, 400, { error: "username and password required" });
@@ -100,13 +95,8 @@ export const authShareTokenHandler = async (
     return;
   }
 
-  let body: ShareScope<unknown>;
-  try {
-    body = await readJsonBody<ShareScope<unknown>>(req);
-  } catch {
-    writeJson(res, 400, { error: "Invalid JSON" });
-    return;
-  }
+  const body = await readJsonRequest<ShareScope<unknown>>(req, res);
+  if (!body) return;
 
   // A share token without a filter would be indistinguishable from full access;
   // require a non-null filter so the share is always scoped.
@@ -231,13 +221,8 @@ export const passkeyRegistrationOptionsHandler = async (
     return;
   }
 
-  let body: { username?: unknown };
-  try {
-    body = await readJsonBody<{ username?: unknown }>(req);
-  } catch {
-    writeJson(res, 400, { error: "Invalid JSON" });
-    return;
-  }
+  const body = await readJsonRequest<{ username?: unknown }>(req, res);
+  if (!body) return;
 
   if (typeof body.username !== "string") {
     writeJson(res, 400, { error: "username required" });
@@ -267,13 +252,8 @@ export const passkeyRegistrationVerifyHandler = async (
     return;
   }
 
-  let body: { sessionId?: unknown; response?: unknown };
-  try {
-    body = await readJsonBody<{ sessionId?: unknown; response?: unknown }>(req);
-  } catch {
-    writeJson(res, 400, { error: "Invalid JSON" });
-    return;
-  }
+  const body = await readJsonRequest<{ sessionId?: unknown; response?: unknown }>(req, res);
+  if (!body) return;
 
   if (typeof body.sessionId !== "string" || !body.response) {
     writeJson(res, 400, { error: "sessionId and response required" });
@@ -311,13 +291,8 @@ export const passkeyAuthenticationVerifyHandler = async (
     return;
   }
 
-  let body: { sessionId?: unknown; response?: unknown };
-  try {
-    body = await readJsonBody<{ sessionId?: unknown; response?: unknown }>(req);
-  } catch {
-    writeJson(res, 400, { error: "Invalid JSON" });
-    return;
-  }
+  const body = await readJsonRequest<{ sessionId?: unknown; response?: unknown }>(req, res);
+  if (!body) return;
 
   if (typeof body.sessionId !== "string" || !body.response) {
     writeJson(res, 400, { error: "sessionId and response required" });
@@ -341,16 +316,11 @@ export const authLogoutHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ) => {
-  let body: { token?: unknown };
-  try {
-    body = await readJsonBody<{ token?: unknown }>(req);
-  } catch {
-    writeJson(res, 400, { error: "Invalid JSON" });
-    return;
-  }
+  const body = await readJsonRequest<{ token?: unknown }>(req, res);
+  if (!body) return;
 
   if (typeof body.token === "string") {
-    revokeToken(body.token);
+    await revokeToken(body.token);
   }
 
   writeJson(res, 200, { ok: true });

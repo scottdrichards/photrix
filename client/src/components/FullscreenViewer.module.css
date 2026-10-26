@@ -694,3 +694,9 @@
   overflow-y: auto;
   z-index: 100;
 }
+
+.taggingError {
+  font-size: 0.78rem;
+  color: var(--danger);
+  white-space: nowrap;
+}

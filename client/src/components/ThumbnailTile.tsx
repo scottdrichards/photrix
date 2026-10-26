@@ -423,11 +423,8 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     e.stopPropagation();
     e.preventDefault();
     isScrubbingRef.current = true;
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // setPointerCapture is unavailable in some environments (e.g. jsdom)
-    }
+    // Optional call: jsdom has no pointer capture.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     seekFromClientX(e.clientX, e.currentTarget);
   };
 

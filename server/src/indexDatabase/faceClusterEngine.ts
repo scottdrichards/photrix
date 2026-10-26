@@ -2,6 +2,7 @@ import type { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
 import { getLogger } from "../observability/logger.ts";
 import { decodeEmbedding } from "./embeddingCodec.ts";
+import { attempt } from "../common/result.ts";
 
 const log = getLogger("faceClusterEngine");
 
@@ -151,7 +152,8 @@ export class FaceClusterEngine {
     // let a requester's disconnect abort a chained operation midway.
     const run = () => runWithoutRequestAbortSignal(fn);
     const result = this.chain.then(run, run);
-    this.chain = result.catch(() => undefined);
+    // The caller gets `result` and its error; the chain only needs to know it settled.
+    this.chain = attempt(result);
     return result;
   }
 

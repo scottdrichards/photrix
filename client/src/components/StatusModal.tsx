@@ -11,6 +11,7 @@ import {
 import { ProgressItem } from "./ProgressItem";
 import { describeHoldup } from "./taskHoldup";
 import css from "./StatusModal.module.css";
+import { syncDialogOpenState } from "./syncDialogOpenState";
 
 type ActiveTab = "tasks" | "devtracker";
 
@@ -70,23 +71,6 @@ const HoldupBadge = ({ task }: { task: BackgroundTaskStatus }) => {
       {text}
     </span>
   );
-};
-
-const syncDialogOpenState = (dialog: HTMLDialogElement, isOpen: boolean) => {
-  try {
-    if (isOpen) {
-      if (!dialog.open) {
-        dialog.showModal();
-      }
-      return;
-    }
-
-    if (dialog.open) {
-      dialog.close();
-    }
-  } catch {
-    // Ignore dialog state races so the status modal never crashes the app.
-  }
 };
 
 const formatBytes = (bytes: number) => {

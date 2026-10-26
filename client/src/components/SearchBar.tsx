@@ -14,6 +14,7 @@ import { useFilter, type FilterState } from "./filter/FilterContext";
 import { SearchInterpretationChips } from "./SearchInterpretationChips";
 import css from "./SearchBar.module.css";
 import { SearchStatusIcon } from "./SearchStatus";
+import { readStorage, writeStorage } from "../storage";
 
 const SEARCH_EXAMPLES = [
   "sunset on the beach",
@@ -32,21 +33,10 @@ const SEARCH_EXAMPLES = [
 // a persistent opt-out rather than a one-off toggle.
 const AI_SEARCH_STORAGE_KEY = "photrix_ai_search_enabled";
 
-const readAiSearchPreference = (): boolean => {
-  try {
-    return window.localStorage.getItem(AI_SEARCH_STORAGE_KEY) !== "false";
-  } catch {
-    return true;
-  }
-};
+const readAiSearchPreference = (): boolean => readStorage(AI_SEARCH_STORAGE_KEY) !== "false";
 
-const writeAiSearchPreference = (enabled: boolean): void => {
-  try {
-    window.localStorage.setItem(AI_SEARCH_STORAGE_KEY, String(enabled));
-  } catch {
-    // Ignore storage failures — the toggle still works for this session.
-  }
-};
+const writeAiSearchPreference = (enabled: boolean): void =>
+  writeStorage(AI_SEARCH_STORAGE_KEY, String(enabled));
 
 /**
  * Filter fields a query interpretation is allowed to touch. Snapshotting exactly

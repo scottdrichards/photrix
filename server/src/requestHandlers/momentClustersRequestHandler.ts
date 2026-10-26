@@ -1,7 +1,7 @@
 import type * as http from "http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { writeJson } from "../utils.ts";
-import { readJsonBody } from "../common/readBody.ts";
+import { readJsonRequest } from "../common/readBody.ts";
 
 /**
  * Mutating endpoints for moment clusters (burst/near-duplicate stacks) — the
@@ -23,13 +23,8 @@ export const momentClustersRequestHandler = async (
   // representative and pin the choice so background re-scoring never
   // overwrites it.
   if (url.pathname === "/api/moment-clusters/representative" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const b = body as Record<string, unknown>;
     if (typeof b.clusterId !== "string" || typeof b.path !== "string") {
       writeJson(res, 400, { error: "Missing clusterId or path" });
@@ -49,13 +44,8 @@ export const momentClustersRequestHandler = async (
   // (the background task never re-clusters an already-processed file). The
   // client-only "temporary" unstack never calls this.
   if (url.pathname === "/api/moment-clusters/dissolve" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const b = body as Record<string, unknown>;
     if (typeof b.clusterId !== "string") {
       writeJson(res, 400, { error: "Missing clusterId" });

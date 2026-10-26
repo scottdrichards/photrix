@@ -2,6 +2,8 @@ import { readdir, stat, unlink, utimes } from "fs/promises";
 import { basename, join, resolve } from "path";
 import { MEDIA_CACHE_DIR } from "./cacheUtils.ts";
 import { getLogger } from "../observability/logger.ts";
+import { isNotFound } from "./result.ts";
+import { toError } from "./toError.ts";
 
 const log = getLogger("cacheEviction");
 
@@ -185,7 +187,11 @@ export const markCacheAccess = (filePath: string): void => {
   const resolved = resolve(filePath);
   if (!resolved.startsWith(resolve(MEDIA_CACHE_DIR))) return;
   const now = new Date();
-  void utimes(resolved, now, now).catch(() => {});
+  // A file evicted between the serve and this touch is fine; anything else isn't.
+  void utimes(resolved, now, now).catch((error: unknown) => {
+    const err = toError(error);
+    if (!isNotFound(err)) log.warn({ err }, "Could not record cache access");
+  });
 };
 
 /**

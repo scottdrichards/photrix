@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getAuthHeaders } from "../auth";
 import { buildFullShareFilter } from "../api/filters";
 import type { FilterState } from "../components/filter/FilterContext";
+import { logFailure } from "../logFailure";
 
 const DEBOUNCE_MS = 600;
 
@@ -90,9 +91,8 @@ export const usePageTitle = (filter: FilterState): { description: string | null 
             setDescription(data.title);
           }
         })
-        .catch(() => {
-          // Aborted or network error — leave current title/description
-        });
+        // The current title stays.
+        .catch(logFailure("pageTitle.failed", "Could not generate the page title"));
     }, DEBOUNCE_MS);
 
     return () => {

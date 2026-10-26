@@ -8,13 +8,9 @@ import os from "node:os";
  */
 export const getAvailableMemoryMB = (): number => {
   if (process.platform === "linux") {
-    try {
-      const content = readFileSync("/proc/meminfo", "utf8");
-      const match = /^MemAvailable:\s+(\d+)\s+kB/m.exec(content);
-      if (match?.[1]) return Number(match[1]) / 1024;
-    } catch {
-      // fall through
-    }
+    // Always present on Linux; if it can't be read, that's worth failing loudly.
+    const match = /^MemAvailable:\s+(\d+)\s+kB/m.exec(readFileSync("/proc/meminfo", "utf8"));
+    if (match?.[1]) return Number(match[1]) / 1024;
   }
   return os.freemem() / (1024 * 1024);
 };

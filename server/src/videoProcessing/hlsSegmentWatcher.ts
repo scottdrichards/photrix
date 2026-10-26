@@ -20,14 +20,9 @@ type WatchEntry = { emitter: EventEmitter; watcher?: FSWatcher };
 // file in the tree changes.
 const watchers = new Map<string, WatchEntry>();
 
-/** Closes a watcher handle without ever letting close() itself throw. */
+/** FSWatcher.close() is idempotent: closing an already-closed watcher is a no-op. */
 const closeQuietly = (watcher: FSWatcher | undefined): void => {
-  if (!watcher) return;
-  try {
-    watcher.close();
-  } catch {
-    // Already closed / handle gone — nothing to do.
-  }
+  watcher?.close();
 };
 
 const getOrCreateWatcher = (hlsDir: string): EventEmitter => {

@@ -1,7 +1,7 @@
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { writeJson } from "../utils.ts";
-import { readJsonBody } from "../common/readBody.ts";
+import { readJsonRequest } from "../common/readBody.ts";
 
 // Claims expire after 1 hour so a crashed agent doesn't lock a suggestion forever.
 const CLAIM_EXPIRY_MS = 60 * 60 * 1000;
@@ -78,13 +78,8 @@ export const feedbackHandler = async (
   // submission came through one, so triage can be appropriately skeptical of
   // it without having to trust free-text content alone.
   if (req.method === "POST" && !idParam) {
-    let body: { text?: unknown; clientSessionId?: unknown };
-    try {
-      body = await readJsonBody<{ text?: unknown; clientSessionId?: unknown }>(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON" });
-      return;
-    }
+    const body = await readJsonRequest<{ text?: unknown; clientSessionId?: unknown }>(req, res);
+    if (!body) return;
 
     if (typeof body.text !== "string" || body.text.trim().length === 0) {
       writeJson(res, 400, { error: "text is required" });
@@ -114,13 +109,8 @@ export const feedbackHandler = async (
       return;
     }
 
-    let body: { action?: unknown; claimedBy?: unknown };
-    try {
-      body = await readJsonBody<{ action?: unknown; claimedBy?: unknown }>(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON" });
-      return;
-    }
+    const body = await readJsonRequest<{ action?: unknown; claimedBy?: unknown }>(req, res);
+    if (!body) return;
 
     const now = Date.now();
 

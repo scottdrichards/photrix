@@ -74,3 +74,9 @@
     border-radius: var(--radius-md, 8px);
   }
 }
+
+.error {
+  font-size: 0.78rem;
+  color: var(--danger);
+  white-space: nowrap;
+}

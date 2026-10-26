@@ -1,6 +1,6 @@
 import { PassThrough } from "node:stream";
 import type http from "node:http";
-import { BodyTooLargeError, readJsonBody, readTextBody } from "./readBody.ts";
+import { BodyTooLargeError, readJsonBody, readJsonRequest, readTextBody } from "./readBody.ts";
 
 const requestFrom = (chunks: Buffer[]): http.IncomingMessage => {
   const stream = new PassThrough();
@@ -38,5 +38,41 @@ describe("readJsonBody", () => {
 
   it("rejects invalid JSON", async () => {
     await expect(readJsonBody(requestFrom([Buffer.from("{nope")]))).rejects.toThrow("Invalid JSON");
+  });
+});
+
+describe("readJsonRequest", () => {
+  const responseRecorder = () => {
+    const recorded: { status?: number; body?: unknown } = {};
+    const res = {
+      writeHead: (status: number) => {
+        recorded.status = status;
+        return res;
+      },
+      setHeader: () => res,
+      end: (text: string) => {
+        recorded.body = JSON.parse(text);
+      },
+    } as unknown as http.ServerResponse;
+    return { res, recorded };
+  };
+
+  it("returns the parsed body and leaves the response alone", async () => {
+    const { res, recorded } = responseRecorder();
+    await expect(readJsonRequest(requestFrom([Buffer.from('{"a":1}')]), res)).resolves.toEqual({ a: 1 });
+    expect(recorded.status).toBeUndefined();
+  });
+
+  it("answers 400 with the reason for a body that isn't JSON", async () => {
+    const { res, recorded } = responseRecorder();
+    await expect(readJsonRequest(requestFrom([Buffer.from("{nope")]), res)).resolves.toBeNull();
+    expect(recorded).toEqual({ status: 400, body: { error: "Invalid JSON" } });
+  });
+
+  it("answers 413, not 400, for a body over the limit", async () => {
+    const { res, recorded } = responseRecorder();
+    const request = requestFrom([Buffer.alloc(10), Buffer.alloc(10)]);
+    await expect(readJsonRequest(request, res, { maxBytes: 15 })).resolves.toBeNull();
+    expect(recorded.status).toBe(413);
   });
 });

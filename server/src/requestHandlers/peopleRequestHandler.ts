@@ -2,7 +2,7 @@ import type * as http from "http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { writeJson } from "../utils.ts";
 import { invalidateNamedCentroidCache } from "./faceIdentifyRequestHandler.ts";
-import { readJsonBody } from "../common/readBody.ts";
+import { readJsonRequest } from "../common/readBody.ts";
 
 export const peopleRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
@@ -19,13 +19,8 @@ export const peopleRequestHandler = async (
 
   // POST /api/people/rename — rename a cluster
   if (url.pathname === "/api/people/rename" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     if (
       typeof body !== "object" ||
       body === null ||
@@ -46,13 +41,8 @@ export const peopleRequestHandler = async (
 
   // POST /api/people/merge — merge one or more source clusters into a target
   if (url.pathname === "/api/people/merge" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const b = body as Record<string, unknown>;
     if (typeof b.targetClusterId !== "string" || !Array.isArray(b.sourceClusterIds)) {
       writeJson(res, 400, { error: "Missing targetClusterId or sourceClusterIds" });
@@ -107,13 +97,8 @@ export const peopleRequestHandler = async (
 
   // POST /api/people/tags — replace a person's tag list
   if (url.pathname === "/api/people/tags" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const b = body as Record<string, unknown>;
     if (typeof b.clusterId !== "string" || !Array.isArray(b.tags)) {
       writeJson(res, 400, { error: "Missing clusterId or tags" });
@@ -131,13 +116,8 @@ export const peopleRequestHandler = async (
 
   // POST /api/people/exclude-face — remove one outlier detection from its cluster (feedback #90)
   if (url.pathname === "/api/people/exclude-face" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const faceId = (body as Record<string, unknown>).faceId;
     if (typeof faceId !== "number" || !Number.isFinite(faceId)) {
       writeJson(res, 400, { error: "Missing faceId" });
@@ -176,13 +156,8 @@ export const peopleRequestHandler = async (
   // `dryRun: true` reports the count without changing anything, which is what
   // lets the UI label the button with a real number while the line is dragged.
   if (url.pathname === "/api/people/cutoff" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const b = body as Record<string, unknown>;
     if (typeof b.clusterId !== "string") {
       writeJson(res, 400, { error: "Missing clusterId" });
@@ -216,13 +191,8 @@ export const peopleRequestHandler = async (
   // user's judgement on specific faces. Takes a list: the review UI's whole
   // point is acting on many faces at once.
   if (url.pathname === "/api/people/verdict" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const b = body as Record<string, unknown>;
     const faceIds = Array.isArray(b.faceIds)
       ? b.faceIds.filter((id): id is number => typeof id === "number" && Number.isFinite(id))
@@ -257,13 +227,8 @@ export const peopleRequestHandler = async (
   // POST /api/people/refit — re-derive centre and radius from current members,
   // splitting when one cap cannot hold them without a rejected face.
   if (url.pathname === "/api/people/refit" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const b = body as Record<string, unknown>;
     if (typeof b.clusterId !== "string") {
       writeJson(res, 400, { error: "Missing clusterId" });
@@ -286,13 +251,8 @@ export const peopleRequestHandler = async (
   // being kept, so no radius removes it — the caller should fall back to
   // POST /api/people/verdict with "rejected".
   if (url.pathname === "/api/people/shrink-exclude" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const b = body as Record<string, unknown>;
     if (typeof b.clusterId !== "string" || typeof b.faceId !== "number") {
       writeJson(res, 400, { error: "Missing clusterId or faceId" });
@@ -314,13 +274,8 @@ export const peopleRequestHandler = async (
   // the faces that are not this person's which the widened cap would cover;
   // `includeCollateral` takes them in as well.
   if (url.pathname === "/api/people/grow-include" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const b = body as Record<string, unknown>;
     if (typeof b.clusterId !== "string" || typeof b.faceId !== "number") {
       writeJson(res, 400, { error: "Missing clusterId or faceId" });
@@ -341,13 +296,8 @@ export const peopleRequestHandler = async (
   // POST /api/people/new-cluster — give a face its own cluster under the same
   // person. The decline path when growing would have cost too much.
   if (url.pathname === "/api/people/new-cluster" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     const b = body as Record<string, unknown>;
     if (typeof b.clusterId !== "string" || typeof b.faceId !== "number") {
       writeJson(res, 400, { error: "Missing clusterId or faceId" });
@@ -364,13 +314,8 @@ export const peopleRequestHandler = async (
 
   // POST /api/people/separate — detach one centroid from a named person
   if (url.pathname === "/api/people/separate" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
     if (
       typeof body !== "object" ||
       body === null ||

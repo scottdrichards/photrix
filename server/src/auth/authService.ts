@@ -8,6 +8,8 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
+import { logFailure } from "../common/logFailure.ts";
+import { getLogger } from "../observability/logger.ts";
 import type { ShareScope } from "../../../shared/filter-contract/src/index.ts";
 
 type TokenData = {
@@ -24,6 +26,16 @@ type ApiTokenData = {
 };
 
 const API_TOKEN_PREFIX = "photrix-mcp-v1";
+
+const log = getLogger("auth");
+
+// Persistence rules for this module. The in-memory maps answer every request;
+// the database is what they are rebuilt from at startup. So:
+// - a *new* credential is usable at once and persisted in the background; if
+//   that write fails it only ends early (at the next restart), which is logged;
+// - a *revocation* is persisted first and applied in memory only once that
+//   write has succeeded, and a failure propagates to the caller. Otherwise a
+//   revoked credential would come back to life at the next restart, silently.
 
 type AccountConfig = { username: string; password: string };
 
@@ -184,11 +196,10 @@ export const issueToken = (username = "_test_", ip: string | null = null): strin
   const token = randomBytes(32).toString("hex");
   const createdAt = Date.now();
   tokens.set(token, { createdAt, username, ip, lastSeenAt: createdAt });
-  // Persist to DB if available (fire-and-forget; in-memory Map is source of truth).
   db?.run(
     "INSERT INTO auth_sessions (token, username, createdAt, ip, lastSeenAt) VALUES (?, ?, ?, ?, ?)",
     [token, username, createdAt, ip, createdAt],
-  ).catch(() => {});
+  ).catch(logFailure(log, "Could not persist a new session; it will end at the next restart"));
   return token;
 };
 
@@ -233,7 +244,7 @@ const touchApiToken = (token: string): void => {
   if (now - last < API_TOKEN_TOUCH_INTERVAL_MS) return;
   apiTokenLastTouched.set(token, now);
   db?.run("UPDATE api_tokens SET lastUsedAt = ? WHERE token = ?", [now, token]).catch(
-    () => {},
+    logFailure(log, "Could not record API token use"),
   );
 };
 
@@ -252,7 +263,7 @@ const touchSession = (token: string): void => {
   sessionLastTouched.set(token, now);
   data.lastSeenAt = now;
   db?.run("UPDATE auth_sessions SET lastSeenAt = ? WHERE token = ?", [now, token]).catch(
-    () => {},
+    logFailure(log, "Could not record session activity"),
   );
 };
 
@@ -260,10 +271,13 @@ export const validateToken = (token: string): boolean => {
   const session = tokens.get(token);
   if (session) {
     if (Date.now() - session.lastSeenAt > SESSION_EXPIRY_MS) {
-      // Expired — evict eagerly so the Map doesn't grow with dead entries.
+      // Expired — evict eagerly so the Map doesn't grow with dead entries. The
+      // row needs no care: startup deletes expired rows before loading.
       tokens.delete(token);
       sessionLastTouched.delete(token);
-      db?.run("DELETE FROM auth_sessions WHERE token = ?", [token]).catch(() => {});
+      db?.run("DELETE FROM auth_sessions WHERE token = ?", [token]).catch(
+        logFailure(log, "Could not delete an expired session"),
+      );
       return false;
     }
     touchSession(token);
@@ -301,7 +315,7 @@ export const issueApiToken = (
   db?.run(
     "INSERT INTO api_tokens (token, username, name, createdAt, lastUsedAt) VALUES (?, ?, ?, ?, ?)",
     [token, username, name, createdAt, null],
-  ).catch(() => {});
+  ).catch(logFailure(log, "Could not persist a new API token; it will stop working at the next restart"));
   return { token, createdAt };
 };
 
@@ -323,12 +337,12 @@ export const listApiTokens = async (username: string): Promise<ApiTokenInfo[]> =
     .sort((a, b) => b.createdAt - a.createdAt);
 };
 
-export const revokeApiToken = (username: string, token: string): boolean => {
+export const revokeApiToken = async (username: string, token: string): Promise<boolean> => {
   const data = apiTokens.get(token);
   if (!data || data.username !== username) return false;
+  await db?.run("DELETE FROM api_tokens WHERE token = ?", [token]);
   apiTokens.delete(token);
   apiTokenLastTouched.delete(token);
-  db?.run("DELETE FROM api_tokens WHERE token = ?", [token]).catch(() => {});
   return true;
 };
 
@@ -345,7 +359,7 @@ export const recordShareLink = (username: string, token: string, label: string):
   db?.run(
     "INSERT OR REPLACE INTO share_links (token, username, label, createdAt, revokedAt) VALUES (?, ?, ?, ?, NULL)",
     [token, username, label, Date.now()],
-  ).catch(() => {});
+  ).catch(logFailure(log, "Could not record a new share link; it won't appear in the account panel"));
 };
 
 // Revoked links are excluded here (not just hidden client-side): once revoked
@@ -383,12 +397,12 @@ export const revokeShareLink = async (
     [token, username],
   );
   if (!rows[0]) return false;
-  revokedShareTokens.add(tokenDigest(token));
-  db.run("UPDATE share_links SET revokedAt = ? WHERE token = ? AND username = ?", [
+  await db.run("UPDATE share_links SET revokedAt = ? WHERE token = ? AND username = ?", [
     Date.now(),
     token,
     username,
-  ]).catch(() => {});
+  ]);
+  revokedShareTokens.add(tokenDigest(token));
   return true;
 };
 
@@ -399,13 +413,13 @@ export const revokeAllShareLinksForUser = async (username: string): Promise<numb
     "SELECT token FROM share_links WHERE username = ? AND revokedAt IS NULL",
     [username],
   );
-  for (const row of active) {
-    revokedShareTokens.add(tokenDigest(row.token));
-  }
   await db.run(
     "UPDATE share_links SET revokedAt = ? WHERE username = ? AND revokedAt IS NULL",
     [now, username],
   );
+  for (const row of active) {
+    revokedShareTokens.add(tokenDigest(row.token));
+  }
   return active.length;
 };
 
@@ -429,36 +443,38 @@ export const listSessions = (username: string): SessionInfo[] =>
     }))
     .sort((a, b) => b.createdAt - a.createdAt);
 
-export const revokeSessionsForUser = (username: string): void => {
+export const revokeSessionsForUser = async (username: string): Promise<void> => {
+  await db?.run("DELETE FROM auth_sessions WHERE username = ?", [username]);
   for (const [token, data] of tokens) {
     if (data.username === username) {
       tokens.delete(token);
       sessionLastTouched.delete(token);
     }
   }
-  db?.run("DELETE FROM auth_sessions WHERE username = ?", [username]).catch(() => {});
 };
 
 // Revokes every session for a user except the one making the request — lets a
 // user with a pile of old logins (different devices, cleared browser storage,
 // etc.) clean up in one action without also signing themselves out.
-export const revokeOtherSessions = (username: string, keepToken: string): void => {
+export const revokeOtherSessions = async (username: string, keepToken: string): Promise<void> => {
+  await db?.run("DELETE FROM auth_sessions WHERE username = ? AND token != ?", [
+    username,
+    keepToken,
+  ]);
   for (const [token, data] of tokens) {
     if (data.username === username && token !== keepToken) {
       tokens.delete(token);
       sessionLastTouched.delete(token);
     }
   }
-  db?.run("DELETE FROM auth_sessions WHERE username = ? AND token != ?", [
-    username,
-    keepToken,
-  ]).catch(() => {});
 };
 
-export const revokeToken = (token: string): void => {
+export const revokeToken = async (token: string): Promise<void> => {
+  await db?.run("DELETE FROM auth_sessions WHERE token = ?", [token]);
   tokens.delete(token);
   sessionLastTouched.delete(token);
-  db?.run("DELETE FROM auth_sessions WHERE token = ?", [token]).catch(() => {});
+  // Held in memory only: a share token revoked here is live again after a
+  // restart. (Share links are revoked durably through revokeShareLink.)
   if (isStatelessShareToken(token)) {
     revokedShareTokens.add(tokenDigest(token));
   }

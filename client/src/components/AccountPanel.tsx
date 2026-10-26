@@ -22,6 +22,7 @@ import { clearToken, isPasskeyAvailable, registerPasskey } from "../auth";
 import { buildShareUrl } from "../hooks/useShareFilter";
 import css from "./AccountPanel.module.css";
 import { InstallAppSection } from "./InstallAppSection";
+import { syncDialogOpenState } from "./syncDialogOpenState";
 
 type Props = {
   isOpen: boolean;
@@ -41,18 +42,6 @@ const copyToClipboard = async (text: string): Promise<boolean> => {
     return true;
   } catch {
     return false;
-  }
-};
-
-const syncDialogOpenState = (dialog: HTMLDialogElement, isOpen: boolean) => {
-  try {
-    if (isOpen) {
-      if (!dialog.open) dialog.showModal();
-      return;
-    }
-    if (dialog.open) dialog.close();
-  } catch {
-    // Ignore dialog state races so the panel never crashes the app.
   }
 };
 

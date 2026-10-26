@@ -8,6 +8,7 @@ import { type ConversionPriority } from "../common/conversionPriority.ts";
 import { scheduleMediaConversion } from "../common/mediaConversionScheduler.ts";
 import { createAbortError, getRequestAbortSignal } from "../common/requestAbort.ts";
 import { getLogger } from "../observability/logger.ts";
+import { logFailure } from "../common/logFailure.ts";
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 
 const log = getLogger("convertImage");
@@ -323,11 +324,8 @@ const destroyWorker = (worker: PoolWorker, error: Error): void => {
   worker.idleTimer = null;
   const index = pool.indexOf(worker);
   if (index >= 0) pool.splice(index, 1);
-  try {
-    worker.child.kill("SIGKILL");
-  } catch {
-    // Already gone.
-  }
+  // kill() reports an exited child by returning false; it doesn't throw.
+  worker.child.kill("SIGKILL");
   const pending = worker.pending;
   worker.pending = null;
   pending?.reject(error);
@@ -427,8 +425,9 @@ const createWorker = (command: string, baseArgs: string[]): PoolWorker => {
       destroyWorker(worker, new Error(detail));
     });
   });
-  // A worker that dies while idle just leaves the pool; nothing awaits it.
-  worker.ready.catch(() => {});
+  // A request waiting on this worker gets the failure itself; this records a
+  // worker that died with nothing waiting (it then just leaves the pool).
+  worker.ready.catch(logFailure(log, "Image conversion worker failed"));
 
   return worker;
 };

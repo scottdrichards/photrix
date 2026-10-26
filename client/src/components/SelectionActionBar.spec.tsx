@@ -1,6 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
 import type { PhotoItem } from "../api";
+import { updatePhotoMetadata } from "../api";
+
+vi.mock("../api", async () => {
+  const actual = await vi.importActual<typeof import("../api")>("../api");
+  return { ...actual, updatePhotoMetadata: vi.fn(() => Promise.resolve()) };
+});
 import { SelectionActionBar } from "./SelectionActionBar";
 import { SelectionProvider, useSelectionContext } from "./selection/SelectionContext";
 
@@ -87,5 +93,17 @@ describe("SelectionActionBar", () => {
     fireEvent.click(screen.getByRole("button", { name: /download/i }));
 
     expect(screen.getByRole("heading", { name: "Download 1 item" })).toBeInTheDocument();
+  });
+
+  it("puts the rating back and says so when the server rejects it", async () => {
+    vi.mocked(updatePhotoMetadata).mockRejectedValueOnce(new Error("status 500"));
+    renderSelectionModeWithCheckedItem();
+
+    fireEvent.click(screen.getByRole("button", { name: "4 stars" }));
+    // Shown at once, before the server answers.
+    expect(screen.getByRole("button", { name: "4 stars" })).toHaveAttribute("aria-pressed", "true");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save that change");
+    expect(screen.getByRole("button", { name: "4 stars" })).toHaveAttribute("aria-pressed", "false");
   });
 });

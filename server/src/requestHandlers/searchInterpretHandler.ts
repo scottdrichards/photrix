@@ -6,7 +6,7 @@ import { loadSearchVocabulary } from "../naturalLanguageSearch/searchVocabulary.
 import { getOllamaUrl } from "../shareDescription/ollamaGenerate.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../utils.ts";
-import { readJsonBody } from "../common/readBody.ts";
+import { readJsonRequest } from "../common/readBody.ts";
 
 const log = getLogger("searchInterpretHandler");
 
@@ -40,13 +40,8 @@ export const searchInterpretHandler = async (
   res: http.ServerResponse,
   { database }: { database: IndexDatabase },
 ): Promise<void> => {
-  let body: { q?: unknown };
-  try {
-    body = await readJsonBody<{ q?: unknown }>(req, { maxBytes: MAX_BODY_BYTES });
-  } catch {
-    writeJson(res, 400, { error: "Invalid JSON" });
-    return;
-  }
+  const body = await readJsonRequest<{ q?: unknown }>(req, res, { maxBytes: MAX_BODY_BYTES });
+  if (!body) return;
 
   const query = typeof body.q === "string" ? body.q.trim() : "";
   if (!query) {

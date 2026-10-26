@@ -7,6 +7,10 @@ import {
   type ComputeWorkerRole,
 } from "../taskOrchestrator/computeWorkers.ts";
 import { getWhisperRuntimeState, type WhisperRuntimeState } from "../audioProcessing/whisperRuntimeState.ts";
+import { attempt } from "../common/result.ts";
+import { getLogger } from "./logger.ts";
+
+const log = getLogger("systemMetrics");
 
 const execAsync = promisify(exec);
 
@@ -119,20 +123,23 @@ let gpuAvailable = true;
 // Raw per-pid VRAM from nvidia-smi, before role tagging. Keyed by pid.
 async function fetchGpuProcessVram(): Promise<Map<number, number>> {
   const byPid = new Map<number, number>();
-  try {
-    const { stdout } = await execAsync(
-      "nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits",
-      { timeout: 2000 },
-    );
-    for (const line of stdout.trim().split("\n")) {
-      if (!line.trim()) continue;
-      const [pid, usedMemory] = line.split(",").map((s) => parseInt(s.trim(), 10));
-      if (pid !== undefined && !Number.isNaN(pid) && usedMemory !== undefined) {
-        byPid.set(pid, usedMemory);
-      }
+  const query = await attempt(
+    execAsync("nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits", {
+      timeout: 2000,
+    }),
+  );
+  // No NVIDIA GPU, an older nvidia-smi, or a transient failure: the status view
+  // simply shows no per-process breakdown. Polled often, so debug level.
+  if (!query.ok) {
+    log.debug({ err: query.error }, "nvidia-smi per-process query failed");
+    return byPid;
+  }
+  for (const line of query.value.stdout.trim().split("\n")) {
+    if (!line.trim()) continue;
+    const [pid, usedMemory] = line.split(",").map((s) => parseInt(s.trim(), 10));
+    if (pid !== undefined && !Number.isNaN(pid) && usedMemory !== undefined) {
+      byPid.set(pid, usedMemory);
     }
-  } catch {
-    // Older nvidia-smi builds or a transient failure: fall back to no breakdown.
   }
   return byPid;
 }

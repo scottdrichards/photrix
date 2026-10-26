@@ -9,6 +9,7 @@ import type { FaceAttributes } from "../faceDetection/faceDetector.type.ts";
 import type { FaceAttributeRequest } from "./imageAnalysisWorker.ts";
 import { PermanentImageError } from "./imageAnalysisWorker.ts";
 import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
+import { attempt } from "../common/result.ts";
 
 const log = getLogger("processFaceAttributes");
 
@@ -115,13 +116,18 @@ export const processFaceAttributes = (
                 { err: error, path: relativePath },
                 "Face attribute derivation failed; marking faces unknown",
               );
-              const faces = await database
-                .getFaceBoxesForAttributes(relativePath)
-                .catch(() => []);
-              if (faces.length > 0) {
-                await database
-                  .saveFaceAttributes(faces.map(({ id }) => ({ id, attributes: {} })))
-                  .catch(() => undefined);
+              const marked = await attempt(
+                database
+                  .getFaceBoxesForAttributes(relativePath)
+                  .then((faces) =>
+                    database.saveFaceAttributes(faces.map(({ id }) => ({ id, attributes: {} }))),
+                  ),
+              );
+              if (!marked.ok) {
+                log.warn(
+                  { err: marked.error, path: relativePath },
+                  "Could not mark faces unknown; the file stays at the head of the queue",
+                );
               }
             }
           }),

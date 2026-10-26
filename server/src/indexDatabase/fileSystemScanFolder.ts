@@ -6,6 +6,10 @@ import { IndexDatabase } from "./indexDatabase.ts";
 import { canonicalRelativePath } from "./utils/pathUtils.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
+import { attempt, isNotFound } from "../common/result.ts";
+import { getLogger } from "../observability/logger.ts";
+
+const log = getLogger("fileSystemScan");
 
 export const fileSystemScanFolder = (
   database: IndexDatabase,
@@ -26,8 +30,11 @@ export const fileSystemScanFolder = (
 
   const completion: Promise<void> = (async () => {
     if (isRootScan) {
-      const rootStats = await stat(base).catch(() => null);
-      if (!rootStats?.isDirectory()) {
+      const rootStats = await attempt(stat(base));
+      if (!rootStats.ok && !isNotFound(rootStats.error)) {
+        log.warn({ err: rootStats.error }, "Media root is not readable");
+      }
+      if (!rootStats.ok || !rootStats.value.isDirectory()) {
         // The root path itself is missing (e.g. an unmounted network share
         // presenting no directory at all). Treat the index as unloaded
         // rather than walking an absent tree and pruning everything it
@@ -50,8 +57,17 @@ export const fileSystemScanFolder = (
 
       const discoveredPaths = await Promise.all(
         absolutePathsBatch.map(async (absolutePath) => {
-          const stats = await stat(absolutePath).catch(() => null);
-          if (!stats?.isFile() || stats.size === 0) {
+          const stats = await attempt(stat(absolutePath));
+          if (!stats.ok) {
+            // Gone since the directory listing: genuinely missing, let it prune.
+            if (isNotFound(stats.error)) return null;
+            // Listed but unreadable right now (a share hiccup): keep its index
+            // entry rather than prune a file that exists, with its faces and names.
+            log.warn({ err: stats.error }, "Could not stat a listed file; keeping its index entry");
+            seenPaths.add(canonicalRelativePath(path.relative(database.storagePath, absolutePath)));
+            return null;
+          }
+          if (!stats.value.isFile() || stats.value.size === 0) {
             return null;
           }
           return path.relative(database.storagePath, absolutePath);
