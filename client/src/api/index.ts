@@ -121,3 +121,5 @@ export { fetchPhotoCaption, streamPhotoDescription } from "./photoCaption";
 
 export type { DefaultExclusionFilter } from "./settings";
 export { fetchDefaultExclusionFilter, setDefaultExclusionFilter } from "./settings";
+
+export { fetchFeatureFlags, setFeatureFlagOverride } from "./featureFlags";

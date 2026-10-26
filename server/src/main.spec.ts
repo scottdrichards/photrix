@@ -79,9 +79,11 @@ describe("main.ts HTTP Server", () => {
     });
 
     const { createServer } = await import("./createServer.ts");
+    const { FeatureFlagStore } = await import("./featureFlags/featureFlagStore.ts");
     server = createServer(database, storagePath, {
       onRequest: () => {},
       taskOrchestrator: createTaskOrchestrator(database),
+      featureFlags: await FeatureFlagStore.load(database.asyncSqlite, {}),
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));

@@ -12,8 +12,9 @@ import { ProgressItem } from "./ProgressItem";
 import { describeHoldup } from "./taskHoldup";
 import css from "./StatusModal.module.css";
 import { syncDialogOpenState } from "./syncDialogOpenState";
+import { FeatureFlagsPanel } from "./FeatureFlagsPanel";
 
-type ActiveTab = "tasks" | "devtracker";
+type ActiveTab = "tasks" | "devtracker" | "flags";
 
 type StatusModalProps = {
   isOpen: boolean;
@@ -477,10 +478,17 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
             >
               Dev tracker
             </button>
+            <button
+              className={`btn ${activeTab === "flags" ? "btn-primary" : "btn-ghost"} ${css.tabBtn}`}
+              onClick={() => setActiveTab("flags")}
+            >
+              Feature flags
+            </button>
           </div>
         </div>
 
         {activeTab === "devtracker" && <DevTracker />}
+        {activeTab === "flags" && <FeatureFlagsPanel />}
 
         {activeTab === "tasks" && !status && <progress />}
         {activeTab === "tasks" && status && (

@@ -60,6 +60,8 @@ import { photoCaptionRequestHandler } from "./requestHandlers/photoCaptionReques
 import { suggestRotationRequestHandler } from "./requestHandlers/suggestRotationRequestHandler.ts";
 import { analyzeImage } from "./imageAnalysis/imageAnalysisWorker.ts";
 import { killAllSessions } from "./videoProcessing/hlsSession.ts";
+import type { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
+import { featureFlagsRequestHandler } from "./requestHandlers/featureFlagsRequestHandler.ts";
 
 const log = getLogger("httpServer");
 
@@ -74,6 +76,7 @@ const KEEP_ALIVE_TIMEOUT_MS = 65_000;
 
 type ServerOptions = {
   taskOrchestrator: TaskOrchestrator;
+  featureFlags: FeatureFlagStore;
 };
 
 export const createServer = (
@@ -81,7 +84,7 @@ export const createServer = (
   storagePath: string,
   options: ServerOptions,
 ) => {
-  const { taskOrchestrator } = options;
+  const { taskOrchestrator, featureFlags } = options;
 
   const server = http.createServer((req, res) => {
     const requestIdHeader = req.headers["x-request-id"];
@@ -415,6 +418,17 @@ export const createServer = (
               stream: false,
               taskOrchestrator,
             });
+            return;
+          }
+
+          // Any caller may read the flags (the client needs them to render);
+          // only a signed-in session, not a share link, may change one.
+          if (req.url?.startsWith("/api/feature-flags")) {
+            await featureFlagsRequestHandler(
+              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+              res,
+              { store: featureFlags, canChange: !shareScope },
+            );
             return;
           }
 

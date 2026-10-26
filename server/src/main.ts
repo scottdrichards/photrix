@@ -62,8 +62,9 @@ import {
 import { startMcpServer } from "./mcp/mcpServer.ts";
 import {
   processThumbnailBackfill,
-  readThumbnailBackfillConfig,
+  readThumbnailBackfillLimits,
 } from "./imageProcessing/thumbnailBackfill.ts";
+import { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
 
 const startServer = async () => {
   // Kill any ML workers left resident by a prior instance before we spawn our
@@ -92,6 +93,7 @@ const startServer = async () => {
   const mediaRoot = process.env.MEDIA_ROOT || "./exampleFolder";
   const database = new IndexDatabase(mediaRoot);
   await database.init();
+  const featureFlags = await FeatureFlagStore.load(database.asyncSqlite, process.env);
   await initAuthService(database.asyncSqlite);
   initPasskeyService(database.asyncSqlite);
 
@@ -134,6 +136,7 @@ const startServer = async () => {
   // accepting requests, so existing photos load immediately and the rest warms in
   // behind it.
   const server = createServer(database, mediaRoot, {
+    featureFlags,
     taskOrchestrator,
   });
   logger.info({ mediaRoot, port: process.env.PORT ?? 3000 }, "Server started");
@@ -235,7 +238,7 @@ const startServer = async () => {
     void database.checkpointWal();
   });
 
-  const thumbnailBackfillConfig = readThumbnailBackfillConfig();
+  const thumbnailBackfillConfig = readThumbnailBackfillLimits();
   const { notifyFilesChanged } = registerBackgroundTasks(taskOrchestrator, {
     fileSystemScan: {
       name: "File system scan",
@@ -307,7 +310,11 @@ const startServer = async () => {
     },
     thumbnailBackfill: {
       name: "Grid thumbnail backfill",
-      start: () => processThumbnailBackfill(database, thumbnailBackfillConfig),
+      start: () =>
+        processThumbnailBackfill(database, {
+          ...thumbnailBackfillConfig,
+          isEnabled: () => featureFlags.isEnabled("thumbnailBackfill"),
+        }),
       // One file at a time through the shared conversion pool: about one
       // decode's worth of CPU, so it fits beside image analysis. It also
       // stands aside on its own whenever the machine is busy.
