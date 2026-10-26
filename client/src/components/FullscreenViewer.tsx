@@ -2059,10 +2059,10 @@ export function FullscreenViewer() {
                       <dd>{String(meta.mimeType)}</dd>
                     </div>
                   )}
-                  {meta?.duration != null && (
+                  {formatDuration(meta?.duration) && (
                     <div className={css.infoRow}>
                       <dt>Duration</dt>
-                      <dd>{formatDuration(meta.duration)}</dd>
+                      <dd>{formatDuration(meta?.duration)}</dd>
                     </div>
                   )}
                   {meta?.framerate != null && (
