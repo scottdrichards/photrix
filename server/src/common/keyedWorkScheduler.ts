@@ -67,7 +67,7 @@ export const createKeyedWorkScheduler = (maxConcurrent: number) => {
         },
         reject: (error) => {
           waiter.cleanup();
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         },
         cleanup: () => {},
       };

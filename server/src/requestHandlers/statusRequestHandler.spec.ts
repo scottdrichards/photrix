@@ -248,7 +248,7 @@ describe("statusRequestHandler", () => {
     const req = new EventEmitter() as http.IncomingMessage;
     const { res, getWrites } = createMockResponse();
 
-    statusRequestHandler(req, res, {
+    void statusRequestHandler(req, res, {
       stream: true,
       taskOrchestrator: alwaysEnabledOrchestrator,
     });
@@ -285,7 +285,7 @@ describe("statusRequestHandler", () => {
       },
     };
 
-    statusRequestHandler(req, res, {
+    void statusRequestHandler(req, res, {
       stream: true,
       taskOrchestrator,
     });

@@ -56,7 +56,7 @@ const normalizeGPS = (
       return input;
     }
     if (Array.isArray(input) && input.length >= 2) {
-      const [degrees, minutes, seconds = 0] = input;
+      const [degrees, minutes, seconds = 0] = input as unknown[];
       if (
         typeof degrees === "number" &&
         typeof minutes === "number" &&

@@ -5560,7 +5560,7 @@ export class IndexDatabase {
     return rows
       .map((row) => {
         const record = rowToFileRecord(row as Record<string, string | number>);
-        const similarity = scoreTranscriptMatch(query, String(row.audioTranscript ?? ""));
+        const similarity = scoreTranscriptMatch(query, row.audioTranscript as string);
         return similarity > 0 ? { ...record, similarity } : null;
       })
       .filter((row): row is FileRecord & { similarity: number } => row !== null)

@@ -82,7 +82,7 @@ export const pipeChildProcessLogs = (
 ) => {
   child.stdout?.on("data", () => {});
 
-  child.stderr?.on("data", (data) => {
+  child.stderr?.on("data", (data: Buffer) => {
     onCapturedStderr(data.toString());
   });
 };
