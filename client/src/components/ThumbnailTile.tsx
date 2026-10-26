@@ -252,7 +252,9 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   // abstract count badge. Only meaningful (and only sent by the server)
   // alongside stackCount, never restackCount — an unstacked member is just
   // an ordinary photo, not itself a stack.
-  const stackPreviewPaths = isStack ? (photo.metadata?.momentClusterPreviewPaths ?? []) : [];
+  const stackPreviewPaths = isStack
+    ? (photo.metadata?.momentClusterPreviewPaths ?? [])
+    : [];
   const searchSources = photo.searchSources;
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTriggeredRef = useRef(false);
@@ -281,8 +283,18 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     if (isNear) hasBeenNearRef.current = true;
   }, [isNear]);
   const shouldLoad = isNear || hasBeenNearRef.current;
-  const { setSelected, selectionMode, checkedPaths, enterSelectionMode, toggleChecked } =
-    useSelectionContext();
+  const {
+    selected,
+    setSelected,
+    selectionMode,
+    checkedPaths,
+    enterSelectionMode,
+    toggleChecked,
+  } = useSelectionContext();
+  // While this photo is open the viewer carries the name; two elements sharing
+  // one makes the browser abort the transition (no open/close morph at all).
+  const ownViewTransitionName =
+    selected?.path === photo.path ? undefined : viewTransitionName;
   const metadataRatio = getAspectRatio(photo);
   const knowsRatioFromMetadata = hasMetadataDimensions(photo);
   const ratio = loadedRatio ?? metadataRatio;
@@ -294,8 +306,12 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
   const rawEditAdj = photo.metadata?.editAdj;
   const editAdj: EditAdj | null = (() => {
     if (!rawEditAdj || typeof rawEditAdj !== "string") return null;
-    try { const a = JSON.parse(rawEditAdj) as EditAdj; return isDirty(a) ? a : null; }
-    catch { return null; }
+    try {
+      const a = JSON.parse(rawEditAdj) as EditAdj;
+      return isDirty(a) ? a : null;
+    } catch {
+      return null;
+    }
   })();
   const rawTileId = useId();
   const tileFilterId = `pth-${rawTileId.replace(/:/g, "")}`;
@@ -393,7 +409,8 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
     const video = videoRef.current;
     if (!video) return;
     const rect = bar.getBoundingClientRect();
-    const ratio = rect.width > 0 ? Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) : 0;
+    const ratio =
+      rect.width > 0 ? Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) : 0;
     const dur = video.duration || durationSeconds || 0;
     if (dur > 0) video.currentTime = ratio * dur;
     setPreviewProgress(ratio);
@@ -579,7 +596,7 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       style={
         {
           "--ratio": ratio.toString(),
-          ...(viewTransitionName ? { viewTransitionName } : {}),
+          ...(ownViewTransitionName ? { viewTransitionName: ownViewTransitionName } : {}),
         } as React.CSSProperties
       }
       onClick={handleClick}
@@ -788,143 +805,154 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
           explode animation) isn't cut off by this wrapper's overflow:hidden.
           See .tileMedia's comment in the CSS module. */}
       <div className={css.tileMedia}>
-      {isVideo ? (
-        <>
-          <span
-            className={`${css.videoBadge}${isPreviewPlaying || isPreviewLeaving ? ` ${css.videoBadgeDimmed}` : ""}`}
-            aria-hidden="true"
-          >
-            <PlayCircle24Regular fontSize={24} />
-          </span>
-          <img
-            ref={videoFade.ref}
-            src={gatedVideoThumbnail.admittedUrl}
-            alt={photo.name}
-            loading={loading}
-            fetchPriority={fetchPriority}
-            decoding="async"
-            className={css.image}
-            style={videoFade.style}
-            onLoad={videoFade.onLoad}
-            onError={gatedVideoThumbnail.release}
-          />
-          {scrubUrl && (
-            // Feedback #76: swapped in over the poster while the pointer is
-            // over the tile, before the ambient preview (below) takes over.
-            // No fade — scrubbing is meant to feel immediate, matching the
-            // pointer, not animate a beat behind it.
-            <img
-              key={scrubUrl}
-              src={scrubUrl}
-              alt=""
-              aria-hidden="true"
-              decoding="async"
-              className={css.image}
-            />
-          )}
-          {(isDwelt || isPreviewPlaying || isPreviewLeaving) && isNear && (
-            // Mounted for the whole dwell, and for the coast-to-a-stop-then-fade
-            // tail after the hover ends, so the hook always has an element to
-            // attach to and the frozen last frame has something to fade out of.
-            // isPreviewPlaying is what bridges the one render where isDwelt has
-            // already gone false but the hook's cleanup (which flips isLeaving
-            // true) hasn't run yet — without it the element would unmount for a
-            // frame and the coast-down would have nothing left to animate.
-            // It stays transparent until playback actually starts, and the
-            // thumbnail underneath is what shows if it never does.
-            <video
-              ref={videoRef}
-              className={`${css.motionLayer}${isPreviewPlaying || isPreviewLeaving ? ` ${css.motionLayerVisible}` : ""}`}
-              muted
-              loop={false}
-              playsInline
-              preload="none"
-              aria-hidden="true"
-              onTimeUpdate={handlePreviewTimeUpdate}
-            />
-          )}
-          {isPreviewPlaying && (
-            <div
-              className={css.scrubBar}
-              onClick={handleScrubClick}
-              onPointerDown={handleScrubPointerDown}
-              onPointerMove={handleScrubPointerMove}
-              onPointerUp={handleScrubPointerUp}
-              onPointerCancel={handleScrubPointerUp}
+        {isVideo ? (
+          <>
+            <span
+              className={`${css.videoBadge}${isPreviewPlaying || isPreviewLeaving ? ` ${css.videoBadgeDimmed}` : ""}`}
               aria-hidden="true"
             >
-              <div className={css.scrubTrack}>
-                <div className={css.scrubFill} style={{ width: `${previewProgress * 100}%` }} />
-              </div>
-            </div>
-          )}
-        </>
-      ) : isImage ? (
-        <>
-          {hasMicro && (
+              <PlayCircle24Regular fontSize={24} />
+            </span>
             <img
-              ref={microFade.ref}
-              src={microUrl}
+              ref={videoFade.ref}
+              src={gatedVideoThumbnail.admittedUrl}
               alt={photo.name}
               loading={loading}
               fetchPriority={fetchPriority}
               decoding="async"
               className={css.image}
+              style={videoFade.style}
+              onLoad={videoFade.onLoad}
+              onError={gatedVideoThumbnail.release}
+            />
+            {scrubUrl && (
+              // Feedback #76: swapped in over the poster while the pointer is
+              // over the tile, before the ambient preview (below) takes over.
+              // No fade — scrubbing is meant to feel immediate, matching the
+              // pointer, not animate a beat behind it.
+              <img
+                key={scrubUrl}
+                src={scrubUrl}
+                alt=""
+                aria-hidden="true"
+                decoding="async"
+                className={css.image}
+              />
+            )}
+            {(isDwelt || isPreviewPlaying || isPreviewLeaving) && isNear && (
+              // Mounted for the whole dwell, and for the coast-to-a-stop-then-fade
+              // tail after the hover ends, so the hook always has an element to
+              // attach to and the frozen last frame has something to fade out of.
+              // isPreviewPlaying is what bridges the one render where isDwelt has
+              // already gone false but the hook's cleanup (which flips isLeaving
+              // true) hasn't run yet — without it the element would unmount for a
+              // frame and the coast-down would have nothing left to animate.
+              // It stays transparent until playback actually starts, and the
+              // thumbnail underneath is what shows if it never does.
+              <video
+                ref={videoRef}
+                className={`${css.motionLayer}${isPreviewPlaying || isPreviewLeaving ? ` ${css.motionLayerVisible}` : ""}`}
+                muted
+                loop={false}
+                playsInline
+                preload="none"
+                aria-hidden="true"
+                onTimeUpdate={handlePreviewTimeUpdate}
+              />
+            )}
+            {isPreviewPlaying && (
+              <div
+                className={css.scrubBar}
+                onClick={handleScrubClick}
+                onPointerDown={handleScrubPointerDown}
+                onPointerMove={handleScrubPointerMove}
+                onPointerUp={handleScrubPointerUp}
+                onPointerCancel={handleScrubPointerUp}
+                aria-hidden="true"
+              >
+                <div className={css.scrubTrack}>
+                  <div
+                    className={css.scrubFill}
+                    style={{ width: `${previewProgress * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </>
+        ) : isImage ? (
+          <>
+            {hasMicro && (
+              <img
+                ref={microFade.ref}
+                src={microUrl}
+                alt={photo.name}
+                loading={loading}
+                fetchPriority={fetchPriority}
+                decoding="async"
+                className={css.image}
+                style={{
+                  ...microFade.style,
+                  ...(tileEditStyle?.filter ? { filter: tileEditStyle.filter } : {}),
+                  ...(tileEditStyle?.transform
+                    ? { transform: tileEditStyle.transform }
+                    : {}),
+                  ...(tileEditStyle?.clipPath
+                    ? { clipPath: tileEditStyle.clipPath }
+                    : {}),
+                }}
+                onLoad={microFade.onLoad}
+              />
+            )}
+            <img
+              ref={sharpFade.ref}
+              src={gatedSharpUrl.admittedUrl}
+              alt={photo.name}
+              loading={loading}
+              fetchPriority={hasMicro ? "low" : fetchPriority}
+              decoding="async"
+              className={css.image}
               style={{
-                ...microFade.style,
+                ...sharpFade.style,
+                // When layered over the micro base, cover it; otherwise flow normally.
+                ...(hasMicro ? { position: "absolute", inset: 0 } : {}),
                 ...(tileEditStyle?.filter ? { filter: tileEditStyle.filter } : {}),
-                ...(tileEditStyle?.transform ? { transform: tileEditStyle.transform } : {}),
+                ...(tileEditStyle?.transform
+                  ? { transform: tileEditStyle.transform }
+                  : {}),
                 ...(tileEditStyle?.clipPath ? { clipPath: tileEditStyle.clipPath } : {}),
               }}
-              onLoad={microFade.onLoad}
+              onLoad={sharpFade.onLoad}
+              onError={gatedSharpUrl.release}
             />
-          )}
-          <img
-            ref={sharpFade.ref}
-            src={gatedSharpUrl.admittedUrl}
-            alt={photo.name}
-            loading={loading}
-            fetchPriority={hasMicro ? "low" : fetchPriority}
-            decoding="async"
-            className={css.image}
-            style={{
-              ...sharpFade.style,
-              // When layered over the micro base, cover it; otherwise flow normally.
-              ...(hasMicro ? { position: "absolute", inset: 0 } : {}),
-              ...(tileEditStyle?.filter ? { filter: tileEditStyle.filter } : {}),
-              ...(tileEditStyle?.transform ? { transform: tileEditStyle.transform } : {}),
-              ...(tileEditStyle?.clipPath ? { clipPath: tileEditStyle.clipPath } : {}),
-            }}
-            onLoad={sharpFade.onLoad}
-            onError={gatedSharpUrl.release}
-          />
-          {tileEditStyle?.vignetteBackground && (
-            <div
-              className={css.vignetteOverlay}
+            {tileEditStyle?.vignetteBackground && (
+              <div
+                className={css.vignetteOverlay}
+                aria-hidden="true"
+                style={{
+                  background: tileEditStyle.vignetteBackground,
+                  ...(tileEditStyle.transform
+                    ? { transform: tileEditStyle.transform }
+                    : {}),
+                  ...(tileEditStyle.clipPath ? { clipPath: tileEditStyle.clipPath } : {}),
+                }}
+              />
+            )}
+          </>
+        ) : (
+          // Feedback #129: a file the browser can't render at all (an
+          // embedded .DS_Store, a sidecar, anything the indexer picked up but
+          // isn't image/video) used to fall back to just the bare filename,
+          // with nothing to distinguish it from a broken thumbnail. A generic
+          // document glyph makes it read as "this is a real file, just not a
+          // previewable one" rather than looking like something failed to load.
+          <div className={css.unknownFile}>
+            <DocumentQuestionMark24Regular
+              className={css.unknownFileIcon}
               aria-hidden="true"
-              style={{
-                background: tileEditStyle.vignetteBackground,
-                ...(tileEditStyle.transform ? { transform: tileEditStyle.transform } : {}),
-                ...(tileEditStyle.clipPath ? { clipPath: tileEditStyle.clipPath } : {}),
-              }}
             />
-          )}
-        </>
-      ) : (
-        // Feedback #129: a file the browser can't render at all (an
-        // embedded .DS_Store, a sidecar, anything the indexer picked up but
-        // isn't image/video) used to fall back to just the bare filename,
-        // with nothing to distinguish it from a broken thumbnail. A generic
-        // document glyph makes it read as "this is a real file, just not a
-        // previewable one" rather than looking like something failed to load.
-        <div className={css.unknownFile}>
-          <DocumentQuestionMark24Regular
-            className={css.unknownFileIcon}
-            aria-hidden="true"
-          />
-          <span className={css.unknownFileName}>{photo.name}</span>
-        </div>
-      )}
+            <span className={css.unknownFileName}>{photo.name}</span>
+          </div>
+        )}
       </div>
     </button>
   );

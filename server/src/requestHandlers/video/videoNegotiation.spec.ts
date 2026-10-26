@@ -6,6 +6,7 @@ import {
   REASON_CACHED_HLS,
   REASON_GPU_HLS,
   REASON_NO_PATH,
+  REASON_UNPLAYABLE_NO_GPU,
   REASON_PREVIEW_CACHED,
   REASON_PREVIEW_DIRECT,
   REASON_PREVIEW_TRANSCODE,
@@ -182,6 +183,21 @@ describe("negotiateVideoPlayback", () => {
     expect(result).toEqual({ mode: "error", reason: REASON_NO_PATH });
   });
 
+  it("blames the format, not the connection, when the browser can't decode the original", async () => {
+    const result = await negotiateVideoPlayback(
+      { path: "video.mp4", bandwidthMbps: 500, hevcSupported: false },
+      baseDeps({
+        getFileMetadata: async () => ({
+          sizeInBytes: 1_000_000,
+          duration: 60,
+          videoCodec: "hevc",
+        }),
+      }),
+    );
+
+    expect(result).toEqual({ mode: "error", reason: REASON_UNPLAYABLE_NO_GPU });
+  });
+
   it("errors when bandwidth is unknown and there is no cache or GPU", async () => {
     const result = await negotiateVideoPlayback(
       { path: "video.mp4", bandwidthMbps: null, hevcSupported: false },
@@ -344,7 +360,11 @@ describe("negotiateVideoPlayback", () => {
 
 describe("shouldReclaimGpuForPlayback", () => {
   const liveEncode = { mode: "hls" as const, url: "/x", reason: REASON_GPU_HLS };
-  const livePreview = { mode: "hls" as const, url: "/x", reason: REASON_PREVIEW_TRANSCODE };
+  const livePreview = {
+    mode: "hls" as const,
+    url: "/x",
+    reason: REASON_PREVIEW_TRANSCODE,
+  };
   const cached = { mode: "hls" as const, url: "/x", reason: REASON_CACHED_HLS };
   const direct = { mode: "direct" as const, url: "/x", reason: REASON_DIRECT };
 

@@ -12,7 +12,10 @@ class FakePerformanceObserver {
   observe({ type }: { type: string }) {
     observers.set(type, this.callback);
   }
-  disconnect() {}
+  disconnect() {
+    for (const [type, callback] of observers)
+      if (callback === this.callback) observers.delete(type);
+  }
 }
 const emit = (type: string, entries: unknown[]) =>
   observers.get(type)?.({ getEntries: () => entries });
@@ -69,14 +72,16 @@ describe("client perf monitor", () => {
     const { startClientPerfMonitor } = await import("./clientPerf");
     startClientPerfMonitor();
 
-    emit("navigation", [
-      {
-        responseStart: 120,
-        domContentLoadedEventEnd: 800,
-        loadEventEnd: 1_500,
-        transferSize: 4_000,
-      },
-    ]);
+    const loaded = {
+      responseStart: 120,
+      domContentLoadedEventEnd: 800,
+      loadEventEnd: 1_500,
+      transferSize: 4_000,
+    };
+    emit("navigation", [loaded]);
+    emit("navigation", [loaded]);
+
+    expect(logClientEvent).toHaveBeenCalledTimes(1);
 
     expect(logClientEvent.mock.calls[0][0]).toMatchObject({
       event: "client.page.loaded",

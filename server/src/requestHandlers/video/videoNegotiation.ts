@@ -49,6 +49,8 @@ export const REASON_CACHED_HLS = "Cached HLS available";
 export const REASON_GPU_HLS = "Hardware-accelerated HLS encoding available";
 export const REASON_NO_PATH =
   "Connection too slow for the original and no GPU to transcode";
+export const REASON_UNPLAYABLE_NO_GPU =
+  "This browser can't decode the original's format and there's no GPU to convert it";
 export const REASON_PREVIEW_CACHED = "Preview from cached low rendition";
 export const REASON_PREVIEW_DIRECT = "Preview from the original — cheap enough to read";
 export const REASON_PREVIEW_TRANSCODE = "Preview via live 360p transcode";
@@ -244,9 +246,15 @@ export const negotiateVideoPlayback = async (
     return { mode: "hls", url: hlsUrl, reason: REASON_GPU_HLS };
   }
 
-  // 4. Link too slow for the raw file and no GPU to transcode — fail. There is
-  //    deliberately no raw fallback here: the original would only buffer endlessly.
-  return { mode: "error", reason: REASON_NO_PATH };
+  // 4. Neither the raw file nor a transcode can work — fail, saying which wall
+  //    was hit. There is deliberately no raw fallback: the original would only
+  //    buffer endlessly (or not decode at all).
+  return {
+    mode: "error",
+    reason: canClientPlayCodec(metadata?.videoCodec, hevcSupported)
+      ? REASON_NO_PATH
+      : REASON_UNPLAYABLE_NO_GPU,
+  };
 };
 
 const buildDeps = (database: IndexDatabase, storageRoot: string): NegotiationDeps => ({

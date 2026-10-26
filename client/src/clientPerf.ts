@@ -67,9 +67,11 @@ export const startClientPerfMonitor = () => {
   }
 
   if (supported.includes("navigation")) {
-    new PerformanceObserver((list) => {
+    const navigationObserver = new PerformanceObserver((list) => {
       for (const entry of list.getEntries() as PerformanceNavigationTiming[]) {
         if (!entry.loadEventEnd) continue;
+        // The completed entry can be delivered more than once.
+        navigationObserver.disconnect();
         logClientEvent({
           level: "info",
           event: "client.page.loaded",
@@ -81,7 +83,9 @@ export const startClientPerfMonitor = () => {
             transferBytes: entry.transferSize,
           },
         });
+        return;
       }
-    }).observe({ type: "navigation", buffered: true });
+    });
+    navigationObserver.observe({ type: "navigation", buffered: true });
   }
 };

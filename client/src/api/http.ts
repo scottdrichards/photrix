@@ -38,12 +38,12 @@ export const fetchWithDiagnostics = async (
       },
     });
   } catch (error) {
+    // `controller.abort(reason)` rejects with the reason itself, not an AbortError.
+    const aborted =
+      (error as Error)?.name === "AbortError" || Boolean(init?.signal?.aborted);
     logClientEvent({
-      level: (error as Error).name === "AbortError" ? "warn" : "error",
-      event:
-        (error as Error).name === "AbortError"
-          ? "client.request.aborted"
-          : "client.request.failed",
+      level: aborted ? "warn" : "error",
+      event: aborted ? "client.request.aborted" : "client.request.failed",
       message: `Failed to ${errorLabel}`,
       clientOperationId,
       clientRequestId,
