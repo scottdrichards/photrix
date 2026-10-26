@@ -174,6 +174,8 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
     });
 
   return (
+    // Backdrop click-to-close; Escape already closes the native dialog via onClose.
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
     <dialog
       ref={dialogRef}
       onClose={onDismiss}
