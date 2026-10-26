@@ -8,6 +8,7 @@ import { getLogger } from "../observability/logger.ts";
 import { buildPythonProcessEnv, resolvePythonCommand } from "../python/pythonRuntime.ts";
 import {
   COMPUTE_WORKER_IDS,
+  computeWorkerSpawned,
   registerComputeWorker,
   withForegroundWorker,
   awaitForegroundIdle,
@@ -233,6 +234,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
         env: { ...pythonEnv, HF_HOME: path.join(CACHE_DIR, "huggingface") },
       });
       proc = child;
+      computeWorkerSpawned(COMPUTE_WORKER_IDS.image);
 
       // The child's stdin can emit an async 'error' (e.g. EPIPE) if the Python
       // process dies between requests. Without a listener Node escalates it to an

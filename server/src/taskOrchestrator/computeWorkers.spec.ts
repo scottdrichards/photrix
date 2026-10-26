@@ -14,6 +14,7 @@ jest.unstable_mockModule("../observability/logger.ts", () => ({
 const {
   registerComputeWorker,
   unregisterComputeWorker,
+  computeWorkerSpawned,
   withForegroundWorker,
   awaitForegroundIdle,
   suspendComputeWorkers,
@@ -280,5 +281,53 @@ describe("killAndAwaitExit", () => {
     jest.advanceTimersByTime(1);
     await done;
     expect(resolved).toBe(true);
+  });
+});
+
+describe("computeWorkers respawned children", () => {
+  const signalsTo = (killSpy: jest.SpiedFunction<typeof process.kill>, pids: number[]) =>
+    killSpy.mock.calls
+      .filter(([pid]) => pids.includes(pid))
+      .map(([pid, sig]) => `${pid}:${String(sig)}`);
+
+  it("freezes a child that spawns while suspension is already in effect", () => {
+    const killSpy = jest.spyOn(process, "kill").mockImplementation(() => true);
+    let pid = 515151;
+    registerComputeWorker("respawning", () => pid);
+
+    suspendComputeWorkers();
+    pid = 525252; // the first child exited and a new one started mid-window
+    computeWorkerSpawned("respawning");
+    resumeComputeWorkers();
+
+    expect(signalsTo(killSpy, [515151, 525252])).toEqual([
+      "515151:SIGSTOP",
+      "525252:SIGSTOP",
+      "525252:SIGCONT",
+    ]);
+    unregisterComputeWorker("respawning");
+    killSpy.mockRestore();
+  });
+
+  it("leaves a child running when a foreground call is what spawned it", async () => {
+    const killSpy = jest.spyOn(process, "kill").mockImplementation(() => true);
+    let pid = 535353;
+    registerComputeWorker("foreground-spawn", () => pid);
+    suspendComputeWorkers();
+
+    await withForegroundWorker("foreground-spawn", async () => {
+      pid = 545454;
+      computeWorkerSpawned("foreground-spawn");
+      expect(signalsTo(killSpy, [545454]).filter((s) => s.endsWith("SIGSTOP"))).toEqual([]);
+    });
+
+    // Once the lease ends the background suspension applies to the new child.
+    expect(signalsTo(killSpy, [545454]).at(-1)).toBe("545454:SIGSTOP");
+    unregisterComputeWorker("foreground-spawn");
+    killSpy.mockRestore();
+  });
+
+  it("refuses a spawn notice for a worker that was never registered", () => {
+    expect(() => computeWorkerSpawned("unknown-worker")).toThrow("never registered");
   });
 });

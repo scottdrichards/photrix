@@ -74,6 +74,10 @@ type Entry = {
   idleGate: Promise<void> | null;
   resolveIdle: (() => void) | null;
   suspended: boolean;
+  // The pid the current `suspended` state was last signalled to. The entry
+  // outlives its child process, so when this differs from getPid() a new child
+  // has spawned that has not been told the current state yet.
+  signalledPid: number | null;
   suspensionListeners: Set<(suspended: boolean) => void>;
 };
 
@@ -94,14 +98,18 @@ const signal = (
   }
 };
 
+// Level-triggered: signals whenever the state changes *or* the process behind
+// the entry has changed, so a child that respawns inside a suspension window is
+// frozen too. Listeners still hear only real state transitions.
 const setWorkerSuspended = (id: string, entry: Entry, nextSuspended: boolean): void => {
-  if (entry.suspended === nextSuspended) return;
+  const pid = entry.getPid() ?? null;
+  const transition = entry.suspended !== nextSuspended;
+  if (!transition && entry.signalledPid === pid) return;
   entry.suspended = nextSuspended;
-  log.debug(
-    { id, pid: entry.getPid() },
-    nextSuspended ? "suspending compute worker" : "resuming compute worker",
-  );
-  signal(entry.getPid(), nextSuspended ? "SIGSTOP" : "SIGCONT", id);
+  entry.signalledPid = pid;
+  log.debug({ id, pid }, nextSuspended ? "suspending compute worker" : "resuming compute worker");
+  signal(pid, nextSuspended ? "SIGSTOP" : "SIGCONT", id);
+  if (!transition) return;
   for (const listener of entry.suspensionListeners) {
     listener(nextSuspended);
   }
@@ -117,6 +125,7 @@ export const registerComputeWorker = (
     idleGate: null,
     resolveIdle: null,
     suspended: false,
+    signalledPid: null,
     suspensionListeners: new Set(),
   };
   workers.set(id, entry);
@@ -124,6 +133,17 @@ export const registerComputeWorker = (
   // a model mid-request). Freeze it on arrival so it doesn't burn CPU loading a
   // model while we're trying to keep the request fast.
   if (suspended) setWorkerSuspended(id, entry, true);
+};
+
+/**
+ * Tell the registry a worker's child process was (re)started. Call it right
+ * after spawn: a child born inside a suspension window is frozen at once,
+ * unless a foreground call is what spawned it (it holds a lease).
+ */
+export const computeWorkerSpawned = (id: string): void => {
+  const entry = workers.get(id);
+  if (!entry) throw new Error(`Compute worker "${id}" was never registered`);
+  setWorkerSuspended(id, entry, suspended && entry.leases === 0);
 };
 
 export const unregisterComputeWorker = (id: string): void => {
@@ -152,7 +172,8 @@ export const onComputeWorkerSuspensionChange = (
  * Needed because `onComputeWorkerSuspensionChange` only fires on *transitions*,
  * while a worker's child process spawns and exits independently of them. A
  * child that starts while suspension is already in effect produces no
- * transition, so an edge-triggered listener never learns about it.
+ * transition, so an edge-triggered listener never learns about it. (The SIGSTOP
+ * itself does reach such a child, via `computeWorkerSpawned`.)
  */
 export const isComputeWorkerSuspended = (id: string): boolean =>
   workers.get(id)?.suspended ?? false;
