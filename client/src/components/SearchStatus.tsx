@@ -195,17 +195,25 @@ export const SearchStatusIcon = () => {
   const nowReady =
     awaitingModel.length > 0 && awaitingModel.every((source) => states?.[source] === "ready");
 
-  // A tap outside closes a pinned popover.
+  // A tap outside closes a pinned popover; Escape pressed inside it closes it.
   useEffect(() => {
     if (!open) return;
+    const dismiss = () => {
+      setOpen(false);
+      setPinned(false);
+    };
     const onPointerDown = (event: PointerEvent) => {
-      if (!wrapperRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-        setPinned(false);
-      }
+      if (!wrapperRef.current?.contains(event.target as Node)) dismiss();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && wrapperRef.current?.contains(event.target as Node)) dismiss();
     };
     document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [open]);
 
   if (!active || visibleSources.length === 0) return null;
@@ -242,9 +250,6 @@ export const SearchStatusIcon = () => {
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => {
         if (!pinned) setOpen(false);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") close();
       }}
     >
       <button

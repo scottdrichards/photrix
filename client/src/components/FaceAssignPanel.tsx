@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Dismiss24Regular } from "@fluentui/react-icons";
 import {
   buildFaceCropUrl,
@@ -73,8 +73,12 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
       });
 
     return () => abortController.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [face.personId, face.faceId]);
+
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   const suggestions = useMemo(() => {
     const trimmed = draft.trim().toLowerCase();
@@ -145,7 +149,7 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
               key={index}
               className={css.previewThumb}
               src={buildFaceCropUrl(previewFace, 96)}
-              alt="Related photo of this face"
+              alt="Other sighting of this face"
               loading="lazy"
             />
           ))}
@@ -161,7 +165,7 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Type a name…"
-          autoFocus
+          ref={inputRef}
           disabled={saving}
           aria-label="Person's name"
         />
