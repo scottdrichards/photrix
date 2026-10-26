@@ -10,7 +10,10 @@ import { createTaskController } from "../taskOrchestrator/taskController.ts";
 import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
 import type { AnalyzeImage } from "../imageAnalysis/processImageAnalysis.ts";
 import { PermanentImageError } from "../imageAnalysis/imageAnalysisWorker.ts";
-import type { AnalysisFrame } from "../videoProcessing/extractAnalysisFrames.ts";
+import {
+  VideoUnreadableError,
+  type AnalysisFrame,
+} from "../videoProcessing/extractAnalysisFrames.ts";
 import { collapseFaceTracks, type FrameFaces } from "./collapseFaceTracks.ts";
 import {
   createVideoFaceEta,
@@ -58,7 +61,13 @@ type VideoFaceDatabase = Pick<
 
 type QueuedVideo = QueuedVideoFaces;
 
-type VideoOutcome = "done" | "failed";
+/**
+ * `unreadable` is the file's own fault (truncated, nothing decodable). It is
+ * dropped for good and never counts toward the failure breaker: cheapest-first
+ * sorts tiny broken clips together, and five of them in a row once stopped the
+ * whole run on its first day.
+ */
+type VideoOutcome = "done" | "failed" | "unreadable";
 
 class WorkerEvicted extends Error {}
 
@@ -89,7 +98,13 @@ export const processVideoFaceAnalysis = (
     value: Awaited<ReturnType<VideoFaceDatabase["getVideoFaceAnalysisProgress"]>>;
   } | null = null;
   let queueCostCache: { at: number; value: VideoFaceCostInputs[] } | null = null;
-  const run = { done: 0, failed: 0, faces: 0, lastSummaryAt: now() };
+  const run: Record<VideoOutcome, number> & { faces: number; lastSummaryAt: number } = {
+    done: 0,
+    failed: 0,
+    unreadable: 0,
+    faces: 0,
+    lastSummaryAt: now(),
+  };
 
   const readProgress = async () => {
     if (!progressCache || now() - progressCache.at > PROGRESS_CACHE_MS) {
@@ -114,6 +129,7 @@ export const processVideoFaceAnalysis = (
         {
           videosDone: run.done,
           videosFailed: run.failed,
+          videosUnreadable: run.unreadable,
           facesStored: run.faces,
           remaining: progress.remaining,
           coolingDown: progress.coolingDown,
@@ -173,6 +189,11 @@ export const processVideoFaceAnalysis = (
       try {
         frames = await extractFrames(videoPath, durationSeconds, workDir);
       } catch (error) {
+        if (error instanceof VideoUnreadableError) {
+          log.warn({ err: error, path: relativePath }, "Video unreadable; dropped");
+          await database.saveImageAnalysisDecodeError(relativePath);
+          return "unreadable";
+        }
         log.warn({ err: error, path: relativePath }, "Video frame extraction failed");
         await database.saveVideoFaceAnalysisError(relativePath);
         return "failed";
@@ -262,9 +283,10 @@ export const processVideoFaceAnalysis = (
         ctrl.checkCancelled();
         try {
           const outcome = await analyzeVideo(video);
-          if (outcome === "done") run.done += 1;
-          else run.failed += 1;
-          consecutiveFailures = outcome === "done" ? 0 : consecutiveFailures + 1;
+          run[outcome] += 1;
+          // A broken file says nothing about the pipeline either way.
+          if (outcome === "done") consecutiveFailures = 0;
+          if (outcome === "failed") consecutiveFailures += 1;
         } catch (error) {
           if (!(error instanceof WorkerEvicted)) throw error;
           // The worker was killed for a user's sake, not because of this video,

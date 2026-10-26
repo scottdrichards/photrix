@@ -5,7 +5,10 @@ import type { DetectedFace } from "../faceDetection/faceDetector.type.ts";
 import { PermanentImageError } from "../imageAnalysis/imageAnalysisWorker.ts";
 import type { ImageAnalysisResult } from "../imageAnalysis/imageAnalysisWorker.ts";
 import { markWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
-import type { AnalysisFrame } from "../videoProcessing/extractAnalysisFrames.ts";
+import {
+  VideoUnreadableError,
+  type AnalysisFrame,
+} from "../videoProcessing/extractAnalysisFrames.ts";
 import {
   MAX_CONSECUTIVE_FAILURES,
   processVideoFaceAnalysis,
@@ -212,6 +215,30 @@ describe("processVideoFaceAnalysis", () => {
     expect(extractions).toBe(MAX_CONSECUTIVE_FAILURES);
     expect(errors).toHaveLength(MAX_CONSECUTIVE_FAILURES);
     expect((await runner.getStatus!()).state).toBe("complete");
+  });
+
+  it("drops unreadable videos for good without tripping the breaker", async () => {
+    // Cheapest first puts tiny broken clips side by side; a run of them is
+    // the files' fault, not the pipeline's, so the good video after them runs.
+    const videos = [
+      ...Array.from({ length: MAX_CONSECUTIVE_FAILURES + 2 }, (_, i) => ({
+        relativePath: `v/broken${i}.mov`,
+        sizeBytes: 1e5,
+      })),
+      { relativePath: "v/good.mp4", durationSeconds: 60, sizeBytes: 50e6 },
+    ];
+    const { decodeErrors, errors, saved } = await run(
+      videos,
+      async (video, duration, outDir) => {
+        if (video.includes("broken"))
+          throw new VideoUnreadableError("moov atom not found");
+        return framesAt(0)(video, duration, outDir);
+      },
+      async () => ({ faces: [] }),
+    );
+    expect(decodeErrors).toHaveLength(MAX_CONSECUTIVE_FAILURES + 2);
+    expect(errors).toEqual([]);
+    expect(saved.has("v/good.mp4")).toBe(true);
   });
 
   it("leaves a video queued, unstamped, when the worker is evicted mid-video", async () => {
