@@ -68,6 +68,17 @@ const DEFAULT_MBIT_PER_SECOND = 50;
 
 export type VideoFaceCost = { extractMs: number; frames: number };
 
+/** A video waiting for the face pass, with what ordering it needs. */
+export type QueuedVideoFaces = { relativePath: string } & VideoFaceCostInputs & {
+    /** ms since epoch: date taken, else file creation. */
+    takenAt?: number;
+    /** It failed once and came back after the retry cooldown. */
+    failedBefore: boolean;
+  };
+
+/** Videos taken this recently go first, so new footage gets faces soon. */
+export const RECENT_VIDEO_MS = 30 * 24 * 60 * 60 * 1_000;
+
 const megapixels = ({ width, height }: VideoFaceCostInputs): number =>
   width && height ? (width * height) / 1e6 : DEFAULT_MEGAPIXELS;
 
@@ -186,4 +197,28 @@ export const createVideoFaceEta = (
       workShare: Number(workShare().toFixed(2)),
     }),
   };
+};
+
+/**
+ * The order the face pass takes videos in: recent ones (last
+ * {@link RECENT_VIDEO_MS}) first, then the rest, and cheapest first inside
+ * each group, so the most videos get faces soonest and a few huge long
+ * recordings don't hold up thousands of short clips. Videos that failed
+ * before go last of all: they are the likeliest to fail again.
+ */
+export const orderVideoFaceQueue = <T extends QueuedVideoFaces>(
+  videos: readonly T[],
+  now: number = Date.now(),
+  priors = VIDEO_FACE_COST_PRIORS,
+): T[] => {
+  const group = (video: T) =>
+    video.failedBefore ? 2 : (video.takenAt ?? 0) >= now - RECENT_VIDEO_MS ? 0 : 1;
+  const cost = (video: T) => {
+    const { extractMs, frames } = predictVideoFaceCost(video, priors);
+    return extractMs + frames * priors.detectMsPerFrame;
+  };
+  return videos
+    .map((video) => ({ video, group: group(video), cost: cost(video) }))
+    .sort((a, b) => a.group - b.group || a.cost - b.cost)
+    .map(({ video }) => video);
 };

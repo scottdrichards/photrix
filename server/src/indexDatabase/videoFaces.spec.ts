@@ -1,4 +1,4 @@
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect, jest } from "@jest/globals";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -56,10 +56,18 @@ describe("video face queue", () => {
       });
       await addVideo(db, "v/no-exif.mp4", { exif: false });
 
-      expect(await db.getVideosNeedingFaceAnalysis()).toEqual([
-        { relativePath: "/v/new.mp4", durationSeconds: 30 },
-        { relativePath: "/v/old.mp4", durationSeconds: 12 },
-      ]);
+      const queued = await db.getVideosNeedingFaceAnalysis();
+      expect(queued).toHaveLength(2);
+      expect(queued[0]).toMatchObject({
+        relativePath: "/v/new.mp4",
+        durationSeconds: 30,
+        takenAt: new Date("2024-01-01").getTime(),
+        failedBefore: false,
+      });
+      expect(queued[1]).toMatchObject({
+        relativePath: "/v/old.mp4",
+        durationSeconds: 12,
+      });
     });
   });
 
@@ -89,6 +97,14 @@ describe("video face queue", () => {
       await db.saveVideoFaceAnalysisError("v/bad.mp4");
 
       expect(await db.getVideosNeedingFaceAnalysis()).toEqual([]);
+      // Back after the cooldown, and marked so it goes behind fresh work.
+      const later = jest
+        .spyOn(Date, "now")
+        .mockReturnValue(Date.now() + IndexDatabase.VIDEO_FACE_RETRY_COOLDOWN_MS + 1);
+      expect(await db.getVideosNeedingFaceAnalysis()).toMatchObject([
+        { relativePath: "/v/bad.mp4", failedBefore: true },
+      ]);
+      later.mockRestore();
       // Still owed, so progress doesn't claim it is done, and says why.
       expect(await db.getVideoFaceAnalysisProgress()).toMatchObject({
         remaining: 1,

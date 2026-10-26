@@ -12,10 +12,19 @@ import type { AnalyzeImage } from "../imageAnalysis/processImageAnalysis.ts";
 import { PermanentImageError } from "../imageAnalysis/imageAnalysisWorker.ts";
 import type { AnalysisFrame } from "../videoProcessing/extractAnalysisFrames.ts";
 import { collapseFaceTracks, type FrameFaces } from "./collapseFaceTracks.ts";
-import { createVideoFaceEta, type VideoFaceCostInputs } from "./videoFaceCost.ts";
+import {
+  createVideoFaceEta,
+  orderVideoFaceQueue,
+  type QueuedVideoFaces,
+  type VideoFaceCostInputs,
+} from "./videoFaceCost.ts";
 
 const log = getLogger("processVideoFaceAnalysis");
 
+/**
+ * Videos taken per read of the queue. The queue is re-read and re-ordered
+ * after each batch, so a video added meanwhile still lands in its place.
+ */
 const DB_BATCH_SIZE = 20;
 /**
  * This many failures in a row stop the run. One bad file is the file; five in
@@ -47,7 +56,7 @@ type VideoFaceDatabase = Pick<
   | "getVideoFaceQueueCostInputs"
 >;
 
-type QueuedVideo = { relativePath: string } & VideoFaceCostInputs;
+type QueuedVideo = QueuedVideoFaces;
 
 type VideoOutcome = "done" | "failed";
 
@@ -237,7 +246,10 @@ export const processVideoFaceAnalysis = (
     let consecutiveFailures = 0;
     while (true) {
       ctrl.checkCancelled();
-      const videos = await database.getVideosNeedingFaceAnalysis(DB_BATCH_SIZE);
+      const videos = orderVideoFaceQueue(
+        await database.getVideosNeedingFaceAnalysis(),
+        now(),
+      ).slice(0, DB_BATCH_SIZE);
       if (!videos.length) {
         await logSummary(true);
         ctrl.markComplete();

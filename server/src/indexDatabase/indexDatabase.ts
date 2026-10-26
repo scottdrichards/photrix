@@ -68,7 +68,10 @@ import { computePCA3D } from "./pca.ts";
 import { getLogger } from "../observability/logger.ts";
 import { FACE_ATTRIBUTE_VERSION } from "../faceDetection/faceAttributes.ts";
 import type { FaceAttributes } from "../faceDetection/faceDetector.type.ts";
-import type { VideoFaceCostInputs } from "../videoFaceAnalysis/videoFaceCost.ts";
+import type {
+  QueuedVideoFaces,
+  VideoFaceCostInputs,
+} from "../videoFaceAnalysis/videoFaceCost.ts";
 import {
   computePhotoQualityScore,
   faceAttributesToQualityInputs,
@@ -5188,22 +5191,31 @@ export class IndexDatabase {
              AND still.livePhotoVideoFileName = files.fileName
          )`;
 
-  async getVideosNeedingFaceAnalysis(limit = 20): Promise<
-    Array<{ relativePath: string } & VideoFaceCostInputs>
-  > {
+  /**
+   * Every video the face pass can take now, with what it needs to order them:
+   * cost inputs, when it was taken, and whether it failed before. The runner
+   * picks the order (videoFaceCost.ts `orderVideoFaceQueue`), so the cost
+   * model lives in one place rather than a second copy in SQL.
+   */
+  async getVideosNeedingFaceAnalysis(limit?: number): Promise<QueuedVideoFaces[]> {
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT folder, fileName, ${IndexDatabase.VIDEO_FACE_COST_COLUMNS} FROM files
+      `SELECT folder, fileName, ${IndexDatabase.VIDEO_FACE_COST_COLUMNS},
+              COALESCE(dateTaken, created) AS takenAt,
+              facesLastErrorAt IS NOT NULL AS failedBefore
+       FROM files
        WHERE ${IndexDatabase.VIDEOS_NEEDING_FACES_WHERE}
          AND (facesLastErrorAt IS NULL OR facesLastErrorAt < ?)
        ORDER BY facesLastErrorAt IS NOT NULL, dateTaken DESC NULLS LAST,
                 folder DESC, fileName DESC
-       LIMIT ?`,
+       ${limit === undefined ? "" : "LIMIT ?"}`,
       Date.now() - IndexDatabase.VIDEO_FACE_RETRY_COOLDOWN_MS,
-      limit,
+      ...(limit === undefined ? [] : [limit]),
     );
     return rows.map((row) => ({
       relativePath: joinPath(row.folder as string, row.fileName as string),
       ...toVideoFaceCostInputs(row),
+      takenAt: finiteOrUndefined(row.takenAt),
+      failedBefore: row.failedBefore === 1,
     }));
   }
 

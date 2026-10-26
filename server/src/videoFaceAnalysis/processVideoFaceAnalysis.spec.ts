@@ -38,7 +38,8 @@ const fakeDatabase = (videos: Video[]) => {
     decodeErrors,
     db: {
       storagePath: "/media",
-      getVideosNeedingFaceAnalysis: async (limit = 20) => queue.slice(0, limit),
+      getVideosNeedingFaceAnalysis: async (limit?: number) =>
+        queue.slice(0, limit ?? queue.length).map((v) => ({ failedBefore: false, ...v })),
       saveFaceDetectionResult: async (relativePath: string, faces: DetectedFace[]) => {
         saved.set(relativePath, faces);
         take(relativePath);
@@ -243,23 +244,41 @@ describe("processVideoFaceAnalysis", () => {
       async () => ({ faces: [] }),
       async (video, duration, outDir) => {
         if (video.endsWith("bad.mp4")) throw new Error("ffmpeg exited 1");
-        if (video.endsWith("tiny.mp4")) await gate;
+        // The costliest goes last (cheapest first), so park the run on it.
+        if (video.endsWith("big.mp4")) await gate;
         return framesAt(0)(video, duration, outDir);
       },
     );
     // Wait until the run is parked on the last video.
-    while (!fake.errors.length || !fake.saved.has("v/big.mp4")) {
+    while (!fake.errors.length || !fake.saved.has("v/tiny.mp4")) {
       await new Promise((resolve) => setImmediate(resolve));
     }
     const status = await runner.getStatus!();
     expect(status.description).toBe(
       "Finding faces in videos • 1 failed, retrying in a week",
     );
-    // Only the tiny clip is left: a second or two, not a third of the run.
-    expect(status.etaMs).toBeGreaterThan(0);
-    expect(status.etaMs).toBeLessThan(10_000);
+    // Only the big clip is left: its 500 MB read, not a third of a 3-video run.
+    expect(status.etaMs).toBeGreaterThan(5_000);
+    expect(status.etaMs).toBeLessThan(60_000);
     release();
     await runner.onComplete();
+  });
+
+  it("takes the cheapest video first", async () => {
+    const order: string[] = [];
+    await run(
+      [
+        { relativePath: "v/long.mp4", durationSeconds: 600, sizeBytes: 4e9 },
+        { relativePath: "v/short.mp4", durationSeconds: 5, sizeBytes: 5e6 },
+        { relativePath: "v/mid.mp4", durationSeconds: 30, sizeBytes: 200e6 },
+      ],
+      async (video, duration, outDir) => {
+        order.push(path.basename(video));
+        return framesAt(0)(video, duration, outDir);
+      },
+      async () => ({ faces: [] }),
+    );
+    expect(order).toEqual(["short.mp4", "mid.mp4", "long.mp4"]);
   });
 
   it("reports progress over all videos", async () => {

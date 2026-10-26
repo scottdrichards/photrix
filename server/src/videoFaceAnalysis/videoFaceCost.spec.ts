@@ -2,6 +2,8 @@ import { describe, it, expect } from "@jest/globals";
 import { MAX_ANALYSIS_FRAMES } from "../videoProcessing/extractAnalysisFrames.ts";
 import {
   createVideoFaceEta,
+  orderVideoFaceQueue,
+  RECENT_VIDEO_MS,
   predictVideoFaceCost,
   VIDEO_FACE_COST_PRIORS as P,
 } from "./videoFaceCost.ts";
@@ -82,5 +84,59 @@ describe("createVideoFaceEta", () => {
     const busyMs = extractMs + frames * P.detectMsPerFrame;
     expect(eta.snapshot().workShare).toBeCloseTo(Math.max(0.05, busyMs / now), 2);
     expect(eta.estimateMs([clip])).toBeGreaterThan(before * 10);
+  });
+});
+
+describe("orderVideoFaceQueue", () => {
+  const now = Date.UTC(2026, 9, 26);
+  const video = (
+    relativePath: string,
+    ageDays: number,
+    sizeMB: number,
+    extra: { durationSeconds?: number; failedBefore?: boolean } = {},
+  ) => ({
+    relativePath,
+    durationSeconds: extra.durationSeconds ?? 20,
+    sizeBytes: sizeMB * 1e6,
+    takenAt: now - ageDays * 24 * 60 * 60 * 1_000,
+    failedBefore: extra.failedBefore ?? false,
+  });
+
+  it("does the last 30 days first, then the rest, cheapest first in each", () => {
+    const ordered = orderVideoFaceQueue(
+      [
+        video("old-big", 400, 900),
+        video("recent-big", 3, 900),
+        video("old-tiny", 400, 2),
+        video("recent-tiny", 10, 2),
+        video("recent-long", 1, 4_000, { durationSeconds: 900 }),
+        video("old-failed-tiny", 400, 1, { failedBefore: true }),
+      ],
+      now,
+    );
+    expect(ordered.map((v) => v.relativePath)).toEqual([
+      "recent-tiny",
+      "recent-big",
+      "recent-long",
+      "old-tiny",
+      "old-big",
+      "old-failed-tiny",
+    ]);
+  });
+
+  it("counts a video with no date as old, and the cutoff as recent", () => {
+    const ordered = orderVideoFaceQueue(
+      [
+        {
+          relativePath: "undated",
+          durationSeconds: 5,
+          sizeBytes: 1e6,
+          failedBefore: false,
+        },
+        { ...video("edge", 0, 900), takenAt: now - RECENT_VIDEO_MS },
+      ],
+      now,
+    );
+    expect(ordered.map((v) => v.relativePath)).toEqual(["edge", "undated"]);
   });
 });
