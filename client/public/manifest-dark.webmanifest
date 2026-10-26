@@ -1,9 +1,9 @@
 {
-  "id": "/?pwa-debug=a",
-  "name": "Photrix A",
-  "short_name": "Photrix A",
-  "description": "TEMPORARY PWA colour test A: no colours (the real fix)",
-  "start_url": "/?pwa-debug=a",
+  "id": "/",
+  "name": "Photrix",
+  "short_name": "Photrix",
+  "description": "A better way to view photos.",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "icons": [
@@ -31,5 +31,7 @@
       "type": "image/svg+xml",
       "purpose": "any"
     }
-  ]
+  ],
+  "background_color": "#11161d",
+  "theme_color": "#11161d"
 }
