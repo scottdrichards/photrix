@@ -9,6 +9,8 @@ import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestH
 import { networkProbeRequestHandler } from "./requestHandlers/networkProbeRequestHandler.ts";
 import { dayPhotoRequestHandler } from "./requestHandlers/dayPhotoRequestHandler.ts";
 import { diagnosticsEventsRequestHandler } from "./requestHandlers/diagnosticsRequestHandler.ts";
+import { buildDiagnosticsReport } from "./observability/buildDiagnosticsReport.ts";
+import { diagnosticsReportRequestHandler } from "./requestHandlers/diagnosticsReportRequestHandler.ts";
 import { videoNegotiationRequestHandler } from "./requestHandlers/video/videoNegotiation.ts";
 import { searchRequestHandler } from "./requestHandlers/searchRequestHandler.ts";
 import { searchInterpretHandler } from "./requestHandlers/searchInterpretHandler.ts";
@@ -351,6 +353,22 @@ export const createServer = (
             return;
           }
 
+          if (
+            (pathname === "/api/diagnostics/perf" || pathname === "/api/diagnostics/report") &&
+            req.method === "GET"
+          ) {
+            if (shareScope) {
+              writeJson(res, 403, { error: "Forbidden" });
+              return;
+            }
+            await diagnosticsReportRequestHandler(
+              req as http.IncomingMessage & { url: string },
+              res,
+              taskOrchestrator,
+            );
+            return;
+          }
+
           if (req.url?.startsWith("/api/status/stream") && req.method === "GET") {
             if (shareScope) {
               writeJson(res, 403, { error: "Forbidden" });
@@ -498,7 +516,11 @@ export const createServer = (
               req as http.IncomingMessage & { url: string },
               res,
               database,
-              { markExternal: Boolean(shareScope) },
+              {
+                markExternal: Boolean(shareScope),
+                buildDiagnosticsReport: (clientSessionId) =>
+                  buildDiagnosticsReport(clientSessionId, taskOrchestrator),
+              },
             );
             return;
           }
