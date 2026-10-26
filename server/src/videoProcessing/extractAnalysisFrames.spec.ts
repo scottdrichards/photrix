@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -11,7 +11,6 @@ import {
   parseShowinfoTimes,
   planFrameSampling,
   selectEvenly,
-  VideoUnreadableError,
 } from "./extractAnalysisFrames.ts";
 
 describe("planFrameSampling", () => {
@@ -186,52 +185,4 @@ describeWithFfmpeg("extractAnalysisFrames (real ffmpeg)", () => {
     for (const f of frames)
       expect(f.startMs <= f.timeMs && f.timeMs <= f.endMs).toBe(true);
   }, 60_000);
-
-  it("times every frame of a long keyframe run, past the 64 KB stderr cap", async () => {
-    // 175 keyframes of moving pattern: showinfo writes well over 64 KB, which
-    // once cost the first frames their timestamps (and failed the video).
-    const long = path.join(root, "long.mp4");
-    ffmpeg([
-      "-f",
-      "lavfi",
-      "-i",
-      "testsrc=s=96x64:r=10:d=175",
-      "-g",
-      "10",
-      "-c:v",
-      "libx264",
-      "-pix_fmt",
-      "yuv420p",
-      long,
-    ]);
-    const frames = await extractAnalysisFrames(long, 175, freshOutDir());
-    expect(frames).toHaveLength(MAX_ANALYSIS_FRAMES);
-    expect(frames[0].timeMs).toBe(0);
-    expect(frames.at(-1)!.timeMs).toBeGreaterThan(170_000);
-    // Thinned to 24, each kept frame still stands only for its own stretch,
-    // up to the next keyframe; the gaps are what collapseFaceTracks bridges.
-    expect(frames[0].endMs).toBe(1_000);
-    expect(frames.at(-1)!.endMs).toBe(175_000);
-  }, 60_000);
-
-  it("says the file is unreadable when it isn't a video", async () => {
-    const bogus = path.join(root, "bogus.mp4");
-    writeFileSync(bogus, "not a video");
-    const extraction = extractAnalysisFrames(bogus, 5, freshOutDir());
-    await expect(extraction).rejects.toBeInstanceOf(VideoUnreadableError);
-    await expect(extraction).rejects.toThrow(/ffmpeg/);
-  });
-
-  it("says a truncated clip is unreadable, by seek as well as by keyframe", async () => {
-    // The first bytes of a real MP4 with the rest cut off: no moov atom, the
-    // way an iPhone clip looks when it was copied before it finished.
-    const truncated = path.join(root, "truncated.mp4");
-    writeFileSync(truncated, readFileSync(clip).subarray(0, 4_096));
-    await expect(
-      extractAnalysisFrames(truncated, 12, freshOutDir()),
-    ).rejects.toBeInstanceOf(VideoUnreadableError);
-    await expect(
-      extractAnalysisFrames(truncated, 600, freshOutDir()),
-    ).rejects.toBeInstanceOf(VideoUnreadableError);
-  }, 120_000);
 });

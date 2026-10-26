@@ -33,14 +33,27 @@ import { appendWithLimit } from "./videoUtils.ts";
  */
 export class VideoUnreadableError extends Error {}
 
-/** ffmpeg's ways of saying the input is the problem, not ffmpeg or the share. */
+/** ffmpeg can't open the input as media at all. */
 const UNREADABLE_INPUT =
-  /moov atom not found|Invalid data found when processing input|does not contain any stream|Output file is empty|Nothing was written into output file/i;
+  /moov atom not found|Invalid data found when processing input|does not contain any stream/i;
+/**
+ * ffmpeg opened the input but decoded nothing. Only a verdict on the file when
+ * reading from the start: a seek past the end says exactly the same thing.
+ */
+const NOTHING_DECODED = /Output file is empty|Nothing was written into output file/i;
 
-/** Rethrows an ffmpeg failure, as {@link VideoUnreadableError} when the file is at fault. */
-const classifyFfmpegError = (error: unknown): never => {
-  const message = error instanceof Error ? error.message : String(error);
-  if (UNREADABLE_INPUT.test(message)) throw new VideoUnreadableError(message);
+const messageOf = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+/**
+ * Rethrows a keyframe-mode ffmpeg failure, as {@link VideoUnreadableError}
+ * when the file is at fault.
+ */
+const classifyKeyframeError = (error: unknown): never => {
+  const message = messageOf(error);
+  if (UNREADABLE_INPUT.test(message) || NOTHING_DECODED.test(message)) {
+    throw new VideoUnreadableError(message);
+  }
   throw error;
 };
 
@@ -214,73 +227,99 @@ export const extractAnalysisFrames = async (
   outDir: string,
 ): Promise<AnalysisFrame[]> => {
   const plan = planFrameSampling(durationSeconds);
-
-  if (plan.mode === "seek") {
-    const frames: AnalysisFrame[] = [];
-    const times = plan.timesSeconds;
-    const durationMs = (durationSeconds ?? 0) * 1_000;
-    // Halfway to each neighbour, from the planned grid: a failed seek leaves a
-    // hole rather than stretching its neighbours over what nobody looked at.
-    const halfway = (a: number, b: number) => Math.round(((a + b) / 2) * 1_000);
-    let lastError: Error | null = null;
-    for (const [index, seconds] of plan.timesSeconds.entries()) {
-      const framePath = path.join(outDir, `s${String(index).padStart(4, "0")}.jpg`);
-      try {
-        await runFfmpeg(
-          [
-            "-ss",
-            seconds.toFixed(3),
-            "-i",
-            videoPath,
-            "-an",
-            "-sn",
-            "-dn",
-            "-frames:v",
-            "1",
-            "-vf",
-            SCALE_FILTER,
-            "-q:v",
-            "3",
-            "-update",
-            "1",
-            "-y",
-            framePath,
-          ],
-          SEEK_TIMEOUT_MS,
-        );
-      } catch (error) {
-        // A seek past the last decodable frame fails ("Could not open encoder
-        // before EOF") rather than writing nothing, and the stored duration is
-        // sometimes longer than the stream. One bad seek costs one frame.
-        // runFfmpeg only rejects with an Error.
-        lastError = error as Error;
-        continue;
-      }
-      if ((await readdir(outDir)).includes(path.basename(framePath))) {
-        frames.push({
-          path: framePath,
-          timeMs: Math.round(seconds * 1_000),
-          startMs: index === 0 ? 0 : halfway(times[index - 1], seconds),
-          endMs:
-            index === times.length - 1
-              ? Math.round(durationMs)
-              : halfway(seconds, times[index + 1]),
-        });
-      }
-    }
-    // Every seek failing is the file, not its length.
-    if (frames.length === 0 && lastError) {
-      classifyFfmpegError(lastError);
-    }
-    return frames;
+  if (plan.mode === "keyframes") {
+    return extractKeyframes(videoPath, durationSeconds, plan.maxSeconds, outDir);
   }
 
+  const { frames, lastError } = await extractBySeeking(
+    videoPath,
+    plan.timesSeconds,
+    durationSeconds ?? 0,
+    outDir,
+  );
+  if (frames.length > 0) return frames;
+  if (lastError && UNREADABLE_INPUT.test(messageOf(lastError))) {
+    throw new VideoUnreadableError(messageOf(lastError));
+  }
+  // Every seek missed. The stored length can be wrong (far longer than the
+  // stream), and then every seek lands past the end, which ffmpeg reports just
+  // like a file with nothing in it. Read from the start instead, capped like a
+  // video of unknown length: a real video still gives frames, and only one
+  // that gives nothing from the start is unreadable.
+  return extractKeyframes(videoPath, undefined, LONG_VIDEO_SECONDS, outDir);
+};
+
+const extractBySeeking = async (
+  videoPath: string,
+  times: readonly number[],
+  durationSeconds: number,
+  outDir: string,
+): Promise<{ frames: AnalysisFrame[]; lastError: Error | null }> => {
+  const frames: AnalysisFrame[] = [];
+  // Halfway to each neighbour, from the planned grid: a failed seek leaves a
+  // hole rather than stretching its neighbours over what nobody looked at.
+  const halfway = (a: number, b: number) => Math.round(((a + b) / 2) * 1_000);
+  let lastError: Error | null = null;
+  for (const [index, seconds] of times.entries()) {
+    const framePath = path.join(outDir, `s${String(index).padStart(4, "0")}.jpg`);
+    try {
+      await runFfmpeg(
+        [
+          "-ss",
+          seconds.toFixed(3),
+          "-i",
+          videoPath,
+          "-an",
+          "-sn",
+          "-dn",
+          "-frames:v",
+          "1",
+          "-vf",
+          SCALE_FILTER,
+          "-q:v",
+          "3",
+          "-update",
+          "1",
+          "-y",
+          framePath,
+        ],
+        SEEK_TIMEOUT_MS,
+      );
+    } catch (error) {
+      // A seek past the last decodable frame fails ("Could not open encoder
+      // before EOF") rather than writing nothing, and the stored duration is
+      // sometimes longer than the stream. One bad seek costs one frame.
+      // runFfmpeg only rejects with an Error.
+      lastError = error as Error;
+      continue;
+    }
+    if ((await readdir(outDir)).includes(path.basename(framePath))) {
+      frames.push({
+        path: framePath,
+        timeMs: Math.round(seconds * 1_000),
+        startMs: index === 0 ? 0 : halfway(times[index - 1], seconds),
+        endMs:
+          index === times.length - 1
+            ? Math.round(durationSeconds * 1_000)
+            : halfway(seconds, times[index + 1]),
+      });
+    }
+  }
+  return { frames, lastError };
+};
+
+const extractKeyframes = async (
+  videoPath: string,
+  durationSeconds: number | undefined,
+  maxSeconds: number | undefined,
+  outDir: string,
+): Promise<AnalysisFrame[]> => {
   const times: number[] = [];
   await runFfmpeg(
     [
       "-skip_frame",
       "nokey",
-      ...(plan.maxSeconds ? ["-t", String(plan.maxSeconds)] : []),
+      ...(maxSeconds ? ["-t", String(maxSeconds)] : []),
       "-i",
       videoPath,
       "-an",
@@ -300,7 +339,7 @@ export const extractAnalysisFrames = async (
       const time = showinfoTime(line);
       if (time !== null) times.push(time);
     },
-  ).catch(classifyFfmpegError);
+  ).catch(classifyKeyframeError);
 
   const files = (await readdir(outDir)).filter((name) => /^k\d+\.jpg$/.test(name)).sort();
   if (times.length !== files.length) {
@@ -314,7 +353,7 @@ export const extractAnalysisFrames = async (
   // The last frame runs to the end of the video. With no known length (or a
   // `-t` cap), it gets the minimum spacing, the least it can stand for.
   const lastEndMs =
-    plan.maxSeconds === undefined && durationSeconds
+    maxSeconds === undefined && durationSeconds
       ? Math.round(durationSeconds * 1_000)
       : (frameTimes.at(-1) ?? 0) + MIN_FRAME_SPACING_SECONDS * 1_000;
   const all: AnalysisFrame[] = files.map((name, i) => ({
