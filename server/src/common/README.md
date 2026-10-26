@@ -19,12 +19,12 @@ runs it in **worker threads** and talks to them over request/response messages.
 ### Custom SQL functions (`sqliteWorker.ts`)
 
 - `regexp` — JS `RegExp.test`; invalid patterns return 0 instead of throwing.
-- `cosine_similarity(a, b)` — operates on `Float64` BLOBs. **SQLite BLOB buffers
-  are not guaranteed to be 8-byte aligned**, which a `Float64Array` view requires,
-  and a truncated/odd-length blob would throw. Both are guarded: odd lengths
-  return 0, and the bytes are copied into a freshly-allocated (aligned) buffer
-  before the view is created. Keep these guards — a throw here surfaces as an
-  opaque SQL error that breaks vector search.
+- `cosine_similarity_i8(a, b)` — cosine over two int8 embedding blobs (layout in
+  `indexDatabase/embeddingCodec.ts`), for queries that compare against a
+  *subset* of vectors inside SQL (face-cluster growth, the `semantic` filter).
+  Whole-library semantic search does not use it: one JavaScript call per row
+  made a 177k-photo scan take ~5 s. That goes through the in-memory index in
+  `indexDatabase/vectorIndex/` instead.
 
 ## Cache paths — `cacheUtils.ts`
 

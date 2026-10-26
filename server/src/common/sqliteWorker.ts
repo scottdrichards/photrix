@@ -13,52 +13,8 @@ type WorkerInit = {
     options: { deterministic?: boolean };
     type:
       | "regexp"
-      | "cosine_similarity"
-      | "cosine_similarity_f32"
       | "cosine_similarity_i8";
   }>;
-};
-
-// Cosine similarity between two BLOBs each holding a packed array of floats.
-// `bytesPerEl` selects the element width: Float64 (8 bytes) for face embeddings,
-// Float32 (4 bytes) for CLIP image embeddings. Runs entirely inside SQLite so an
-// ORDER BY ... LIMIT over the table never materialises every row's embedding on
-// the JS heap.
-//
-// This is invoked once per candidate row — hundreds of thousands of times for a
-// single semantic search over a large library — so per-row overhead dominates
-// the query. The earlier implementation copied BOTH blobs into freshly
-// allocated aligned buffers on every call (to satisfy TypedArray's alignment
-// requirement); those two allocations per row, not the arithmetic, were the bulk
-// of the cost. DataView imposes no alignment requirement, so we read each value
-// in place straight from the SQLite blob with zero allocation. Stored vectors
-// are little-endian (written from a TypedArray on an LE host), so we read LE.
-const cosineSimilarityBlob = (
-  a: Buffer | null,
-  b: Buffer | null,
-  bytesPerEl: number,
-): number => {
-  if (!a || !b || a.length !== b.length || a.length === 0) return 0;
-  // Blobs must hold whole values; a truncated/odd-length blob would otherwise
-  // throw a RangeError and surface as an opaque SQL error.
-  if (a.length % bytesPerEl !== 0) return 0;
-  const av = new DataView(a.buffer, a.byteOffset, a.length);
-  const bv = new DataView(b.buffer, b.byteOffset, b.length);
-  const n = a.length / bytesPerEl;
-  const f32 = bytesPerEl === 4;
-  let dot = 0;
-  let leftMag = 0;
-  let rightMag = 0;
-  for (let i = 0; i < n; i++) {
-    const off = i * bytesPerEl;
-    const x = f32 ? av.getFloat32(off, true) : av.getFloat64(off, true);
-    const y = f32 ? bv.getFloat32(off, true) : bv.getFloat64(off, true);
-    dot += x * y;
-    leftMag += x * x;
-    rightMag += y * y;
-  }
-  const denom = Math.sqrt(leftMag) * Math.sqrt(rightMag);
-  return denom > 0 ? dot / denom : 0;
 };
 
 // Cosine similarity between two int8-quantized embedding blobs (see
@@ -127,22 +83,6 @@ for (const fn of init.customFunctions ?? []) {
           return 0;
         }
       },
-    );
-  }
-
-  if (fn.type === "cosine_similarity") {
-    db.function(
-      fn.name,
-      { deterministic: fn.options.deterministic ?? true },
-      (a: Buffer | null, b: Buffer | null) => cosineSimilarityBlob(a, b, 8),
-    );
-  }
-
-  if (fn.type === "cosine_similarity_f32") {
-    db.function(
-      fn.name,
-      { deterministic: fn.options.deterministic ?? true },
-      (a: Buffer | null, b: Buffer | null) => cosineSimilarityBlob(a, b, 4),
     );
   }
 
