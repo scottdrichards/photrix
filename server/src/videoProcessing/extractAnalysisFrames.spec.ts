@@ -154,6 +154,12 @@ describeWithFfmpeg("extractAnalysisFrames (real ffmpeg)", () => {
     expect(times.filter((t) => t < 6_000).length).toBeLessThanOrEqual(2);
     expect(times.filter((t) => t >= 6_000).length).toBeGreaterThanOrEqual(5);
     for (const t of times) expect(t % 1_000).toBe(0);
+    // Each frame stands for itself up to the next one that changed, and the
+    // last for the rest of the clip, so the windows tile it without a gap.
+    expect(frames[0].startMs).toBe(0);
+    frames.slice(1).forEach((f, i) => expect(frames[i].endMs).toBe(f.startMs));
+    expect(frames.every((f) => f.startMs === f.timeMs)).toBe(true);
+    expect(frames.at(-1)!.endMs).toBe(12_000);
     // Every returned frame exists, and nothing else is left behind.
     expect(readdirSync(outDir).sort()).toEqual(
       frames.map((f) => path.basename(f.path)).sort(),
@@ -172,6 +178,12 @@ describeWithFfmpeg("extractAnalysisFrames (real ffmpeg)", () => {
     const frames = await extractAnalysisFrames(clip, 200, freshOutDir());
     expect(frames.length).toBeGreaterThan(0);
     expect(frames.every((f) => f.timeMs < 12_000)).toBe(true);
+    // A seek stands for halfway to its neighbours on the planned grid.
+    const spacing = (200 * 0.96) / (MAX_ANALYSIS_FRAMES - 1);
+    expect(frames[0].startMs).toBe(0);
+    expect(frames[0].endMs).toBe(Math.round((4 + spacing / 2) * 1_000));
+    for (const f of frames)
+      expect(f.startMs <= f.timeMs && f.timeMs <= f.endMs).toBe(true);
   }, 60_000);
 
   it("times every frame of a long keyframe run, past the 64 KB stderr cap", async () => {
@@ -195,6 +207,10 @@ describeWithFfmpeg("extractAnalysisFrames (real ffmpeg)", () => {
     expect(frames).toHaveLength(MAX_ANALYSIS_FRAMES);
     expect(frames[0].timeMs).toBe(0);
     expect(frames.at(-1)!.timeMs).toBeGreaterThan(170_000);
+    // Thinned to 24, each kept frame still stands only for its own stretch,
+    // up to the next keyframe; the gaps are what collapseFaceTracks bridges.
+    expect(frames[0].endMs).toBe(1_000);
+    expect(frames.at(-1)!.endMs).toBe(175_000);
   }, 60_000);
 
   it("throws when the file isn't a video", async () => {

@@ -37,6 +37,14 @@ import { DescriptionEditor } from "./DescriptionEditor";
 import { getToken } from "../auth";
 import { createClientOperationId, logClientEvent } from "../diagnostics";
 import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes, type NamedFace } from "./FaceOverlay";
+import { VideoPeopleTimeline } from "./VideoPeopleTimeline";
+import { videoPeople } from "./videoPeople";
+
+// The people timeline under a video: its rows are this tall, and past this many
+// it scrolls rather than squeezing the video further.
+const PEOPLE_TIMELINE_ROW_PX = 28;
+const PEOPLE_TIMELINE_PADDING_PX = 24;
+const PEOPLE_TIMELINE_MAX_ROWS = 4;
 import { FaceAssignPanel } from "./FaceAssignPanel";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { MiniMap } from "./MiniMap";
@@ -352,6 +360,10 @@ export function FullscreenViewer() {
   const [showFaces, setShowFaces] = useState(false);
   const [hasFaceOverlayData, setHasFaceOverlayData] = useState(false);
   const [peopleFaces, setPeopleFaces] = useState<PhotoPersonFace[]>([]);
+  // Which file `peopleFaces` belongs to. The list stays in state until the next
+  // file's fetch lands, so the video timeline checks it rather than showing the
+  // last video's people over this one.
+  const [peopleFacesPath, setPeopleFacesPath] = useState<string | null>(null);
   // Which unnamed face's "Who is this?" chip is open, if any (see
   // FaceAssignPanel). Bumping facesRefreshToken re-runs the faces-fetch
   // effect below to pick up a just-saved name/merge without duplicating its
@@ -454,12 +466,17 @@ export function FullscreenViewer() {
   // overlay can label each face and link to its person page. facesRefreshToken
   // is bumped after a successful FaceAssignPanel save so a just-named/merged
   // face's label updates immediately, without a second copy of this fetch.
+  // Videos too: their faces carry when each person is on screen, which the
+  // people timeline under the player draws.
   useEffect(() => {
-    if (!photo || photo.mediaType === "video") return;
+    if (!photo) return;
 
     const abortController = new AbortController();
     fetchPeopleFacesForFile(photo.path, abortController.signal)
-      .then((faces) => setPeopleFaces(faces))
+      .then((faces) => {
+        setPeopleFaces(faces);
+        setPeopleFacesPath(photo.path);
+      })
       .catch(() => {
         // Face names are a non-essential enhancement; leave the overlay to fall
         // back to metadata boxes if the lookup fails or is aborted.
@@ -1290,6 +1307,24 @@ export function FullscreenViewer() {
   const usesSwipeViewer =
     photo != null && photo.mediaType !== "video" && !showLiveVideo && !editMode;
 
+  // Who is in this video and when.
+  const videoFaces =
+    photo?.mediaType === "video" && peopleFacesPath === photo.path ? peopleFaces : [];
+  const peopleInVideo = videoPeople(videoFaces);
+  const peopleTimelinePx =
+    peopleInVideo.length > 0
+      ? PEOPLE_TIMELINE_PADDING_PX +
+        Math.min(peopleInVideo.length, PEOPLE_TIMELINE_MAX_ROWS) * PEOPLE_TIMELINE_ROW_PX
+      : 0;
+  const seekVideo = (ms: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = ms / 1000;
+    void video.play().catch(() => {
+      // Autoplay policy may refuse; the seek itself still happened.
+    });
+  };
+
   const faceToggleDisabled =
     photo?.mediaType === "video" || (!hasFaceOverlayData && peopleFaces.length === 0);
 
@@ -1527,6 +1562,7 @@ export function FullscreenViewer() {
                             }
                           : {}),
                         viewTransitionName: photoViewTransitionName(photo.path),
+                        "--people-h": `${peopleTimelinePx}px`,
                       } as React.CSSProperties
                     }
                   >
@@ -1566,6 +1602,22 @@ export function FullscreenViewer() {
                     <span className={css.videoBadge} data-testid="video-status">
                       {videoStatusLabel[videoStatus]}
                     </span>
+                  )}
+                  {peopleInVideo.length > 0 && (
+                    <div
+                      className={css.videoPeople}
+                      style={{ maxHeight: `${peopleTimelinePx}px` }}
+                    >
+                      <VideoPeopleTimeline
+                        faces={videoFaces}
+                        durationMs={
+                          photo.metadata?.duration
+                            ? photo.metadata.duration * 1000
+                            : undefined
+                        }
+                        onSeek={seekVideo}
+                      />
+                    </div>
                   )}
                 </>
               ) : showLiveVideo && photo.livePhotoUrl ? (

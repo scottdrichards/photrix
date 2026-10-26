@@ -71,6 +71,9 @@ class FaceRuntime(Generic[App]):
         self._gpu_app: App | None = None
         self._cpu_app: App | None = None
         self._gpu_retry_at = 0.0
+        # "gpu" or "cpu": where the last call actually ran, so callers can tell
+        # a GPU-configured worker that fell back from one running as asked.
+        self.last_device: str | None = None
 
     @property
     def wants_gpu(self) -> bool:
@@ -119,7 +122,16 @@ class FaceRuntime(Generic[App]):
     def run(self, fn: Callable[[App], T]) -> T:
         if self._gpu_available():
             try:
-                return fn(self._gpu())
+                result = fn(self._gpu())
+                self.last_device = "gpu"
+                return result
             except Exception as exc:  # noqa: BLE001 - always answer on CPU
                 self._on_gpu_failure(exc)
-        return fn(self._cpu())
+        result = fn(self._cpu())
+        self.last_device = "cpu"
+        return result
+
+    @property
+    def on_cpu_fallback(self) -> bool:
+        """Configured for the GPU, but the last call ran on CPU."""
+        return self.wants_gpu and self.last_device == "cpu"

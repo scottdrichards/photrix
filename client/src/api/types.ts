@@ -11,7 +11,9 @@ import type {
   ServerStatus as SharedServerStatus,
   ApiFilterOptions,
   SortOption,
+  TaskHoldup,
 } from "../../../shared/filter-contract/src";
+export type { TaskHoldup };
 export type { BackgroundTaskStatus, DateRangeFilter, FaceAttributeFilter, FaceClusterMatchMode, GeoBounds, MediaTypeFilter, RatingFilter, ShareScope, SearchSource, ApiFilterOptions, SortOption };
 
 export interface ApiPhotoItem {
@@ -124,11 +126,18 @@ export type ClusterFace = {
  * the face-assign panel to exclude "the face already on screen" from its
  * related-faces preview.
  */
+/** A stretch of a video, in ms from the start, that a person is on screen for. */
+export type FaceAppearance = { startMs: number; endMs: number };
+
 export type PhotoPersonFace = {
   faceId: number;
   box: FaceBox;
   personId: string;
   name: string | null;
+  /** Video faces only: the frame the box is on. */
+  frameTimeMs?: number;
+  /** Video faces only: when this person is on screen, earliest first. */
+  appearances?: FaceAppearance[];
 };
 
 /** A named person, for the face-assign panel's existing-name autocomplete. */

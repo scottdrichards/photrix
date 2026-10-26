@@ -1,4 +1,7 @@
-import type { BackgroundTaskStatus } from "../../../shared/filter-contract/src/index.ts";
+import type {
+  BackgroundTaskStatus,
+  TaskHoldup,
+} from "../../../shared/filter-contract/src/index.ts";
 import { getLogger } from "../observability/logger.ts";
 import { recordServerDiagnosticEvent } from "../observability/diagnosticsStore.ts";
 import { isSystemOverloaded, getAvailableMemoryMB } from "./systemLoad.ts";
@@ -76,6 +79,8 @@ export type TaskRunner = {
       total: number;
       portionComplete: number;
       description: string;
+      /** See BackgroundTaskStatus.etaMs. */
+      etaMs: number;
     }>
   >;
 };
@@ -107,6 +112,7 @@ type RunningTask = {
   queue: QueueType;
   priority: TaskPriority;
   runner: TaskRunner;
+  requirements: Partial<Record<Resources, number>>;
 };
 
 export type TaskOrchestrator = {
@@ -140,23 +146,27 @@ export type TaskOrchestrator = {
   };
 };
 
+/** The resources a task can't get right now; empty when it can start. */
+const unmetResources = (
+  state: Record<Resources, number>,
+  requirements: Partial<Record<Resources, number>>,
+  availableMemoryMB: () => number,
+): Resources[] =>
+  (Object.entries(requirements) as Array<[Resources, number | undefined]>)
+    .filter(([resource, amount]) => {
+      if (amount == null) return false;
+      // Compare against live OS memory minus what's already reserved, so the
+      // system never over-commits RAM across concurrent ML workers.
+      if (resource === "memoryMB") return availableMemoryMB() - state.memoryMB < amount;
+      return state[resource] + amount > 1;
+    })
+    .map(([resource]) => resource);
+
 const canRunTask = (
   state: Record<Resources, number>,
   requirements: Partial<Record<Resources, number>>,
   availableMemoryMB: () => number,
-): boolean => {
-  for (const [resource, amount] of Object.entries(requirements)) {
-    if (amount == null) continue;
-    if (resource === "memoryMB") {
-      // Compare against live OS memory minus what's already reserved, so the
-      // system never over-commits RAM across concurrent ML workers.
-      if (availableMemoryMB() - state.memoryMB < amount) return false;
-    } else {
-      if (state[resource as Resources] + amount > 1) return false;
-    }
-  }
-  return true;
-};
+): boolean => unmetResources(state, requirements, availableMemoryMB).length === 0;
 
 const checkoutResources = (
   state: Record<Resources, number>,
@@ -219,6 +229,17 @@ export type TaskOrchestratorOptions = {
     resume: () => void;
     releaseReclaim?: () => void;
   };
+  // Whether a user GPU request has killed the ML workers to free VRAM (see
+  // reclaimGpuForUser). Lets a paused GPU task say the GPU was lent out rather
+  // than only that someone is using the app.
+  isGpuReclaimed?: () => boolean;
+  // A holdup the orchestrator can't see for itself, for a task that is
+  // otherwise running freely: e.g. its model fell back to CPU on a full GPU.
+  holdupHint?: (task: {
+    name: string;
+    type?: TaskType;
+    requirements: Partial<Record<Resources, number>>;
+  }) => TaskHoldup | undefined;
 };
 
 export const createTaskOrchestrator = (
@@ -233,6 +254,8 @@ export const createTaskOrchestrator = (
     suspend: () => {},
     resume: () => {},
   };
+  const isGpuReclaimed = options.isGpuReclaimed ?? (() => false);
+  const holdupHint = options.holdupHint ?? (() => undefined);
 
   const queues: Record<QueueType, Task[]> = {
     blocking: [],
@@ -465,6 +488,44 @@ export const createTaskOrchestrator = (
     resourcesInUse: { ...resourcesInUse },
   });
 
+  // Why a running task isn't making full progress, read off the same state the
+  // backoff acts on, so the status view can never disagree with what the
+  // orchestrator is actually doing.
+  const runningHoldup = (task: RunningTask): TaskHoldup | undefined => {
+    if (!processBackgroundTasks) return { reason: "background-off" };
+    if (userActive()) {
+      return isGpuReclaimed() && (task.requirements.gpu ?? 0) > 0
+        ? { reason: "gpu-lent" }
+        : { reason: "user-active" };
+    }
+    if (overloadActive() && task.priority !== "high") return { reason: "server-busy" };
+    return holdupHint(task);
+  };
+
+  // Why a queued task hasn't started: the switch, or the budgets it is waiting
+  // for and which running tasks hold them.
+  const queuedHoldup = (task: Task): TaskHoldup | undefined => {
+    if (!processBackgroundTasks) return { reason: "background-off" };
+    const requirements = task.resources ?? getResourceRequirements(task.type);
+    const unmet = unmetResources(resourcesInUse, requirements, availableMemoryMB);
+    if (unmet.length === 0) return undefined;
+    const heldBy = [...runningTasks]
+      .filter((running) =>
+        unmet.some((resource) => (running.requirements[resource] ?? 0) > 0),
+      )
+      .map((running) => running.name);
+    return { reason: "waiting-for-resources", resources: unmet, heldBy };
+  };
+
+  const withHoldup = (
+    status: BackgroundTaskStatus,
+    holdup: TaskHoldup | undefined,
+  ): BackgroundTaskStatus => {
+    if (status.state === "complete" || status.state === "cancelled") return status;
+    const { holdup: _stale, ...rest } = status;
+    return holdup ? { ...rest, holdup } : rest;
+  };
+
   const bareRunningStatus = (task: RunningTask): BackgroundTaskStatus => ({
     id: `${task.queue}:${task.name}`,
     name: task.name,
@@ -506,6 +567,9 @@ export const createTaskOrchestrator = (
           ...(status.total != null ? { total: status.total } : {}),
           ...(portionComplete != null ? { portionComplete } : {}),
           ...(status.description ? { description: status.description } : {}),
+          ...(status.etaMs != null && Number.isFinite(status.etaMs)
+            ? { etaMs: Math.max(0, status.etaMs) }
+            : {}),
         } as BackgroundTaskStatus;
         lastKnownStatus.set(id, built);
         return built;
@@ -541,8 +605,12 @@ export const createTaskOrchestrator = (
       ({ queue }) => queue === "background" || queue === "implied",
     );
 
+    // The holdup is read fresh on every poll rather than cached with the
+    // task's own status: it changes the moment a request starts or ends.
     const normalizedActiveStatuses = await Promise.all(
-      activeTasks.map((task) => readActiveTaskStatus(task)),
+      activeTasks.map(async (task) =>
+        withHoldup(await readActiveTaskStatus(task), runningHoldup(task)),
+      ),
     );
 
     // Drop bookkeeping for tasks that are no longer active so the maps can't
@@ -557,12 +625,16 @@ export const createTaskOrchestrator = (
     }
 
     const queuedStatuses = (["background", "implied"] as const).flatMap((queue) =>
-      queues[queue].map((task, index) => ({
-        id: `${queue}:${task.name}:${index}`,
-        name: task.name,
-        queue,
-        state: "queued" as const,
-      })),
+      queues[queue].map((task, index) => {
+        const holdup = queuedHoldup(task);
+        return {
+          id: `${queue}:${task.name}:${index}`,
+          name: task.name,
+          queue,
+          state: "queued" as const,
+          ...(holdup ? { holdup } : {}),
+        };
+      }),
     );
 
     return [...normalizedActiveStatuses, ...queuedStatuses];
@@ -626,6 +698,7 @@ export const createTaskOrchestrator = (
         queue,
         priority: nextTask.priority ?? "normal",
         runner,
+        requirements,
       };
       runningTasks.add(runningTask);
       logTaskEvent("Started", queue, nextTask.name);

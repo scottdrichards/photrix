@@ -1,0 +1,59 @@
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  width: 100%;
+  padding: var(--space-s) var(--space-m);
+  border-radius: var(--radius-md);
+  background: rgb(0 0 0 / 55%);
+  color: #fff;
+  font-size: var(--fs-sm);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(4rem, 9rem) 1fr auto auto;
+  align-items: center;
+  gap: var(--space-s);
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: rgb(255 255 255 / 18%);
+}
+
+.segment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: rgb(255 255 255 / 65%);
+  cursor: pointer;
+}
+
+.segment:hover,
+.segment:focus-visible {
+  background: #fff;
+}
+
+.longest {
+  background: var(--brand, #f97316);
+}
+
+.jump {
+  height: 22px;
+  min-height: 0;
+  padding: 0 var(--space-s);
+  font-size: var(--fs-sm);
+  color: inherit;
+}

@@ -444,3 +444,118 @@ describe("taskOrchestrator backoff", () => {
     expect(resume).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("taskOrchestrator holdups", () => {
+  // A task that runs until `finish` is called and reports a paused state when
+  // the orchestrator pauses it, like the real runners do.
+  const longTask = (name: string, resources: Record<string, number>, etaMs?: number) => {
+    let finish!: () => void;
+    const done = new Promise<void>((resolve) => (finish = resolve));
+    let state: "running" | "paused" = "running";
+    return {
+      finish: () => finish(),
+      task: {
+        name,
+        resources,
+        start: () => ({
+          onComplete: () => done,
+          pause: () => {
+            state = "paused";
+          },
+          resume: async () => {
+            state = "running";
+          },
+          getStatus: async () => ({ state, ...(etaMs != null ? { etaMs } : {}) }),
+        }),
+      },
+    };
+  };
+  const byName = async (orchestrator: ReturnType<typeof createTaskOrchestrator>) =>
+    new Map(
+      (await orchestrator.getBackgroundTaskStatus()).map((status) => [
+        status.name,
+        status,
+      ]),
+    );
+
+  it("says a GPU task is paused because the GPU was lent to playback, not just that someone is busy", async () => {
+    let reclaimed = false;
+    const orchestrator = createTaskOrchestrator({
+      isOverloaded: () => false,
+      isGpuReclaimed: () => reclaimed,
+    });
+    const gpu = longTask("GPU task", { gpu: 0.5 });
+    const cpu = longTask("CPU task", { cpu: 0.25 });
+    orchestrator.addTask(gpu.task, "background");
+    orchestrator.addTask(cpu.task, "background");
+    await wait(30);
+    expect((await byName(orchestrator)).get("GPU task")).not.toHaveProperty("holdup");
+
+    reclaimed = true;
+    const lease = orchestrator.beginUserRequest("HLS playback");
+    let statuses = await byName(orchestrator);
+    expect(statuses.get("GPU task")?.holdup).toEqual({ reason: "gpu-lent" });
+    expect(statuses.get("CPU task")?.holdup).toEqual({ reason: "user-active" });
+
+    reclaimed = false;
+    lease.release();
+    await wait(2_100);
+    statuses = await byName(orchestrator);
+    expect(statuses.get("GPU task")).not.toHaveProperty("holdup");
+    gpu.finish();
+    cpu.finish();
+  });
+
+  it("names the budget a queued task waits for and the task holding it", async () => {
+    const orchestrator = createTaskOrchestrator({ isOverloaded: () => false });
+    const first = longTask("Image analysis", { gpu: 0.75 });
+    const second = longTask("Audio embedding", { gpu: 0.5 });
+    orchestrator.addTask(first.task, "background");
+    orchestrator.addTask(second.task, "background");
+    await wait(30);
+    expect((await byName(orchestrator)).get("Audio embedding")).toMatchObject({
+      state: "queued",
+      holdup: {
+        reason: "waiting-for-resources",
+        resources: ["gpu"],
+        heldBy: ["Image analysis"],
+      },
+    });
+
+    orchestrator.setPerformBackgroundTasks(false);
+    const statuses = await byName(orchestrator);
+    expect(statuses.get("Audio embedding")?.holdup).toEqual({ reason: "background-off" });
+    expect(statuses.get("Image analysis")?.holdup).toEqual({ reason: "background-off" });
+    orchestrator.setPerformBackgroundTasks(true);
+    first.finish();
+    await wait(30);
+    second.finish();
+  });
+
+  it("passes a task's own ETA through, and asks the hint only for an unblocked task", async () => {
+    let hintCalls = 0;
+    const orchestrator = createTaskOrchestrator({
+      isOverloaded: () => false,
+      holdupHint: () => {
+        hintCalls += 1;
+        return { reason: "faces-on-cpu" };
+      },
+    });
+    const video = longTask("Video faces", { cpu: 0.5 }, 90_000);
+    orchestrator.addTask(video.task, "background");
+    await wait(30);
+    expect((await byName(orchestrator)).get("Video faces")).toMatchObject({
+      etaMs: 90_000,
+      holdup: { reason: "faces-on-cpu" },
+    });
+
+    const calls = hintCalls;
+    const lease = orchestrator.beginUserRequest("search");
+    expect((await byName(orchestrator)).get("Video faces")?.holdup).toEqual({
+      reason: "user-active",
+    });
+    expect(hintCalls).toBe(calls);
+    lease.release();
+    video.finish();
+  });
+});

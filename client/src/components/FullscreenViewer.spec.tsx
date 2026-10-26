@@ -27,7 +27,9 @@ const {
   hlsRecoverMediaErrorMock,
   hlsEventHandlers,
   hlsInstances,
+  fetchPeopleFacesForFileMock,
 } = vi.hoisted(() => ({
+  fetchPeopleFacesForFileMock: vi.fn((): Promise<unknown[]> => Promise.resolve([])),
   fetchPhotoCaptionMock: vi.fn(() => Promise.resolve(null as string | null)),
   streamPhotoDescriptionMock: vi.fn(
     (_path: string, _onDelta: (text: string) => void): Promise<string | null> =>
@@ -59,7 +61,8 @@ vi.mock("../api", () => ({
   negotiateVideoPlayback: (...args: unknown[]) =>
     (negotiateVideoPlaybackMock as (...a: unknown[]) => unknown)(...args),
   fetchTranscriptSegments: () => Promise.resolve([]),
-  fetchPeopleFacesForFile: () => Promise.resolve([]),
+  fetchPeopleFacesForFile: (...args: unknown[]) =>
+    (fetchPeopleFacesForFileMock as (...a: unknown[]) => unknown)(...args),
   fetchPhotoCaption: (...args: unknown[]) =>
     (fetchPhotoCaptionMock as (...a: unknown[]) => unknown)(...args),
   streamPhotoDescription: (...args: unknown[]) =>
@@ -143,6 +146,8 @@ describe("FullscreenViewer", () => {
     vi.restoreAllMocks();
     fetchPhotoCaptionMock.mockReset();
     fetchPhotoCaptionMock.mockResolvedValue(null);
+    fetchPeopleFacesForFileMock.mockReset();
+    fetchPeopleFacesForFileMock.mockResolvedValue([]);
     streamPhotoDescriptionMock.mockReset();
     streamPhotoDescriptionMock.mockImplementation(() => new Promise<string | null>(() => {}));
     probeVideoPlaybackProfileMock.mockReset();
@@ -748,6 +753,47 @@ describe("FullscreenViewer", () => {
     const video = container.querySelector("video");
 
     expect(video).not.toBeNull();
+  });
+
+  it("shows who is in a video and jumps to their longest stretch", async () => {
+    fetchPeopleFacesForFileMock.mockResolvedValue([
+      {
+        faceId: 1,
+        box: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 },
+        personId: "person-7",
+        name: "Ada",
+        frameTimeMs: 12_000,
+        appearances: [
+          { startMs: 1_000, endMs: 3_000 },
+          { startMs: 10_000, endMs: 20_000 },
+        ],
+      },
+    ]);
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/clip.mp4",
+        name: "clip.mp4",
+        mediaType: "video",
+        metadata: { duration: 30 },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+    const play = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockResolvedValue(undefined);
+
+    const { container } = render(<FullscreenViewer />);
+    expect(await screen.findByText("Ada")).toBeInTheDocument();
+    const video = container.querySelector("video")!;
+
+    fireEvent.click(screen.getByRole("button", { name: "Longest" }));
+    expect(video.currentTime).toBe(10);
+    fireEvent.click(screen.getByRole("button", { name: "First" }));
+    expect(video.currentTime).toBe(1);
+    expect(play).toHaveBeenCalled();
   });
 
   it("logs media element waiting and stalled events for videos", async () => {

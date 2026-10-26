@@ -79,7 +79,7 @@ describe("video face queue", () => {
       const queued = (await db.getVideosNeedingFaceAnalysis()).map((v) => v.relativePath);
       expect(queued).toEqual(["/lp/solo.mp4"]);
       const progress = await db.getVideoFaceAnalysisProgress();
-      expect(progress).toEqual({ total: 2, remaining: 1 });
+      expect(progress).toEqual({ total: 2, remaining: 1, coolingDown: 0, unreadable: 0 });
     });
   });
 
@@ -89,8 +89,13 @@ describe("video face queue", () => {
       await db.saveVideoFaceAnalysisError("v/bad.mp4");
 
       expect(await db.getVideosNeedingFaceAnalysis()).toEqual([]);
-      // Still owed, so progress doesn't claim it is done.
-      expect((await db.getVideoFaceAnalysisProgress()).remaining).toBe(1);
+      // Still owed, so progress doesn't claim it is done, and says why.
+      expect(await db.getVideoFaceAnalysisProgress()).toMatchObject({
+        remaining: 1,
+        coolingDown: 1,
+      });
+      // Not this run's work, so the ETA doesn't price it.
+      expect(await db.getVideoFaceQueueCostInputs()).toEqual([]);
     });
   });
 
@@ -99,7 +104,74 @@ describe("video face queue", () => {
       await addVideo(db, "v/corrupt.mp4");
       await db.saveImageAnalysisDecodeError("v/corrupt.mp4");
       expect(await db.getVideosNeedingFaceAnalysis()).toEqual([]);
-      expect((await db.getVideoFaceAnalysisProgress()).remaining).toBe(0);
+      expect(await db.getVideoFaceAnalysisProgress()).toMatchObject({
+        remaining: 0,
+        unreadable: 1,
+      });
+    });
+  });
+
+  it("hands the queue's sizes and resolutions to the ETA", async () => {
+    await withTempDb(async (db) => {
+      await db.addFile({
+        folder: "/v/",
+        fileName: "4k.mp4",
+        mimeType: "video/mp4",
+        duration: 40,
+        sizeInBytes: 300e6,
+        infoProcessedAt: new Date(),
+        dimensionWidth: 3840,
+        dimensionHeight: 2160,
+        exifProcessedAt: new Date(),
+      });
+      expect(await db.getVideoFaceQueueCostInputs()).toEqual([
+        { durationSeconds: 40, sizeBytes: 300e6, width: 3840, height: 2160 },
+      ]);
+      expect((await db.getVideosNeedingFaceAnalysis())[0]).toMatchObject({
+        relativePath: "/v/4k.mp4",
+        sizeBytes: 300e6,
+      });
+    });
+  });
+
+  it("stores when each person is on screen, and hands it to whoever asks who is in the video", async () => {
+    await withTempDb(async (db) => {
+      await addVideo(db, "v/party.mp4", { duration: 20 });
+      const appearances = [
+        { startMs: 0, endMs: 3_000 },
+        { startMs: 9_000, endMs: 15_000 },
+      ];
+      await db.saveFaceDetectionResult("v/party.mp4", [
+        {
+          box: { x: 0.1, y: 0.2, width: 0.2, height: 0.3 },
+          confidence: 0.9,
+          embedding: unit(1),
+          frameTimeMs: 10_000,
+          appearances,
+        },
+      ]);
+      while (await db.clusterPendingFaces(256)) {
+        /* drain */
+      }
+
+      const [face] = await db.getPeopleFacesForFile("v/party.mp4");
+      expect(face).toMatchObject({ frameTimeMs: 10_000, appearances });
+
+      // Re-detection replaces them, and removing the file leaves no orphans.
+      await db.saveFaceDetectionResult("v/party.mp4", [
+        {
+          box: { x: 0.1, y: 0.2, width: 0.2, height: 0.3 },
+          confidence: 0.9,
+          embedding: unit(1),
+          frameTimeMs: 1_000,
+          appearances: [{ startMs: 1_000, endMs: 2_000 }],
+        },
+      ]);
+      const rows = () =>
+        db.asyncSqlite.all<{ n: number }>("SELECT COUNT(*) AS n FROM faceAppearances");
+      expect((await rows())[0].n).toBe(1);
+      await db.removeFile("v/party.mp4");
+      expect((await rows())[0].n).toBe(0);
     });
   });
 

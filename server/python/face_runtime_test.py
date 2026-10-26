@@ -69,6 +69,23 @@ class FaceRuntimeTest(unittest.TestCase):
         self.assertFalse(h.runtime.gpu_loaded)
         self.assertTrue(any("using CPU for 60s" in line for line in h.logs))
 
+    def test_reports_a_fallback_only_when_the_gpu_was_wanted(self) -> None:
+        h = Harness()
+        h.call()
+        self.assertFalse(h.runtime.on_cpu_fallback)
+        h.gpu_error = OOM
+        h.call()
+        self.assertTrue(h.runtime.on_cpu_fallback)
+        h.clock.now += 61
+        h.gpu_error = None
+        h.call()
+        self.assertFalse(h.runtime.on_cpu_fallback)
+
+        cpu_only = Harness(provider=CPU_PROVIDER)
+        cpu_only.call()
+        self.assertEqual(cpu_only.runtime.last_device, "cpu")
+        self.assertFalse(cpu_only.runtime.on_cpu_fallback)
+
     def test_yield_gpu_hands_over_and_cools_down(self) -> None:
         h = Harness()
         h.call()

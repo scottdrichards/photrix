@@ -192,6 +192,53 @@ describe("StatusModal", () => {
     expect(screen.getByText(/State: Queued/)).toBeInTheDocument();
   });
 
+  it("says why a task is held up, highlighting GPU contention, and prefers the task's own ETA", async () => {
+    let onUpdate: ((status: unknown) => void) | undefined;
+    subscribeStatusStreamMock.mockImplementation((update) => {
+      onUpdate = update as (status: unknown) => void;
+      return () => undefined;
+    });
+    render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
+
+    await act(async () => {
+      onUpdate?.(
+        makeStatus({
+          backgroundTasks: [
+            {
+              id: "background:Video faces",
+              name: "Video faces",
+              queue: "background",
+              state: "paused",
+              itemsProcessed: 10,
+              total: 100,
+              etaMs: 3 * 60 * 60_000,
+              holdup: { reason: "gpu-lent" },
+            },
+            {
+              id: "background:Audio embedding:0",
+              name: "Audio embedding",
+              queue: "background",
+              state: "queued",
+              holdup: {
+                reason: "waiting-for-resources",
+                resources: ["gpu"],
+                heldBy: ["Video faces"],
+              },
+            },
+          ],
+        }),
+      );
+    });
+
+    const [lent, waiting] = screen.getAllByTestId("task-holdup");
+    expect(lent).toHaveTextContent("Paused: GPU lent to video playback");
+    expect(waiting).toHaveTextContent("Waiting for the GPU (in use by Video faces)");
+    expect(lent.className).toMatch(/badgeHot/);
+    expect(screen.getByText(/3 hours remaining/)).toBeInTheDocument();
+    // The holdup replaces the bare "State: Paused".
+    expect(screen.queryByText(/State: Paused/)).not.toBeInTheDocument();
+  });
+
   it("unsubscribes on unmount", () => {
     const unsubscribe = vi.fn();
     subscribeStatusStreamMock.mockReturnValue(unsubscribe);

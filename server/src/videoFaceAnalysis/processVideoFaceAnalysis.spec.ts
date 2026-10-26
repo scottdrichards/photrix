@@ -12,12 +12,20 @@ import {
   type ExtractFrames,
 } from "./processVideoFaceAnalysis.ts";
 
-type Video = { relativePath: string; durationSeconds?: number };
+type Video = { relativePath: string; durationSeconds?: number; sizeBytes?: number };
 
 /** An in-memory stand-in for the queue: a video leaves it once anything is stamped. */
 const fakeDatabase = (videos: Video[]) => {
   const queue = [...videos];
-  const saved = new Map<string, Array<DetectedFace & { frameTimeMs?: number }>>();
+  const saved = new Map<
+    string,
+    Array<
+      DetectedFace & {
+        frameTimeMs?: number;
+        appearances?: ReadonlyArray<{ startMs: number; endMs: number }>;
+      }
+    >
+  >();
   const errors: string[] = [];
   const decodeErrors: string[] = [];
   const take = (relativePath: string) => {
@@ -46,7 +54,11 @@ const fakeDatabase = (videos: Video[]) => {
       getVideoFaceAnalysisProgress: async () => ({
         total: videos.length,
         remaining: queue.length,
+        coolingDown: errors.length,
+        unreadable: decodeErrors.length,
       }),
+      getVideoFaceQueueCostInputs: async () =>
+        queue.map(({ relativePath: _, ...cost }) => cost),
     },
   };
 };
@@ -69,6 +81,8 @@ const framesAt =
     times.map((timeMs, i): AnalysisFrame => ({
       path: path.join(outDir, `f${i}.jpg`),
       timeMs,
+      startMs: timeMs,
+      endMs: times[i + 1] ?? timeMs + 1_000,
     }));
 
 const run = async (
@@ -98,6 +112,13 @@ describe("processVideoFaceAnalysis", () => {
     expect(faces).toHaveLength(2);
     expect(faces.map((f) => f.frameTimeMs)).toEqual([3_000, 3_000]);
     expect(faces.find((f) => f.embedding[0] === 1)?.box.width).toBe(0.3);
+    // On screen from the first frame until the empty one at 6 s.
+    expect(faces.find((f) => f.embedding[0] === 1)?.appearances).toEqual([
+      { startMs: 0, endMs: 6_000 },
+    ]);
+    expect(faces.find((f) => f.embedding[4] === 1)?.appearances).toEqual([
+      { startMs: 3_000, endMs: 6_000 },
+    ]);
   });
 
   it("records a video with no faces as done, so it isn't scanned again", async () => {
@@ -207,6 +228,38 @@ describe("processVideoFaceAnalysis", () => {
     expect(errors).toEqual([]);
     expect(decodeErrors).toEqual([]);
     expect(saved.size).toBe(0);
+  });
+
+  it("prices the queue it still has to do, and says what failed", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const fake = fakeDatabase([
+      { relativePath: "v/bad.mp4", durationSeconds: 10, sizeBytes: 50e6 },
+      { relativePath: "v/big.mp4", durationSeconds: 60, sizeBytes: 500e6 },
+      { relativePath: "v/tiny.mp4", durationSeconds: 5, sizeBytes: 1e6 },
+    ]);
+    const runner = processVideoFaceAnalysis(
+      fake.db,
+      async () => ({ faces: [] }),
+      async (video, duration, outDir) => {
+        if (video.endsWith("bad.mp4")) throw new Error("ffmpeg exited 1");
+        if (video.endsWith("tiny.mp4")) await gate;
+        return framesAt(0)(video, duration, outDir);
+      },
+    );
+    // Wait until the run is parked on the last video.
+    while (!fake.errors.length || !fake.saved.has("v/big.mp4")) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    const status = await runner.getStatus!();
+    expect(status.description).toBe(
+      "Finding faces in videos • 1 failed, retrying in a week",
+    );
+    // Only the tiny clip is left: a second or two, not a third of the run.
+    expect(status.etaMs).toBeGreaterThan(0);
+    expect(status.etaMs).toBeLessThan(10_000);
+    release();
+    await runner.onComplete();
   });
 
   it("reports progress over all videos", async () => {

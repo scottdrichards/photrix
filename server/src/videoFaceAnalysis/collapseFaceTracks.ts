@@ -15,6 +15,10 @@ import type { DetectedFace } from "../faceDetection/faceDetector.type.ts";
  * face it resembles at {@link VIDEO_TRACK_SIMILARITY} or more. Two faces from
  * the same frame never share a track, since they are two different people
  * standing side by side.
+ *
+ * Each kept face also carries when that person is on screen, from the frames
+ * its track was seen in (see {@link trackAppearances}). It costs nothing extra:
+ * the track already knows its frames.
  */
 
 /**
@@ -36,8 +40,30 @@ export const VIDEO_TRACK_SIMILARITY = 0.45;
  */
 export const MIN_VIDEO_FACE_WIDTH = 0.035;
 
-export type FrameFaces = { timeMs: number; faces: DetectedFace[] };
-export type VideoFace = DetectedFace & { frameTimeMs: number };
+/**
+ * Two stretches of one person closer than this are one appearance. It bridges a
+ * single keyframe where the detector missed them (a turned head, motion blur);
+ * keyframes are about a second apart, seeks on a long video far more, so a real
+ * exit and re-entry is never merged on a long video's coarse grid.
+ */
+export const APPEARANCE_MERGE_GAP_MS = 2_000;
+
+/** One frame's faces, and the stretch of video the frame stands for. */
+export type FrameFaces = {
+  timeMs: number;
+  startMs: number;
+  endMs: number;
+  faces: DetectedFace[];
+};
+
+/** A stretch of video, in ms from the start, that a person is on screen for. */
+export type FaceAppearance = { startMs: number; endMs: number };
+
+export type VideoFace = DetectedFace & {
+  frameTimeMs: number;
+  /** When this person is on screen, earliest first. Never empty. */
+  appearances: FaceAppearance[];
+};
 
 const cosine = (a: Float64Array, b: Float64Array): number => {
   if (a.length === 0 || a.length !== b.length) return -1;
@@ -78,7 +104,11 @@ export const collapseFaceTracks = (
     )
     .sort((a, b) => b.quality - a.quality);
 
-  type Track = { best: VideoFace; members: typeof candidates; frames: Set<number> };
+  type Track = {
+    best: DetectedFace & { frameTimeMs: number };
+    members: typeof candidates;
+    frames: Set<number>;
+  };
   const tracks: Track[] = [];
 
   for (const candidate of candidates) {
@@ -106,6 +136,50 @@ export const collapseFaceTracks = (
     }
   }
 
+  const ordered = tracks.map((t) => ({
+    ...t.best,
+    appearances: trackAppearances(frames, t.frames),
+  }));
   // Earliest appearance first: the order a viewer would meet them in.
-  return tracks.map((t) => t.best).sort((a, b) => a.frameTimeMs - b.frameTimeMs);
+  return ordered.sort(
+    (a, b) =>
+      a.appearances[0].startMs - b.appearances[0].startMs ||
+      a.frameTimeMs - b.frameTimeMs,
+  );
+};
+
+/**
+ * The stretches a track is on screen, from the frames it was seen in. A run of
+ * consecutive analysed frames covers the first one's start to the last one's
+ * end, including any frames thinned out between them: someone seen in two
+ * frames in a row was there in between too. Only a frame that was analysed and
+ * did *not* show them ends a run.
+ */
+export const trackAppearances = (
+  frames: readonly FrameFaces[],
+  seenIn: ReadonlySet<number>,
+): FaceAppearance[] => {
+  const runs: FaceAppearance[] = [];
+  let open: FaceAppearance | null = null;
+  frames.forEach((frame, index) => {
+    if (seenIn.has(index)) {
+      if (open) open.endMs = Math.max(open.endMs, frame.endMs);
+      else open = { startMs: frame.startMs, endMs: frame.endMs };
+      return;
+    }
+    if (open) runs.push(open);
+    open = null;
+  });
+  if (open) runs.push(open);
+
+  const merged: FaceAppearance[] = [];
+  for (const run of runs) {
+    const last = merged.at(-1);
+    if (last && run.startMs - last.endMs <= APPEARANCE_MERGE_GAP_MS) {
+      last.endMs = Math.max(last.endMs, run.endMs);
+    } else {
+      merged.push({ ...run });
+    }
+  }
+  return merged;
 };

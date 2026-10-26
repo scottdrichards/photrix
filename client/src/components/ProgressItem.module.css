@@ -28,3 +28,7 @@
   overflow-wrap: break-word;
   word-break: break-word;
 }
+
+.badgeRow {
+  margin-top: var(--space-xs);
+}

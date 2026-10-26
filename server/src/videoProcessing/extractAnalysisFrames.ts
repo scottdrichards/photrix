@@ -44,6 +44,14 @@ export type AnalysisFrame = {
   path: string;
   /** Offset into the video, ms from the start. */
   timeMs: number;
+  /**
+   * The stretch of video this frame stands for, so whoever is in it can be
+   * said to be on screen for that long. A keyframe stands for itself and the
+   * near-duplicates `mpdecimate` dropped after it: from its own time to the
+   * next keyframe that changed. A seek stands for halfway to its neighbours.
+   */
+  startMs: number;
+  endMs: number;
 };
 
 export type FramePlan =
@@ -189,6 +197,11 @@ export const extractAnalysisFrames = async (
 
   if (plan.mode === "seek") {
     const frames: AnalysisFrame[] = [];
+    const times = plan.timesSeconds;
+    const durationMs = (durationSeconds ?? 0) * 1_000;
+    // Halfway to each neighbour, from the planned grid: a failed seek leaves a
+    // hole rather than stretching its neighbours over what nobody looked at.
+    const halfway = (a: number, b: number) => Math.round(((a + b) / 2) * 1_000);
     let lastError: Error | null = null;
     for (const [index, seconds] of plan.timesSeconds.entries()) {
       const framePath = path.join(outDir, `s${String(index).padStart(4, "0")}.jpg`);
@@ -224,7 +237,15 @@ export const extractAnalysisFrames = async (
         continue;
       }
       if ((await readdir(outDir)).includes(path.basename(framePath))) {
-        frames.push({ path: framePath, timeMs: Math.round(seconds * 1_000) });
+        frames.push({
+          path: framePath,
+          timeMs: Math.round(seconds * 1_000),
+          startMs: index === 0 ? 0 : halfway(times[index - 1], seconds),
+          endMs:
+            index === times.length - 1
+              ? Math.round(durationMs)
+              : halfway(seconds, times[index + 1]),
+        });
       }
     }
     // Every seek failing is the file, not its length.
@@ -269,9 +290,21 @@ export const extractAnalysisFrames = async (
       `ffmpeg wrote ${files.length} frames but reported ${times.length} timestamps`,
     );
   }
-  const all = files.map((name, i) => ({
+  const frameTimes = times.map((time) => Math.max(0, Math.round(time * 1_000)));
+  // The last frame runs to the end of the video. With no known length (or a
+  // `-t` cap), it gets the minimum spacing, the least it can stand for.
+  const lastEndMs =
+    plan.maxSeconds === undefined && durationSeconds
+      ? Math.round(durationSeconds * 1_000)
+      : (frameTimes.at(-1) ?? 0) + MIN_FRAME_SPACING_SECONDS * 1_000;
+  const all: AnalysisFrame[] = files.map((name, i) => ({
     path: path.join(outDir, name),
-    timeMs: Math.max(0, Math.round(times[i] * 1_000)),
+    timeMs: frameTimes[i],
+    startMs: frameTimes[i],
+    endMs: Math.max(
+      frameTimes[i],
+      i + 1 < frameTimes.length ? frameTimes[i + 1] : lastEndMs,
+    ),
   }));
   const kept = selectEvenly(all, MAX_ANALYSIS_FRAMES);
   const keptPaths = new Set(kept.map((frame) => frame.path));

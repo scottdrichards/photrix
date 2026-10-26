@@ -9,6 +9,7 @@ import {
   fetchFeedbackItems,
 } from "../api";
 import { ProgressItem } from "./ProgressItem";
+import { describeHoldup } from "./taskHoldup";
 import css from "./StatusModal.module.css";
 
 type ActiveTab = "tasks" | "devtracker";
@@ -60,6 +61,16 @@ const computeEta = (
 };
 
 const capitalize = (value: string) => value[0]?.toUpperCase() + value.slice(1);
+
+const HoldupBadge = ({ task }: { task: BackgroundTaskStatus }) => {
+  if (!task.holdup) return null;
+  const { text, gpu } = describeHoldup(task.holdup);
+  return (
+    <span className={`${css.badge} ${gpu ? css.badgeHot : ""}`} data-testid="task-holdup">
+      {text}
+    </span>
+  );
+};
 
 const syncDialogOpenState = (dialog: HTMLDialogElement, isOpen: boolean) => {
   try {
@@ -178,6 +189,7 @@ const ComputeSection = ({
   totalVramMB,
   unaccountedVramMB,
   arbitration,
+  facesOnCpu,
   onClearTranscodes,
   clearTranscodesLabel,
 }: {
@@ -186,6 +198,7 @@ const ComputeSection = ({
   totalVramMB: number | undefined;
   unaccountedVramMB: number | undefined;
   arbitration: Arbitration | undefined;
+  facesOnCpu: boolean;
   onClearTranscodes: () => void;
   clearTranscodesLabel: string;
 }) => {
@@ -215,9 +228,15 @@ const ComputeSection = ({
               GPU reclaimed for playback
             </span>
           )}
+          {facesOnCpu && (
+            <span className={`${css.badge} ${css.badgeHot}`}>
+              GPU full: faces on CPU
+            </span>
+          )}
           {!arbitration.userActive &&
             !arbitration.workersSuspended &&
-            !arbitration.gpuReclaimed && (
+            !arbitration.gpuReclaimed &&
+            !facesOnCpu && (
               <span className={css.emptyText}>
                 Idle — background work may use the GPU
               </span>
@@ -295,7 +314,7 @@ const toProgress = (task: BackgroundTaskStatus) => {
 const buildTaskDetail = (task: BackgroundTaskStatus) => {
   const detailParts = [
     `Queue: ${capitalize(task.queue)}`,
-    task.state !== "running" ? `State: ${capitalize(task.state)}` : null,
+    task.state !== "running" && !task.holdup ? `State: ${capitalize(task.state)}` : null,
     task.description ?? null,
   ].filter(Boolean);
 
@@ -539,6 +558,9 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                 totalVramMB={status.system.gpu?.memory?.total}
                 unaccountedVramMB={status.system.gpu?.unaccountedMB}
                 arbitration={status.arbitration}
+                facesOnCpu={status.backgroundTasks.some(
+                  (task) => task.holdup?.reason === "faces-on-cpu",
+                )}
                 onClearTranscodes={onClearTranscodes}
                 clearTranscodesLabel={clearTranscodesLabel}
               />
@@ -571,14 +593,20 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                 status.backgroundTasks.map((task) => {
                   const progress = toProgress(task);
                   const detail = buildTaskDetail(task);
+                  // A task that prices its own remaining work knows better
+                  // than items-per-second, when its items differ in cost.
                   const eta =
-                    progress && task.total != null && task.itemsProcessed != null
-                      ? computeEta(
-                          progressHistoryRef.current.get(task.id) ?? [],
-                          task.total,
-                          task.itemsProcessed,
-                        )
-                      : null;
+                    task.etaMs != null
+                      ? task.etaMs > 0
+                        ? formatEta(task.etaMs)
+                        : null
+                      : progress && task.total != null && task.itemsProcessed != null
+                        ? computeEta(
+                            progressHistoryRef.current.get(task.id) ?? [],
+                            task.total,
+                            task.itemsProcessed,
+                          )
+                        : null;
 
                   if (progress) {
                     return (
@@ -588,6 +616,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                         progress={progress}
                         detail={detail}
                         eta={eta}
+                        badge={<HoldupBadge task={task} />}
                         summaryLabel="items"
                       />
                     );
@@ -597,6 +626,7 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                     <div className={css.taskRow} key={task.id}>
                       <span className={css.value}>{task.name}</span>
                       {detail ? <small>{detail}</small> : null}
+                      <HoldupBadge task={task} />
                     </div>
                   );
                 })

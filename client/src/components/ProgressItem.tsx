@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import css from "./ProgressItem.module.css";
 import type { ProgressEntry } from "../api";
 
@@ -6,6 +7,8 @@ type ProgressItemProps = {
   progress: ProgressEntry;
   detail?: string;
   eta?: string | null;
+  /** Shown under the bar, e.g. why the task is paused. */
+  badge?: ReactNode;
   summaryLabel?: string;
   valueFormatter?: (value: number) => string;
 };
@@ -15,6 +18,7 @@ export const ProgressItem = ({
   progress,
   detail,
   eta,
+  badge,
   summaryLabel = "ready",
   valueFormatter = (value: number) => value.toLocaleString(),
 }: ProgressItemProps) => {
@@ -36,6 +40,7 @@ export const ProgressItem = ({
         {eta ? ` (${eta})` : ""}
         {detail ? ` • ${detail}` : ""}
       </span>
+      {badge ? <div className={css.badgeRow}>{badge}</div> : null}
     </div>
   );
 };

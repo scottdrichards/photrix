@@ -48,6 +48,8 @@ type WorkerSuccess = {
   attributes?: Array<{ id?: unknown } & Record<string, unknown>>;
   facesError?: string;
   embeddingError?: string;
+  /** Set when the face model is configured for the GPU but this call ran on CPU. */
+  facesOnCpuFallback?: boolean;
 };
 
 type WorkerResponse =
@@ -363,6 +365,26 @@ registerComputeWorker(
   () => analysisWorker.getProcess()?.pid ?? null,
 );
 
+// Where face detection last ran. The worker falls back to CPU per call when
+// the GPU is full (face_runtime.py), which keeps answers coming but runs ~10x
+// slower, so the status view says so instead of only looking slow.
+const faceDevice = { lastFallbackAt: 0, lastOnGpuAt: 0 };
+/** A fallback this old with no face call since says nothing about now. */
+const FACE_DEVICE_STALE_MS = 5 * 60_000;
+
+const noteFaceDevice = (onCpuFallback: boolean, at = Date.now()) => {
+  if (onCpuFallback) faceDevice.lastFallbackAt = at;
+  else faceDevice.lastOnGpuAt = at;
+};
+
+/**
+ * True when the face model is configured for the GPU, its latest call ran on
+ * CPU, and that was recent. CPU-only configurations never report it.
+ */
+export const isFaceModelOnCpuFallback = (now = Date.now()): boolean =>
+  faceDevice.lastFallbackAt > faceDevice.lastOnGpuAt &&
+  now - faceDevice.lastFallbackAt < FACE_DEVICE_STALE_MS;
+
 /**
  * Decode an image once and run the requested model(s). The caller asks only for
  * the parts a file is still missing, so completed work is never recomputed.
@@ -390,7 +412,10 @@ export const analyzeImage = async (
   }
 
   const result: ImageAnalysisResult = {};
-  if (raw.faces) result.faces = raw.faces.map(asDetectedFace);
+  if (raw.faces) {
+    result.faces = raw.faces.map(asDetectedFace);
+    noteFaceDevice(raw.facesOnCpuFallback === true);
+  }
   if (raw.embedding) result.embedding = new Float32Array(raw.embedding);
   if (raw.facesError) result.facesError = raw.facesError;
   if (raw.embeddingError) result.embeddingError = raw.embeddingError;

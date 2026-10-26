@@ -80,9 +80,12 @@
 }
 
 .videoWrapper {
-  width: min(100%, 90vw, calc(90vh * var(--video-ar, 1.7778)));
+  /* --people-h makes room below the video for the people timeline, so it
+     never covers the player's own controls. */
+  width: min(100%, 90vw, calc((90vh - var(--people-h, 0px)) * var(--video-ar, 1.7778)));
   max-width: min(100%, 90vw);
-  max-height: 100%;
+  max-height: calc(100% - var(--people-h, 0px));
+  margin-bottom: var(--people-h, 0px);
   height: auto;
   display: flex;
   align-items: center;
@@ -680,4 +683,14 @@
     max-height: none;
     margin: 0 auto;
   }
+}
+
+.videoPeople {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-s);
+  transform: translateX(-50%);
+  width: min(720px, 90vw);
+  overflow-y: auto;
+  z-index: 100;
 }

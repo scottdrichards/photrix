@@ -515,6 +515,9 @@ def _handle_analyze_image(payload: dict) -> dict:
     if want_faces:
         try:
             response["faces"] = _detect_faces(rgb)
+            # Lets the server show "faces on CPU" while the GPU is full.
+            if _faces.on_cpu_fallback:
+                response["facesOnCpuFallback"] = True
         except Exception as exc:  # noqa: BLE001 - report per-part, keep worker alive
             response["facesError"] = str(exc)
     if want_embed:

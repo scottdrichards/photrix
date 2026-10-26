@@ -370,6 +370,24 @@ export const tables = {
     compositeIndexes: [],
   },
   /**
+   * When each video face's person is on screen: one row per stretch, in ms from
+   * the start of the video. Only video faces have rows; a still has no time.
+   *
+   * Kept beside `faces` rather than in it, like `faceEmbeddings`, so nothing
+   * that reads face rows pays for it. Keyed by face, so it follows the face
+   * through clustering, naming and merges with no bookkeeping: "when is this
+   * person on screen" is a join from whatever face query already ran. Every
+   * face delete removes these rows too (see `deleteFacesStatements`).
+   */
+  faceAppearances: {
+    columns: [
+      { name: "faceId", type: "INTEGER", isPrimaryKey: true },
+      { name: "startMs", type: "INTEGER", isPrimaryKey: true },
+      { name: "endMs", type: "INTEGER" },
+    ],
+    compositeIndexes: [],
+  },
+  /**
    * CLIP image and audio vectors, one row per file that has at least one.
    *
    * Same reasoning as `faceEmbeddings`: the two 2 KB BLOBs inline pushed every

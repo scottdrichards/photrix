@@ -386,6 +386,35 @@ export const filterFieldCapabilities = Object.fromEntries(
   { supportsArray: boolean; allowsNullState: boolean }
 >;
 
+/**
+ * Why a background task isn't making full progress right now.
+ *
+ * - `background-off`: the "Enable background tasks" switch is off.
+ * - `user-active`: someone is using the app, and background work yields.
+ * - `gpu-lent`: as `user-active`, and the GPU was also handed to video
+ *   playback (the ML workers were killed to free its memory). Only reported
+ *   for tasks that use the GPU.
+ * - `server-busy`: the server is under load, so the task runs in bursts.
+ * - `waiting-for-resources`: queued until running tasks free `resources`.
+ * - `faces-on-cpu`: running, but the face model fell back to the CPU because
+ *   the GPU is full, so it is several times slower.
+ */
+export type TaskHoldupReason =
+  | "background-off"
+  | "user-active"
+  | "gpu-lent"
+  | "server-busy"
+  | "waiting-for-resources"
+  | "faces-on-cpu";
+
+export type TaskHoldup = {
+  reason: TaskHoldupReason;
+  /** `waiting-for-resources` only: the budgets that are full, e.g. "gpu". */
+  resources?: string[];
+  /** `waiting-for-resources` only: the running tasks holding them. */
+  heldBy?: string[];
+};
+
 export type BackgroundTaskStatus = {
   id: string;
   name: string;
@@ -395,6 +424,13 @@ export type BackgroundTaskStatus = {
   total?: number;
   portionComplete?: number;
   description?: string;
+  /** Present only while the task is held up; see {@link TaskHoldup}. */
+  holdup?: TaskHoldup;
+  /**
+   * The task's own estimate of the time left, when it can price its remaining
+   * work better than items-per-second can (items that differ widely in cost).
+   */
+  etaMs?: number;
 };
 
 export type ComputeProcessRole = "image" | "clap" | "whisper" | "other";

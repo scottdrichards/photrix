@@ -68,6 +68,7 @@ import { computePCA3D } from "./pca.ts";
 import { getLogger } from "../observability/logger.ts";
 import { FACE_ATTRIBUTE_VERSION } from "../faceDetection/faceAttributes.ts";
 import type { FaceAttributes } from "../faceDetection/faceDetector.type.ts";
+import type { VideoFaceCostInputs } from "../videoFaceAnalysis/videoFaceCost.ts";
 import {
   computePhotoQualityScore,
   faceAttributesToQualityInputs,
@@ -322,6 +323,33 @@ const FACE_CLUSTER_PCA_NEIGHBORS = 10;
 // thousands of clusters (megabytes) and a big person's detail tens of
 // thousands of face entries.
 const MAX_FACE_CLUSTERS_LISTED = 1000;
+const finiteOrUndefined = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+const toVideoFaceCostInputs = (row: Record<string, unknown>): VideoFaceCostInputs => ({
+  durationSeconds: finiteOrUndefined(row.duration),
+  sizeBytes: finiteOrUndefined(row.sizeInBytes),
+  width: finiteOrUndefined(row.dimensionsWidth),
+  height: finiteOrUndefined(row.dimensionsHeight),
+});
+
+/**
+ * Deletes the face rows matching `where` and every row keyed by their ids.
+ * The side tables go first, since they find their rows through the faces
+ * about to be removed. The one place a face is deleted, so a new per-face
+ * table can't be orphaned by a delete path that forgot it.
+ */
+const deleteFacesStatements = (
+  where: string,
+  params: unknown[],
+): Array<{ sql: string; params: unknown[] }> => [
+  ...["faceAppearances", "faceEmbeddings"].map((table) => ({
+    sql: `DELETE FROM ${table} WHERE faceId IN (SELECT id FROM faces WHERE ${where})`,
+    params,
+  })),
+  { sql: `DELETE FROM faces WHERE ${where}`, params },
+];
+
 const MAX_FACES_IN_CLUSTER_DETAIL = 2000;
 const MAX_MERGE_SUGGESTIONS = 6;
 
@@ -1151,6 +1179,8 @@ export class IndexDatabase {
       attributes?: FaceAttributes;
       /** Video faces only — see `faces.frameTimeMs`. */
       frameTimeMs?: number;
+      /** Video faces only — see the `faceAppearances` table. */
+      appearances?: ReadonlyArray<{ startMs: number; endMs: number }>;
     }>,
     detectedAt: Date = new Date(),
   ): Promise<void> {
@@ -1162,17 +1192,7 @@ export class IndexDatabase {
     await this.withdrawFaceClusterAssignments(folder, fileName);
 
     const statements: Array<{ sql: string; params: unknown[] }> = [
-      {
-        // Must precede the face delete — it resolves the outgoing face ids
-        // through the rows it is about to remove.
-        sql: `DELETE FROM faceEmbeddings WHERE faceId IN (
-                SELECT id FROM faces WHERE folder = ? AND fileName = ?)`,
-        params: [folder, fileName],
-      },
-      {
-        sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
-        params: [folder, fileName],
-      },
+      ...deleteFacesStatements("folder = ? AND fileName = ?", [folder, fileName]),
     ];
 
     for (const face of faces) {
@@ -1240,30 +1260,36 @@ export class IndexDatabase {
       fileName,
     );
     if (insertedIds.length === faces.length) {
-      const embeddingStatements: Array<{ sql: string; params: unknown[] }> = [];
+      const perFaceStatements: Array<{ sql: string; params: unknown[] }> = [];
       faces.forEach((face, index) => {
+        for (const { startMs, endMs } of face.appearances ?? []) {
+          perFaceStatements.push({
+            sql: "INSERT OR REPLACE INTO faceAppearances (faceId, startMs, endMs) VALUES (?, ?, ?)",
+            params: [insertedIds[index].id, Math.round(startMs), Math.round(endMs)],
+          });
+        }
         const encoded = encodeEmbedding(face.embedding);
         if (encoded) {
-          embeddingStatements.push({
+          perFaceStatements.push({
             sql: "INSERT INTO faceEmbeddings (faceId, embedding) VALUES (?, ?)",
             params: [insertedIds[index].id, encoded],
           });
         } else {
           // No usable vector: stamp the sentinel so the clustering backfill
           // (which now selects purely on `clusterId IS NULL`) skips it forever.
-          embeddingStatements.push({
+          perFaceStatements.push({
             sql: "UPDATE faces SET clusterId = ? WHERE id = ?",
             params: [UNCLUSTERABLE_CLUSTER_ID, insertedIds[index].id],
           });
         }
       });
-      if (embeddingStatements.length > 0) {
-        await this.db.transaction(embeddingStatements);
+      if (perFaceStatements.length > 0) {
+        await this.db.transaction(perFaceStatements);
       }
     } else {
       log.warn(
         { path: relativePath, inserted: insertedIds.length, expected: faces.length },
-        "Face row count did not match detection count; skipping embedding write",
+        "Face row count did not match detection count; skipping embedding and appearance write",
       );
     }
 
@@ -1498,16 +1524,7 @@ export class IndexDatabase {
     await this.withdrawFaceClusterAssignments(folder, fileName);
 
     const statements: Array<{ sql: string; params: unknown[] }> = [
-      {
-        // Before the faces delete — it resolves ids through those rows.
-        sql: `DELETE FROM faceEmbeddings WHERE faceId IN (
-                SELECT id FROM faces WHERE folder = ? AND fileName = ?)`,
-        params: [folder, fileName],
-      },
-      {
-        sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
-        params: [folder, fileName],
-      },
+      ...deleteFacesStatements("folder = ? AND fileName = ?", [folder, fileName]),
       ...faces.map((face) => ({
         // Faces named by EXIF regions carry no recognition vector, so they get
         // no faceEmbeddings row. UNCLUSTERABLE is what keeps the clustering
@@ -1609,6 +1626,10 @@ export class IndexDatabase {
       box: { x: number; y: number; width: number; height: number };
       personId: string;
       name: string | null;
+      /** Video faces only: the frame the box is on. */
+      frameTimeMs?: number;
+      /** Video faces only: when this person is on screen, earliest first. */
+      appearances?: Array<{ startMs: number; endMs: number }>;
     }>
   > {
     const { folder, fileName } = splitPath(relativePath);
@@ -1620,6 +1641,7 @@ export class IndexDatabase {
       boxHeight: number;
       personId: number;
       name: string | null;
+      frameTimeMs: number | null;
     }>(
       `SELECT
          faces.id,
@@ -1628,7 +1650,8 @@ export class IndexDatabase {
          faces.boxWidth,
          faces.boxHeight,
          COALESCE(cluster.personId, faces.clusterId) AS personId,
-         person.name AS name
+         person.name AS name,
+         faces.frameTimeMs
        FROM faces
        LEFT JOIN faceClusters AS cluster ON cluster.id = faces.clusterId
        LEFT JOIN faceClusters AS person
@@ -1638,6 +1661,10 @@ export class IndexDatabase {
       folder,
       fileName,
     );
+    // Only video faces have appearances, so a photo skips the lookup.
+    const appearances = rows.some((row) => typeof row.frameTimeMs === "number")
+      ? await this.getFaceAppearances(rows.map((row) => row.id))
+      : new Map<number, Array<{ startMs: number; endMs: number }>>();
 
     return rows.map((row) => ({
       faceId: row.id,
@@ -1649,7 +1676,35 @@ export class IndexDatabase {
       },
       personId: faceClusterIdToString(row.personId),
       name: row.name,
+      ...(typeof row.frameTimeMs === "number" ? { frameTimeMs: row.frameTimeMs } : {}),
+      ...(appearances.has(row.id) ? { appearances: appearances.get(row.id) } : {}),
     }));
+  }
+
+  /**
+   * When each of these faces is on screen, earliest first, keyed by face id.
+   * Faces from stills have no rows and are absent from the map.
+   */
+  async getFaceAppearances(
+    faceIds: readonly number[],
+  ): Promise<Map<number, Array<{ startMs: number; endMs: number }>>> {
+    const result = new Map<number, Array<{ startMs: number; endMs: number }>>();
+    // Chunked to stay well under SQLite's bound-parameter limit.
+    for (let i = 0; i < faceIds.length; i += 500) {
+      const chunk = faceIds.slice(i, i + 500);
+      const rows = await this.db.all<{ faceId: number; startMs: number; endMs: number }>(
+        `SELECT faceId, startMs, endMs FROM faceAppearances
+         WHERE faceId IN (${chunk.map(() => "?").join(",")})
+         ORDER BY faceId, startMs`,
+        ...chunk,
+      );
+      for (const { faceId, startMs, endMs } of rows) {
+        const list = result.get(faceId) ?? [];
+        list.push({ startMs, endMs });
+        result.set(faceId, list);
+      }
+    }
+    return result;
   }
 
   /**
@@ -1806,16 +1861,9 @@ export class IndexDatabase {
       "DELETE FROM files WHERE folder = ? AND fileName = ?",
       [folder, fileName],
     );
-    // Before the faces delete — it resolves ids through the rows it removes.
-    await this.db.run(
-      `DELETE FROM faceEmbeddings WHERE faceId IN (
-         SELECT id FROM faces WHERE folder = ? AND fileName = ?)`,
-      [folder, fileName],
+    await this.db.transaction(
+      deleteFacesStatements("folder = ? AND fileName = ?", [folder, fileName]),
     );
-    await this.db.run("DELETE FROM faces WHERE folder = ? AND fileName = ?", [
-      folder,
-      fileName,
-    ]);
     await this.db.run("DELETE FROM fileEmbeddings WHERE folder = ? AND fileName = ?", [
       folder,
       fileName,
@@ -1869,15 +1917,9 @@ export class IndexDatabase {
 
     // Face/audio detections are keyed by path and describe the old content, so
     // drop them; the analysis pass regenerates them from the new bytes.
-    await this.db.run(
-      `DELETE FROM faceEmbeddings WHERE faceId IN (
-         SELECT id FROM faces WHERE folder = ? AND fileName = ?)`,
-      [folder, fileName],
+    await this.db.transaction(
+      deleteFacesStatements("folder = ? AND fileName = ?", [folder, fileName]),
     );
-    await this.db.run("DELETE FROM faces WHERE folder = ? AND fileName = ?", [
-      folder,
-      fileName,
-    ]);
     await this.db.run("DELETE FROM audioSegments WHERE folder = ? AND fileName = ?", [
       folder,
       fileName,
@@ -1897,16 +1939,7 @@ export class IndexDatabase {
           sql: "DELETE FROM files WHERE folder = ? AND fileName = ?",
           params: [folder, fileName] as unknown[],
         },
-        {
-          // Before the faces delete — it resolves ids through those rows.
-          sql: `DELETE FROM faceEmbeddings WHERE faceId IN (
-                  SELECT id FROM faces WHERE folder = ? AND fileName = ?)`,
-          params: [folder, fileName] as unknown[],
-        },
-        {
-          sql: "DELETE FROM faces WHERE folder = ? AND fileName = ?",
-          params: [folder, fileName] as unknown[],
-        },
+        ...deleteFacesStatements("folder = ? AND fileName = ?", [folder, fileName]),
         {
           sql: "DELETE FROM fileEmbeddings WHERE folder = ? AND fileName = ?",
           params: [folder, fileName] as unknown[],
@@ -1930,16 +1963,7 @@ export class IndexDatabase {
         sql: "DELETE FROM files WHERE folder LIKE ? ESCAPE '\\'",
         params: [likePattern],
       },
-      {
-        // Before the faces delete — it resolves ids through those rows.
-        sql: `DELETE FROM faceEmbeddings WHERE faceId IN (
-                SELECT id FROM faces WHERE folder LIKE ? ESCAPE '\\')`,
-        params: [likePattern],
-      },
-      {
-        sql: "DELETE FROM faces WHERE folder LIKE ? ESCAPE '\\'",
-        params: [likePattern],
-      },
+      ...deleteFacesStatements("folder LIKE ? ESCAPE '\\'", [likePattern]),
       {
         sql: "DELETE FROM fileEmbeddings WHERE folder LIKE ? ESCAPE '\\'",
         params: [likePattern],
@@ -5164,11 +5188,11 @@ export class IndexDatabase {
              AND still.livePhotoVideoFileName = files.fileName
          )`;
 
-  async getVideosNeedingFaceAnalysis(
-    limit = 20,
-  ): Promise<Array<{ relativePath: string; durationSeconds?: number }>> {
+  async getVideosNeedingFaceAnalysis(limit = 20): Promise<
+    Array<{ relativePath: string } & VideoFaceCostInputs>
+  > {
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT folder, fileName, duration FROM files
+      `SELECT folder, fileName, ${IndexDatabase.VIDEO_FACE_COST_COLUMNS} FROM files
        WHERE ${IndexDatabase.VIDEOS_NEEDING_FACES_WHERE}
          AND (facesLastErrorAt IS NULL OR facesLastErrorAt < ?)
        ORDER BY facesLastErrorAt IS NOT NULL, dateTaken DESC NULLS LAST,
@@ -5179,8 +5203,27 @@ export class IndexDatabase {
     );
     return rows.map((row) => ({
       relativePath: joinPath(row.folder as string, row.fileName as string),
-      durationSeconds: typeof row.duration === "number" ? row.duration : undefined,
+      ...toVideoFaceCostInputs(row),
     }));
+  }
+
+  /** What the video-face ETA needs to know about a video. */
+  private static readonly VIDEO_FACE_COST_COLUMNS =
+    "duration, sizeInBytes, dimensionsWidth, dimensionsHeight";
+
+  /**
+   * Cost inputs for every video this run will still process: queued and not
+   * cooling down after a failure. For the ETA, which prices each video by its
+   * length, size and resolution rather than counting them as equal.
+   */
+  async getVideoFaceQueueCostInputs(): Promise<VideoFaceCostInputs[]> {
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT ${IndexDatabase.VIDEO_FACE_COST_COLUMNS} FROM files
+       WHERE ${IndexDatabase.VIDEOS_NEEDING_FACES_WHERE}
+         AND (facesLastErrorAt IS NULL OR facesLastErrorAt < ?)`,
+      Date.now() - IndexDatabase.VIDEO_FACE_RETRY_COOLDOWN_MS,
+    );
+    return rows.map(toVideoFaceCostInputs);
   }
 
   /** Starts the retry cooldown for a video whose face pass failed. */
@@ -5194,14 +5237,38 @@ export class IndexDatabase {
     );
   }
 
-  /** `remaining` counts videos still queued, including ones cooling down after a failure. */
-  async getVideoFaceAnalysisProgress(): Promise<{ total: number; remaining: number }> {
-    const row = await this.db.get<{ total: number; remaining: number }>(
+  /**
+   * `remaining` counts videos still queued, including `coolingDown`: ones that
+   * failed and wait out the retry cooldown. `unreadable` were dropped for good
+   * (ffmpeg found no frame) and are in neither count.
+   */
+  async getVideoFaceAnalysisProgress(): Promise<{
+    total: number;
+    remaining: number;
+    coolingDown: number;
+    unreadable: number;
+  }> {
+    const row = await this.db.get<{
+      total: number;
+      remaining: number;
+      coolingDown: number;
+      unreadable: number;
+    }>(
       `SELECT
          (SELECT COUNT(*) FROM files WHERE mimeType LIKE 'video/%') AS total,
-         (SELECT COUNT(*) FROM files WHERE ${IndexDatabase.VIDEOS_NEEDING_FACES_WHERE}) AS remaining`,
+         (SELECT COUNT(*) FROM files WHERE ${IndexDatabase.VIDEOS_NEEDING_FACES_WHERE}) AS remaining,
+         (SELECT COUNT(*) FROM files WHERE ${IndexDatabase.VIDEOS_NEEDING_FACES_WHERE}
+            AND facesLastErrorAt >= ?) AS coolingDown,
+         (SELECT COUNT(*) FROM files WHERE mimeType LIKE 'video/%'
+            AND facesProcessedAt IS NULL AND analysisDecodeErrorAt IS NOT NULL) AS unreadable`,
+      Date.now() - IndexDatabase.VIDEO_FACE_RETRY_COOLDOWN_MS,
     );
-    return { total: row?.total ?? 0, remaining: row?.remaining ?? 0 };
+    return {
+      total: row?.total ?? 0,
+      remaining: row?.remaining ?? 0,
+      coolingDown: row?.coolingDown ?? 0,
+      unreadable: row?.unreadable ?? 0,
+    };
   }
 
   /** True when images exist that are waiting for upstream EXIF/info tasks to run before analysis can start. */

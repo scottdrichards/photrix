@@ -45,6 +45,8 @@ export type {
   FaceClusterPCAPoint,
   MomentClusterMember,
   MomentClusterDetail,
+  TaskHoldup,
+  FaceAppearance,
 } from "./types";
 
 export { buildFullShareFilter, buildShareScope } from "./filters";

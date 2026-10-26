@@ -15,6 +15,7 @@ import {
   analyzeFaceAttributes,
   analyzeImage,
   embedText,
+  isFaceModelOnCpuFallback,
 } from "./imageAnalysis/imageAnalysisWorker.ts";
 import { processImageAnalysis } from "./imageAnalysis/processImageAnalysis.ts";
 import { processFaceAttributes } from "./imageAnalysis/processFaceAttributes.ts";
@@ -38,6 +39,7 @@ import {
   resumeComputeWorkers,
   suspendComputeWorkers,
   releaseGpuReclaim,
+  isGpuReclaimed,
   shutdownComputeWorkers,
 } from "./taskOrchestrator/computeWorkers.ts";
 import { reapOrphanedComputeWorkers } from "./taskOrchestrator/reapOrphanedWorkers.ts";
@@ -102,6 +104,13 @@ const startServer = async () => {
       resume: resumeComputeWorkers,
       releaseReclaim: releaseGpuReclaim,
     },
+    isGpuReclaimed,
+    // Every image-analysis-typed task shares the one worker and its face model,
+    // so a CPU fallback slows all of them.
+    holdupHint: ({ type }) =>
+      type === "imageAnalysis" && isFaceModelOnCpuFallback()
+        ? { reason: "faces-on-cpu" }
+        : undefined,
   });
   // An active HLS playback counts as user activity for its entire session
   // lifetime (until the idle reaper fires), not just per segment fetch. A
