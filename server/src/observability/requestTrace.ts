@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { logger } from "./logger.ts";
 import { redactRequestPath } from "./privacy.ts";
+import { recordRequestEnd, recordRequestStart, routeKey } from "./perfMonitor.ts";
 import {
   context as otelContext,
   ROOT_CONTEXT,
@@ -31,6 +32,9 @@ type RequestSpan = {
 
 type RequestTraceContext = {
   requestId: string;
+  // Unique per request even when a client reuses an inbound x-request-id.
+  perfId: string;
+  route: string;
   method: string;
   url: string;
   clientSessionId?: string;
@@ -151,6 +155,8 @@ export const runWithRequestTrace = async <T>(
   );
   const context: RequestTraceContext = {
     requestId,
+    perfId: randomUUID(),
+    route: routeKey(meta.method, meta.url),
     method: meta.method,
     url: meta.url,
     ...(meta.clientSessionId ? { clientSessionId: meta.clientSessionId } : {}),
@@ -163,6 +169,7 @@ export const runWithRequestTrace = async <T>(
     spans: [],
   };
 
+  recordRequestStart(context.perfId, context.route);
   return await requestTraceStorage.run(
     context,
     async () =>
@@ -192,6 +199,13 @@ export const finishRequestTrace = (statusCode: number): void => {
     code: statusCode >= 500 ? SpanStatusCode.ERROR : SpanStatusCode.OK,
   });
   context.rootSpan.end();
+  recordRequestEnd(context.perfId, {
+    route: context.route,
+    statusCode,
+    durationMs: totalDuration,
+    // Only top-level spans: nested ones are already inside their parent's time.
+    spans: context.spans.filter((span) => span.depth === 0),
+  });
 
   const logLevel = statusCode >= 500 ? "error" : statusCode >= 400 ? "warn" : "info";
   logger[logLevel](

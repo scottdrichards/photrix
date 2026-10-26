@@ -38,6 +38,7 @@ import { getToken } from "../auth";
 import { createClientOperationId, logClientEvent } from "../diagnostics";
 import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes, type NamedFace } from "./FaceOverlay";
 import { VideoPeopleTimeline } from "./VideoPeopleTimeline";
+import { VideoLoadingOverlay, type PlaybackState } from "./VideoLoadingOverlay";
 import { videoPeople } from "./videoPeople";
 
 // The people timeline under a video: its rows are this tall, and past this many
@@ -144,18 +145,13 @@ const syncDialogOpenState = (dialog: HTMLDialogElement, isOpen: boolean) => {
   }
 };
 
-type VideoStatus = "hls" | "direct" | "unavailable" | null;
+type VideoStatus = "hls" | "direct" | null;
 
 // How long a direct stream may stay stalled before we give up on it and switch to
 // adaptive HLS. Long enough to ride out a brief buffering blip, short enough that a
 // genuinely under-provisioned link recovers quickly.
 const DIRECT_STALL_FALLBACK_MS = 3000;
 
-const videoStatusLabel: Record<NonNullable<VideoStatus>, string> = {
-  hls: "HLS",
-  direct: "Raw Video",
-  unavailable: "Playback Unavailable",
-};
 
 const formatShutterSpeed = (exposureTime: unknown): string | null => {
   const t =
@@ -341,6 +337,22 @@ export function FullscreenViewer() {
 
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [videoStatus, setVideoStatus] = useState<VideoStatus>(null);
+  // What the player is waiting on, shown by VideoLoadingOverlay.
+  const [playback, setPlayback] = useState<PlaybackState>({ phase: "idle", since: 0 });
+  // When bytes last arrived; a ref because progress fires several times a second.
+  const lastDataAtRef = useRef(0);
+  const [retryNonce, setRetryNonce] = useState(0);
+  // Per-attempt numbers for the `video.playback.summary` diagnostics event.
+  const playbackStatsRef = useRef<{
+    startedAt: number;
+    mode: string | null;
+    reason: string | null;
+    firstFrameAt: number | null;
+    stalls: number;
+    stalledMs: number;
+    stallStartedAt: number | null;
+    levelSwitches: number;
+  } | null>(null);
   // ABR quality selector. `hlsLevels` are the variants the player can switch between
   // (ascending height); `manualLevel` is -1 for Auto/ABR or a level index to lock to;
   // `activeLevelHeight` is the height ABR is currently playing (for the "Auto" label).
@@ -654,13 +666,14 @@ export function FullscreenViewer() {
       }
     };
 
-    const markPlaybackUnavailable = () => {
+    const markPlaybackUnavailable = (reason: string) => {
       destroyHls();
       clearVideoSource(video);
       if (cancelled) {
         return;
       }
-      setVideoStatus("unavailable");
+      setPlayback({ phase: "unavailable", since: Date.now(), detail: reason });
+      setVideoStatus(null);
       setHlsLevels([]);
       setManualLevel(-1);
       setActiveLevelHeight(null);
@@ -674,6 +687,19 @@ export function FullscreenViewer() {
     setHlsLevels([]);
     setManualLevel(-1);
     setActiveLevelHeight(null);
+    setPlayback({ phase: "measuring", since: Date.now() });
+    lastDataAtRef.current = 0;
+    const stats = {
+      startedAt: Date.now(),
+      mode: null as string | null,
+      reason: null as string | null,
+      firstFrameAt: null as number | null,
+      stalls: 0,
+      stalledMs: 0,
+      stallStartedAt: null as number | null,
+      levelSwitches: 0,
+    };
+    playbackStatsRef.current = stats;
 
     const loadSelectedPlayback = async () => {
       try {
@@ -687,6 +713,7 @@ export function FullscreenViewer() {
         });
         const playbackProfile = await probeVideoPlaybackProfile();
         if (cancelled) return;
+        setPlayback({ phase: "negotiating", since: Date.now() });
 
         const negotiation = await negotiateVideoPlayback({
           path: photo.path,
@@ -696,6 +723,8 @@ export function FullscreenViewer() {
           clientOperationId,
         });
         if (cancelled) return;
+        stats.mode = negotiation.mode;
+        stats.reason = negotiation.reason;
 
         // Restore playback position after a direct→HLS fallback (the ref is only
         // set on that path). Registered before the source is attached so it catches
@@ -737,14 +766,17 @@ export function FullscreenViewer() {
           // No transcode is available (e.g. no GPU) and the link can't carry the
           // raw file. We deliberately do NOT fall back to the raw original — it
           // would only buffer endlessly — so fail visibly instead.
-          markPlaybackUnavailable();
+          markPlaybackUnavailable(negotiation.reason);
           return;
         }
 
         if (negotiation.mode === "direct") {
           // The server measured the connection as fast enough for the untranscoded
           // file (and the browser supports its codec), so play it directly — no GPU.
-          if (!cancelled) setVideoStatus("direct");
+          if (!cancelled) {
+            setVideoStatus("direct");
+            setPlayback({ phase: "starting", since: Date.now(), detail: "Loading original…" });
+          }
           restorePlaybackPosition();
           // negotiation.url is server-built and token-less; use photo.originalUrl
           // (client-built, token-bearing) for the same file.
@@ -808,7 +840,6 @@ export function FullscreenViewer() {
           const hls = new Hls({
             enableWorker: true,
             lowLatencyMode: false,
-            startLevel: 0,
             loader: DurationCapturingLoader,
             // Inject auth token into every XHR hls.js makes (manifest, playlists, segments)
             ...(authToken
@@ -831,15 +862,29 @@ export function FullscreenViewer() {
             // already took for the direct-vs-HLS negotiation (playbackProfile),
             // instead of hls.js's hardcoded 500kbps default — reuses the existing
             // probe rather than starting ABR blind on a link we've already sampled.
+            // With that measurement, also start at the rung it supports instead of
+            // test-loading the lowest one first: every rung is a separate on-demand
+            // GPU encode on the server, so climbing 360p→720p→1080p on open costs
+            // two extra encodes and two visible quality jumps. Without one, hls.js
+            // falls back to test-loading the lowest rung.
             ...(playbackProfile.bandwidthMbps
-              ? { abrEwmaDefaultEstimate: playbackProfile.bandwidthMbps * 1_000_000 }
+              ? {
+                  abrEwmaDefaultEstimate: playbackProfile.bandwidthMbps * 1_000_000,
+                  testBandwidth: false,
+                }
               : {}),
           });
 
           restorePlaybackPosition();
           hls.loadSource(hlsUrl);
           hls.attachMedia(video);
-          if (!cancelled) setVideoStatus("hls");
+          if (!cancelled) {
+            setVideoStatus("hls");
+            setPlayback({ phase: "starting", since: Date.now(), detail: "Starting stream…" });
+          }
+          hls.on(Hls.Events.FRAG_LOADED, () => {
+            lastDataAtRef.current = Date.now();
+          });
 
           const getDuration = () => serverDuration ?? knownDuration ?? video.duration;
 
@@ -899,6 +944,7 @@ export function FullscreenViewer() {
 
           // Reflect the level ABR has settled on so the "Auto" option can show it.
           hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
+            stats.levelSwitches += 1;
             if (!cancelled) setActiveLevelHeight(hls.levels[data.level]?.height ?? null);
           });
 
@@ -935,7 +981,7 @@ export function FullscreenViewer() {
             }
             // No raw fallback: an unrecoverable HLS error fails visibly rather
             // than dropping to the full-size original.
-            markPlaybackUnavailable();
+            markPlaybackUnavailable(`The stream failed (${data.details}).`);
           });
           hlsRef.current = hls;
           // Asymmetric ABR: downswitches stay on hls.js's own fast, untouched
@@ -947,7 +993,10 @@ export function FullscreenViewer() {
         }
 
         if (nativeHlsSupport) {
-          if (!cancelled) setVideoStatus("hls");
+          if (!cancelled) {
+            setVideoStatus("hls");
+            setPlayback({ phase: "starting", since: Date.now(), detail: "Starting stream…" });
+          }
           restorePlaybackPosition();
           // For native HLS (Safari), Authorization headers can't be set, so
           // embed the token as a query param. The server propagates it through
@@ -961,7 +1010,7 @@ export function FullscreenViewer() {
         }
 
         // Browser can play neither hls.js nor native HLS: no raw fallback.
-        markPlaybackUnavailable();
+        markPlaybackUnavailable("This browser can't play adaptive (HLS) streams.");
       } catch (error) {
         logClientEvent({
           level: "error",
@@ -974,7 +1023,9 @@ export function FullscreenViewer() {
           },
           immediate: true,
         });
-        markPlaybackUnavailable();
+        markPlaybackUnavailable(
+          `Couldn't start playback: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     };
 
@@ -982,18 +1033,40 @@ export function FullscreenViewer() {
 
     return () => {
       cancelled = true;
+      // One event per attempt that answers "was it slow, and why": startup
+      // time (or how long the user waited before giving up), stalls, ABR
+      // switches and frames the browser dropped.
+      const now = Date.now();
+      const quality = video.getVideoPlaybackQuality?.();
       logClientEvent({
-        level: "info",
-        event: "video.playback.cleanup",
-        message: `Cleaned up playback for ${photo.path}`,
+        level: stats.stalls > 0 || !stats.firstFrameAt ? "warn" : "info",
+        event: "video.playback.summary",
+        message: `Playback summary for ${photo.path}`,
         clientOperationId,
-        data: { path: photo.path },
+        data: {
+          path: photo.path,
+          mode: stats.mode,
+          reason: stats.reason,
+          bytesPerSecondOfVideo:
+            photo.metadata?.sizeInBytes && photo.metadata.duration
+              ? Math.round(photo.metadata.sizeInBytes / photo.metadata.duration)
+              : null,
+          timeToFirstFrameMs: stats.firstFrameAt ? stats.firstFrameAt - stats.startedAt : null,
+          gaveUpWaitingAfterMs: stats.firstFrameAt ? null : now - stats.startedAt,
+          stalls: stats.stalls,
+          stalledMs: stats.stalledMs + (stats.stallStartedAt ? now - stats.stallStartedAt : 0),
+          levelSwitches: stats.levelSwitches,
+          watchedS: Math.round(video.currentTime),
+          droppedFrames: quality?.droppedVideoFrames ?? null,
+          totalFrames: quality?.totalVideoFrames ?? null,
+        },
       });
       destroyHls();
       clearVideoSource(video);
     };
-    // forceTranscode re-runs this to switch a stalled direct stream over to HLS.
-  }, [photo, forceTranscode]);
+    // forceTranscode re-runs this to switch a stalled direct stream over to HLS;
+    // retryNonce re-runs it from the overlay's Retry button.
+  }, [photo, forceTranscode, retryNonce]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1048,14 +1121,37 @@ export function FullscreenViewer() {
       }, DIRECT_STALL_FALLBACK_MS);
     };
 
+    const stats = playbackStatsRef.current;
     const onPlaying = () => {
       clearStallTimer();
       logVideoEvent("video.element.playing", "info");
+      const now = Date.now();
+      if (stats) {
+        stats.firstFrameAt ??= now;
+        if (stats.stallStartedAt) stats.stalledMs += now - stats.stallStartedAt;
+        stats.stallStartedAt = null;
+      }
+      setPlayback({ phase: "playing", since: now });
     };
-    const onCanPlay = () => logVideoEvent("video.element.canplay", "info");
+    const onCanPlay = () => {
+      logVideoEvent("video.element.canplay", "info");
+      // Ready but not playing (autoplay blocked): nothing left to wait for.
+      setPlayback((current) =>
+        current.phase === "starting" ? { phase: "playing", since: Date.now() } : current,
+      );
+    };
     const onWaiting = () => {
       logVideoEvent("video.element.waiting", "warn");
       armDirectStallFallback();
+      if (!stats?.firstFrameAt) return;
+      stats.stalls += 1;
+      stats.stallStartedAt ??= Date.now();
+      setPlayback((current) =>
+        current.phase === "playing" ? { phase: "buffering", since: Date.now() } : current,
+      );
+    };
+    const onProgress = () => {
+      lastDataAtRef.current = Date.now();
     };
     const onStalled = () => {
       logVideoEvent("video.element.stalled", "warn");
@@ -1063,16 +1159,18 @@ export function FullscreenViewer() {
     };
     const onError = () => {
       logVideoEvent("video.element.error", "error");
-      if (
-        hlsRef.current ||
-        videoStatus === "unavailable" ||
-        !(video.currentSrc || video.getAttribute("src"))
-      ) {
+      if (hlsRef.current || !(video.currentSrc || video.getAttribute("src"))) {
         return;
       }
 
+      const mediaErrorCode = video.error?.code;
       clearVideoSource(video);
-      setVideoStatus("unavailable");
+      setPlayback({
+        phase: "unavailable",
+        since: Date.now(),
+        detail: `The browser couldn't play this file${mediaErrorCode ? ` (media error ${mediaErrorCode})` : ""}.`,
+      });
+      setVideoStatus(null);
       setHlsLevels([]);
       setManualLevel(-1);
       setActiveLevelHeight(null);
@@ -1083,6 +1181,7 @@ export function FullscreenViewer() {
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("stalled", onStalled);
     video.addEventListener("error", onError);
+    video.addEventListener("progress", onProgress);
 
     return () => {
       clearStallTimer();
@@ -1091,6 +1190,7 @@ export function FullscreenViewer() {
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onStalled);
       video.removeEventListener("error", onError);
+      video.removeEventListener("progress", onProgress);
     };
   }, [photo?.path, photo?.mediaType, videoStatus]);
 
@@ -1597,10 +1697,17 @@ export function FullscreenViewer() {
                       )}
                       Your browser does not support HTML video playback.
                     </video>
+                    <VideoLoadingOverlay
+                      state={playback}
+                      lastDataAtRef={lastDataAtRef}
+                      onRetry={() => setRetryNonce((n) => n + 1)}
+                    />
                   </div>
                   {videoStatus && (
                     <span className={css.videoBadge} data-testid="video-status">
-                      {videoStatusLabel[videoStatus]}
+                      {videoStatus === "direct"
+                        ? "Original"
+                        : `Streaming${activeLevelHeight ? ` · ${activeLevelHeight}p` : ""}`}
                     </span>
                   )}
                   {peopleInVideo.length > 0 && (

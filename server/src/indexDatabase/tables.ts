@@ -635,6 +635,9 @@ export const tables = {
       // null otherwise. Lets triage treat those with appropriate skepticism
       // without having to trust free-text content alone. See feedback #99.
       { name: "source", type: "TEXT" },
+      // JSON diagnostics report for the submitter's browser session
+      // (buildDiagnosticsReport.ts), served at /api/feedback/:id/diagnostics.
+      { name: "diagnostics", type: "TEXT" },
     ],
     compositeIndexes: [],
   },

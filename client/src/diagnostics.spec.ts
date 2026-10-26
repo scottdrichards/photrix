@@ -29,7 +29,7 @@ describe("client diagnostics flush", () => {
     vi.resetModules();
   });
 
-  it("sends bounded batches and only asks for keepalive when the body fits", async () => {
+  it("drains the queue in bounded batches and only asks for keepalive when the body fits", async () => {
     const bodies: Array<{ events: unknown[]; keepalive: boolean | undefined }> = [];
     vi.stubGlobal(
       "fetch",
@@ -49,14 +49,16 @@ describe("client diagnostics flush", () => {
     }
     await diagnostics.flushClientDiagnostics();
 
-    expect(bodies).toHaveLength(1);
-    expect(bodies[0].events).toHaveLength(50);
+    expect(bodies.map((b) => b.events.length)).toEqual([50, 50, 20]);
     // 50 x ~2 KB is past the browser's 64 KiB keepalive ceiling.
     expect(bodies[0].keepalive).toBe(false);
   });
 
   it("keeps a failed batch for retry but caps the queue", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("offline"))));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new TypeError("offline"))),
+    );
     const diagnostics = await import("./diagnostics");
     for (let i = 0; i < 700; i++) {
       diagnostics.logClientEvent({ level: "info", event: `e${i}` });
@@ -67,8 +69,9 @@ describe("client diagnostics flush", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((_url: string, init: RequestInit) => {
-        for (const e of (JSON.parse(init.body as string) as { events: Array<{ event: string }> })
-          .events) {
+        for (const e of (
+          JSON.parse(init.body as string) as { events: Array<{ event: string }> }
+        ).events) {
           sent.push(e.event);
         }
         return Promise.resolve(new Response(null, { status: 202 }));

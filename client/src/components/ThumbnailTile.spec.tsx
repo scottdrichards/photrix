@@ -44,7 +44,10 @@ beforeAll(() => {
   class FakeIntersectionObserver {
     private instance: FakeObserverInstance;
 
-    constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    constructor(
+      callback: IntersectionObserverCallback,
+      options?: IntersectionObserverInit,
+    ) {
       this.instance = {
         callback,
         margin: Number.parseInt(String(options?.rootMargin ?? "0"), 10) || 0,
@@ -180,6 +183,21 @@ describe("ThumbnailTile", () => {
     expect(setSelected).toHaveBeenCalledWith(photo);
   });
 
+  it("hands its view-transition name to the viewer while its photo is open, so the open/close morph can run", () => {
+    const photo = createPhoto();
+    const context = useSelectionContextMock.getMockImplementation()?.() ?? {};
+    useSelectionContextMock.mockReturnValue({ ...context, selected: null });
+    const { rerender } = render(
+      <ThumbnailTile photo={photo} viewTransitionName="tile-a" />,
+    );
+    const tile = screen.getByRole("button", { name: "1.jpg" });
+    expect(tile.style.viewTransitionName).toBe("tile-a");
+
+    useSelectionContextMock.mockReturnValue({ ...context, selected: photo });
+    rerender(<ThumbnailTile photo={photo} viewTransitionName="tile-a" />);
+    expect(tile.style.viewTransitionName).toBe("");
+  });
+
   describe("stack controls", () => {
     it("renders the stack badge + kebab for a collapsed representative, and neither opens the photo", () => {
       const setSelected = vi.fn();
@@ -228,7 +246,11 @@ describe("ThumbnailTile", () => {
       });
 
       render(
-        <ThumbnailTile photo={createPhoto()} stackCount={2} onToggleStack={onToggleStack} />,
+        <ThumbnailTile
+          photo={createPhoto()}
+          stackCount={2}
+          onToggleStack={onToggleStack}
+        />,
       );
 
       const badge = screen.getByRole("button", {
@@ -274,7 +296,13 @@ describe("ThumbnailTile", () => {
         toggleChecked: vi.fn(),
       });
 
-      render(<ThumbnailTile photo={createPhoto()} stackCount={3} onOpenStackActions={vi.fn()} />);
+      render(
+        <ThumbnailTile
+          photo={createPhoto()}
+          stackCount={3}
+          onOpenStackActions={vi.fn()}
+        />,
+      );
 
       const badge = screen.getByRole("button", {
         name: "3 photos of this moment — show separately",
@@ -479,7 +507,11 @@ describe("ThumbnailTile", () => {
 
       const video = container.querySelector("video") as HTMLVideoElement;
       Object.defineProperty(video, "duration", { value: 95, configurable: true });
-      Object.defineProperty(video, "currentTime", { value: 0, writable: true, configurable: true });
+      Object.defineProperty(video, "currentTime", {
+        value: 0,
+        writable: true,
+        configurable: true,
+      });
 
       const bar = container.querySelector('[class*="scrubBar"]');
       expect(bar).not.toBeNull();
@@ -690,35 +722,31 @@ describe("ThumbnailTile", () => {
   // Feedback #136: a plain <video autoPlay> can silently fail to start on
   // some mobile browsers (reported on Edge/Android) -- there's no rejected
   // play() promise to catch, since nothing here calls .play() explicitly.
-  it(
-    "stops the ambient/hover clip if it never actually starts playing",
-    async () => {
-      const photo = createPhoto({ livePhotoUrl: "http://localhost/a/1.MOV" });
-      const { container } = render(<ThumbnailTile photo={photo} />);
-      triggerIntersection(true);
-      const badge = screen.getByLabelText("Live photo");
+  it("stops the ambient/hover clip if it never actually starts playing", async () => {
+    const photo = createPhoto({ livePhotoUrl: "http://localhost/a/1.MOV" });
+    const { container } = render(<ThumbnailTile photo={photo} />);
+    triggerIntersection(true);
+    const badge = screen.getByLabelText("Live photo");
 
-      fireEvent.mouseEnter(badge);
-      expect(
-        container.querySelector("video")?.className.includes("motionLayerVisible"),
-      ).toBe(true);
+    fireEvent.mouseEnter(badge);
+    expect(
+      container.querySelector("video")?.className.includes("motionLayerVisible"),
+    ).toBe(true);
 
-      // Autoplay blocked: jsdom never fires "playing" on the element (there is
-      // no real decoder), so this exercises the exact same "never confirmed"
-      // path a genuinely blocked mobile autoplay would. Past the
-      // confirmation window, the hook must give up rather than leave the
-      // badge/clip looking like it's playing forever.
-      await waitFor(
-        () => {
-          expect(
-            container.querySelector("video")?.className.includes("motionLayerVisible"),
-          ).not.toBe(true);
-        },
-        { timeout: 3000 },
-      );
-    },
-    10000,
-  );
+    // Autoplay blocked: jsdom never fires "playing" on the element (there is
+    // no real decoder), so this exercises the exact same "never confirmed"
+    // path a genuinely blocked mobile autoplay would. Past the
+    // confirmation window, the hook must give up rather than leave the
+    // badge/clip looking like it's playing forever.
+    await waitFor(
+      () => {
+        expect(
+          container.querySelector("video")?.className.includes("motionLayerVisible"),
+        ).not.toBe(true);
+      },
+      { timeout: 3000 },
+    );
+  }, 10000);
 
   it("opens the paired clip as a video when clicked from the live badge", () => {
     const setSelected = vi.fn();

@@ -4,18 +4,8 @@ HTTP request handlers wired up in `createServer.ts`. Each handler owns one route
 
 ## Route map
 
-| Handler                      | Route prefix       | Notes                                                |
-| ---------------------------- | ------------------ | ---------------------------------------------------- |
-| `authRequestHandler`         | `/api/auth`        | Passkey registration/login, token issue              |
-| `diagnosticsRequestHandler`  | `/api/diagnostics` | Client-event logging endpoint                        |
-| `files/filesRequestHandler`  | `/api/files/`      | Core media serving: thumbnails, previews, HLS, crops |
-| `foldersRequestHandler`      | `/api/folders/`    | Folder summary queries                               |
-| `peopleRequestHandler`       | `/api/people/`     | Rename, merge, separate face clusters                |
-| `searchRequestHandler`       | `/api/search`      | CLIP/audio/transcript semantic search                |
-| `statusRequestHandler`       | `/api/status`      | Server status SSE stream + background-tasks toggle   |
-| `suggestionsRequestHandler`  | `/api/suggestions` | Autocomplete field values                            |
-| `networkProbeRequestHandler` | `/api/probe`       | Latency/bandwidth probe (no-cache)                   |
-| `video/`                     | `/api/video/`      | Video playback negotiation (HLS vs direct)           |
+See `/documentation/ARCHITECTURE.md` (route → handler → the module doing the
+work). Keep that table current when adding a route.
 
 ## Cache headers
 
