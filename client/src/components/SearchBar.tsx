@@ -13,6 +13,7 @@ import { interpretSearchQuery } from "../api/naturalLanguageSearch";
 import { useFilter, type FilterState } from "./filter/FilterContext";
 import { SearchInterpretationChips } from "./SearchInterpretationChips";
 import css from "./SearchBar.module.css";
+import { SearchStatusIcon } from "./SearchStatus";
 
 const SEARCH_EXAMPLES = [
   "sunset on the beach",
@@ -248,6 +249,7 @@ export const SearchBar = () => {
             <Dismiss24Regular />
           </button>
         )}
+        <SearchStatusIcon />
         <div className={css.aiToggleGroup}>
           <button
             type="button"

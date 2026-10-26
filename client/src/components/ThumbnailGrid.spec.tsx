@@ -5,6 +5,8 @@ import { useFilter } from "./filter/FilterContext";
 import { FilterProvider } from "./filter/FilterContext";
 import { SelectionProvider } from "./selection/SelectionContext";
 import { ThumbnailGrid } from "./ThumbnailGrid";
+import { SearchStatusIcon } from "./SearchStatus";
+import { useSearchActivity } from "./searchActivity";
 // Real CSS module (not mocked) so tests can assert against the same
 // generated class names ThumbnailGrid itself applies to an inline-unstacked
 // cluster's members (css.clusterMember + the tight/round-corner modifiers).
@@ -134,6 +136,19 @@ const renderGrid = () =>
       </SelectionProvider>
     </FilterProvider>,
   );
+
+/** The grid plus the search bar's status icon, which the grid publishes to. */
+const renderGridWithStatus = () =>
+  render(
+    <FilterProvider>
+      <SelectionProvider>
+        <SearchStatusIcon />
+        <ThumbnailGrid view="library" onViewChange={() => {}} />
+      </SelectionProvider>
+    </FilterProvider>,
+  );
+
+const statusIcon = () => screen.getByRole("button", { name: /^Search status:/ });
 
 describe("ThumbnailGrid", () => {
   beforeEach(() => {
@@ -572,11 +587,19 @@ describe("ThumbnailGrid", () => {
         },
       });
 
-    renderGrid();
+    renderGridWithStatus();
 
+    // The full suite runs in parallel on a loaded box; this first search can
+    // take longer than findBy's 1 s default to settle there.
     expect(
-      await screen.findByText(/Image matches aren.t included: the model was still loading/),
+      await screen.findByRole(
+        "button",
+        { name: "Search status: 1 source left out" },
+        { timeout: 5000 },
+      ),
     ).toBeInTheDocument();
+    fireEvent.click(statusIcon());
+    expect(screen.getByText("left out: model still loading")).toBeInTheDocument();
     expect(await screen.findByText(/Ready now/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -585,7 +608,9 @@ describe("ThumbnailGrid", () => {
       expect(fetchSemanticSearchMock).toHaveBeenCalledTimes(2);
       expect(screen.getByText("i/1.jpg")).toBeInTheDocument();
     });
-    expect(screen.queryByText(/aren.t included/)).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Search status: All sources answered" }),
+    ).toBeInTheDocument();
   });
 
   it("explains a search that returned nothing because the models were loading, instead of 'No results found'", async () => {
@@ -603,11 +628,14 @@ describe("ThumbnailGrid", () => {
       }),
     );
 
-    renderGrid();
+    renderGridWithStatus();
 
-    expect(await screen.findByText(/Audio matches aren.t included/)).toBeInTheDocument();
-    expect(screen.getByText(/Waiting for the model to finish loading/)).toBeInTheDocument();
+    expect(await screen.findByText(/Search isn.t ready yet/)).toBeInTheDocument();
     expect(screen.queryByText("No results found for your search.")).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Search status: 2 sources left out" }));
+    expect(screen.getAllByText("left out: model still loading")).toHaveLength(2);
+    expect(screen.getByText(/Waiting for the model to finish loading/)).toBeInTheDocument();
   });
 
   it("clears an earlier search error when the next search succeeds", async () => {
@@ -639,6 +667,44 @@ describe("ThumbnailGrid", () => {
     expect(screen.queryByText(/Search models are still loading/)).not.toBeInTheDocument();
   });
 
+  it("never reports a search as finished before its first result arrives", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    let resolveSearch: (value: unknown) => void = () => {};
+    fetchSemanticSearchMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSearch = resolve;
+      }),
+    );
+    // Every state the icon is shown, in order.
+    const seen: string[] = [];
+    const Recorder = () => {
+      const { active, searching, outcome } = useSearchActivity();
+      const label = !active ? "idle" : searching ? "searching" : outcome ? "answered" : "finished";
+      if (seen.at(-1) !== label) seen.push(label);
+      return null;
+    };
+    render(
+      <FilterProvider>
+        <SelectionProvider>
+          <Recorder />
+          <ThumbnailGrid view="library" onViewChange={() => {}} />
+        </SelectionProvider>
+      </FilterProvider>,
+    );
+    await waitFor(() => expect(fetchSemanticSearchMock).toHaveBeenCalledTimes(1));
+    act(() =>
+      resolveSearch({
+        items: [makePhoto("a/1.jpg")],
+        total: 1,
+        query: "beach",
+        sourceStatus: { image: { status: "ok" }, audio: { status: "ok" }, transcript: { status: "ok" } },
+      }),
+    );
+    expect(await screen.findByText("a/1.jpg")).toBeInTheDocument();
+    await waitFor(() => expect(seen.at(-1)).toBe("answered"));
+    expect(seen).not.toContain("finished");
+  });
+
   it("keeps showing search progress when a query is replaced mid-flight", async () => {
     window.history.pushState({}, "", "/?q=beach");
     // Both searches honour their abort signal the way fetch does, and never
@@ -660,11 +726,14 @@ describe("ThumbnailGrid", () => {
       <FilterProvider>
         <SelectionProvider>
           <QuerySetter />
+          <SearchStatusIcon />
           <ThumbnailGrid view="library" onViewChange={() => {}} />
         </SelectionProvider>
       </FilterProvider>,
     );
-    expect(await screen.findByText("Searching")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Search status: Searching" }),
+    ).toBeInTheDocument();
 
     act(() => setQuery("beach house"));
 
@@ -673,7 +742,7 @@ describe("ThumbnailGrid", () => {
     });
     // The first search's abort has settled by now; progress must still show.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(screen.getByText("Searching")).toBeInTheDocument();
+    expect(statusIcon()).toHaveAccessibleName("Search status: Searching");
   });
 });
 

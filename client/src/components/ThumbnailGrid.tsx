@@ -12,7 +12,7 @@ import { useFilter } from "./filter/FilterContext";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { ThumbnailTile } from "./ThumbnailTile";
 import { PhotoStackModal } from "./PhotoStackModal";
-import { SearchStatus } from "./SearchStatus";
+import { IDLE_SEARCH_ACTIVITY, publishSearchActivity } from "./searchActivity";
 import { SelectionActionBar } from "./SelectionActionBar";
 import { SortControl } from "./SortControl";
 import { SortDockPortal } from "./SortDockPortal";
@@ -62,9 +62,10 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   // Per-source outcome of the current search (which modalities answered, which
-  // timed out and why), shown by SearchStatus. Null outside search.
+  // timed out and why), shown by the search bar's status icon. Null outside
+  // search.
   const [searchOutcome, setSearchOutcome] = useState<SearchSourceStatus | null>(null);
-  // Bumped by SearchStatus's Retry to re-run the same search.
+  // Bumped by the status icon's Retry to re-run the same search.
   const [retryNonce, setRetryNonce] = useState(0);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   // Feedback #112: per-tile "why did this match" icons (image/audio/
@@ -223,8 +224,8 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
         if (err.name === "AbortError") return;
         if (err instanceof SearchUnavailableError) {
           // Nothing to show yet because the models are loading. Clear the old
-          // results (they belong to a different query) and let SearchStatus
-          // explain which source is missing and offer a retry.
+          // results (they belong to a different query); the grid and the
+          // status icon explain which source is missing and offer a retry.
           setSearchOutcome(err.sourceStatus);
           setData({ items: [], total: 0, filterUsed: filter });
           return;
@@ -288,6 +289,33 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
     setPage(1);
     setRetryNonce((n) => n + 1);
   };
+
+  // Feedback #143: the search bar shows this search's status as an icon. It
+  // lives in another branch of the tree, so publish rather than render it.
+  const semanticActive = !!filter.semanticQuery;
+  // Searching until a first page *for this query* has arrived (or failed).
+  // `loading` alone lags: it turns on in an effect, so the render that makes a
+  // query active would otherwise publish "finished, no outcome" for a moment
+  // and flash a check before the progress ring.
+  const searchingFirstPage =
+    page === 1 && !error && (loading || data?.filterUsed !== filter);
+  const enabledSources = filter.searchSources ?? ALL_SEARCH_SOURCES;
+  useEffect(() => {
+    publishSearchActivity(
+      semanticActive
+        ? {
+            active: true,
+            searching: searchingFirstPage,
+            outcome: searchingFirstPage ? null : searchOutcome,
+            enabledSources,
+            retry: handleRetrySearch,
+          }
+        : IDLE_SEARCH_ACTIVITY,
+    );
+    // handleRetrySearch only calls state setters, so a stale copy is fine.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [semanticActive, searchingFirstPage, searchOutcome, enabledSources]);
+  useEffect(() => () => publishSearchActivity(IDLE_SEARCH_ACTIVITY), []);
   const emptyMessage = filter.semanticQuery
     ? "No results found for your search."
     : "No photos yet. Upload some to get started.";
@@ -317,14 +345,6 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
           pinned to the bottom-right — see SortDockPortal. */}
       <SortDockPortal>{data && <SortControl />}</SortDockPortal>
       {error ? <h3>{error}</h3> : null}
-      {filter.semanticQuery && (
-        <SearchStatus
-          searching={loading && page === 1}
-          outcome={loading && page === 1 ? null : searchOutcome}
-          enabledSources={filter.searchSources ?? ALL_SEARCH_SOURCES}
-          onRetry={handleRetrySearch}
-        />
-      )}
       {data ? (
         <div className={css.statusRow} aria-live="polite">
           {resultCountLabel && <span>{resultCountLabel}</span>}
@@ -447,10 +467,19 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
           </div>
         )}
       </div>
-      {/* When a source failed, SearchStatus already explains the gap, and
-          "no results found" would claim a certainty the search doesn't have. */}
+      {/* When a source failed, "no results found" would claim a certainty the
+          search doesn't have. Say what happened; the status icon in the search
+          bar has the per-source detail and lights up once a model is ready. */}
       {!loading && data && data.items.length === 0 && !searchFailedSomewhere && (
         <h3>{emptyMessage}</h3>
+      )}
+      {!loading && data && data.items.length === 0 && searchFailedSomewhere && (
+        <div className={css.searchUnavailable} role="status">
+          <h3>Search isn&apos;t ready yet: a search model is still loading.</h3>
+          <button type="button" onClick={handleRetrySearch}>
+            Retry
+          </button>
+        </div>
       )}
       <SelectionActionBar />
       <PhotoStackModal
