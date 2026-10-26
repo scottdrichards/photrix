@@ -380,7 +380,16 @@ export function FullscreenViewer() {
     scale: PHOTO_ZOOM_DEFAULT_SCALE,
   });
 
+  // The effects below re-run when the viewer moves to another photo, not on
+  // every new photo object (a rating or tag edit produces one). They key on
+  // the path and read anything else through latestPhotoRef.
+  const photoPath = photo?.path ?? null;
+  const photoMediaType = photo?.mediaType ?? null;
+  const latestPhotoRef = useRef(photo);
+  latestPhotoRef.current = photo;
+
   useEffect(() => {
+    const photo = latestPhotoRef.current;
     const hasFaceRegions =
       photo !== null &&
       photo.mediaType !== "video" &&
@@ -399,10 +408,14 @@ export function FullscreenViewer() {
     setPreviewImgLoaded(false);
     setCanvasAdj(DEFAULT_ADJ);
     const rawEditAdj = photo?.metadata?.editAdj;
-    const parsedAdj =
+    const parsed =
       rawEditAdj && typeof rawEditAdj === "string"
-        ? (() => { try { return JSON.parse(rawEditAdj) as EditAdj; } catch { return DEFAULT_ADJ; } })()
-        : DEFAULT_ADJ;
+        ? attemptSync(() => JSON.parse(rawEditAdj) as EditAdj)
+        : null;
+    if (parsed && !parsed.ok) {
+      logFailure("viewer.edits.unreadable", "Saved photo edits are unreadable; showing the original")(parsed.error);
+    }
+    const parsedAdj = parsed?.ok ? parsed.value : DEFAULT_ADJ;
     setSavedAdj(parsedAdj);
     latestAdjRef.current = parsedAdj;
     setPhotoAspectRatio(readMetadataAspectRatio(photo?.metadata));
@@ -437,7 +450,7 @@ export function FullscreenViewer() {
     }
 
     playbackOperationIdRef.current = null;
-  }, [photo?.path]);
+  }, [photoPath]);
 
   // Fetch the photo's detected faces (with resolved People names) so the face
   // overlay can label each face and link to its person page. facesRefreshToken
@@ -446,19 +459,19 @@ export function FullscreenViewer() {
   // Videos too: their faces carry when each person is on screen, which the
   // people timeline under the player draws.
   useEffect(() => {
-    if (!photo) return;
+    if (!photoPath) return;
 
     const abortController = new AbortController();
-    fetchPeopleFacesForFile(photo.path, abortController.signal)
+    fetchPeopleFacesForFile(photoPath, abortController.signal)
       .then((faces) => {
         setPeopleFaces(faces);
-        setPeopleFacesPath(photo.path);
+        setPeopleFacesPath(photoPath);
       })
       // Names are an enhancement: without them the overlay shows the metadata boxes.
       .catch(logFailure("viewer.faces.failed", "Could not load face names for the viewer"));
 
     return () => abortController.abort();
-  }, [photo?.path, photo?.mediaType, facesRefreshToken]);
+  }, [photoPath, facesRefreshToken]);
 
   // Feedback #145: "this isn't {name}" from the viewer. A rejected verdict
   // pulls the face out of that person; the refetch then shows it unnamed, with
@@ -490,7 +503,7 @@ export function FullscreenViewer() {
   // long-since-abandoned photo could land after a later one already has its
   // own caption showing.
   useEffect(() => {
-    if (!photo) {
+    if (!photoPath) {
       // Viewer closed: hand the tab title back to whatever owned it before
       // (usePageTitle's filter-derived title, or the static "Photrix"
       // default) rather than leaving a stale caption in the tab forever.
@@ -520,17 +533,17 @@ export function FullscreenViewer() {
     // video) — the server would also just return null for a video, but skip
     // the round-trip entirely rather than firing a request that can never
     // succeed.
-    if (photo.mediaType === "video") return;
+    if (photoMediaType === "video") return;
 
     const abortController = new AbortController();
-    fetchPhotoCaption(photo.path, abortController.signal)
+    fetchPhotoCaption(photoPath, abortController.signal)
       .then((caption) => {
         if (caption) document.title = caption;
       })
       .catch(logFailure("viewer.caption.failed", "Could not load the photo caption"));
 
     return () => abortController.abort();
-  }, [photo?.path, photo?.mediaType]);
+  }, [photoPath, photoMediaType]);
 
   // Feedback #148: the long AI description lives in the file-info panel and
   // is written on demand — only while the panel is open, streamed in as the
@@ -571,12 +584,12 @@ export function FullscreenViewer() {
 
   // Fetch transcript segments for videos
   useEffect(() => {
-    if (!photo || photo.mediaType !== "video") return;
+    if (!photoPath || photoMediaType !== "video") return;
 
     const abortController = new AbortController();
 
     fetchTranscriptSegments(
-      photo.path,
+      photoPath,
       abortController.signal,
       playbackOperationIdRef.current ?? undefined,
     )
@@ -594,7 +607,7 @@ export function FullscreenViewer() {
     return () => {
       abortController.abort();
     };
-  }, [photo?.path, photo?.mediaType]);
+  }, [photoPath, photoMediaType]);
 
   // Sync caption track mode with showCaptions toggle
   useEffect(() => {

@@ -13,6 +13,7 @@ import { describeHoldup } from "./taskHoldup";
 import css from "./StatusModal.module.css";
 import { syncDialogOpenState } from "./syncDialogOpenState";
 import { FeatureFlagsPanel } from "./FeatureFlagsPanel";
+import { logFailure } from "../logFailure";
 
 type ActiveTab = "tasks" | "devtracker" | "flags";
 
@@ -398,28 +399,30 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
     if (!isOpen) {
       return;
     }
+    const progressHistory = progressHistoryRef.current;
     const unsubscribe = subscribeStatusStream(
       (data) => {
         const now = Date.now();
         for (const task of data.backgroundTasks) {
           if (task.itemsProcessed == null) continue;
-          const history = progressHistoryRef.current.get(task.id) ?? [];
+          const history = progressHistory.get(task.id) ?? [];
           const lastSample = history[history.length - 1];
           if (lastSample?.itemsProcessed === task.itemsProcessed) continue;
           const updated = [
             ...history,
             { timestamp: now, itemsProcessed: task.itemsProcessed },
           ];
-          progressHistoryRef.current.set(task.id, updated.slice(-20));
+          progressHistory.set(task.id, updated.slice(-20));
         }
         setStatus(data);
       },
-      (_error) => {},
+      // The stream reconnects by itself; the failure is recorded, not hidden.
+      logFailure("status.stream.failed", "The server status stream dropped"),
     );
 
     return () => {
       unsubscribe();
-      progressHistoryRef.current.clear();
+      progressHistory.clear();
       setStatus(undefined);
       setIsTogglingBackgroundTasks(false);
       setToggleError(null);
