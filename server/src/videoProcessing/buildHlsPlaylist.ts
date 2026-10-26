@@ -21,9 +21,9 @@ export const HLS_SEGMENT_SECONDS = 1;
  * playback starts. Segments that aren't encoded yet are long-polled by the segment
  * handler (see waitForHlsFile) until FFmpeg writes them.
  *
- * The segment count must match what FFmpeg produces: with a fixed 30fps, a keyframe
- * every HLS_SEGMENT_SECONDS (`-g` = fps × segment seconds) and a matching `-hls_time`,
- * segments are cut at exactly HLS_SEGMENT_SECONDS boundaries, so the count is
+ * The segment count must match what FFmpeg produces: keyframes are forced at every
+ * HLS_SEGMENT_SECONDS of presentation time (at any output frame rate) and `-hls_time`
+ * matches, so segments are cut at HLS_SEGMENT_SECONDS boundaries and the count is
  * `ceil(duration / segmentSeconds)`
  * and the EXTINF durations sum to the total duration (the last segment is the remainder).
  */

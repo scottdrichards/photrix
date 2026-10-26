@@ -3,7 +3,6 @@ import {
   negotiateVideoPlayback,
   bandwidthCoversRawFile,
   REASON_DIRECT,
-  REASON_CACHED_HLS,
   REASON_GPU_HLS,
   REASON_NO_PATH,
   REASON_UNPLAYABLE_NO_GPU,
@@ -19,7 +18,6 @@ import {
 // Default file: 100 MB over 60 s ≈ 13.3 Mbps average bitrate, so the 1.5× raw
 // threshold is 20 Mbps. Bandwidth of 50 clears it; 10 does not.
 const baseDeps = (overrides: Partial<NegotiationDeps> = {}): NegotiationDeps => ({
-  hasCachedHLS: async () => false,
   getCachedPreviewSeconds: async () => 0,
   isGpuAvailable: async () => false,
   getFileMetadata: async () => ({
@@ -114,15 +112,6 @@ describe("negotiateVideoPlayback", () => {
     expect(result.mode).toBe("direct");
   });
 
-  it("prefers direct over cached HLS when the link is fast", async () => {
-    const result = await negotiateVideoPlayback(
-      { path: "video.mp4", bandwidthMbps: FAST, hevcSupported: false },
-      baseDeps({ hasCachedHLS: async () => true }),
-    );
-
-    expect(result.mode).toBe("direct");
-  });
-
   it("does NOT go direct when the codec is unplayable, even on a fast link", async () => {
     const result = await negotiateVideoPlayback(
       { path: "video.mp4", bandwidthMbps: FAST, hevcSupported: false },
@@ -143,29 +132,7 @@ describe("negotiateVideoPlayback", () => {
     });
   });
 
-  it("uses cached HLS when the link is too slow for raw", async () => {
-    const result = await negotiateVideoPlayback(
-      { path: "video.mp4", bandwidthMbps: SLOW, hevcSupported: false },
-      baseDeps({ hasCachedHLS: async () => true }),
-    );
-
-    expect(result).toEqual({
-      mode: "hls",
-      url: expect.stringContaining("representation=hls"),
-      reason: REASON_CACHED_HLS,
-    });
-  });
-
-  it("prefers cached HLS over an on-the-fly GPU encode on a slow link", async () => {
-    const result = await negotiateVideoPlayback(
-      { path: "video.mp4", bandwidthMbps: SLOW, hevcSupported: false },
-      baseDeps({ hasCachedHLS: async () => true, isGpuAvailable: async () => true }),
-    );
-
-    expect(result.reason).toBe(REASON_CACHED_HLS);
-  });
-
-  it("uses on-the-fly GPU HLS on a slow link when nothing is cached", async () => {
+  it("uses on-the-fly GPU HLS on a slow link", async () => {
     const result = await negotiateVideoPlayback(
       { path: "video.mp4", bandwidthMbps: SLOW, hevcSupported: false },
       baseDeps({ isGpuAvailable: async () => true }),
@@ -365,7 +332,7 @@ describe("shouldReclaimGpuForPlayback", () => {
     url: "/x",
     reason: REASON_PREVIEW_TRANSCODE,
   };
-  const cached = { mode: "hls" as const, url: "/x", reason: REASON_CACHED_HLS };
+  const cached = { mode: "hls" as const, url: "/x", reason: REASON_PREVIEW_CACHED };
   const direct = { mode: "direct" as const, url: "/x", reason: REASON_DIRECT };
 
   it("reclaims for a fresh NVIDIA encode, full or preview", () => {

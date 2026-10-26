@@ -13,6 +13,7 @@ type FFProbeStream = {
   codec_name?: string;
   pix_fmt?: string;
   r_frame_rate?: string;
+  avg_frame_rate?: string;
   /** e.g. "bt709" (SDR), "smpte2084" (HDR10/HDR10+ PQ), "arib-std-b67" (HLG). */
   color_transfer?: string;
   tags?: {
@@ -65,6 +66,13 @@ export type VideoSourceProfile = {
   pixelFormat: string;
   /** ffmpeg color_transfer of the video stream ("bt709", "smpte2084", …), or "". */
   colorTransfer: string;
+  /**
+   * Frame rate as an ffmpeg rational ("24000/1001"), or "" if unknown. The
+   * average, not `r_frame_rate`: for variable-frame-rate phone video
+   * r_frame_rate is a timebase-ish ceiling (often 120 or 600), not the rate.
+   * Containers that record no average report "0/0"; then r_frame_rate is it.
+   */
+  frameRate: string;
 };
 
 /**
@@ -92,9 +100,7 @@ export const isHighBitDepthPixelFormat = (pixelFormat: string): boolean =>
  * rather than one per property: every HLS variant start pays this latency
  * before ffmpeg can even be spawned.
  */
-export const getVideoSourceProfile = (
-  filePath: string,
-): Promise<VideoSourceProfile> =>
+export const getVideoSourceProfile = (filePath: string): Promise<VideoSourceProfile> =>
   new Promise((resolve, reject) => {
     const proc = spawn(
       "ffprobe",
@@ -119,6 +125,10 @@ export const getVideoSourceProfile = (
           codec: video?.codec_name ?? "",
           pixelFormat: video?.pix_fmt ?? "",
           colorTransfer: video?.color_transfer ?? "",
+          frameRate:
+            video?.avg_frame_rate && video.avg_frame_rate !== "0/0"
+              ? video.avg_frame_rate
+              : (video?.r_frame_rate ?? ""),
         });
       } catch (e) {
         reject(e);
@@ -126,7 +136,6 @@ export const getVideoSourceProfile = (
     });
     proc.on("error", reject);
   });
-
 
 export const getVideoMetadata = async (
   filePath: string,

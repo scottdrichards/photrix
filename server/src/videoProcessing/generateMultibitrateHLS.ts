@@ -6,6 +6,7 @@ import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
 import { existsSync } from "fs";
 import { getGpuAcceleration, type GpuAcceleration } from "./gpuAcceleration.ts";
 import { HLS_SEGMENT_SECONDS } from "./buildHlsPlaylist.ts";
+import { hlsOutputFrameRate } from "./hlsOutputFrameRate.ts";
 import { getLogger } from "../observability/logger.ts";
 import { pathToken } from "../observability/privacy.ts";
 import {
@@ -51,15 +52,6 @@ const ensureGpuHeadroom = async (): Promise<void> => {
   }
 };
 
-/** Output frame rate for all variants. */
-const HLS_FPS = 30;
-/**
- * Keyframe interval in frames. Derived so a keyframe lands on every segment
- * boundary (`-g` = fps × segment seconds), which lets the HLS muxer cut clean
- * fixed-length segments that match the synthetic VOD playlist's segment count.
- */
-const HLS_GOP = HLS_FPS * HLS_SEGMENT_SECONDS;
-
 type Variant = {
   height: number;
   bitrate: number;
@@ -69,7 +61,8 @@ type Variant = {
 };
 
 /**
- * HLS quality variants: 360p fast-start, 720p standard, 1080p quality — all at 30fps.
+ * HLS quality variants: 360p fast-start, 720p standard, 1080p quality, each at the
+ * source's own frame rate up to 30fps (see hlsOutputFrameRate).
  *
  * All three are advertised in the master playlist and the player adapts between them
  * mid-stream (real ABR) from its own measured throughput. Each is encoded lazily and
@@ -281,7 +274,7 @@ const scaleFilter = (height: number, rotation: number): string =>
  * VAAPI-resident frames (verified — a portrait clip comes out landscape, no
  * warning), so `-noautorotate` plus transpose_vaapi is the only correct shape.
  */
-const buildIntelVppFilters = (height: number, rotation: number): string => {
+const buildIntelVppFilters = (height: number, rotation: number, fps: string): string => {
   const turned = rotation === 90 || rotation === 270;
   const scale = turned
     ? `scale_vaapi=${height}:-2:format=nv12`
@@ -295,7 +288,7 @@ const buildIntelVppFilters = (height: number, rotation: number): string => {
           ? ",transpose_vaapi=clock"
           : "";
   // No hwupload tail here (gpu.vfExtra): the frames are already VAAPI surfaces.
-  return `fps=${HLS_FPS},${scale}${rotate}`;
+  return `fps=${fps},${scale}${rotate}`;
 };
 
 /**
@@ -318,6 +311,7 @@ const buildIntelVppFilters = (height: number, rotation: number): string => {
 const buildIntelGpuFrameFilters = (
   height: number,
   rotation: number,
+  fps: string,
   highBitDepth: boolean,
   vfExtra: string,
 ): string => {
@@ -325,7 +319,7 @@ const buildIntelGpuFrameFilters = (
     ? ["hwdownload", "p010le"]
     : ["hwmap=mode=read+direct", "nv12"];
   const chain = [
-    `fps=${HLS_FPS}`,
+    `fps=${fps}`,
     transfer,
     `format=${transferFormat}`,
     scaleFilter(height, rotation),
@@ -364,6 +358,9 @@ const encodeVariant = (
   tier: EncodeTier = "gpu-frames",
 ): Promise<void> => {
   const rotation = source.rotation;
+  const fps = hlsOutputFrameRate(source.frameRate);
+  const [fpsNum, fpsDen] = fps.split("/").map(Number);
+  const maxGopFrames = Math.ceil((fpsNum / fpsDen) * HLS_SEGMENT_SECONDS);
   return new Promise((resolve, reject) => {
     // Encode pipelines, in order of preference:
     //
@@ -419,7 +416,7 @@ const encodeVariant = (
     } else if (useNvidia) {
       // NVDEC + CPU filters + NVENC: GPU decode, CPU auto-rotate, GPU encode.
       hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -hwaccel cuda, no output format
-      vf = `fps=${HLS_FPS},scale=-2:${variant.height},format=yuv420p`;
+      vf = `fps=${fps},scale=-2:${variant.height},format=yuv420p`;
       videoCodec = gpu?.h264Codec ?? "libx264";
       encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
     } else if (useIntelGpuFrames) {
@@ -428,10 +425,11 @@ const encodeVariant = (
       // and pushed back for the encode.
       hwaccelArgs = [...gpu.hwaccelArgs, ...gpu.gpuFrameArgs];
       vf = gpu.supportsVideoProc
-        ? buildIntelVppFilters(variant.height, rotation)
+        ? buildIntelVppFilters(variant.height, rotation, fps)
         : buildIntelGpuFrameFilters(
             variant.height,
             rotation,
+            fps,
             isHighBitDepthPixelFormat(source.pixelFormat),
             gpu.vfExtra,
           );
@@ -441,13 +439,13 @@ const encodeVariant = (
       // VAAPI decode → system memory → CPU auto-rotate/scale → hwupload → VAAPI
       // encode. See INTEL.hwaccelArgs for why scaling can't move onto this iGPU.
       hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -hwaccel vaapi + -vaapi_device
-      vf = `fps=${HLS_FPS},scale=-2:${variant.height}${gpu?.vfExtra ?? ""}`;
+      vf = `fps=${fps},scale=-2:${variant.height}${gpu?.vfExtra ?? ""}`;
       videoCodec = gpu?.h264Codec ?? "libx264";
       encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
     } else {
       // Pure CPU.
       hwaccelArgs = [];
-      vf = `fps=${HLS_FPS},scale=-2:${variant.height},format=yuv420p`;
+      vf = `fps=${fps},scale=-2:${variant.height},format=yuv420p`;
       videoCodec = "libx264";
       encoderArgs = ["-preset", "veryfast", "-crf", "28"];
     }
@@ -463,7 +461,7 @@ const encodeVariant = (
       vf,
       // `-r` is only needed for the full CUDA pipeline: frames stay on the GPU so the
       // CPU `fps` filter can't run. All other paths have `fps=` in the vf chain above.
-      ...(useCudaPipeline ? ["-r", String(HLS_FPS)] : []),
+      ...(useCudaPipeline ? ["-r", fps] : []),
       "-c:v",
       videoCodec,
       ...encoderArgs,
@@ -480,8 +478,10 @@ const encodeVariant = (
       // mismatch the synthetic VOD playlist's fixed 1s EXTINFs.
       "-force_key_frames",
       `expr:gte(t,n_forced*${HLS_SEGMENT_SECONDS})`,
+      // Upper bound only (one segment's worth of frames); the forced keyframes
+      // above are what align segments, at any frame rate.
       "-g",
-      String(HLS_GOP),
+      String(maxGopFrames),
       "-c:a",
       "aac",
       "-b:a",
@@ -531,7 +531,12 @@ const encodeVariant = (
               : "software (libx264)";
 
       log.info(
-        { hlsDir: pathToken(hlsDir), variant: `${variant.height}p`, encoder: encoderLabel, rotation },
+        {
+          hlsDir: pathToken(hlsDir),
+          variant: `${variant.height}p`,
+          encoder: encoderLabel,
+          rotation,
+        },
         "HLS encode spawned",
       );
 
@@ -541,7 +546,11 @@ const encodeVariant = (
         if (!existsSync(firstSegment)) return;
         clearInterval(firstSegmentPoll);
         log.info(
-          { hlsDir: pathToken(hlsDir), variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
+          {
+            hlsDir: pathToken(hlsDir),
+            variant: `${variant.height}p`,
+            ms: Date.now() - spawnedAt,
+          },
           "HLS first segment ready",
         );
       }, 100);
@@ -556,7 +565,11 @@ const encodeVariant = (
         clearInterval(firstSegmentPoll);
         if (code === 0) {
           log.info(
-            { hlsDir: pathToken(hlsDir), variant: `${variant.height}p`, ms: Date.now() - spawnedAt },
+            {
+              hlsDir: pathToken(hlsDir),
+              variant: `${variant.height}p`,
+              ms: Date.now() - spawnedAt,
+            },
             "HLS encode complete",
           );
           resolve();
@@ -589,10 +602,14 @@ const encodeVariant = (
           // GPU-frame pipeline is the fragile one (it needs a decodable codec
           // and a mappable surface), while the system-frame pipeline still
           // encodes on the iGPU and is many times faster than libx264.
-          const nextTier: EncodeTier =
-            useIntelGpuFrames ? "system-frames" : "software";
+          const nextTier: EncodeTier = useIntelGpuFrames ? "system-frames" : "software";
           log.warn(
-            { hlsDir: pathToken(hlsDir), variant: `${variant.height}p`, nextTier, stderr: scrubEncodePaths(stderrTail(stderr), filePath, hlsDir) },
+            {
+              hlsDir: pathToken(hlsDir),
+              variant: `${variant.height}p`,
+              nextTier,
+              stderr: scrubEncodePaths(stderrTail(stderr), filePath, hlsDir),
+            },
             "GPU encode failed, retrying on a lower tier",
           );
           encodeVariant(
@@ -629,7 +646,7 @@ const encodeVariant = (
 };
 
 /**
- * Generates a single HLS variant (one of SUPPORTED_HLS_HEIGHTS @ 30fps) on the fly,
+ * Generates a single HLS variant (one of SUPPORTED_HLS_HEIGHTS) on the fly,
  * always encoding from the beginning of the file. Segments not yet written are
  * long-polled by the segment handler (see waitForHlsFile) until ffmpeg produces them.
  * The output is ephemeral and is reaped once playback goes idle.

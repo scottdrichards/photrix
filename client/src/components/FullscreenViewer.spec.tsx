@@ -1026,7 +1026,7 @@ describe("FullscreenViewer", () => {
     negotiateVideoPlaybackMock.mockResolvedValue({
       mode: "hls",
       url: "http://localhost/a/standard.m3u8",
-      reason: "Cached HLS available",
+      reason: "Hardware-accelerated HLS encoding available",
     });
 
     useSelectionContextMock.mockReturnValue({
@@ -1065,7 +1065,7 @@ describe("FullscreenViewer", () => {
     negotiateVideoPlaybackMock.mockResolvedValue({
       mode: "hls",
       url: "http://localhost/a/clip.m3u8",
-      reason: "Cached HLS available",
+      reason: "Hardware-accelerated HLS encoding available",
     });
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto({
@@ -1126,7 +1126,7 @@ describe("FullscreenViewer", () => {
     negotiateVideoPlaybackMock.mockResolvedValue({
       mode: "hls",
       url: "http://localhost/a/standard.m3u8",
-      reason: "Cached HLS available",
+      reason: "Hardware-accelerated HLS encoding available",
     });
 
     useSelectionContextMock.mockReturnValue({

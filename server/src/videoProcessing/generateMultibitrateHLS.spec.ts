@@ -202,6 +202,44 @@ describe("generateVariantHLS", () => {
     expect(encodeArgs).not.toContain("-ss");
   });
 
+  it("encodes at the source's own frame rate instead of resampling a 24fps film to 30", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-fps-"));
+    process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
+    const source = path.join(root, "film.mp4");
+    writeFileSync(source, "video");
+
+    const spawnMock = makeNvidiaSpawnMock(
+      probeJson({ avg_frame_rate: "24000/1001", tags: { rotate: "90" } }),
+    );
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+    const { generateVariantHLS } = await import("./generateMultibitrateHLS.ts");
+
+    await generateVariantHLS(source, 720);
+
+    const encodeArgs = lastEncodeArgs(spawnMock);
+    expect(encodeArgs[encodeArgs.indexOf("-vf") + 1]).toContain("fps=24000/1001,");
+    // Max GOP of one segment at this rate; keyframes are forced by time anyway.
+    expect(encodeArgs[encodeArgs.indexOf("-g") + 1]).toBe("24");
+  });
+
+  it("drops every other frame of a 60fps source on the full CUDA pipeline", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-fps60-"));
+    process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
+    const source = path.join(root, "action.mp4");
+    writeFileSync(source, "video");
+
+    const spawnMock = makeNvidiaSpawnMock(probeJson({ avg_frame_rate: "60/1" }));
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+    const { generateVariantHLS } = await import("./generateMultibitrateHLS.ts");
+
+    await generateVariantHLS(source, 720);
+
+    const encodeArgs = lastEncodeArgs(spawnMock);
+    expect(encodeArgs[encodeArgs.indexOf("-r") + 1]).toBe("30/1");
+  });
+
   it("falls back to software encoding when hardware encode fails", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-variant-fallback-"));
     process.env.CACHE_DIR = root;
@@ -451,8 +489,9 @@ describe("generateVariantHLS", () => {
     await expect(generateVariantHLS(source, 720)).resolves.toBeUndefined();
 
     // Probes + exactly one encode: no software respawn behind the user's back.
-    const encodeCalls = spawnMock.mock.calls.filter(([command, args]) =>
-      command === "ffmpeg" && (args as string[]).includes("-hls_time"),
+    const encodeCalls = spawnMock.mock.calls.filter(
+      ([command, args]) =>
+        command === "ffmpeg" && (args as string[]).includes("-hls_time"),
     );
     expect(encodeCalls).toHaveLength(1);
   });

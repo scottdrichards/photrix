@@ -21,7 +21,7 @@ the user-activity bracket for the task orchestrator, then a flat list of
 | `POST /api/search/interpret`             | `searchInterpretHandler.ts`                         | `naturalLanguageSearch/interpretSearchQuery.ts`                                                          |
 | `POST /api/page-title`                   | `pageTitleHandler.ts`                               | describes the current filter for the header                                                              |
 | `GET /api/suggestions`                   | `suggestionsRequestHandler.ts`                      | `indexDatabase.ts`                                                                                       |
-| `GET /api/video/negotiate`               | `video/videoNegotiation.ts`                         | direct vs cached HLS vs live GPU HLS decision                                                            |
+| `GET /api/video/negotiate`               | `video/videoNegotiation.ts`                         | direct vs live GPU HLS decision                                                                          |
 | `/api/faces/…`                           | `faceIdentifyRequestHandler.ts`                     | `faceDetection/`, `indexDatabase/faceReview.ts`                                                          |
 | `/api/people/…`                          | `peopleRequestHandler.ts`                           | `indexDatabase/faceClusterEngine.ts`                                                                     |
 | `POST /api/moment-clusters/…`            | `momentClustersRequestHandler.ts`                   | `indexDatabase/momentClusterEngine.ts`                                                                   |
@@ -60,10 +60,12 @@ request answers it.
    "HLS setup effect"). Bandwidth comes from `client/src/videoPlaybackProfile.ts`
    (probed once at app start).
 2. `GET /api/video/negotiate` → `videoNegotiation.ts` picks **direct** (link
-   can carry the original), **cached HLS**, **live GPU HLS**, or **error**.
+   can carry the original and the browser can decode it), **live GPU HLS**,
+   or **error** (with a reason saying which).
 3. HLS: hls.js requests the master → variant playlist → segments from
    `filesRequestHandler.ts` `tryHLSStream`. Each variant is a separate
-   on-demand ffmpeg encode (`generateMultibitrateHLS.ts`), queued through the
+   on-demand ffmpeg encode (`generateMultibitrateHLS.ts`) at the source's own
+   frame rate up to 30fps (`hlsOutputFrameRate.ts`), queued through the
    task orchestrator, killed after 8s unused and deleted after 90s
    (`hlsSession.ts`). Segment requests wait for the encoder
    (`hlsSegmentWatcher.ts`).
