@@ -1,8 +1,12 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MomentClusterDetail, PhotoItem } from "../api";
+import { SearchUnavailableError } from "../api";
+import { useFilter } from "./filter/FilterContext";
 import { FilterProvider } from "./filter/FilterContext";
 import { SelectionProvider } from "./selection/SelectionContext";
 import { ThumbnailGrid } from "./ThumbnailGrid";
+import { SearchStatusIcon } from "./SearchStatus";
+import { useSearchActivity } from "./searchActivity";
 // Real CSS module (not mocked) so tests can assert against the same
 // generated class names ThumbnailGrid itself applies to an inline-unstacked
 // cluster's members (css.clusterMember + the tight/round-corner modifiers).
@@ -11,6 +15,7 @@ import gridCss from "./ThumbnailGrid.module.css";
 const fetchPhotosMock = vi.fn();
 const fetchMomentClusterDetailMock = vi.fn<(clusterId: string) => Promise<MomentClusterDetail | null>>();
 const fetchSemanticSearchMock = vi.fn();
+const fetchSearchStatusMock = vi.fn();
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
@@ -19,6 +24,7 @@ vi.mock("../api", async () => {
     fetchPhotos: (...args: unknown[]) => fetchPhotosMock(...args),
     fetchMomentClusterDetail: (...args: [string]) => fetchMomentClusterDetailMock(...args),
     fetchSemanticSearch: (...args: unknown[]) => fetchSemanticSearchMock(...args),
+    fetchSearchStatus: (...args: unknown[]) => fetchSearchStatusMock(...args),
   };
 });
 
@@ -131,11 +137,30 @@ const renderGrid = () =>
     </FilterProvider>,
   );
 
+/** The grid plus the search bar's status icon, which the grid publishes to. */
+const renderGridWithStatus = () =>
+  render(
+    <FilterProvider>
+      <SelectionProvider>
+        <SearchStatusIcon />
+        <ThumbnailGrid view="library" onViewChange={() => {}} />
+      </SelectionProvider>
+    </FilterProvider>,
+  );
+
+const statusIcon = () => screen.getByRole("button", { name: /^Search status:/ });
+
 describe("ThumbnailGrid", () => {
   beforeEach(() => {
     fetchPhotosMock.mockReset();
     fetchMomentClusterDetailMock.mockReset();
     fetchSemanticSearchMock.mockReset();
+    fetchSearchStatusMock.mockReset();
+    fetchSearchStatusMock.mockResolvedValue({
+      image: "ready",
+      audio: "ready",
+      transcript: "ready",
+    });
     observers.length = 0;
   });
 
@@ -537,4 +562,187 @@ describe("ThumbnailGrid", () => {
     const secondCallArgs = fetchSemanticSearchMock.mock.calls[1][0] as { offset?: number };
     expect(secondCallArgs.offset).toBe(50);
   });
+
+  it("says which source is missing from a partial search, and retries once its model is ready", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    fetchSemanticSearchMock
+      .mockResolvedValueOnce({
+        items: [makePhoto("t/1.mp4")],
+        total: 1,
+        query: "beach",
+        sourceStatus: {
+          image: { status: "failed", reason: "loading" },
+          audio: { status: "ok" },
+          transcript: { status: "ok" },
+        },
+      })
+      .mockResolvedValueOnce({
+        items: [makePhoto("i/1.jpg"), makePhoto("t/1.mp4")],
+        total: 2,
+        query: "beach",
+        sourceStatus: {
+          image: { status: "ok" },
+          audio: { status: "ok" },
+          transcript: { status: "ok" },
+        },
+      });
+
+    renderGridWithStatus();
+
+    // The full suite runs in parallel on a loaded box; this first search can
+    // take longer than findBy's 1 s default to settle there.
+    expect(
+      await screen.findByRole(
+        "button",
+        { name: "Search status: 1 source left out" },
+        { timeout: 5000 },
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(statusIcon());
+    expect(screen.getByText("left out: model still loading")).toBeInTheDocument();
+    expect(await screen.findByText(/Ready now/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(fetchSemanticSearchMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("i/1.jpg")).toBeInTheDocument();
+    });
+    expect(
+      await screen.findByRole("button", { name: "Search status: All sources answered" }),
+    ).toBeInTheDocument();
+  });
+
+  it("explains a search that returned nothing because the models were loading, instead of 'No results found'", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    fetchSearchStatusMock.mockResolvedValue({
+      image: "loading",
+      audio: "loading",
+      transcript: "ready",
+    });
+    fetchSemanticSearchMock.mockRejectedValueOnce(
+      new SearchUnavailableError({
+        image: { status: "failed", reason: "loading" },
+        audio: { status: "failed", reason: "loading" },
+        transcript: { status: "ok" },
+      }),
+    );
+
+    renderGridWithStatus();
+
+    expect(await screen.findByText(/Search isn.t ready yet/)).toBeInTheDocument();
+    expect(screen.queryByText("No results found for your search.")).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Search status: 2 sources left out" }));
+    expect(screen.getAllByText("left out: model still loading")).toHaveLength(2);
+    expect(screen.getByText(/Waiting for the model to finish loading/)).toBeInTheDocument();
+  });
+
+  it("clears an earlier search error when the next search succeeds", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    fetchSemanticSearchMock
+      .mockRejectedValueOnce(new Error("Failed to semantic search (status 500)"))
+      .mockResolvedValueOnce({ items: [makePhoto("a/1.jpg")], total: 1, query: "sunset" });
+
+    let setQuery: (q: string) => void = () => {};
+    const QuerySetter = () => {
+      const { setFilter } = useFilter();
+      setQuery = (q) => setFilter({ semanticQuery: q });
+      return null;
+    };
+    render(
+      <FilterProvider>
+        <SelectionProvider>
+          <QuerySetter />
+          <ThumbnailGrid view="library" onViewChange={() => {}} />
+        </SelectionProvider>
+      </FilterProvider>,
+    );
+
+    expect(await screen.findByText(/Search models are still loading/)).toBeInTheDocument();
+
+    act(() => setQuery("sunset"));
+
+    expect(await screen.findByText("a/1.jpg")).toBeInTheDocument();
+    expect(screen.queryByText(/Search models are still loading/)).not.toBeInTheDocument();
+  });
+
+  it("never reports a search as finished before its first result arrives", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    let resolveSearch: (value: unknown) => void = () => {};
+    fetchSemanticSearchMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSearch = resolve;
+      }),
+    );
+    // Every state the icon is shown, in order.
+    const seen: string[] = [];
+    const Recorder = () => {
+      const { active, searching, outcome } = useSearchActivity();
+      const label = !active ? "idle" : searching ? "searching" : outcome ? "answered" : "finished";
+      if (seen.at(-1) !== label) seen.push(label);
+      return null;
+    };
+    render(
+      <FilterProvider>
+        <SelectionProvider>
+          <Recorder />
+          <ThumbnailGrid view="library" onViewChange={() => {}} />
+        </SelectionProvider>
+      </FilterProvider>,
+    );
+    await waitFor(() => expect(fetchSemanticSearchMock).toHaveBeenCalledTimes(1));
+    act(() =>
+      resolveSearch({
+        items: [makePhoto("a/1.jpg")],
+        total: 1,
+        query: "beach",
+        sourceStatus: { image: { status: "ok" }, audio: { status: "ok" }, transcript: { status: "ok" } },
+      }),
+    );
+    expect(await screen.findByText("a/1.jpg")).toBeInTheDocument();
+    await waitFor(() => expect(seen.at(-1)).toBe("answered"));
+    expect(seen).not.toContain("finished");
+  });
+
+  it("keeps showing search progress when a query is replaced mid-flight", async () => {
+    window.history.pushState({}, "", "/?q=beach");
+    // Both searches honour their abort signal the way fetch does, and never
+    // finish on their own — so only an abort can settle one.
+    fetchSemanticSearchMock.mockImplementation(
+      ({ signal }: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason));
+        }),
+    );
+
+    let setQuery: (q: string) => void = () => {};
+    const QuerySetter = () => {
+      const { setFilter } = useFilter();
+      setQuery = (q) => setFilter({ semanticQuery: q });
+      return null;
+    };
+    render(
+      <FilterProvider>
+        <SelectionProvider>
+          <QuerySetter />
+          <SearchStatusIcon />
+          <ThumbnailGrid view="library" onViewChange={() => {}} />
+        </SelectionProvider>
+      </FilterProvider>,
+    );
+    expect(
+      await screen.findByRole("button", { name: "Search status: Searching" }),
+    ).toBeInTheDocument();
+
+    act(() => setQuery("beach house"));
+
+    await waitFor(() => {
+      expect(fetchSemanticSearchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+    // The first search's abort has settled by now; progress must still show.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(statusIcon()).toHaveAccessibleName("Search status: Searching");
+  });
 });
+

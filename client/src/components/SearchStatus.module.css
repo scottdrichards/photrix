@@ -1,0 +1,205 @@
+/* The search bar's status icon and its details popover (feedback #143). */
+
+.wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full, 999px);
+  background: none;
+  color: var(--fg2);
+  cursor: pointer;
+}
+
+.iconButton:hover,
+.iconButton[aria-expanded="true"] {
+  background: var(--bg2, rgba(127, 127, 127, 0.12));
+}
+
+.iconButton:focus-visible {
+  outline: 2px solid var(--brand, #2563eb);
+  outline-offset: 1px;
+}
+
+/* A missing model has finished loading: draw the eye to Retry. */
+.iconButton[data-ready] {
+  animation: ready-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ready-pulse {
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand, #2563eb) 30%, transparent);
+  }
+}
+
+.ok {
+  color: var(--success, #15803d);
+}
+
+.warning {
+  color: var(--warning, #b45309);
+}
+
+/* Progress ring: one arc per source. */
+.ring[data-spinning] {
+  animation: ring-spin 1.6s linear infinite;
+}
+
+@keyframes ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.segment {
+  stroke: var(--stroke2, rgba(127, 127, 127, 0.35));
+  transition: stroke var(--dur-normal, 200ms);
+}
+
+.segment[data-phase="active"],
+.segment[data-phase="done"] {
+  stroke: var(--brand, #2563eb);
+}
+
+.segment[data-phase="failed"] {
+  stroke: var(--warning, #b45309);
+}
+
+.segment[data-phase="pending"] {
+  animation: segment-wait 1.2s ease-in-out infinite;
+}
+
+@keyframes segment-wait {
+  50% {
+    stroke-opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ring[data-spinning],
+  .segment[data-phase="pending"],
+  .iconButton[data-ready] {
+    animation: none;
+  }
+}
+
+.popover {
+  position: absolute;
+  top: calc(100% + var(--space-s, 8px));
+  right: 0;
+  z-index: 1000;
+  min-width: 240px;
+  max-width: min(320px, 90vw);
+  padding: var(--space-s, 8px) var(--space-m, 12px);
+  border: 1px solid var(--stroke1, rgba(127, 127, 127, 0.25));
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface, #fff);
+  box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.18));
+  color: var(--fg1);
+  font-size: var(--fs-sm, 0.875rem);
+  text-align: left;
+}
+
+.title {
+  font-weight: var(--fw-semi, 600);
+  margin-block-end: var(--space-xs, 4px);
+}
+
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-xxs, 2px);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs, 4px);
+  white-space: nowrap;
+}
+
+.name {
+  font-weight: var(--fw-semi, 600);
+}
+
+.text {
+  color: var(--fg2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row[data-phase="failed"] .text {
+  color: var(--warning, #b45309);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--stroke2, rgba(127, 127, 127, 0.35));
+}
+
+.dot[data-phase="active"],
+.dot[data-phase="done"] {
+  background: var(--brand, #2563eb);
+}
+
+.dot[data-phase="done"] {
+  background: var(--success, #15803d);
+}
+
+.dot[data-phase="failed"] {
+  background: var(--warning, #b45309);
+}
+
+.hint {
+  color: var(--fg3);
+  font-size: 0.8em;
+  margin-block-start: var(--space-xs, 4px);
+}
+
+.retryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-s, 8px);
+  margin-block-start: var(--space-xs, 4px);
+}
+
+.retryRow .hint {
+  margin: 0;
+  white-space: normal;
+}
+
+.retry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs, 2px);
+  flex-shrink: 0;
+  padding: 2px var(--space-s, 8px);
+  border: 1px solid var(--stroke1, rgba(127, 127, 127, 0.25));
+  border-radius: var(--radius-sm, 4px);
+  background: none;
+  color: var(--fg1);
+  font: inherit;
+  cursor: pointer;
+}
+
+.retry[data-ready] {
+  border-color: var(--brand, #2563eb);
+  background: var(--brand, #2563eb);
+  color: var(--fg-inv, #fff);
+}
