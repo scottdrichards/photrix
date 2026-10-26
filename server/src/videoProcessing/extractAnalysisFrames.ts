@@ -24,6 +24,26 @@ import { appendWithLimit } from "./videoUtils.ts";
  * would be wrong. CPU frames come out upright, the way the video plays.
  */
 
+/**
+ * The file itself can't be read as video: truncated (an iPhone clip copied
+ * before it finished has no `moov` atom), not a container ffmpeg knows, or
+ * holding nothing it can decode, like Apple's 1 fps still-image streams.
+ * Retrying can't help until the file changes on disk, and a change on disk
+ * resyncs the file, which clears the mark and queues it again.
+ */
+export class VideoUnreadableError extends Error {}
+
+/** ffmpeg's ways of saying the input is the problem, not ffmpeg or the share. */
+const UNREADABLE_INPUT =
+  /moov atom not found|Invalid data found when processing input|does not contain any stream|Output file is empty|Nothing was written into output file/i;
+
+/** Rethrows an ffmpeg failure, as {@link VideoUnreadableError} when the file is at fault. */
+const classifyFfmpegError = (error: unknown): never => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (UNREADABLE_INPUT.test(message)) throw new VideoUnreadableError(message);
+  throw error;
+};
+
 /** Longer than this, sample by seeking rather than decoding every keyframe. */
 export const LONG_VIDEO_SECONDS = 180;
 /** At most this many frames per video reach the face detector. */
@@ -250,7 +270,7 @@ export const extractAnalysisFrames = async (
     }
     // Every seek failing is the file, not its length.
     if (frames.length === 0 && lastError) {
-      throw lastError;
+      classifyFfmpegError(lastError);
     }
     return frames;
   }
@@ -280,7 +300,7 @@ export const extractAnalysisFrames = async (
       const time = showinfoTime(line);
       if (time !== null) times.push(time);
     },
-  );
+  ).catch(classifyFfmpegError);
 
   const files = (await readdir(outDir)).filter((name) => /^k\d+\.jpg$/.test(name)).sort();
   if (times.length !== files.length) {

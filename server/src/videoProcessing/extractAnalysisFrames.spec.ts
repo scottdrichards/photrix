@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
   parseShowinfoTimes,
   planFrameSampling,
   selectEvenly,
+  VideoUnreadableError,
 } from "./extractAnalysisFrames.ts";
 
 describe("planFrameSampling", () => {
@@ -213,11 +214,24 @@ describeWithFfmpeg("extractAnalysisFrames (real ffmpeg)", () => {
     expect(frames.at(-1)!.endMs).toBe(175_000);
   }, 60_000);
 
-  it("throws when the file isn't a video", async () => {
+  it("says the file is unreadable when it isn't a video", async () => {
     const bogus = path.join(root, "bogus.mp4");
     writeFileSync(bogus, "not a video");
-    await expect(extractAnalysisFrames(bogus, 5, freshOutDir())).rejects.toThrow(
-      /ffmpeg/,
-    );
+    const extraction = extractAnalysisFrames(bogus, 5, freshOutDir());
+    await expect(extraction).rejects.toBeInstanceOf(VideoUnreadableError);
+    await expect(extraction).rejects.toThrow(/ffmpeg/);
   });
+
+  it("says a truncated clip is unreadable, by seek as well as by keyframe", async () => {
+    // The first bytes of a real MP4 with the rest cut off: no moov atom, the
+    // way an iPhone clip looks when it was copied before it finished.
+    const truncated = path.join(root, "truncated.mp4");
+    writeFileSync(truncated, readFileSync(clip).subarray(0, 4_096));
+    await expect(
+      extractAnalysisFrames(truncated, 12, freshOutDir()),
+    ).rejects.toBeInstanceOf(VideoUnreadableError);
+    await expect(
+      extractAnalysisFrames(truncated, 600, freshOutDir()),
+    ).rejects.toBeInstanceOf(VideoUnreadableError);
+  }, 120_000);
 });
