@@ -201,6 +201,15 @@ const startServer = async () => {
   // Running the scan last (sequentially) ensures it warms pages that will
   // actually stay hot for the first real queries.
   const warmupLease = taskOrchestrator.beginUserRequest("startup search warmup");
+  // Cached models load in ~35 s. A first run downloads them, which takes
+  // minutes, and holding the lease that long leaves a new install showing an
+  // empty library because the file-system scan is background work too. Hold
+  // background work at most this long; the models keep loading either way.
+  const warmupHoldTimer = setTimeout(() => {
+    logger.warn("Search models still loading after 60 s; starting background work alongside");
+    warmupLease.release();
+  }, 60_000);
+  warmupHoldTimer.unref();
   void Promise.allSettled([
     embedText("warmup").then(() => logger.info("CLIP text-embedding model warmed")),
     audioDisabled
@@ -214,6 +223,7 @@ const startServer = async () => {
         .warmSemanticSearch()
         .then(() => logger.info("Semantic search vector cache warmed")),
     ]);
+    clearTimeout(warmupHoldTimer);
     warmupLease.release();
     for (const r of [...modelResults, ...scanResult]) {
       if (r.status === "rejected") {

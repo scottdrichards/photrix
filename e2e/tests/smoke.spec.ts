@@ -15,13 +15,17 @@ test.describe("app shell", () => {
   });
 
   test("renders thumbnails for the indexed library", async ({ page }) => {
-    await page.goto("/");
-
+    // The server indexes exampleFolder in the background after boot, and only
+    // once its search-model warmup releases (up to a minute, longer than the
+    // first page load). The grid doesn't poll for new files, so reload until a
+    // load finds them, as a user arriving later would. Reloads are spaced out
+    // because every API request briefly pauses background work.
+    test.setTimeout(180_000);
     const grid = page.getByTestId("thumbnail-grid");
-    await expect(grid).toBeVisible();
-
-    // The server indexes exampleFolder asynchronously on boot, so allow generous
-    // time for the first thumbnails to appear rather than asserting immediately.
-    await expect(grid.getByRole("img").first()).toBeVisible({ timeout: 60_000 });
+    await expect(async () => {
+      await page.goto("/");
+      await expect(grid).toBeVisible();
+      await expect(grid.getByRole("img").first()).toBeVisible({ timeout: 5_000 });
+    }).toPass({ timeout: 150_000, intervals: [10_000] });
   });
 });

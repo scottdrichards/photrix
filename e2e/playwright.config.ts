@@ -21,6 +21,8 @@ const serverEnv = {
   PHOTRIX_OTEL_ENABLED: "false",
   // Keep the piped server output readable; bump to "debug" when diagnosing a boot failure.
   LOG_LEVEL: "warn",
+  // An ephemeral port, so the run never collides with a Photrix already running here.
+  MCP_PORT: "0",
 };
 
 export default defineConfig({
