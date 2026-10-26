@@ -34,8 +34,9 @@ The client proxies `/api` to `http://localhost:3000` in development.
 - Local and production examples are included in that file.
 - For internet-facing setup details, see `GETTING_STARTED.md`.
 
-- For local tracing and Jaeger setup, see `documentation/OBSERVABILITY.md`.
+## Finding your way around
 
-## Observability
-
-The server can export OpenTelemetry traces for request, DB, file, and conversion spans.
+- `documentation/ARCHITECTURE.md`: where each route, representation and background stage is processed.
+- `documentation/DIAGNOSTICS.md`: turning "it was slow" into a report an agent can debug
+  (`/api/diagnostics/report`, also saved with every suggestion).
+- `documentation/OBSERVABILITY.md`: OpenTelemetry/Jaeger traces for request, DB, file and conversion spans.

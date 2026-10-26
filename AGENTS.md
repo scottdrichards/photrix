@@ -4,6 +4,8 @@ Review these files when implicated (relative to root)
 
 - Testing: /TESTING.md
 - Deployment/Setup: /GETTING_STARTED.md
+- Where does X happen (routes, video pipeline, background stages): /documentation/ARCHITECTURE.md
+- Debugging a slowdown/bug from a user report: /documentation/DIAGNOSTICS.md
 
 # Terminal commands
 
