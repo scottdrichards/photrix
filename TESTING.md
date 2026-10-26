@@ -16,6 +16,8 @@ and the implementation details benefit from testing to manage their complexity.
   run needs `bun run test:e2e:install`. See `e2e/README.md` for isolation details
   and how to add tests.
 
+CI (`.github/workflows/ci.yml`) runs typecheck, lint, client and server unit tests on every PR and push to `master`; e2e is not run in CI.
+
 Tests still run under Jest (server) and Vitest (client) on Node, not `bun
 test` — bun is only the package manager here (see `GETTING_STARTED.md`).
 
