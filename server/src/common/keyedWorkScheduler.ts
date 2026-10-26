@@ -1,6 +1,7 @@
+import { toError } from "./toError.ts";
 type PendingEntry<T> = {
   resolve: (value: T) => void;
-  reject: (error: unknown) => void;
+  reject: (error: Error) => void;
   cleanup: () => void;
 };
 
@@ -29,7 +30,7 @@ export const createKeyedWorkScheduler = (maxConcurrent: number) => {
   const removeWaiter = <T>(
     entry: WorkEntry<T>,
     waiter: PendingEntry<T>,
-    error: unknown,
+    error: Error,
   ) => {
     const index = entry.waiters.indexOf(waiter);
     if (index === -1) {
@@ -97,7 +98,7 @@ export const createKeyedWorkScheduler = (maxConcurrent: number) => {
 
       void next.work(next.controller.signal).then(
         (result) => {
-          const waiters = next.waiters as PendingEntry<typeof result>[];
+          const waiters = next.waiters;
           if (workByKey.get(next.key) === next) {
             workByKey.delete(next.key);
           }
@@ -112,7 +113,7 @@ export const createKeyedWorkScheduler = (maxConcurrent: number) => {
           }
           activeCount--;
           startPendingWork();
-          waiters.forEach((waiter) => waiter.reject(error));
+          waiters.forEach((waiter) => waiter.reject(toError(error)));
         },
       );
     }

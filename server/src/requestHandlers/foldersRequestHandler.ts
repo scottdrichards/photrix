@@ -51,7 +51,7 @@ export const foldersRequestHandler = async (
     const requestFilter = filterParam ? (JSON.parse(filterParam) as FilterElement) : {};
     const filter = combineFilters([
       requestFilter,
-      ...(shareFilter ? [shareFilter as FilterElement] : []),
+      ...(shareFilter ? [shareFilter] : []),
     ]);
     const folders = await (() => database.getFolders(normalizedPath, filter))();
     res.writeHead(200, { "Content-Type": "application/json" });

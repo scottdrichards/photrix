@@ -5,7 +5,7 @@ import type { ChildProcess } from "node:child_process";
 // A minimal fake ffmpeg process: an EventEmitter with a spy-able kill().
 const makeChild = () => {
   const child = new EventEmitter() as EventEmitter & ChildProcess & { kill: jest.Mock };
-  child.kill = jest.fn(() => true) as unknown as ChildProcess["kill"] & jest.Mock;
+  child.kill = jest.fn(() => true);
   return child;
 };
 

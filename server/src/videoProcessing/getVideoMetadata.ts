@@ -1,3 +1,4 @@
+import { toError } from "../common/toError.ts";
 import { spawn } from "child_process";
 import type { ExifMetadata } from "../indexDatabase/fileRecord.type.ts";
 
@@ -108,7 +109,7 @@ export const getVideoSourceProfile = (filePath: string): Promise<VideoSourceProf
       FFPROBE_SPAWN_OPTIONS,
     );
     let stdout = "";
-    proc.stdout.on("data", (d) => {
+    proc.stdout.on("data", (d: Buffer) => {
       stdout += d.toString();
     });
     proc.on("close", (code) => {
@@ -131,7 +132,7 @@ export const getVideoSourceProfile = (filePath: string): Promise<VideoSourceProf
               : (video?.r_frame_rate ?? ""),
         });
       } catch (e) {
-        reject(e);
+        reject(toError(e));
       }
     });
     proc.on("error", reject);
@@ -155,11 +156,11 @@ export const getVideoMetadata = async (
     let stdout = "";
     let stderr = "";
 
-    process.stdout.on("data", (data) => {
+    process.stdout.on("data", (data: Buffer) => {
       stdout += data.toString();
     });
 
-    process.stderr.on("data", (data) => {
+    process.stderr.on("data", (data: Buffer) => {
       stderr += data.toString();
     });
 
@@ -233,7 +234,7 @@ export const getVideoMetadata = async (
 
         resolve(metadata);
       } catch (e) {
-        reject(e);
+        reject(toError(e));
       }
     });
 

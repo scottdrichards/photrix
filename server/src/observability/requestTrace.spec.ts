@@ -9,7 +9,6 @@ import {
   bindCurrentRequestTrace,
   finishRequestTrace,
   getCurrentRequestId,
-  measureOperation,
   runWithRequestTrace,
 } from "./requestTrace.ts";
 
@@ -26,7 +25,7 @@ const createSpanRecorder = () => {
     },
   };
 
-  jest.spyOn(trace, "getTracer").mockReturnValue(fakeTracer as Tracer);
+  jest.spyOn(trace, "getTracer").mockReturnValue(fakeTracer);
 
   return { calls };
 };

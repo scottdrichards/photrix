@@ -11,7 +11,6 @@ import {
 import { HLS_SEGMENT_SECONDS } from "../../videoProcessing/buildHlsPlaylist.ts";
 import { existsSync } from "fs";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
-import type { FilterElement } from "../../indexDatabase/indexDatabase.type.ts";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { writeJson } from "../../utils.ts";
 import path from "path";
@@ -319,7 +318,7 @@ export const videoNegotiationRequestHandler = async (
   if (shareFilter) {
     const allowed = await database.fileMatchesFilter(
       videoPath,
-      shareFilter as FilterElement,
+      shareFilter,
     );
     if (!allowed) {
       return writeJson(res, 403, { error: "Access denied" });

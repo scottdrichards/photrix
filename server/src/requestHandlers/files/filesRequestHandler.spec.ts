@@ -36,13 +36,13 @@ const createMockResponse = () => {
     headersSent: false,
     writeHead: jest.fn(() => {
       (res as { headersSent: boolean }).headersSent = true;
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
     end: jest.fn((chunk?: string) => {
       if (chunk) {
         body += chunk;
       }
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
     write: jest.fn(() => true),
   } as unknown as http.ServerResponse;

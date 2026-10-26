@@ -73,7 +73,7 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
       });
 
     return () => abortController.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [face.personId, face.faceId]);
 
   const suggestions = useMemo(() => {
@@ -145,7 +145,7 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
               key={index}
               className={css.previewThumb}
               src={buildFaceCropUrl(previewFace, 96)}
-              alt="Related photo of this face"
+              alt="Another crop of this face"
               loading="lazy"
             />
           ))}
@@ -161,6 +161,7 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Type a name…"
+          // eslint-disable-next-line jsx-a11y/no-autofocus -- the only field in a just-opened panel; focusing it is the expected flow
           autoFocus
           disabled={saving}
           aria-label="Person's name"

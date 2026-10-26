@@ -13,7 +13,7 @@ const JPEG_WITHOUT_THUMB = path.join(EXAMPLE_DIR, "subFolder/20120803_160939.jpg
 const HEIC_FILE = path.join(EXAMPLE_DIR, "sewing-threads.heic");
 
 let tempCacheDir: string;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 let convertEmbeddedThumbnail: (
   filePath: string,
   maxHeight?: number,

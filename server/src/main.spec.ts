@@ -79,7 +79,7 @@ describe("main.ts HTTP Server", () => {
     });
 
     const { createServer } = await import("./createServer.ts");
-    server = await createServer(database, storagePath, {
+    server = createServer(database, storagePath, {
       onRequest: () => {},
       taskOrchestrator: createTaskOrchestrator(database),
     });

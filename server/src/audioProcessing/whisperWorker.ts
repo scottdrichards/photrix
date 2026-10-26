@@ -271,7 +271,7 @@ const onWorkerLine = (
     return;
   }
 
-  const segments = (message as { id: number; segments: TranscriptSegment[] }).segments;
+  const segments = (message).segments;
   const logMethod = elapsedMs >= SLOW_REQUEST_MS ? log.info.bind(log) : log.debug.bind(log);
   logMethod(
     {

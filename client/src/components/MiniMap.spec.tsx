@@ -13,8 +13,6 @@ vi.mock("ol/Map", () => ({
 
     constructor({
       view,
-      target,
-      layers,
     }: {
       view: MockMap["view"];
       target?: HTMLElement;

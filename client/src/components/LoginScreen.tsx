@@ -108,6 +108,7 @@ export const LoginScreen = ({ onAuthenticated }: Props) => {
             placeholder="Username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
+            // eslint-disable-next-line jsx-a11y/no-autofocus -- first field of the login form; focusing it is the expected flow
             autoFocus
             autoComplete="username"
             disabled={loading}

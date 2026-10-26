@@ -65,7 +65,7 @@ export const suggestionsRequestHandler = async (
       : null;
 
     const filterParts: FilterElement[] = [
-      ...(shareFilter ? [shareFilter as FilterElement] : []),
+      ...(shareFilter ? [shareFilter] : []),
       pathFilter,
       ...(extraFilter ? [extraFilter] : []),
     ];

@@ -58,11 +58,11 @@ const runProbe = async (
       process.kill();
     }, timeoutMs);
 
-    process.stdout.on("data", (data) => {
+    process.stdout.on("data", (data: Buffer) => {
       stdout += data.toString();
     });
 
-    process.stderr.on("data", (data) => {
+    process.stderr.on("data", (data: Buffer) => {
       stderr += data.toString();
     });
 
@@ -380,7 +380,7 @@ const createWorker = (command: string, baseArgs: string[]): PoolWorker => {
         if (!line) continue;
         let message: { type?: string; id?: number | null; ok?: boolean; error?: string };
         try {
-          message = JSON.parse(line);
+          message = JSON.parse(line) as typeof message;
         } catch {
           continue;
         }

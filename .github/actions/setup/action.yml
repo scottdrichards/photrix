@@ -1,0 +1,20 @@
+name: Set up Photrix
+description: bun workspace install plus the better-sqlite3 native addon, on the Node version production runs.
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version-file: .bun-version
+    - uses: actions/setup-node@v4
+      with:
+        node-version-file: .nvmrc
+    - name: Cache the better-sqlite3 build
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/photrix/native
+        key: native-${{ runner.os }}-${{ hashFiles('bun.lock', '.nvmrc') }}
+    - shell: bash
+      run: bun install --frozen-lockfile
+    - shell: bash
+      run: node scripts/setup-native.mjs

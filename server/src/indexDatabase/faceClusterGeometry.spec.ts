@@ -65,7 +65,7 @@ const drain = async (db: IndexDatabase) => {
 };
 
 const faceIdOf = async (db: IndexDatabase, relativePath: string) =>
-  (await db.getFacesForFile(relativePath))[0]!.id;
+  (await db.getFacesForFile(relativePath))[0].id;
 
 describe("cluster geometry", () => {
   it("shrinks to evict an outlying face and reports what goes with it", async () => {
@@ -78,7 +78,7 @@ describe("cluster geometry", () => {
       await addFacePhoto(db, "p/far-b.jpg", 0.6);
       await drain(db);
 
-      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0]!.personId;
+      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
       const farB = await faceIdOf(db, "p/far-b.jpg");
 
       // Preview first: it must name both stragglers, since evicting the outer
@@ -115,7 +115,7 @@ describe("cluster geometry", () => {
       await addFacePhoto(db, "p/interior.jpg", 0.4);
       await drain(db);
 
-      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0]!.personId;
+      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
       const interior = await faceIdOf(db, "p/interior.jpg");
 
       const preview = (await db.shrinkToExcludeFace(personId, interior, { dryRun: true }))!;
@@ -131,7 +131,7 @@ describe("cluster geometry", () => {
         await addFacePhoto(db, `p/band-${i}.jpg`, 0.02 * i);
       }
       await drain(db);
-      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0]!.personId;
+      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
 
       // Both have to sit beyond the global threshold (cos 0.62 ~ 0.90 rad) or
       // they would simply have joined the band on their own and there would be
@@ -141,7 +141,7 @@ describe("cluster geometry", () => {
       await drain(db);
 
       const wanted = await faceIdOf(db, "p/wanted.jpg");
-      const strangerPerson = (await db.getPeopleFacesForFile("p/stranger.jpg"))[0]!.personId;
+      const strangerPerson = (await db.getPeopleFacesForFile("p/stranger.jpg"))[0].personId;
       expect(strangerPerson).not.toBe(personId);
 
       const preview = (await db.growToIncludeFace(personId, wanted, { dryRun: true }))!;
@@ -161,7 +161,7 @@ describe("cluster geometry", () => {
         await addFacePhoto(db, `p/band-${i}.jpg`, 0.02 * i);
       }
       await drain(db);
-      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0]!.personId;
+      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
       await db.renameCluster(personId, "Ada");
 
       await addFacePhoto(db, "p/other-look.jpg", 1.1);
@@ -186,7 +186,7 @@ describe("cluster geometry", () => {
       await addFacePhoto(db, "p/far.jpg", 0.6);
       await drain(db);
 
-      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0]!.personId;
+      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
       const before = (await db.getFaceClusterReview(personId))!;
 
       // Reject the straggler that was dragging the centre, then refit.
@@ -213,7 +213,7 @@ describe("cluster geometry", () => {
       await addFacePhoto(db, "p/stranger.jpg", 0.45);
       await drain(db);
 
-      const personId = (await db.getPeopleFacesForFile("p/young-0.jpg"))[0]!.personId;
+      const personId = (await db.getPeopleFacesForFile("p/young-0.jpg"))[0].personId;
       const review = (await db.getFaceClusterReview(personId))!;
       // All eleven landed together, which is the situation worth repairing.
       expect(review.faces.length).toBe(11);
