@@ -1,6 +1,5 @@
 import * as http from "http";
 import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
-import type { FilterElement } from "../../indexDatabase/indexDatabase.type.ts";
 import { stat, readFile } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { createReadStream, existsSync, type Stats } from "fs";
@@ -721,7 +720,7 @@ const fileHandler = async (
   if (shareFilter) {
     const allowed = await database.fileMatchesFilter(
       subPath,
-      shareFilter as FilterElement,
+      shareFilter,
     );
     if (!allowed) {
       return writeJson(res, 403, { error: "Access denied" });

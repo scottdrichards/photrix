@@ -41,11 +41,11 @@ const post = async (body: string) => {
   const res = {
     writeHead: jest.fn((code: number) => {
       status = code;
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
     end: jest.fn((chunk?: string) => {
       if (chunk) payload += chunk;
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
   } as unknown as http.ServerResponse;
 

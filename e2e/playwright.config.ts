@@ -21,10 +21,15 @@ const serverEnv = {
   PHOTRIX_OTEL_ENABLED: "false",
   // Keep the piped server output readable; bump to "debug" when diagnosing a boot failure.
   LOG_LEVEL: "warn",
+  // An ephemeral port, so the run never collides with a Photrix already running here.
+  MCP_PORT: "0",
 };
 
 export default defineConfig({
   testDir: "./tests",
+  // A fresh checkout's first page load waits for Vite to compile the whole
+  // client, which alone can pass Playwright's 30 s default on a busy machine.
+  timeout: 120_000,
   globalSetup: "./globalSetup.ts",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,

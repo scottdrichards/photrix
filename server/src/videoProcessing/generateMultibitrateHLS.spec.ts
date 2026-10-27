@@ -95,7 +95,7 @@ const lastEncodeArgs = (spawnMock: { mock: { calls: unknown[][] } }): string[] =
 /** The -vf argument of the last ffmpeg call a mock recorded. */
 const lastFilterChain = (spawnMock: { mock: { calls: unknown[][] } }): string => {
   const args = spawnMock.mock.calls.at(-1)?.[1] as string[];
-  return args[args.indexOf("-vf") + 1] as string;
+  return args[args.indexOf("-vf") + 1];
 };
 
 afterEach(() => {
@@ -195,7 +195,7 @@ describe("generateVariantHLS", () => {
     // GPU encode: h264_nvenc re-uploads CPU frames to GPU.
     expect(encodeArgs).toContain("h264_nvenc");
     // CPU filter chain: fps= in vf, no -r flag needed.
-    const vfArg = encodeArgs[encodeArgs.indexOf("-vf") + 1] as string;
+    const vfArg = encodeArgs[encodeArgs.indexOf("-vf") + 1];
     expect(vfArg).toContain("fps=");
     expect(encodeArgs).not.toContain("-r");
     // No seek: always from start.
@@ -428,7 +428,7 @@ describe("generateVariantHLS", () => {
     // failure, so AV1 keeps the tolerant copy-back shape (and hardware encode).
     expect(encodeArgs).not.toContain("-hwaccel_output_format");
     expect(encodeArgs).toContain("h264_vaapi");
-    const vf = encodeArgs[encodeArgs.indexOf("-vf") + 1] as string;
+    const vf = encodeArgs[encodeArgs.indexOf("-vf") + 1];
     expect(vf).not.toContain("hwmap");
     expect(vf).not.toContain("hwdownload");
   });

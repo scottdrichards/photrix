@@ -393,7 +393,7 @@ const normalizeFaceClusterCentroid = (
   for (let i = 0; i < vector.length; i++) magnitude += vector[i] * vector[i];
   magnitude = Math.sqrt(magnitude);
   if (magnitude < 1e-10) return vector;
-  const out = new Float32Array(vector.length) as Float32Array<ArrayBuffer>;
+  const out = new Float32Array(vector.length);
   for (let i = 0; i < vector.length; i++) out[i] = vector[i] / magnitude;
   return out;
 };
@@ -1001,7 +1001,7 @@ export class IndexDatabase {
     const { folder, fileName } = splitPath(subPath);
     const combined: FilterElement = {
       operation: "and",
-      conditions: [filter, { folder, fileName } as FilterElement],
+      conditions: [filter, { folder, fileName }],
     };
     const { where, params } = filterToSQL(combined);
     const result = await this.db.get<{ count: number }>(
@@ -2989,9 +2989,9 @@ export class IndexDatabase {
         count: seed.count,
         name: seed.name,
         representative: seed.representative,
-        x: coords[index]![0] - (focusOrigin?.[0] ?? 0),
-        y: coords[index]![1] - (focusOrigin?.[1] ?? 0),
-        z: coords[index]![2] - (focusOrigin?.[2] ?? 0),
+        x: coords[index][0] - (focusOrigin?.[0] ?? 0),
+        y: coords[index][1] - (focusOrigin?.[1] ?? 0),
+        z: coords[index][2] - (focusOrigin?.[2] ?? 0),
         focused: seed.id === focusedClusterId,
       })),
     };
@@ -3164,7 +3164,7 @@ export class IndexDatabase {
           return seeds;
         });
       }
-      const seeds = await this.seedsCacheInflight!;
+      const seeds = await this.seedsCacheInflight;
       return minCount <= MIN_FACE_CLUSTER_SIZE
         ? seeds
         : seeds.filter((s) => s.count >= minCount);
@@ -5560,7 +5560,7 @@ export class IndexDatabase {
     return rows
       .map((row) => {
         const record = rowToFileRecord(row as Record<string, string | number>);
-        const similarity = scoreTranscriptMatch(query, String(row.audioTranscript ?? ""));
+        const similarity = scoreTranscriptMatch(query, typeof row.audioTranscript === "string" ? row.audioTranscript : "");
         return similarity > 0 ? { ...record, similarity } : null;
       })
       .filter((row): row is FileRecord & { similarity: number } => row !== null)
@@ -5676,7 +5676,7 @@ export class IndexDatabase {
     // only joined in when asked for, so the common case (no metadata request
     // for it) pays nothing extra.
     const extraColumns: string[] = [];
-    if (metadata?.includes("momentClusterSize" as keyof FileRecord)) {
+    if (metadata?.includes("momentClusterSize")) {
       extraColumns.push(`(CASE WHEN files.momentClusterId IS NULL THEN NULL ELSE
              (SELECT COUNT(*) FROM files momentMember WHERE momentMember.momentClusterId = files.momentClusterId)
            END) AS momentClusterSize`);
@@ -5694,7 +5694,7 @@ export class IndexDatabase {
     // json_group_array over a LIMIT'd derived table (rather than a bare
     // GROUP_CONCAT) sidesteps any need to worry about a folder/fileName
     // containing whatever separator character a naive string join would pick.
-    if (metadata?.includes("momentClusterPreviewPaths" as keyof FileRecord)) {
+    if (metadata?.includes("momentClusterPreviewPaths")) {
       extraColumns.push(`(CASE WHEN files.momentClusterId IS NULL THEN NULL ELSE
              (SELECT json_group_array(preview.path) FROM (
                SELECT (other.folder || other.fileName) AS path

@@ -31,7 +31,6 @@ import {
 import { clientIpFromRequest } from "../auth/ipLocation.ts";
 import { LoginThrottledError, throttleLogin } from "../auth/loginThrottle.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
 import { FilterCompileError, filterToSQL } from "../indexDatabase/filterToSQL.ts";
 import { generateShareDescription } from "../shareDescription/generateShareDescription.ts";
 import { writeJson } from "../utils.ts";
@@ -191,7 +190,7 @@ export const authShareTokenHandler = async (
     typeof rawLabel === "string" && rawLabel.trim()
       ? rawLabel.trim()
       : await generateShareDescription({
-          filter: body.filter as FilterElement,
+          filter: body.filter,
           ...(semanticQuery ? { semanticQuery } : {}),
           database,
         });

@@ -81,7 +81,7 @@ describe("registerBackgroundTasks", () => {
 
     expect(queued.map(({ task }) => task.name)).toEqual(["File system scan"]);
 
-    const scanRunner = queued[0]!.task.start();
+    const scanRunner = queued[0].task.start();
     scan.resolve();
     await scanRunner.onComplete();
 
@@ -93,7 +93,7 @@ describe("registerBackgroundTasks", () => {
       "Grid thumbnail backfill",
     ]);
 
-    const exifRunner = queued[2]!.task.start();
+    const exifRunner = queued[2].task.start();
     exif.resolve();
     await exifRunner.onComplete();
 
@@ -108,7 +108,7 @@ describe("registerBackgroundTasks", () => {
       "Video faces",
     ]);
 
-    const analysisRunner = queued[3]!.task.start();
+    const analysisRunner = queued[3].task.start();
     analysis.resolve();
     await analysisRunner.onComplete();
 
@@ -158,7 +158,7 @@ describe("registerBackgroundTasks", () => {
     // Drive the initial run to completion by starting and awaiting each queued
     // task, which cascades the dependent stages.
     for (let i = 0; i < queued.length; i++) {
-      await queued[i]!.task.start().onComplete();
+      await queued[i].task.start().onComplete();
     }
 
     const afterInitial = queued.length;
@@ -245,7 +245,7 @@ describe("registerBackgroundTasks", () => {
 
     // Complete the scan so the pipeline queues; start file-metadata but leave it
     // running (unresolved).
-    await queued[0]!.task.start().onComplete();
+    await queued[0].task.start().onComplete();
     const fileMetaTask = queued.find(
       ({ task }) => task.name === "File metadata processing",
     )!.task;

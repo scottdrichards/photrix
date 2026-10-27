@@ -203,7 +203,7 @@ export const searchRequestHandler = async (
         ? conditions[0]
         : { operation: "and" as const, conditions };
 
-  const dbFilter = filter as Parameters<typeof database.semanticSearch>[1];
+  const dbFilter = filter;
 
   // Which modalities to run. Absent `sources` param means all of them (the
   // default); a comma-separated subset lets the client disable sources — both to

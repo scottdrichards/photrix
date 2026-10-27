@@ -16,11 +16,11 @@ const createJsonResponse = () => {
   const res = {
     writeHead: jest.fn((code: number) => {
       status = code;
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
     end: jest.fn((chunk?: string) => {
       if (chunk) body += chunk;
-      return res as unknown as http.ServerResponse;
+      return res;
     }),
   } as unknown as http.ServerResponse;
   return { res, getStatus: () => status, getJson: () => JSON.parse(body) };

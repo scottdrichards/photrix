@@ -236,6 +236,7 @@ export const SearchStatusIcon = () => {
   };
 
   return (
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- hover mirrors the button, which is the real control; Escape bubbles up from the button and popover
     <div
       ref={wrapperRef}
       className={css.wrapper}

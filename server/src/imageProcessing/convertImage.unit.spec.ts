@@ -262,7 +262,7 @@ describe("convertImage unit", () => {
         conversionStarted.resolve();
         return true;
       };
-      proc.kill = jest.fn((signal?: string) => {
+      proc.kill = jest.fn((_signal?: string) => {
         queueMicrotask(() => proc.emit("close", null));
         return undefined;
       }) as typeof proc.kill;

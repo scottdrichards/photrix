@@ -42,7 +42,7 @@ export const queryHandler = async (
   const filter = {
     operation: "and" as const,
     conditions: [
-      ...(shareFilter ? [shareFilter as QueryOptions["filter"]] : []),
+      ...(shareFilter ? [shareFilter] : []),
       ...(directoryPath || includeSubfolders
         ? [
             {

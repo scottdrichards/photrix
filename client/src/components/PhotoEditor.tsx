@@ -1027,7 +1027,7 @@ export function PhotoEditor({
               <p className={css.autoError}>No confident horizon line found — nothing changed.</p>
             )}
             {straightenState === "error" && (
-              <p className={css.autoError}>Couldn't check for a horizon line.</p>
+              <p className={css.autoError}>{"Couldn't check for a horizon line."}</p>
             )}
           </div>
 

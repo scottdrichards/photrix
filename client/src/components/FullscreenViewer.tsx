@@ -1680,21 +1680,13 @@ export function FullscreenViewer() {
                         }
                       }}
                     >
-                      {transcriptTrackUrl ? (
-                        <track
-                          key={transcriptTrackUrl}
-                          kind="captions"
-                          src={transcriptTrackUrl}
-                          label="Transcript"
-                          default={showCaptions}
-                        />
-                      ) : (
-                        <track
-                          kind="captions"
-                          src="data:,"
-                          label="Captions not provided"
-                        />
-                      )}
+                      <track
+                        key={transcriptTrackUrl ?? "none"}
+                        kind="captions"
+                        src={transcriptTrackUrl ?? "data:,"}
+                        label={transcriptTrackUrl ? "Transcript" : "Captions not provided"}
+                        default={Boolean(transcriptTrackUrl) && showCaptions}
+                      />
                       Your browser does not support HTML video playback.
                     </video>
                     <VideoLoadingOverlay
@@ -1774,7 +1766,7 @@ export function FullscreenViewer() {
                     />
                   </div>
                   {/* Hidden source image for canvas drawing */}
-                  {/* eslint-disable-next-line jsx-a11y/alt-text */}
+                  { }
                   <img
                     ref={previewImgRef}
                     src={photo.fullUrl}
@@ -1790,7 +1782,7 @@ export function FullscreenViewer() {
                       }
                     }}
                   />
-                  {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */}
+                  { }
                   <canvas
                     ref={previewCanvasRef}
                     className={

@@ -103,7 +103,7 @@ const parseJsonObject = (text: string): RawInterpretation | null => {
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return null;
     }
-    return parsed as RawInterpretation;
+    return parsed;
   } catch {
     return null;
   }
