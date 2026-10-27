@@ -5,10 +5,11 @@ import {
   type FaceClusterMatchMode,
 } from "../../../../shared/filter-contract/src";
 import type { PersonCluster } from "../../api";
-import { buildFaceCropUrl, fetchPeopleClusters, fetchStatus } from "../../api";
+import { fetchPeopleClusters, fetchStatus } from "../../api";
 import { Spinner } from "../../Spinner";
 import { useFilter } from "./FilterContext";
 import css from "./FaceFilterPanel.module.css";
+import { FaceCropImage } from "../FaceCropImage";
 
 type FaceFilterPanelProps = {
   isActive: boolean;
@@ -248,8 +249,8 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
                 title={description}
               >
                 <div className={css.faceWrap}>
-                  <img
-                    src={buildFaceCropUrl(cluster.representative)}
+                  <FaceCropImage
+                    face={cluster.representative}
                     alt=""
                     className={css.faceImage}
                     loading="lazy"
