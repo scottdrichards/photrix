@@ -48,10 +48,7 @@ import { transcribeWithWhisper } from "./audioProcessing/whisperWorker.ts";
 import { processAudioTranscription } from "./audioProcessing/processAudioTranscription.ts";
 import { embedAudioWithClap, embedTextWithClap } from "./audioProcessing/clapWorker.ts";
 import { processAudioEmbedding } from "./audioProcessing/processAudioEmbedding.ts";
-import {
-  detectCuda,
-  detectOnnxRuntimeCudaProvider,
-} from "./audioProcessing/detectCuda.ts";
+import { detectAccelerators } from "./accel/detectAccelerators.ts";
 import { registerBackgroundTasks } from "./backgroundTasks/registerBackgroundTasks.ts";
 import { setPlaybackLifecycleHooks } from "./videoProcessing/hlsSession.ts";
 import { resolveDetectedImageAnalysisEnv } from "./imageAnalysis/imageAnalysisRuntime.ts";
@@ -126,10 +123,10 @@ const startServer = async () => {
 
   // Bind the HTTP port now, before the GPU probes, model warmups, and background
   // ingestion wiring below. None of those are preconditions for serving the
-  // library: CUDA detection only feeds background-ML scheduling, the warmups are
+  // library: accelerator detection only feeds background-ML scheduling, the warmups are
   // best-effort, and the ingestion tasks process *new* work. So anything that
   // blocks here is pure dead time during which the client gets connection-refused
-  // (surfaced as a proxy 500) — and a cold `import torch` in detectCuda alone can
+  // (surfaced as a proxy 500) — and a cold `import torch` in the accelerator probe alone can
   // take several seconds. Everything after this line runs with the socket already
   // accepting requests, so existing photos load immediately and the rest warms in
   // behind it.
@@ -154,11 +151,23 @@ const startServer = async () => {
     }
   }
 
-  const [cudaAvailable, faceCudaAvailable] = await Promise.all([
-    detectCuda(),
-    detectOnnxRuntimeCudaProvider(),
-  ]);
-  logger.info({ cudaAvailable, faceCudaAvailable }, "CUDA detection complete");
+  // One probe for every ML worker: which torch device runs a real op, and which
+  // ONNX Runtime provider the face models get. See python/accel.py.
+  const accelerators = await detectAccelerators();
+  logger.info(
+    {
+      torchDevice: accelerators.torch.device,
+      torchBackend: accelerators.torch.backend,
+      torchVersion: accelerators.torch.version,
+      torchRejected: accelerators.torch.rejected,
+      torchError: accelerators.torch.error,
+      faceProvider: accelerators.ort.provider,
+      ortProviders: accelerators.ort.available,
+      ortError: accelerators.ort.error,
+    },
+    "Accelerator detection complete",
+  );
+  const cudaAvailable = accelerators.torch.device === "cuda";
   // Emergency kill switch for the CLAP/Whisper worker class of bug (repeated
   // CUDA-init-failure/VRAM-exhaustion incidents, 2026-08-25/08-27): flipping
   // this skips spawning both audio workers entirely — no CLAP text warmup, no
@@ -175,10 +184,7 @@ const startServer = async () => {
   }
   Object.assign(
     process.env,
-    resolveDetectedImageAnalysisEnv(process.env, {
-      cudaAvailable,
-      faceCudaAvailable,
-    }),
+    resolveDetectedImageAnalysisEnv(process.env, accelerators),
   );
   // Prime semantic search before the background backlog starts churning, so the
   // first query after a restart is fast instead of timing out. Three independent
@@ -235,6 +241,7 @@ const startServer = async () => {
 
   // On GPU the audio workers run on the GPU and barely touch CPU, so they don't
   // conflict with the CPU-bound image-analysis task and can run concurrently.
+  // CUDA only: Whisper's faster-whisper backend has no other GPU path.
   const audioComputeResources = cudaAvailable ? { gpu: 0.5 } : { cpu: 0.5 };
 
   // When the background queue drains, the read connection goes quiet — the ideal
