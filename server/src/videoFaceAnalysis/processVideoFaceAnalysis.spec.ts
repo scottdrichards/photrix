@@ -5,89 +5,20 @@ import type { DetectedFace } from "../faceDetection/faceDetector.type.ts";
 import { PermanentImageError } from "../imageAnalysis/imageAnalysisWorker.ts";
 import type { ImageAnalysisResult } from "../imageAnalysis/imageAnalysisWorker.ts";
 import { markWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
-import type { AnalysisFrame } from "../videoProcessing/extractAnalysisFrames.ts";
 import {
   MAX_CONSECUTIVE_FAILURES,
   processVideoFaceAnalysis,
   type ExtractFrames,
 } from "./processVideoFaceAnalysis.ts";
-
-type Video = { relativePath: string; durationSeconds?: number; sizeBytes?: number };
-
-/** An in-memory stand-in for the queue: a video leaves it once anything is stamped. */
-const fakeDatabase = (videos: Video[]) => {
-  const queue = [...videos];
-  const saved = new Map<
-    string,
-    Array<
-      DetectedFace & {
-        frameTimeMs?: number;
-        appearances?: ReadonlyArray<{ startMs: number; endMs: number }>;
-      }
-    >
-  >();
-  const errors: string[] = [];
-  const decodeErrors: string[] = [];
-  const take = (relativePath: string) => {
-    const i = queue.findIndex((v) => v.relativePath === relativePath);
-    if (i >= 0) queue.splice(i, 1);
-  };
-  return {
-    saved,
-    errors,
-    decodeErrors,
-    db: {
-      storagePath: "/media",
-      getVideosNeedingFaceAnalysis: async (limit?: number) =>
-        queue.slice(0, limit ?? queue.length).map((v) => ({ failedBefore: false, ...v })),
-      saveFaceDetectionResult: async (relativePath: string, faces: DetectedFace[]) => {
-        saved.set(relativePath, faces);
-        take(relativePath);
-      },
-      saveVideoFaceAnalysisError: async (relativePath: string) => {
-        errors.push(relativePath);
-        take(relativePath);
-      },
-      saveImageAnalysisDecodeError: async (relativePath: string) => {
-        decodeErrors.push(relativePath);
-        take(relativePath);
-      },
-      getVideoFaceAnalysisProgress: async () => ({
-        total: videos.length,
-        remaining: queue.length,
-        coolingDown: errors.length,
-        unreadable: decodeErrors.length,
-      }),
-      getVideoFaceQueueCostInputs: async () =>
-        queue.map(({ relativePath: _, ...cost }) => cost),
-    },
-  };
-};
-
-const embedding = (base: number) => {
-  const v = new Float64Array(8);
-  v[base] = 1;
-  return v;
-};
-const detected = (base: number, size = 0.2): DetectedFace => ({
-  box: { x: 0.1, y: 0.1, width: size, height: size },
-  confidence: 0.9,
-  embedding: embedding(base),
-});
-
-/** Frames at the given times, written nowhere: the fake detector never reads them. */
-const framesAt =
-  (...times: number[]): ExtractFrames =>
-  async (_video, _duration, outDir) =>
-    times.map((timeMs, i): AnalysisFrame => ({
-      path: path.join(outDir, `f${i}.jpg`),
-      timeMs,
-      startMs: timeMs,
-      endMs: times[i + 1] ?? timeMs + 1_000,
-    }));
+import {
+  detected,
+  fakeDatabase,
+  framesAt,
+  type QueuedTestVideo,
+} from "./processVideoFaceAnalysis.fixture.ts";
 
 const run = async (
-  videos: Video[],
+  videos: QueuedTestVideo[],
   extract: ExtractFrames,
   analyze: (framePath: string) => Promise<ImageAnalysisResult>,
 ) => {

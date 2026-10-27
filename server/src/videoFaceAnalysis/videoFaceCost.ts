@@ -26,6 +26,9 @@ import {
  * absorbs what the model can't see, such as the face model falling back to
  * CPU or a slow share. The ETA divides by the share of wall time the task
  * actually works, so pauses for users and other tasks are priced in.
+ *
+ * The runner reads the next video's frames while the face model works on the
+ * current one's, so a video costs the wall clock its slower stage, not both.
  */
 
 export type VideoFaceCostInputs = {
@@ -164,7 +167,7 @@ export const createVideoFaceEta = (
 
   const cost = (video: VideoFaceCostInputs) => {
     const { extractMs, frames } = predictVideoFaceCost(video, priors);
-    return extractMs * Math.exp(logExtractScale) + frames * detectMsPerFrame;
+    return Math.max(extractMs * Math.exp(logExtractScale), frames * detectMsPerFrame);
   };
 
   return {
@@ -186,7 +189,8 @@ export const createVideoFaceEta = (
         );
         detectMsPerFrame += SMOOTHING * (perFrame - detectMsPerFrame);
       }
-      busyMs += actual.extractMs + actual.detectMs;
+      // The two stages overlap (see cost), so the slower one is the time spent.
+      busyMs += Math.max(actual.extractMs, actual.detectMs);
       return predicted;
     },
     estimateMs: (queue) =>

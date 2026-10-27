@@ -71,6 +71,15 @@ type VideoOutcome = "done" | "failed" | "unreadable";
 
 class WorkerEvicted extends Error {}
 
+/** What reading one video's frames came to. The promise never rejects. */
+type Extracted = {
+  workDir?: string;
+  extractMs: number;
+} & ({ frames: AnalysisFrame[] } | { error: unknown });
+
+/** A video whose frames are being read, or have been. */
+type Extraction = { video: QueuedVideo; extracted: Promise<Extracted> };
+
 /**
  * Face detection for videos: sample a few frames (extractAnalysisFrames.ts),
  * run the same detector the photos use on each, and keep one face per person
@@ -78,8 +87,13 @@ class WorkerEvicted extends Error {}
  * `faces.frameTimeMs`, and when its person is on screen in `faceAppearances`.
  *
  * Shares the image-analysis Python worker and its budget, so it never runs
- * beside the photo pass. One video at a time, because the worker is serial and
- * a second request would only sit in its queue while its timeout ran.
+ * beside the photo pass. One video at a time in the face model, because the
+ * worker is serial and a second request would only sit in its queue while its
+ * timeout ran. But reading a video's frames (ffmpeg, off the media share) and
+ * finding faces in them (the GPU) take about as long as each other, so the
+ * next video's frames are read while the face model works on this one's: one
+ * video ahead, never more, and only once this one's frames are in hand, so a
+ * dead share still stops the run after the same few reads.
  *
  * Videos differ in cost by orders of magnitude (a 3 s clip against a 3 min 4K
  * one read end to end off the share), so the ETA prices each queued video by
@@ -179,16 +193,54 @@ export const processVideoFaceAnalysis = (
     return { frameFaces, detectMs };
   };
 
-  const analyzeVideo = async (video: QueuedVideo): Promise<VideoOutcome> => {
-    const { relativePath, durationSeconds } = video;
-    const videoPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
-    const workDir = await mkdtemp(path.join(os.tmpdir(), "photrix-video-faces-"));
-    try {
-      let frames: AnalysisFrame[];
-      const extractStartedAt = now();
+  /** Starts reading a video's frames into its own scratch directory. */
+  const startExtraction = (video: QueuedVideo): Extraction => {
+    const videoPath = path.join(
+      database.storagePath,
+      stripLeadingSlash(video.relativePath),
+    );
+    const extracted = (async (): Promise<Extracted> => {
+      const startedAt = now();
+      let workDir: string | undefined;
       try {
-        frames = await extractFrames(videoPath, durationSeconds, workDir);
+        workDir = await mkdtemp(path.join(os.tmpdir(), "photrix-video-faces-"));
+        const frames = await extractFrames(videoPath, video.durationSeconds, workDir);
+        return { workDir, frames, extractMs: now() - startedAt };
       } catch (error) {
+        return { workDir, error, extractMs: now() - startedAt };
+      }
+    })();
+    return { video, extracted };
+  };
+
+  const removeWorkDir = async ({ workDir }: Extracted) => {
+    if (workDir) await rm(workDir, { recursive: true, force: true });
+  };
+
+  /** Drops a read-ahead the run won't get to; its frames are deleted once read. */
+  const discard = (extraction: Extraction | undefined) => {
+    extraction?.extracted.then(removeWorkDir).catch((error) => {
+      log.debug({ err: error }, "Removing an unused video-face scratch directory failed");
+    });
+  };
+
+  /**
+   * Finds and saves the faces in one video. `readAhead` is called once its
+   * frames are in hand, just before the face model starts on them.
+   */
+  const analyzeVideo = async (
+    { video, extracted: pending }: Extraction,
+    readAhead: () => void,
+  ): Promise<VideoOutcome> => {
+    const { relativePath, durationSeconds } = video;
+    // With the read-ahead working, this is the face model sitting idle.
+    const waitStartedAt = now();
+    const extracted = await pending;
+    const framesWaitMs = now() - waitStartedAt;
+    try {
+      const { extractMs } = extracted;
+      if ("error" in extracted) {
+        const { error } = extracted;
         if (error instanceof VideoUnreadableError) {
           log.warn({ err: error, path: relativePath }, "Video unreadable; dropped");
           await database.saveImageAnalysisDecodeError(relativePath);
@@ -198,7 +250,7 @@ export const processVideoFaceAnalysis = (
         await database.saveVideoFaceAnalysisError(relativePath);
         return "failed";
       }
-      const extractMs = now() - extractStartedAt;
+      const { frames } = extracted;
 
       if (frames.length === 0) {
         // ffmpeg ran cleanly and found nothing to decode: that won't change.
@@ -208,6 +260,7 @@ export const processVideoFaceAnalysis = (
         return "done";
       }
 
+      readAhead();
       const { frameFaces, detectMs } = await detectInFrames(frames);
       const faces = collapseFaceTracks(frameFaces);
       // No `regions` write, unlike photos: regions drive the box overlay in the
@@ -229,6 +282,7 @@ export const processVideoFaceAnalysis = (
           detections: frameFaces.reduce((sum, f) => sum + f.faces.length, 0),
           faces: faces.length,
           extractMs,
+          framesWaitMs,
           detectMs,
           predictedMs: Math.round(predicted),
         },
@@ -242,7 +296,7 @@ export const processVideoFaceAnalysis = (
       await database.saveVideoFaceAnalysisError(relativePath);
       return "failed";
     } finally {
-      await rm(workDir, { recursive: true, force: true });
+      await removeWorkDir(extracted);
     }
   };
 
@@ -263,26 +317,59 @@ export const processVideoFaceAnalysis = (
     ctrl.markComplete();
   };
 
+  let batch: QueuedVideo[] = [];
+  /**
+   * The next video to do. The queue is re-read once the batch runs out;
+   * `inFlight` is a video being worked on and not yet stamped, so still queued.
+   */
+  const nextVideo = async (inFlight?: string): Promise<QueuedVideo | undefined> => {
+    if (!batch.length) {
+      batch = orderVideoFaceQueue(await database.getVideosNeedingFaceAnalysis(), now())
+        .filter((video) => video.relativePath !== inFlight)
+        .slice(0, DB_BATCH_SIZE);
+    }
+    return batch.shift();
+  };
+
   const completion: Promise<void> = (async () => {
     let consecutiveFailures = 0;
-    while (true) {
-      ctrl.checkCancelled();
-      const videos = orderVideoFaceQueue(
-        await database.getVideosNeedingFaceAnalysis(),
-        now(),
-      ).slice(0, DB_BATCH_SIZE);
-      if (!videos.length) {
-        await logSummary(true);
-        ctrl.markComplete();
-        return;
-      }
-
-      for (const video of videos) {
+    // The video after the current one: being read, or read and waiting.
+    const ahead: { next?: Extraction; reading?: Promise<void> } = {};
+    const aheadSettled = async () => {
+      await ahead.reading;
+    };
+    try {
+      while (true) {
         ctrl.checkCancelled();
         await ctrl.waitUntilResumed();
         ctrl.checkCancelled();
+        let current = ahead.next;
+        ahead.next = undefined;
+        if (!current) {
+          const video = await nextVideo();
+          if (!video) {
+            await logSummary(true);
+            ctrl.markComplete();
+            return;
+          }
+          current = startExtraction(video);
+        }
+
+        const inFlight = current.video.relativePath;
+        ahead.reading = undefined;
+        const readAhead = () => {
+          ahead.reading ??= nextVideo(inFlight).then(
+            (video) => {
+              if (video) ahead.next = startExtraction(video);
+            },
+            // The loop reads the queue itself next time round, and fails loudly there.
+            (error) =>
+              log.debug({ err: error }, "Reading ahead in the video queue failed"),
+          );
+        };
+
         try {
-          const outcome = await analyzeVideo(video);
+          const outcome = await analyzeVideo(current, readAhead);
           run[outcome] += 1;
           // A broken file says nothing about the pipeline either way.
           if (outcome === "done") consecutiveFailures = 0;
@@ -294,17 +381,22 @@ export const processVideoFaceAnalysis = (
           // still counts toward the breaker: a worker killed every time would
           // otherwise have each retry read the video off the share again.
           log.info(
-            { path: video.relativePath },
+            { path: inFlight },
             "Video face analysis interrupted by worker eviction",
           );
           consecutiveFailures += 1;
         }
+        await aheadSettled();
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           await stopForFailures(consecutiveFailures);
           return;
         }
         await logSummary();
       }
+    } finally {
+      // Stopped or cancelled with the next video already read: drop its frames.
+      await aheadSettled();
+      discard(ahead.next);
     }
   })();
 

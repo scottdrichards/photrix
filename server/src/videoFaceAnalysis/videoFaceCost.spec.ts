@@ -49,7 +49,7 @@ describe("createVideoFaceEta", () => {
     const eta = createVideoFaceEta(() => 0);
     const { extractMs, frames } = predictVideoFaceCost(clip);
     expect(eta.estimateMs([clip, clip])).toBeCloseTo(
-      2 * (extractMs + frames * P.detectMsPerFrame),
+      2 * Math.max(extractMs, frames * P.detectMsPerFrame),
     );
   });
 
@@ -73,6 +73,17 @@ describe("createVideoFaceEta", () => {
     expect(detectMsPerFrame).toBeLessThan(P.detectMsPerFrame * 2);
   });
 
+  it("prices a video at its slower stage, since the next one's frames are read during detection", () => {
+    const eta = createVideoFaceEta(() => 0);
+    const { extractMs, frames } = predictVideoFaceCost(clip);
+    const detectMs = frames * P.detectMsPerFrame;
+    // Twice as many identical clips: the faster stage hides under the slower.
+    expect(eta.estimateMs([clip, clip])).toBeLessThan(2 * (extractMs + detectMs));
+    expect(eta.estimateMs([clip, clip])).toBeGreaterThanOrEqual(
+      2 * Math.max(extractMs, detectMs),
+    );
+  });
+
   it("prices in the time the task spends paused", () => {
     let now = 0;
     const eta = createVideoFaceEta(() => now);
@@ -81,7 +92,7 @@ describe("createVideoFaceEta", () => {
     // Worked a quarter of the last hour; the rest it was paused for users.
     eta.record(clip, { extractMs, detectMs: frames * P.detectMsPerFrame, frames });
     now = 60 * 60_000;
-    const busyMs = extractMs + frames * P.detectMsPerFrame;
+    const busyMs = Math.max(extractMs, frames * P.detectMsPerFrame);
     expect(eta.snapshot().workShare).toBeCloseTo(Math.max(0.05, busyMs / now), 2);
     expect(eta.estimateMs([clip])).toBeGreaterThan(before * 10);
   });

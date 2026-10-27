@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { DetectedFace } from "../faceDetection/faceDetector.type.ts";
 import {
   BROKEN_VIDEO_KINDS,
   breakVideo,
@@ -15,6 +14,7 @@ import {
   MAX_CONSECUTIVE_FAILURES,
   processVideoFaceAnalysis,
 } from "./processVideoFaceAnalysis.ts";
+import { detected, fakeDatabase } from "./processVideoFaceAnalysis.fixture.ts";
 
 /**
  * The video-face run against failures it has hit on the real library, with
@@ -22,54 +22,6 @@ import {
  * are stand-ins. The everyday behaviour lives in processVideoFaceAnalysis.spec.ts.
  */
 const describeWithFfmpeg = hasFfmpeg ? describe : describe.skip;
-
-type Queued = { relativePath: string; durationSeconds?: number; sizeBytes?: number };
-
-const fakeDatabase = (storagePath: string, videos: Queued[]) => {
-  const queue = [...videos];
-  const saved = new Map<string, DetectedFace[]>();
-  const failed: string[] = [];
-  const unreadable: string[] = [];
-  const take = (relativePath: string) => {
-    const i = queue.findIndex((v) => v.relativePath === relativePath);
-    if (i >= 0) queue.splice(i, 1);
-  };
-  return {
-    saved,
-    failed,
-    unreadable,
-    db: {
-      storagePath,
-      getVideosNeedingFaceAnalysis: async () =>
-        queue.map((v) => ({ ...v, failedBefore: false })),
-      saveFaceDetectionResult: async (relativePath: string, faces: DetectedFace[]) => {
-        saved.set(relativePath, faces);
-        take(relativePath);
-      },
-      saveVideoFaceAnalysisError: async (relativePath: string) => {
-        failed.push(relativePath);
-        take(relativePath);
-      },
-      saveImageAnalysisDecodeError: async (relativePath: string) => {
-        unreadable.push(relativePath);
-        take(relativePath);
-      },
-      getVideoFaceAnalysisProgress: async () => ({
-        total: videos.length,
-        remaining: queue.length,
-        coolingDown: failed.length,
-        unreadable: unreadable.length,
-      }),
-      getVideoFaceQueueCostInputs: async () => queue,
-    },
-  };
-};
-
-const aFace = (): DetectedFace => {
-  const embedding = new Float64Array(8);
-  embedding[0] = 1;
-  return { box: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 }, confidence: 0.9, embedding };
-};
 
 describeWithFfmpeg("processVideoFaceAnalysis regressions", () => {
   let root: string;
@@ -102,25 +54,28 @@ describeWithFfmpeg("processVideoFaceAnalysis regressions", () => {
     });
     const relative = (file: string) => path.relative(root, file);
 
-    const fake = fakeDatabase(root, [
-      // As in the library: the good clip has a known length and size, the
-      // broken ones have neither, so they sort first.
-      {
-        relativePath: relative(good),
-        durationSeconds: 4,
-        sizeBytes: statSync(good).size,
-      },
-      ...broken.map((file) => ({ relativePath: relative(file) })),
-    ]);
+    const fake = fakeDatabase(
+      [
+        // As in the library: the good clip has a known length and size, the
+        // broken ones have neither, so they sort first.
+        {
+          relativePath: relative(good),
+          durationSeconds: 4,
+          sizeBytes: statSync(good).size,
+        },
+        ...broken.map((file) => ({ relativePath: relative(file) })),
+      ],
+      root,
+    );
     const runner = processVideoFaceAnalysis(
       fake.db,
-      async () => ({ faces: [aFace()] }),
+      async () => ({ faces: [detected(0)] }),
       extractAnalysisFrames,
     );
     await runner.onComplete();
 
-    expect(fake.unreadable.sort()).toEqual(broken.map(relative).sort());
-    expect(fake.failed).toEqual([]);
+    expect(fake.decodeErrors.sort()).toEqual(broken.map(relative).sort());
+    expect(fake.errors).toEqual([]);
     expect(fake.saved.get(relative(good))).toHaveLength(1);
   }, 180_000);
 });

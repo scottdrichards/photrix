@@ -9,6 +9,6 @@
     "rewriteRelativeImportExtensions": true,
     "outDir": "dist"
   },
-  // *.fixture.ts are test helpers (they generate broken media for the specs).
+  // *.fixture.ts are test helpers shared between specs (fakes, generated broken media).
   "exclude": ["dist", "node_modules", "**/*.spec.ts", "**/*.test.ts", "**/*.fixture.ts"]
 }

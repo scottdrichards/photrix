@@ -34,7 +34,8 @@ export default tseslint.config(
     },
   },
   {
-    files: ["**/*.{spec,test}.{ts,tsx,js,jsx}"],
+    // *.fixture.ts are test helpers shared between specs.
+    files: ["**/*.{spec,test,fixture}.{ts,tsx,js,jsx}"],
     languageOptions: {
       globals: {
         ...globals.jest,
