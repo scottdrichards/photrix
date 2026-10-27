@@ -47,6 +47,11 @@ jobs:
       - name: Install Playwright Chromium
         working-directory: e2e
         run: bunx playwright install --with-deps chromium
+      # The server shells out to ffmpeg/ffprobe for every video operation
+      # (metadata, thumbnails, playback, share conversion); without them the
+      # example library's videos never get past indexing.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: bun run test:e2e
         env:
           CI: "true"
