@@ -28,23 +28,35 @@ export const ffmpeg = (args: string[]): void => {
 };
 
 /**
- * A small, healthy clip: 4 s of moving test pattern, a keyframe every second.
- * `faststart` puts the index (`moov`) before the frames, as phones write it;
- * without it, the index comes last.
+ * A small, healthy clip: 4 s of moving test pattern at 10 fps, a keyframe
+ * every second. `faststart` puts the index (`moov`) before the frames, as
+ * phones write it; without it, the index comes last. x264 uses B-frames
+ * unless `bFrames` is false.
  */
 export const makeClip = (
   dir: string,
   name = "good.mp4",
-  { faststart = false }: { faststart?: boolean } = {},
+  {
+    faststart = false,
+    seconds = 4,
+    keyframeEverySeconds = 1,
+    bFrames = true,
+  }: {
+    faststart?: boolean;
+    seconds?: number;
+    keyframeEverySeconds?: number;
+    bFrames?: boolean;
+  } = {},
 ): string => {
   const file = path.join(dir, name);
   ffmpeg([
     "-f",
     "lavfi",
     "-i",
-    "testsrc=s=160x120:r=10:d=4",
+    `testsrc=s=160x120:r=10:d=${seconds}`,
     "-g",
-    "10",
+    String(10 * keyframeEverySeconds),
+    ...(bFrames ? [] : ["-bf", "0"]),
     "-c:v",
     "libx264",
     "-pix_fmt",
@@ -112,5 +124,28 @@ export const breakVideo = (
 ): string => {
   const file = path.join(dir, `${name}${path.extname(source)}`);
   writeFileSync(file, BROKEN_VIDEO_KINDS[kind](readFileSync(source)));
+  return file;
+};
+
+/**
+ * A copy of `source` whose index (`stss`, the sync-sample table) lists only
+ * its first keyframe, while the stream still holds all of them. Reading by
+ * the index alone then finds one frame. Not a file seen in the library: it
+ * stands for any whose muxer flags fewer keyframes than the encoder made,
+ * which 6 of 30 library clips do to a lesser degree (2026-10-27: an h264
+ * clip gave 20 frames through its index against 30 decoded).
+ */
+export const indexOnlyFirstKeyframe = (
+  source: string,
+  dir: string,
+  name: string,
+): string => {
+  const bytes = Buffer.from(readFileSync(source));
+  const at = bytes.indexOf("stss", 0, "latin1");
+  if (at < 4) throw new Error(`${source} has no stss box`);
+  // size, "stss", version+flags, entry count, then the entries.
+  bytes.writeUInt32BE(1, at + 8);
+  const file = path.join(dir, `${name}${path.extname(source)}`);
+  writeFileSync(file, bytes);
   return file;
 };

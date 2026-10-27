@@ -7,11 +7,13 @@ import {
   breakVideo,
   ffmpeg,
   hasFfmpeg,
+  indexOnlyFirstKeyframe,
   makeClip,
   type BrokenVideoKind,
 } from "./brokenVideos.fixture.ts";
 import {
   extractAnalysisFrames,
+  keyframeTimeoutMs,
   LONG_VIDEO_SECONDS,
   MAX_ANALYSIS_FRAMES,
   VideoUnreadableError,
@@ -79,6 +81,42 @@ describeWithFfmpeg("extractAnalysisFrames regressions", () => {
     expect(frames.length).toBeGreaterThan(0);
     expect(frames[0].timeMs).toBe(0);
   }, 120_000);
+
+  // 2026-10-27: reading only the keyframes the index marks (-discard:v nokey)
+  // cut what a clip reads off the share by 90 %+, but trusts the index. One
+  // that marks too few keyframes must not cost the video its faces.
+  it("reads every frame when the index marks only the first keyframe", async () => {
+    // Without B-frames, so the index alone is read (see the next case).
+    const twelveSeconds = makeClip(root, "twelve.mp4", { seconds: 12, bFrames: false });
+    const misleading = indexOnlyFirstKeyframe(twelveSeconds, root, "first-key-only");
+    const honest = await extractAnalysisFrames(twelveSeconds, 12, outDir());
+    const frames = await extractAnalysisFrames(misleading, 12, outDir());
+    expect(honest.length).toBeGreaterThan(5);
+    expect(frames.map((f) => f.timeMs)).toEqual(honest.map((f) => f.timeMs));
+  }, 60_000);
+
+  // 2026-10-27: reading only the indexed keyframes of a video with B-frames
+  // mis-times them (an ffmpeg demuxer bug, see reordersFrames): a keyframe at
+  // 3 s came back at 3.1 s, the next at 3.9 s, and the spacing filter then
+  // dropped it. 10 of 25 library clips have B-frames. Their frames must keep
+  // the times they play at, or a face crop seeks to the wrong frame.
+  it("keeps every keyframe's true time in a video with B-frames", async () => {
+    const withBFrames = makeClip(root, "b-frames.mp4", { seconds: 8 });
+    const frames = await extractAnalysisFrames(withBFrames, 8, outDir());
+    expect(frames.map((f) => f.timeMs)).toEqual([
+      0, 1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000,
+    ]);
+  }, 60_000);
+
+  // 2026-10-27: 97 healthy videos of 2 to 3 minutes failed every try with
+  // The value of timeout is out of range: the keyframe timeout scales with
+  // the length, and a fractional length made it a fractional ms count, which
+  // spawn rejects before ffmpeg ever runs.
+  it("reads a video whose stored length is a fraction of a second", async () => {
+    expect(Number.isInteger(keyframeTimeoutMs(150.3337))).toBe(true);
+    const frames = await extractAnalysisFrames(sources.indexLast, 150.3337, outDir());
+    expect(frames.length).toBeGreaterThan(0);
+  });
 
   it("reads the unbroken sources, so the breaks are what fail", async () => {
     for (const source of Object.values(sources)) {

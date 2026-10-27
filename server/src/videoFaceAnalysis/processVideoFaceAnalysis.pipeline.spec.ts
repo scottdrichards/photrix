@@ -23,6 +23,14 @@ const videos = (count: number) =>
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Whether `dir` is gone within a few seconds. An unused read-ahead is removed
+ * in the background, so a fixed wait is flaky on a loaded box.
+ */
+const removedSoon = async (dir: string) => {
+  for (let waited = 0; waited < 5_000 && existsSync(dir); waited += 10) await sleep(10);
+  return !existsSync(dir);
+};
 
 /** Records which video each extraction was for, and where it put its frames. */
 const trackedExtraction = (times: number[] = [0]) => {
@@ -99,10 +107,9 @@ describe("processVideoFaceAnalysis read-ahead", () => {
     );
     control.cancel = runner.cancel;
     await expect(runner.onComplete()).rejects.toThrow();
-    await sleep(20);
 
     expect(tracked.started).toEqual(["00.mp4", "01.mp4"]);
-    expect(existsSync(tracked.outDirs.get("01.mp4")!)).toBe(false);
+    expect(await removedSoon(tracked.outDirs.get("01.mp4")!)).toBe(true);
     expect(fake.saved.has("v/01.mp4")).toBe(false);
   });
 
@@ -115,13 +122,12 @@ describe("processVideoFaceAnalysis read-ahead", () => {
       tracked.extract,
     );
     await runner.onComplete();
-    await sleep(20);
 
     expect(fake.errors).toHaveLength(MAX_CONSECUTIVE_FAILURES);
     // One read ahead of the last failure, never used and never stamped.
     expect(tracked.started).toHaveLength(MAX_CONSECUTIVE_FAILURES + 1);
     const unused = tracked.started.at(-1)!;
     expect(fake.errors).not.toContain(`v/${unused}`);
-    expect(existsSync(tracked.outDirs.get(unused)!)).toBe(false);
+    expect(await removedSoon(tracked.outDirs.get(unused)!)).toBe(true);
   });
 });

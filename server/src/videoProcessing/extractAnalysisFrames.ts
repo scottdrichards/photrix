@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import { readdir, rm } from "fs/promises";
 import path from "path";
+import { getGpuAcceleration } from "./gpuAcceleration.ts";
 import { appendWithLimit } from "./videoUtils.ts";
 
 /**
@@ -12,16 +13,25 @@ import { appendWithLimit } from "./videoUtils.ts";
  *
  * - **Short videos** (up to {@link LONG_VIDEO_SECONDS}) decode only their
  *   keyframes (`-skip_frame nokey`), which skips nearly all of the decode
- *   work. Keyframes closer than {@link MIN_FRAME_SPACING_SECONDS} are dropped,
- *   then `mpdecimate` drops any frame that barely differs from the last one
- *   kept, so a tripod shot of a still scene shrinks to a frame or two.
- * - **Long videos** are sampled at evenly spaced seeks instead. Each seek reads
- *   only a few MB near that point, so a 40 GB recording off the media share
- *   costs {@link MAX_ANALYSIS_FRAMES} small reads rather than the whole file.
+ *   work. A video without B-frames also reads only them (`-discard:v nokey`):
+ *   the container's index says where each keyframe is, so the demuxer skips
+ *   the bytes between them, 90 %+ of a phone clip (see
+ *   {@link reordersFrames} for why not with B-frames). Keyframes closer than
+ *   {@link MIN_FRAME_SPACING_SECONDS}
+ *   are dropped, then `mpdecimate` drops any frame that barely differs from
+ *   the last one kept, so a tripod shot of a still scene shrinks to a frame or
+ *   two.
+ * - **Long videos** are sampled at evenly spaced seeks instead, each landing on
+ *   the keyframe before its target rather than decoding up to the exact frame.
+ *   Each seek reads only a few MB near that point, so a 40 GB recording off
+ *   the media share costs {@link MAX_ANALYSIS_FRAMES} small reads rather than
+ *   the whole file, and {@link SEEK_CONCURRENCY} run at once.
  *
- * Decoding is on the CPU on purpose. ffmpeg's auto-rotate does nothing to VAAPI
- * frames, so a hardware decode hands portrait video over sideways and every box
- * would be wrong. CPU frames come out upright, the way the video plays.
+ * Decoding is on the GPU when there is one: `-hwaccel` with the frames copied
+ * back to memory, which keeps ffmpeg's auto-rotate working, so portrait video
+ * still comes out upright, the way it plays (frames kept *on* the GPU are
+ * where auto-rotate does nothing). A codec the GPU can't decode silently
+ * decodes on the CPU, and a GPU failure retries on the CPU.
  */
 
 /**
@@ -71,6 +81,19 @@ export const MIN_FRAME_SPACING_SECONDS = 1;
 const FRAME_LONG_EDGE = 1920;
 /** Ample for a one-frame seek, short enough that a wedged read can't hold the queue. */
 const SEEK_TIMEOUT_MS = 2 * 60_000;
+/**
+ * Seeks in flight at once. Each mostly waits on the media share, and three at
+ * once halved a long video's time (2026-10-27).
+ */
+export const SEEK_CONCURRENCY = 3;
+/**
+ * A video longer than this that gives at most one keyframe through its index
+ * is read again, every frame: its index may mark fewer keyframes than the
+ * stream holds. A shorter one is believable as a single still scene.
+ */
+export const RECHECK_INDEX_SECONDS = 10;
+/** ffprobe reads only the header and index. */
+const PROBE_TIMEOUT_MS = 30_000;
 
 export type AnalysisFrame = {
   /** JPEG on disk, inside the caller's `outDir`. */
@@ -168,7 +191,9 @@ export const keyframeTimeoutMs = (durationSeconds: number | undefined): number =
     durationSeconds && Number.isFinite(durationSeconds)
       ? durationSeconds
       : LONG_VIDEO_SECONDS;
-  return Math.min(15 * 60_000, Math.max(2 * 60_000, seconds * 1_000));
+  // Whole ms: spawn rejects a fractional timeout outright, and 150.33 s of
+  // video is 150330.00000000003 ms.
+  return Math.round(Math.min(15 * 60_000, Math.max(2 * 60_000, seconds * 1_000)));
 };
 
 /**
@@ -217,6 +242,24 @@ const runFfmpeg = (
   });
 
 /**
+ * Runs `attempt` with GPU decode arguments, and again with none when the GPU
+ * is what failed. A codec the GPU can't decode never gets here: ffmpeg decodes
+ * it on the CPU by itself.
+ */
+const withDecoder = async <T>(
+  attempt: (decodeArgs: readonly string[]) => Promise<T>,
+): Promise<T> => {
+  const gpu = await getGpuAcceleration();
+  if (!gpu) return attempt([]);
+  try {
+    return await attempt(gpu.hwaccelArgs);
+  } catch (error) {
+    if (!gpu.isHardwareFailure(messageOf(error))) throw error;
+    return attempt([]);
+  }
+};
+
+/**
  * Writes the frames to `outDir` (which must exist and be empty) and returns
  * them in time order. An empty list means ffmpeg ran but found no frame, which
  * is a property of the file, not a failure. Throws when ffmpeg fails.
@@ -249,64 +292,172 @@ export const extractAnalysisFrames = async (
   return extractKeyframes(videoPath, undefined, LONG_VIDEO_SECONDS, outDir);
 };
 
+/** The input's own length from ffmpeg's banner ("Duration: 00:01:02.50"). */
+const DURATION_LINE = /^\s*Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/;
+
+export const bannerDurationSeconds = (line: string): number | null => {
+  const match = DURATION_LINE.exec(line);
+  if (!match) return null;
+  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+};
+
+/** `count` tasks, at most `limit` at a time; results in task order. */
+const inPool = async <T>(
+  count: number,
+  limit: number,
+  task: (index: number) => Promise<T>,
+): Promise<T[]> => {
+  const results: T[] = new Array<T>(count);
+  let next = 0;
+  const worker = async () => {
+    while (next < count) {
+      const index = next++;
+      results[index] = await task(index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, count) }, worker));
+  return results;
+};
+
 const extractBySeeking = async (
   videoPath: string,
   times: readonly number[],
   durationSeconds: number,
   outDir: string,
 ): Promise<{ frames: AnalysisFrame[]; lastError: Error | null }> => {
-  const frames: AnalysisFrame[] = [];
   // Halfway to each neighbour, from the planned grid: a failed seek leaves a
   // hole rather than stretching its neighbours over what nobody looked at.
   const halfway = (a: number, b: number) => Math.round(((a + b) / 2) * 1_000);
   let lastError: Error | null = null;
-  for (const [index, seconds] of times.entries()) {
+
+  /** The time of the frame actually written, or null when there was none. */
+  const seek = async (index: number): Promise<number | null> => {
     const framePath = path.join(outDir, `s${String(index).padStart(4, "0")}.jpg`);
+    // Set from ffmpeg's output, in a callback; `as` keeps them from narrowing to null.
+    let frameSeconds = null as number | null;
+    let realSeconds = null as number | null;
     try {
-      await runFfmpeg(
-        [
-          "-ss",
-          seconds.toFixed(3),
-          "-i",
-          videoPath,
-          "-an",
-          "-sn",
-          "-dn",
-          "-frames:v",
-          "1",
-          "-vf",
-          SCALE_FILTER,
-          "-q:v",
-          "3",
-          "-update",
-          "1",
-          "-y",
-          framePath,
-        ],
-        SEEK_TIMEOUT_MS,
-      );
+      await withDecoder((decodeArgs) => {
+        frameSeconds = null;
+        realSeconds = null;
+        return runFfmpeg(
+          [
+            ...decodeArgs,
+            // The keyframe before the target, not the exact frame: an exact
+            // seek decodes everything from that keyframe on, and one frame in
+            // a second makes no difference to who is in the video.
+            "-skip_frame",
+            "nokey",
+            "-noaccurate_seek",
+            "-ss",
+            times[index].toFixed(3),
+            // So showinfo reports where the frame really is. A face crop seeks
+            // to that time exactly, so it must be the frame's, not the plan's.
+            "-copyts",
+            "-i",
+            videoPath,
+            "-an",
+            "-sn",
+            "-dn",
+            "-frames:v",
+            "1",
+            "-vf",
+            `${SCALE_FILTER},showinfo`,
+            "-q:v",
+            "3",
+            "-update",
+            "1",
+            "-y",
+            framePath,
+          ],
+          SEEK_TIMEOUT_MS,
+          (line) => {
+            frameSeconds ??= showinfoTime(line);
+            realSeconds ??= bannerDurationSeconds(line);
+          },
+        );
+      });
     } catch (error) {
       // A seek past the last decodable frame fails ("Could not open encoder
       // before EOF") rather than writing nothing, and the stored duration is
       // sometimes longer than the stream. One bad seek costs one frame.
       // runFfmpeg only rejects with an Error.
       lastError = error as Error;
+      return null;
+    }
+    const written = (await readdir(outDir)).includes(path.basename(framePath));
+    // A seek past the end lands on the last keyframe rather than failing, so
+    // a stored length far longer than the stream would give one frame from its
+    // end. Past the file's own length is a miss, as an exact seek made it.
+    const pastEnd = realSeconds !== null && times[index] > realSeconds;
+    if (written && (frameSeconds === null || pastEnd)) {
+      await rm(framePath, { force: true });
+      return null;
+    }
+    return written ? frameSeconds : null;
+  };
+
+  const landed = await inPool(times.length, SEEK_CONCURRENCY, seek);
+  const frames: AnalysisFrame[] = [];
+  for (const [index, seconds] of landed.entries()) {
+    if (seconds === null) continue;
+    const timeMs = Math.max(0, Math.round(seconds * 1_000));
+    const framePath = path.join(outDir, `s${String(index).padStart(4, "0")}.jpg`);
+    // Two seeks inside one long GOP land on the same keyframe.
+    if (frames.at(-1)?.timeMs === timeMs) {
+      await rm(framePath, { force: true });
       continue;
     }
-    if ((await readdir(outDir)).includes(path.basename(framePath))) {
-      frames.push({
-        path: framePath,
-        timeMs: Math.round(seconds * 1_000),
-        startMs: index === 0 ? 0 : halfway(times[index - 1], seconds),
-        endMs:
-          index === times.length - 1
-            ? Math.round(durationSeconds * 1_000)
-            : halfway(seconds, times[index + 1]),
-      });
-    }
+    const startMs = index === 0 ? 0 : halfway(times[index - 1], times[index]);
+    const endMs =
+      index === times.length - 1
+        ? Math.round(durationSeconds * 1_000)
+        : halfway(times[index], times[index + 1]);
+    frames.push({
+      path: framePath,
+      timeMs,
+      startMs: Math.min(startMs, timeMs),
+      endMs: Math.max(endMs, timeMs),
+    });
   }
   return { frames, lastError };
 };
+
+/**
+ * Whether the video reorders frames (has B-frames). Reading only the indexed
+ * keyframes of such a video (`-discard:v nokey`) mis-times them in ffmpeg
+ * 7.1's MP4 demuxer: it steps through the per-sample display offsets (`ctts`)
+ * once per packet it hands over, not per sample it skips, so each keyframe
+ * after the first gets another sample's offset and lands a frame or two off.
+ * The frames are right, their times are not, and a face crop seeks to that
+ * time. 10 of 25 library clips have B-frames (2026-10-27); all 10 were
+ * mis-timed, the 15 without were exact. Unknown counts as reordering.
+ */
+const reordersFrames = (videoPath: string): Promise<boolean> =>
+  new Promise((resolve) => {
+    const child = spawn(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=has_b_frames",
+        "-of",
+        "csv=p=0",
+        videoPath,
+      ],
+      { timeout: PROBE_TIMEOUT_MS, killSignal: "SIGKILL" },
+    );
+    let out = "";
+    child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+    child.stderr.on("data", () => {});
+    child.on("error", () => resolve(true));
+    child.on("close", (code) =>
+      resolve(code !== 0 || /^\s*(\d+)/.exec(out)?.[1] !== "0"),
+    );
+  });
 
 const extractKeyframes = async (
   videoPath: string,
@@ -314,32 +465,80 @@ const extractKeyframes = async (
   maxSeconds: number | undefined,
   outDir: string,
 ): Promise<AnalysisFrame[]> => {
-  const times: number[] = [];
-  await runFfmpeg(
-    [
-      "-skip_frame",
-      "nokey",
-      ...(maxSeconds ? ["-t", String(maxSeconds)] : []),
-      "-i",
-      videoPath,
-      "-an",
-      "-sn",
-      "-dn",
-      "-vf",
-      KEYFRAME_FILTER,
-      "-fps_mode",
-      "vfr",
-      "-q:v",
-      "3",
-      "-y",
-      path.join(outDir, "k%05d.jpg"),
-    ],
-    keyframeTimeoutMs(durationSeconds),
-    (line) => {
-      const time = showinfoTime(line);
-      if (time !== null) times.push(time);
-    },
-  ).catch(classifyKeyframeError);
+  const readAll = () =>
+    readKeyframes(videoPath, durationSeconds, maxSeconds, outDir, false).catch(
+      classifyKeyframeError,
+    );
+  if (await reordersFrames(videoPath)) return readAll();
+  let frames: AnalysisFrame[];
+  try {
+    frames = await readKeyframes(videoPath, durationSeconds, maxSeconds, outDir, true);
+  } catch (error) {
+    // Nothing decoded from the indexed keyframes alone: only a verdict on the
+    // file once every frame has been read too.
+    if (!NOTHING_DECODED.test(messageOf(error))) return classifyKeyframeError(error);
+    return readAll();
+  }
+  const length = durationSeconds ?? maxSeconds ?? 0;
+  if (frames.length <= 1 && length > RECHECK_INDEX_SECONDS) {
+    // The index can mark fewer keyframes than the stream holds (it lists only
+    // what the muxer called a sync sample), and a frame or none from a video
+    // this long may be that rather than a still scene. Read every frame.
+    return readAll();
+  }
+  return frames;
+};
+
+const clearFrames = async (outDir: string) => {
+  const names = (await readdir(outDir)).filter((name) => /^k\d+\.jpg$/.test(name));
+  await Promise.all(names.map((name) => rm(path.join(outDir, name), { force: true })));
+};
+
+/**
+ * Decodes the keyframes. `indexedOnly` reads only those the container's index
+ * marks, skipping the bytes between them; otherwise every frame is read and
+ * the decoder picks out the keyframes.
+ */
+const readKeyframes = async (
+  videoPath: string,
+  durationSeconds: number | undefined,
+  maxSeconds: number | undefined,
+  outDir: string,
+  indexedOnly: boolean,
+): Promise<AnalysisFrame[]> => {
+  let times: number[] = [];
+  await withDecoder(async (decodeArgs) => {
+    // A GPU attempt that failed part way may have left frames behind.
+    times = [];
+    await clearFrames(outDir);
+    return runFfmpeg(
+      [
+        ...decodeArgs,
+        ...(indexedOnly ? ["-discard:v", "nokey"] : []),
+        "-skip_frame",
+        "nokey",
+        ...(maxSeconds ? ["-t", String(maxSeconds)] : []),
+        "-i",
+        videoPath,
+        "-an",
+        "-sn",
+        "-dn",
+        "-vf",
+        KEYFRAME_FILTER,
+        "-fps_mode",
+        "vfr",
+        "-q:v",
+        "3",
+        "-y",
+        path.join(outDir, "k%05d.jpg"),
+      ],
+      keyframeTimeoutMs(durationSeconds),
+      (line) => {
+        const time = showinfoTime(line);
+        if (time !== null) times.push(time);
+      },
+    );
+  });
 
   const files = (await readdir(outDir)).filter((name) => /^k\d+\.jpg$/.test(name)).sort();
   if (times.length !== files.length) {

@@ -3,7 +3,9 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { makeClip } from "./brokenVideos.fixture.ts";
 import {
+  bannerDurationSeconds,
   extractAnalysisFrames,
   keyframeTimeoutMs,
   LONG_VIDEO_SECONDS,
@@ -56,6 +58,16 @@ describe("parseShowinfoTimes", () => {
       "[Parsed_showinfo_3 @ 0x55] n:   1 pts:  30720 pts_time:2.5     duration: 512",
     ].join("\n");
     expect(parseShowinfoTimes(stderr)).toEqual([0, 2.5]);
+  });
+});
+
+describe("bannerDurationSeconds", () => {
+  it("reads the input's length from ffmpeg's banner, nothing else", () => {
+    expect(
+      bannerDurationSeconds("  Duration: 01:02:03.50, start: 0.000000, bitrate: 9 kb/s"),
+    ).toBe(3723.5);
+    expect(bannerDurationSeconds("  Duration: N/A, bitrate: N/A")).toBeNull();
+    expect(bannerDurationSeconds("[Parsed_showinfo_1 @ 0x5] n: 0 pts_time:2")).toBeNull();
   });
 });
 
@@ -185,4 +197,26 @@ describeWithFfmpeg("extractAnalysisFrames (real ffmpeg)", () => {
     for (const f of frames)
       expect(f.startMs <= f.timeMs && f.timeMs <= f.endMs).toBe(true);
   }, 60_000);
+
+  it("takes each seek's nearest keyframe at its own time, once", async () => {
+    // A keyframe every 10 s, under the 8.3 s between seeks: some seeks share one.
+    const long = makeClip(root, "sparse-keyframes.mp4", {
+      seconds: 200,
+      keyframeEverySeconds: 10,
+    });
+    const frames = await extractAnalysisFrames(long, 200, freshOutDir());
+    const times = frames.map((f) => f.timeMs);
+    // Each frame is where its keyframe plays, which is what a face crop seeks to.
+    for (const t of times) expect(t % 10_000).toBe(0);
+    expect(new Set(times).size).toBe(times.length);
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+    expect(times.length).toBeGreaterThan(15);
+    expect(times.length).toBeLessThan(MAX_ANALYSIS_FRAMES);
+    for (const f of frames)
+      expect(f.startMs <= f.timeMs && f.timeMs <= f.endMs).toBe(true);
+    // The frames of seeks that shared a keyframe aren't left behind.
+    expect(readdirSync(outDir).sort()).toEqual(
+      frames.map((f) => path.basename(f.path)).sort(),
+    );
+  }, 120_000);
 });
