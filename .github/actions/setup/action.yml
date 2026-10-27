@@ -14,6 +14,16 @@ runs:
       with:
         path: ~/.cache/photrix/native
         key: native-${{ runner.os }}-${{ hashFiles('bun.lock', '.nvmrc') }}
+    # The server refuses to start without a Python that can decode images
+    # (convertImage.ts checks for PIL and pillow_heif). Only those two: the rest
+    # of requirements.txt is the ML workers, which no CI test starts. Versions
+    # come from requirements.txt so the two can't drift.
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install the image-decoding Python packages
+      shell: bash
+      run: grep -E '^(Pillow|pillow-heif)==' server/python/requirements.txt | xargs python -m pip install
     - shell: bash
       run: bun install --frozen-lockfile
     - shell: bash
