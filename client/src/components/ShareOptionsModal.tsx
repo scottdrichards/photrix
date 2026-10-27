@@ -7,7 +7,7 @@ type ShareQuality = "original" | "websafe-full" | "websafe-small";
 type ShareAction = "share" | "download";
 type DownloadItem = { url: string; filename: string };
 type PreparedAction =
-  | { kind: "share"; files: File[] }
+  | { kind: "share"; files: File[]; quality: ShareQuality }
   | { kind: "download"; imageFiles: File[]; videoDownloads: DownloadItem[] };
 
 const VIDEO_MIME_BY_EXT: Record<string, string> = {
@@ -43,13 +43,13 @@ const QUALITIES: QualityDef[] = [
     id: "websafe-full",
     label: "Web-safe, original size",
     imageDesc: "JPEG at the original dimensions — easier to share",
-    videoDesc: "Original video (no server-side transcoding available)",
+    videoDesc: "MP4 up to 1080p — plays on any phone or computer",
   },
   {
     id: "websafe-small",
     label: "Smaller size",
     imageDesc: "JPEG up to 1440p — ideal for messaging and social",
-    videoDesc: "Original video (no server-side transcoding available)",
+    videoDesc: "MP4 at 720p — small enough for messaging",
   },
 ];
 
@@ -96,6 +96,34 @@ const getImageFilename = (photo: PhotoItem, quality: ShareQuality): string => {
 const isHeicLikeOriginal = (photo: PhotoItem, quality: ShareQuality): boolean =>
   quality === "original" && /\.(heic|heif)$/i.test(photo.name);
 
+// Videos: "original" is the stored file; the web-safe tiers are an H.264 MP4
+// the server encodes on request (representation=shareMp4) at a 1080p or 720p
+// short side, so a 4K HEVC clip becomes something any phone or chat app takes.
+const VIDEO_SHARE_SIZE: Record<Exclude<ShareQuality, "original">, string> = {
+  "websafe-full": "1080",
+  "websafe-small": "720",
+};
+
+const getVideoShareUrl = (video: PhotoItem, quality: ShareQuality): string => {
+  if (quality === "original") return video.originalUrl;
+  const url = new URL(video.originalUrl);
+  url.searchParams.set("representation", "shareMp4");
+  url.searchParams.set("size", VIDEO_SHARE_SIZE[quality]);
+  return url.toString();
+};
+
+const getVideoShareFilename = (video: PhotoItem, quality: ShareQuality): string =>
+  quality === "original" ? video.name : `${video.name.replace(/\.[^.]+$/, "")}.mp4`;
+
+const getVideoShareMimeType = (video: PhotoItem, quality: ShareQuality): string =>
+  quality === "original" ? getVideoMimeType(video) : "video/mp4";
+
+const getVideoDownloads = (videos: PhotoItem[], quality: ShareQuality): DownloadItem[] =>
+  videos.map((video) => ({
+    url: getVideoShareUrl(video, quality),
+    filename: getVideoShareFilename(video, quality),
+  }));
+
 const triggerDownload = (url: string, filename: string) => {
   const a = document.createElement("a");
   a.href = url;
@@ -133,8 +161,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
   // Only offer a quality tier if it would change at least one selected
   // image's output — e.g. don't offer "web-safe" for an already-JPEG photo,
   // and don't offer "smaller size" when every image is already small.
-  // Videos ignore quality entirely (server never transcodes them), so their
-  // presence alongside images always keeps both tiers available.
+  // Any video keeps both tiers available: each is a real converted MP4.
   const showWebSafeFull =
     !hasImages || hasVideos || images.some((p) => !isAlreadyWebSafe(p));
   const showWebSafeSmall =
@@ -188,10 +215,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
       // their original URL rather than re-using the fetched share blobs, to
       // keep the download path independent of what sharing happened to fetch.
       const imageFiles = preparedAction.files.filter((f) => !f.type.startsWith("video/"));
-      const videoDownloads = videos.map((video) => ({
-        url: video.originalUrl,
-        filename: video.name,
-      }));
+      const videoDownloads = getVideoDownloads(videos, preparedAction.quality);
       setPreparedAction({ kind: "download", imageFiles, videoDownloads });
       setError("Sharing failed on this browser. The files are ready to download instead.");
       setProgress(null);
@@ -211,10 +235,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
             url: getImageShareUrl(photo, quality),
             filename: getImageFilename(photo, quality),
           })),
-          ...videos.map((video) => ({
-            url: video.originalUrl,
-            filename: video.name,
-          })),
+          ...getVideoDownloads(videos, quality),
         ];
 
         if (itemsToDownload.length > 0) {
@@ -265,7 +286,10 @@ export const ShareOptionsModal: React.FC<Props> = ({
       // fetching potentially gigabyte-sized video bytes into memory for
       // nothing — probe with zero-byte placeholder files of the right type.
       const dummyVideoFiles = videos.map(
-        (video) => new File([""], video.name, { type: getVideoMimeType(video) }),
+        (video) =>
+          new File([""], getVideoShareFilename(video, quality), {
+            type: getVideoShareMimeType(video, quality),
+          }),
       );
       const probeFiles = [...imageFiles, ...dummyVideoFiles];
       const canShareFiles =
@@ -283,16 +307,23 @@ export const ShareOptionsModal: React.FC<Props> = ({
         for (let i = 0; i < videos.length; i++) {
           if (abort.signal.aborted) return;
           const video = videos[i];
+          // A converted video is encoded on request, which takes a while
+          // for a long clip — say so rather than look stuck.
+          const verb = quality === "original" ? "Preparing" : "Converting";
           setProgress(
             videos.length > 1
-              ? `Preparing video ${i + 1} of ${videos.length}…`
-              : "Preparing video…",
+              ? `${verb} video ${i + 1} of ${videos.length}…`
+              : `${verb} video…`,
           );
-          const response = await fetch(video.originalUrl, { signal: abort.signal });
+          const response = await fetch(getVideoShareUrl(video, quality), {
+            signal: abort.signal,
+          });
           if (!response.ok) throw new Error(`Failed to fetch ${video.name}`);
           const blob = await response.blob();
           videoFiles.push(
-            new File([blob], video.name, { type: blob.type || getVideoMimeType(video) }),
+            new File([blob], getVideoShareFilename(video, quality), {
+              type: blob.type || getVideoShareMimeType(video, quality),
+            }),
           );
         }
 
@@ -303,7 +334,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
           // Native file share is gesture-sensitive, so after any async
           // prepare step we defer the real browser action to a second
           // explicit tap.
-          setPreparedAction({ kind: "share", files: allFiles });
+          setPreparedAction({ kind: "share", files: allFiles, quality });
           setProgress(null);
           return;
         }
@@ -318,10 +349,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
         setPreparedAction({
           kind: "download",
           imageFiles,
-          videoDownloads: videos.map((video) => ({
-            url: video.originalUrl,
-            filename: video.name,
-          })),
+          videoDownloads: getVideoDownloads(videos, quality),
         });
         setProgress(null);
         return;
@@ -384,9 +412,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
           <p className={css.videoNote}>
             {mode === "share"
               ? "Everything is shared via the system share sheet as the real file (falls back to downloading if your device can't share it directly)."
-              : hasImages
-                ? "Image size changes apply to photos. Videos always download as the original file."
-                : `Video${videos.length > 1 ? "s" : ""} will be downloaded as the original file — no server-side transcoding is available.`}
+              : "Web-safe and smaller videos are converted to MP4 first, which can take a minute for a long clip."}
           </p>
         )}
 
