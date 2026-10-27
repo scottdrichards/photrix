@@ -117,6 +117,7 @@ const ThemeToggle = ({ theme, followsSystem, onToggle }: ThemeToggleProps) => {
       aria-checked={theme === "dark"}
       title={title}
       className={css.themeToggle}
+      data-theme-toggle
       data-theme={theme}
       data-following-system={followsSystem}
       onClick={onToggle}
