@@ -54,6 +54,7 @@ import {
 } from "./auth";
 import { attempt } from "./result";
 import { logFailure } from "./logFailure";
+import { FeatureFlagsProvider } from "./featureFlags/FeatureFlagsContext";
 
 // Extract a token from the URL immediately (before auth check) so share links self-authenticate.
 extractUrlToken();
@@ -584,10 +585,12 @@ export default function App() {
   }
 
   return (
-    <FilterProvider>
-      <SelectionProvider>
-        <AppContent theme={theme} followsSystem={followsSystem} onThemeToggle={handleThemeToggle} />
-      </SelectionProvider>
-    </FilterProvider>
+    <FeatureFlagsProvider>
+      <FilterProvider>
+        <SelectionProvider>
+          <AppContent theme={theme} followsSystem={followsSystem} onThemeToggle={handleThemeToggle} />
+        </SelectionProvider>
+      </FilterProvider>
+    </FeatureFlagsProvider>
   );
 }

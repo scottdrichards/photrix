@@ -25,10 +25,9 @@ const touch = async (filePath: string) => {
   await writeFile(filePath, "x");
 };
 
-describe("readThumbnailBackfillConfig", () => {
+describe("readThumbnailBackfillLimits", () => {
   it("defaults to 10 MB/s, waiting while load is above half the CPUs", () => {
-    expect(mod.readThumbnailBackfillConfig({})).toEqual({
-      enabled: true,
+    expect(mod.readThumbnailBackfillLimits({})).toEqual({
       bytesPerSecond: 10 * 1024 * 1024,
       maxLoad: 0.5,
     });
@@ -36,12 +35,11 @@ describe("readThumbnailBackfillConfig", () => {
 
   it("honours overrides and falls back on bad values", () => {
     expect(
-      mod.readThumbnailBackfillConfig({
-        PHOTRIX_THUMBNAIL_BACKFILL: "0",
+      mod.readThumbnailBackfillLimits({
         PHOTRIX_THUMBNAIL_BACKFILL_MB_PER_SEC: "25",
         PHOTRIX_THUMBNAIL_BACKFILL_MAX_LOAD: "-1",
       }),
-    ).toEqual({ enabled: false, bytesPerSecond: 25 * 1024 * 1024, maxLoad: 0.5 });
+    ).toEqual({ bytesPerSecond: 25 * 1024 * 1024, maxLoad: 0.5 });
   });
 });
 
@@ -154,7 +152,7 @@ describe("processThumbnailBackfill", () => {
     return { database, calls: () => calls };
   };
 
-  const config = { enabled: true, bytesPerSecond: 1e9, maxLoad: 0.5 };
+  const config = { isEnabled: () => true, bytesPerSecond: 1e9, maxLoad: 0.5 };
 
   it("waits while the machine is busy", async () => {
     const clock = fakeClock();
@@ -194,10 +192,24 @@ describe("processThumbnailBackfill", () => {
     expect(await runner.getStatus?.()).toMatchObject({ itemsProcessed: 3, total: 3 });
   });
 
-  it("does nothing when disabled", async () => {
-    const { database, calls } = fakeDatabase([[]]);
-    const runner = mod.processThumbnailBackfill(database, { ...config, enabled: false });
+  it("waits while its feature flag is off, and carries on once it is switched on", async () => {
+    const clock = fakeClock();
+    let enabled = false;
+    const { database } = fakeDatabase([[await cachedVideo("later.mp4")]]);
+    const runner = mod.processThumbnailBackfill(
+      database,
+      { ...config, isEnabled: () => enabled },
+      {
+        ...clock,
+        getLoad: () => 0,
+        sleep: async (ms: number) => {
+          await clock.sleep(ms);
+          enabled = true; // switched on while it waited
+        },
+      },
+    );
     await runner.onComplete();
-    expect(calls()).toBe(0);
+    expect(clock.sleeps[0]).toBe(5_000);
+    expect(await runner.getStatus?.()).toMatchObject({ itemsProcessed: 1, total: 1 });
   });
 });

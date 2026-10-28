@@ -2,6 +2,6 @@
   // Lint-only: the typecheck config excludes specs, which left eslint's
   // type-aware rules unable to parse any of them.
   "extends": "./tsconfig.json",
-  "include": ["src/**/*.ts", "../shared/filter-contract/src/**/*.ts"],
+  "include": ["src/**/*.ts", "../shared/filter-contract/src/**/*.ts", "../shared/feature-flags/src/**/*.ts"],
   "exclude": ["dist", "node_modules"]
 }

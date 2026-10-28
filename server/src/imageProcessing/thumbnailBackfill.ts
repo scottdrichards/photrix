@@ -66,11 +66,15 @@ const MAX_REST_MS = 10_000;
  */
 const CANDIDATE_REFRESH_MS = 10 * 60_000;
 
-export type ThumbnailBackfillConfig = {
-  enabled: boolean;
+export type ThumbnailBackfillLimits = {
   bytesPerSecond: number;
   /** Normalized 1-minute load (1.0 = every CPU busy) the pass waits beneath. */
   maxLoad: number;
+};
+
+export type ThumbnailBackfillConfig = ThumbnailBackfillLimits & {
+  /** Read before every file, so switching the feature flag takes effect at once. */
+  isEnabled: () => boolean;
 };
 
 const positiveNumber = (raw: string | undefined, fallback: number): number => {
@@ -78,10 +82,9 @@ const positiveNumber = (raw: string | undefined, fallback: number): number => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
-export const readThumbnailBackfillConfig = (
+export const readThumbnailBackfillLimits = (
   env: NodeJS.ProcessEnv = process.env,
-): ThumbnailBackfillConfig => ({
-  enabled: env.PHOTRIX_THUMBNAIL_BACKFILL !== "0",
+): ThumbnailBackfillLimits => ({
   bytesPerSecond:
     positiveNumber(env.PHOTRIX_THUMBNAIL_BACKFILL_MB_PER_SEC, DEFAULT_MB_PER_SECOND) *
     1024 *
@@ -194,7 +197,7 @@ const defaultDeps: ThumbnailBackfillDeps = {
 
 export const processThumbnailBackfill = (
   database: IndexDatabase,
-  config: ThumbnailBackfillConfig = readThumbnailBackfillConfig(),
+  config: ThumbnailBackfillConfig,
   deps: Partial<ThumbnailBackfillDeps> = {},
 ): TaskRunner => {
   const { getLoad, sleep, now } = { ...defaultDeps, ...deps };
@@ -213,6 +216,11 @@ export const processThumbnailBackfill = (
       ctrl.checkCancelled();
       await ctrl.waitUntilResumed();
       ctrl.checkCancelled();
+      if (!config.isEnabled()) {
+        description = "Off (thumbnailBackfill feature flag)";
+        await sleep(LOAD_POLL_MS);
+        continue;
+      }
       if (getLoad() <= config.maxLoad) return;
       description = "Waiting for the machine to be less busy";
       await sleep(LOAD_POLL_MS);
@@ -220,12 +228,6 @@ export const processThumbnailBackfill = (
   };
 
   const completion = (async () => {
-    if (!config.enabled) {
-      description = "Disabled";
-      ctrl.markComplete();
-      return;
-    }
-
     const startedAt = now();
     let readBytes = 0;
     // Paths this pass has already looked at, so a refreshed list (see
