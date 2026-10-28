@@ -1260,10 +1260,14 @@ describe("PeopleView", () => {
     expect(faceGridObservers.length).toBeGreaterThan(0);
     faceGridObservers[faceGridObservers.length - 1].trigger(true);
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "face-149.jpg" })).toBeInTheDocument();
-    });
-    // Mounting 150 face cards takes ~4 s in jsdom on its own, so the 5 s
-    // default times out whenever the full suite runs in parallel.
+    // Mounting 150 face cards takes ~4 s in jsdom on its own, so both this
+    // waitFor (1 s default) and the test (5 s default) need more room
+    // whenever the full suite runs in parallel.
+    await waitFor(
+      () => {
+        expect(screen.getByRole("button", { name: "face-149.jpg" })).toBeInTheDocument();
+      },
+      { timeout: 10_000 },
+    );
   }, 15_000);
 });
