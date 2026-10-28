@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatClock, videoPeople } from "./videoPeople";
+import { formatClock, UNNAMED_ROW_ID, videoPeople, videoTimelineRows } from "./videoPeople";
 import type { PhotoPersonFace } from "../api/types";
 
 const face = (
@@ -47,6 +47,32 @@ describe("videoPeople", () => {
     ]);
     expect(people).toHaveLength(1);
     expect(people[0].first).toEqual({ startMs: 4_000, endMs: 4_000 });
+  });
+});
+
+describe("videoTimelineRows", () => {
+  it("keeps named people first and pools everyone unnamed into one last row", () => {
+    const rows = videoTimelineRows([
+      face("person-3", [[1_000, 2_000]]),
+      face("person-1", [[3_000, 4_000]], "Ada"),
+      face("person-4", [[1_500, 9_000]]),
+      face("person-2", [[2_000, 2_500]], "Bo"),
+    ]);
+    expect(rows.map((row) => row.name)).toEqual(["Bo", "Ada", null]);
+    const pooled = rows[2];
+    expect(pooled.personId).toBe(UNNAMED_ROW_ID);
+    expect(pooled.pooledCount).toBe(2);
+    expect(pooled.appearances).toEqual([{ startMs: 1_000, endMs: 9_000 }]);
+    expect(pooled.first.startMs).toBe(1_000);
+  });
+
+  it("leaves a single unnamed person as an ordinary row", () => {
+    const rows = videoTimelineRows([
+      face("person-3", [[1_000, 2_000]]),
+      face("person-1", [[3_000, 4_000]], "Ada"),
+    ]);
+    expect(rows.map((row) => row.personId)).toEqual(["person-1", "person-3"]);
+    expect(rows[1].pooledCount).toBeUndefined();
   });
 });
 
