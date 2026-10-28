@@ -39,7 +39,7 @@ import { createClientOperationId, logClientEvent } from "../diagnostics";
 import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes, type NamedFace } from "./FaceOverlay";
 import { VideoPeopleTimeline } from "./VideoPeopleTimeline";
 import { VideoLoadingOverlay, type PlaybackState } from "./VideoLoadingOverlay";
-import { videoPeople } from "./videoPeople";
+import { videoTimelineRows } from "./videoPeople";
 
 // The people timeline under a video: its rows are this tall, and past this many
 // it scrolls rather than squeezing the video further.
@@ -1410,7 +1410,7 @@ export function FullscreenViewer() {
   // Who is in this video and when.
   const videoFaces =
     photo?.mediaType === "video" && peopleFacesPath === photo.path ? peopleFaces : [];
-  const peopleInVideo = videoPeople(videoFaces);
+  const peopleInVideo = videoTimelineRows(videoFaces);
   const peopleTimelinePx =
     peopleInVideo.length > 0
       ? PEOPLE_TIMELINE_PADDING_PX +
