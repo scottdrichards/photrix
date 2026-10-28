@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Dismiss24Regular } from "@fluentui/react-icons";
 import {
+  assignFaceToPerson,
   fetchClusterFacePreview,
   fetchNamedPeople,
   mergeClusters,
@@ -15,7 +16,10 @@ import { FaceCropImage } from "./FaceCropImage";
 type NamedPersonOption = { id: string; name: string };
 
 type FaceAssignPanelProps = {
-  /** The unnamed face the "Who is this?" chip was clicked on. */
+  /**
+   * The face that was clicked: an unnamed one's "Who is this?" chip, or a named
+   * one's name (which switches the panel to changing just this face).
+   */
   face: NamedFace;
   onClose: () => void;
   /** Called after a successful rename or merge — the caller re-fetches. */
@@ -36,11 +40,14 @@ const PREVIEW_LIMIT = 6;
  *    joins that person's identity instead of duplicating the name as a
  *    second, unrelated person).
  *
- * Phase 1 of the face-tagging work described in photrix/AGENTS.md: handles
- * "no name" only. Re-naming an *already*-named face (the "incorrect name"
- * case) is a follow-up — see the doc for why splitting it this way.
+ * A *named* face opens it in "change person" mode instead (feedback #160):
+ * the wrong name belongs to a whole person, so renaming or merging the cluster
+ * would rename or move everyone in it. This mode moves only the clicked face,
+ * via `assignFaceToPerson`, and skips the sightings preview, which would show
+ * the person it is being taken away from.
  */
 export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelProps) {
+  const changing = face.name !== null;
   const [previewFaces, setPreviewFaces] = useState<ClusterFace[]>([]);
   const [previewLoading, setPreviewLoading] = useState(true);
   const [namedPeople, setNamedPeople] = useState<NamedPersonOption[]>([]);
@@ -50,8 +57,8 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
 
   useEffect(() => {
     const abortController = new AbortController();
-    setPreviewLoading(true);
-    fetchClusterFacePreview({
+    setPreviewLoading(!changing);
+    if (!changing) fetchClusterFacePreview({
       clusterId: face.personId,
       excludeFaceId: face.faceId,
       limit: PREVIEW_LIMIT,
@@ -74,24 +81,33 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
 
     return () => abortController.abort();
      
-  }, [face.personId, face.faceId]);
+  }, [face.personId, face.faceId, changing]);
 
   const suggestions = useMemo(() => {
     const trimmed = draft.trim().toLowerCase();
-    const pool = trimmed
-      ? namedPeople.filter((person) => person.name.toLowerCase().includes(trimmed))
+    // Changing a face away from someone: they're the one answer that's wrong.
+    const candidates = changing
+      ? namedPeople.filter((person) => person.id !== face.personId)
       : namedPeople;
+    const pool = trimmed
+      ? candidates.filter((person) => person.name.toLowerCase().includes(trimmed))
+      : candidates;
     return pool.slice(0, MAX_SUGGESTIONS);
-  }, [draft, namedPeople]);
+  }, [draft, namedPeople, changing, face.personId]);
 
   const assignToExistingPerson = async (person: NamedPersonOption) => {
     setSaving(true);
     setError(null);
     try {
-      await mergeClusters([face.personId], person.id);
+      if (changing) await assignFaceToPerson(face.faceId, { personId: person.id });
+      else await mergeClusters([face.personId], person.id);
       onAssigned();
     } catch {
-      setError(`Couldn't merge into ${person.name} — try again.`);
+      setError(
+        changing
+          ? `Couldn't move this face to ${person.name} — try again.`
+          : `Couldn't merge into ${person.name} — try again.`,
+      );
       setSaving(false);
     }
   };
@@ -112,7 +128,8 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
     setSaving(true);
     setError(null);
     try {
-      await renameCluster(face.personId, trimmed);
+      if (changing) await assignFaceToPerson(face.faceId, { name: trimmed });
+      else await renameCluster(face.personId, trimmed);
       onAssigned();
     } catch {
       setError("Couldn't save that name — try again.");
@@ -124,7 +141,7 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events
     <div className={css.panel} onClick={(e) => e.stopPropagation()}>
       <div className={css.header}>
-        <h4 className={css.title}>Who is this?</h4>
+        <h4 className={css.title}>{changing ? `Not ${face.name}? Who is this?` : "Who is this?"}</h4>
         <button
           type="button"
           className={css.closeButton}
@@ -136,7 +153,11 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
         </button>
       </div>
 
-      {previewLoading ? (
+      {changing ? (
+        <p className={css.hint}>
+          Only this face moves; {face.name}&apos;s other photos stay as they are.
+        </p>
+      ) : previewLoading ? (
         <Spinner size="small" label="Loading other photos of this face..." />
       ) : previewFaces.length > 0 ? (
         <div className={css.previewRow}>
@@ -180,7 +201,9 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
               className={css.suggestionChip}
               onClick={() => assignToExistingPerson(person)}
               disabled={saving}
-              title={`Assign this face to ${person.name}`}
+              title={
+                changing ? `Move this face to ${person.name}` : `Assign this face to ${person.name}`
+              }
             >
               {person.name}
             </button>

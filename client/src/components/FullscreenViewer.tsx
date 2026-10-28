@@ -498,8 +498,9 @@ export function FullscreenViewer() {
   }, [photo?.path, photo?.mediaType, facesRefreshToken]);
 
   // Feedback #145: "this isn't {name}" from the viewer. A rejected verdict
-  // pulls the face out of that person; the refetch then shows it unnamed, with
-  // the usual "Who is this?" chip for naming it correctly.
+  // pulls the face out of that person, and the refetch drops it from the
+  // overlay (only clustered faces come back). Saying who it *is* instead is the
+  // name button -> FaceAssignPanel's change mode (feedback #160).
   const handleRejectFace = (face: NamedFace) => {
     setFaceVerdicts([face.faceId], "rejected")
       .then(() => setFacesRefreshToken((token) => token + 1))

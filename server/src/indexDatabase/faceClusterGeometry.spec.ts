@@ -178,6 +178,77 @@ describe("cluster geometry", () => {
     });
   });
 
+  it("moves one face to another named person and keeps it there", async () => {
+    await withTempDb(async (db) => {
+      // Two unrelated people (Bo in another plane), plus a face out at the
+      // edge of Ada's cluster that is really Bo.
+      for (let i = 0; i < 6; i += 1) {
+        await addFacePhoto(db, `p/ada-${i}.jpg`, 0.02 * i);
+        await addFacePhoto(db, `p/bo-${i}.jpg`, 1.5 + 0.02 * i, 2);
+      }
+      await addFacePhoto(db, "p/misfiled.jpg", 0.8);
+      await drain(db);
+      const ada = (await db.getPeopleFacesForFile("p/ada-0.jpg"))[0].personId;
+      const bo = (await db.getPeopleFacesForFile("p/bo-0.jpg"))[0].personId;
+      expect(ada).not.toBe(bo);
+      await db.renameCluster(ada, "Ada");
+      await db.renameCluster(bo, "Bo");
+      expect((await db.getPeopleFacesForFile("p/misfiled.jpg"))[0].name).toBe("Ada");
+
+      const faceId = await faceIdOf(db, "p/misfiled.jpg");
+      const result = await db.assignFaceToPerson(faceId, { personId: bo });
+      expect(result).toEqual({ personId: bo, name: "Bo" });
+
+      const [moved] = await db.getPeopleFacesForFile("p/misfiled.jpg");
+      expect(moved).toMatchObject({ faceId, personId: bo, name: "Bo" });
+      // Ada lost exactly that face; nobody else moved.
+      const adaReview = (await db.getFaceClusterReview(ada))!;
+      expect(adaReview.faces.map((f) => f.fileName)).not.toContain("misfiled.jpg");
+      expect(adaReview.faces).toHaveLength(6);
+
+      // The moved face's one-face cluster must not start collecting faces that
+      // merely resemble it: this one is beyond Ada's reach but well within the
+      // default threshold of the moved face, so only the radius keeps it out.
+      await addFacePhoto(db, "p/look-alike.jpg", 1.0);
+      await drain(db);
+      expect((await db.getPeopleFacesForFile("p/look-alike.jpg"))[0].name).toBeNull();
+
+      // And the verdict is "confirmed for Bo", so re-applying verdicts after a
+      // re-cluster leaves it where it is.
+      await db.reapplyFaceVerdicts();
+      expect((await db.getPeopleFacesForFile("p/misfiled.jpg"))[0].name).toBe("Bo");
+    });
+  });
+
+  it("starts a new named person from one face", async () => {
+    await withTempDb(async (db) => {
+      for (let i = 0; i < 5; i += 1) {
+        await addFacePhoto(db, `p/ada-${i}.jpg`, 0.02 * i);
+      }
+      await drain(db);
+      const ada = (await db.getPeopleFacesForFile("p/ada-0.jpg"))[0].personId;
+      await db.renameCluster(ada, "Ada");
+
+      const faceId = await faceIdOf(db, "p/ada-3.jpg");
+      const result = (await db.assignFaceToPerson(faceId, { name: "  Cy " }))!;
+      expect(result.name).toBe("Cy");
+      expect(result.personId).not.toBe(ada);
+      expect((await db.getPeopleFacesForFile("p/ada-3.jpg"))[0].name).toBe("Cy");
+      expect((await db.listNamedPeople()).map((p) => p.name).sort()).toEqual(["Ada", "Cy"]);
+    });
+  });
+
+  it("returns null for an unknown face or person", async () => {
+    await withTempDb(async (db) => {
+      await addFacePhoto(db, "p/a.jpg", 0);
+      await drain(db);
+      const faceId = await faceIdOf(db, "p/a.jpg");
+      expect(await db.assignFaceToPerson(987654, { name: "X" })).toBeNull();
+      expect(await db.assignFaceToPerson(faceId, { personId: "person-987654" })).toBeNull();
+      expect(await db.assignFaceToPerson(faceId, { name: "   " })).toBeNull();
+    });
+  });
+
   it("refits a cluster onto its surviving members", async () => {
     await withTempDb(async (db) => {
       for (let i = 0; i < 10; i += 1) {
