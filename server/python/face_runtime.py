@@ -36,9 +36,15 @@ from typing import Callable, Generic, TypeVar
 CPU_PROVIDER = "CPUExecutionProvider"
 
 # Errors that mean "the GPU could not do this right now" rather than "this input
-# is bad". Matched case-insensitively against the exception text.
+# is bad". Matched case-insensitively against the exception text. Covers every
+# GPU execution provider accel.py can pick. The short names must stand alone,
+# not touch a letter, digit or path character, so a file path containing e.g.
+# "timestamps" or "hip-hop" doesn't count as a GPU failure.
 _GPU_RESOURCE_ERROR = re.compile(
-    r"cuda|cudnn|cublas|out of memory|failed to allocate|bfcarena", re.IGNORECASE
+    r"cuda|cudnn|cublas|out of memory|failed to allocate|bfcarena"
+    r"|rocm|miopen|migraphx|directml|coreml|openvino"
+    r"|(?<![\w./\\-])(?:hip|dml|mps|xpu)(?![\w./\\-])",
+    re.IGNORECASE,
 )
 
 App = TypeVar("App")

@@ -1,6 +1,9 @@
 .dialog {
   width: min(94vw, 620px);
   max-height: 88vh;
+  /* dvh tracks the visible viewport on phones and the installed app, where
+     vh is the larger, toolbar-hidden height. */
+  max-height: 88dvh;
   /* Native <dialog> defaults to overflow: auto, which paired with .body's
      own max-height/overflow-y below created two nested scroll containers
      (an outer one with barely any range, and .body doing the real
@@ -14,6 +17,13 @@
   padding: 0;
 }
 
+.dialog[open] {
+  /* Only while open: a bare display rule would override the UA
+     dialog:not([open]) { display: none } and show the closed panel. */
+  display: flex;
+  flex-direction: column;
+}
+
 .dialog::backdrop {
   background: rgba(0, 0, 0, 0.5);
 }
@@ -23,7 +33,11 @@
   flex-direction: column;
   gap: var(--space-m);
   padding: var(--space-m);
-  max-height: 88vh;
+  /* Sized by the open dialog (the flex column above), not by its own vh cap: a separate
+     max-height here excluded this padding and the dialog border, so the
+     body overran the dialog by ~20px and clipped "Done" (feedback #151). */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 

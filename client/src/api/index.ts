@@ -79,6 +79,7 @@ export {
   fetchNamedPeople,
   fetchClusterFacePreview,
   buildFaceCropUrl,
+  faceCropRegion,
   renameCluster,
   mergeClusters,
   separateCluster,

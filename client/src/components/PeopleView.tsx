@@ -9,7 +9,6 @@ import type {
   PeopleClustersResult,
 } from "../api";
 import {
-  buildFaceCropUrl,
   fetchClusterDetail,
   fetchFaceClustersPCA,
   fetchPeopleClusters,
@@ -31,6 +30,7 @@ import { ViewToggle } from "./ViewToggle";
 import { isSharedView } from "../hooks/useShareFilter";
 import css from "./PeopleView.module.css";
 import { FACE_SORT_LABELS, sortFaces, type FaceSort } from "./faceSort";
+import { FaceCropImage } from "./FaceCropImage";
 
 // Share-link viewers are read-only: they may browse people but never rename,
 // merge, or separate clusters (the server rejects those writes too). Computed
@@ -71,8 +71,8 @@ type FaceImageProps = {
 };
 
 const FaceImage = ({ face, className, priority }: FaceImageProps) => (
-  <img
-    src={buildFaceCropUrl(face)}
+  <FaceCropImage
+    face={face}
     alt={face.photo.name}
     className={className}
     loading={priority === "high" ? "eager" : "lazy"}

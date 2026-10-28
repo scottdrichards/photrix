@@ -404,6 +404,15 @@ dialog::backdrop {
   overflow-y: auto;
 }
 
+/* ── Theme switch: every control changes colour in the same frame ── */
+/* Set by applyTheme() for a single style flush. The toggle keeps its own
+   sun/moon animation; that is the one transition a theme switch should show. */
+:root[data-theme-switching] *:not([data-theme-toggle], [data-theme-toggle] *),
+:root[data-theme-switching] *:not([data-theme-toggle], [data-theme-toggle] *)::before,
+:root[data-theme-switching] *:not([data-theme-toggle], [data-theme-toggle] *)::after {
+  transition: none !important;
+}
+
 /* ── View Transitions (photo grid stack toggle) ── */
 /* Global, not a CSS Module rule, because ::view-transition-group() targets a
    browser-generated pseudo-element tree rooted at the document, not anything

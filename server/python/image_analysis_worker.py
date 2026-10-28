@@ -51,6 +51,7 @@ from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 
 from face_attributes import compute_face_attributes
+from accel import CUDA_PROVIDER, empty_cache, is_gpu_device
 from face_runtime import CPU_PROVIDER, FaceRuntime, is_gpu_resource_error
 from worker_memory import trim_heap
 
@@ -127,15 +128,11 @@ _clip = None  # (model, preprocess, tokenizer, torch, device)
 
 
 def _release_gpu_cache() -> None:
-    """Return cached-but-unused CUDA blocks to the driver. No-op on CPU or before
+    """Return cached-but-unused GPU blocks to the driver. No-op on CPU or before
     the CLIP model (which carries the torch handle) has loaded."""
     if _clip is None:
         return
-    torch, device = _clip[3], _clip[4]
-    if device != "cuda":
-        return
-    with contextlib.suppress(Exception):
-        torch.cuda.empty_cache()
+    empty_cache(_clip[3], _clip[4])
 
 
 def _purge_insightface_cache(model_name: str) -> None:
@@ -181,13 +178,14 @@ def _create_face_app(provider: str, allow_redownload: bool = True):
         # CLIP outranks the face models for GPU memory (search depends on it;
         # faces can run on CPU), so make sure it has claimed its share first.
         # A CLIP load failure must not stop the faces from loading.
-        if CLIP_DEVICE == "cuda":
+        if is_gpu_device(CLIP_DEVICE):
             try:
                 _get_clip()
             except Exception as exc:  # noqa: BLE001 - CLIP retries on its own use
                 print(f"CLIP load before face models failed: {exc}", file=sys.stderr)
-        _preload_cuda_dlls()
-        options = CUDA_PROVIDER_OPTIONS if provider == "CUDAExecutionProvider" else {}
+        if provider == CUDA_PROVIDER:
+            _preload_cuda_dlls()
+        options = CUDA_PROVIDER_OPTIONS if provider == CUDA_PROVIDER else {}
         providers, provider_options = [provider, CPU_PROVIDER], [options, {}]
 
     devnull = open(os.devnull, "w")
@@ -234,7 +232,8 @@ def _create_clip():
     import open_clip
     import torch
 
-    device = "cuda" if CLIP_DEVICE == "cuda" else "cpu"
+    # Whatever the startup probe verified: cuda, xpu, mps or cpu.
+    device = CLIP_DEVICE or "cpu"
 
     devnull = open(os.devnull, "w")
     old_stderr = sys.stderr
@@ -267,15 +266,14 @@ def _clip_first(step):
     try:
         return step()
     except Exception as exc:  # noqa: BLE001 - re-raised unless the retry applies
-        if CLIP_DEVICE != "cuda" or not is_gpu_resource_error(exc):
+        if not is_gpu_device(CLIP_DEVICE) or not is_gpu_resource_error(exc):
             raise
         if not _faces.gpu_loaded:
             raise
         _faces.yield_gpu(f"CLIP needs the GPU: {exc}")
         torch = sys.modules.get("torch")
         if torch is not None:
-            with contextlib.suppress(Exception):
-                torch.cuda.empty_cache()
+            empty_cache(torch, CLIP_DEVICE)
         return step()
 
 
