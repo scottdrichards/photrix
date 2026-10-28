@@ -494,7 +494,7 @@ export const searchRequestHandler = async (
       error: "Search workers unavailable",
       message,
       sourceStatus,
-      hint: "Run: npm --prefix server run clip:python:install",
+      hint: "Run: bun run --filter server python:install",
     });
   }
 

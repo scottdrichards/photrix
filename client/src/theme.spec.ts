@@ -28,4 +28,15 @@ describe("applyTheme", () => {
     applyTheme("light");
     expect(manifestHref()).toBe(MANIFEST_HREFS.light);
   });
+
+  it("suppresses transitions only for the switch itself, so hover easing still works after", () => {
+    const observer = new MutationObserver(() => {});
+    observer.observe(document.documentElement, { attributeFilter: ["data-theme-switching"] });
+    applyTheme("dark");
+    const markerChanges = observer.takeRecords().length;
+    observer.disconnect();
+    expect(markerChanges).toBe(2); // set, then removed
+    expect(document.documentElement.hasAttribute("data-theme-switching")).toBe(false);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
 });

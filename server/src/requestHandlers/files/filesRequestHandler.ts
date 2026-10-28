@@ -21,6 +21,10 @@ import {
   generateVideoFrameCrop,
   VIDEO_SCRUB_FRAME_COUNT,
 } from "../../videoProcessing/videoUtils.ts";
+import {
+  exportShareVideo,
+  parseShareVideoShortSide,
+} from "../../videoProcessing/exportShareVideo.ts";
 import { markCacheAccess } from "../../common/cacheEviction.ts";
 import { getMirroredCachedFilePath } from "../../common/cacheUtils.ts";
 import {
@@ -887,6 +891,37 @@ const fileHandler = async (
     } catch (error) {
       return writeJson(res, 500, {
         error: "Failed to generate scrub frame",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // A whole H.264/AAC MP4 for the share dialog's "web-safe" and "smaller"
+  // video options — something a share sheet or another phone can take, unlike
+  // HLS segments or a 4K HEVC original. Encoded once and cached.
+  if (representation === "shareMp4") {
+    if (!isVideo) {
+      return writeJson(res, 415, {
+        error: "Unsupported Media Type",
+        message: "shareMp4 is only available for video files",
+      });
+    }
+    try {
+      const sharePath = await exportShareVideo(
+        normalizedPath,
+        parseShareVideoShortSide(url.searchParams.get("size")),
+      );
+      const shareStats = await stat(sharePath);
+      streamFile(req, res, sharePath, {
+        contentType: "video/mp4",
+        size: shareStats.size,
+        cacheControl: "private, max-age=86400",
+        acceptRanges: true,
+      });
+      return;
+    } catch (error) {
+      return writeJson(res, 500, {
+        error: "Failed to prepare video for sharing",
         message: error instanceof Error ? error.message : String(error),
       });
     }

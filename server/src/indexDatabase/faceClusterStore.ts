@@ -36,6 +36,11 @@ import { getLogger } from "../observability/logger.ts";
 import { attemptSync } from "../common/result.ts";
 import { faceClusterIdToString, faceClusterIdFromString } from "./faceClusterId.ts";
 import { faceRowToClusterFace } from "./faceRowToClusterFace.ts";
+import {
+  type ClusterDetailRow,
+  videoFaceQuota,
+  withVideoFaceShare,
+} from "./clusterDetailVideoShare.ts";
 
 const log = getLogger("faceClusters");
 
@@ -369,8 +374,11 @@ export class FaceClusterStore {
      * a match group a no-op (it just showed the same full person again).
      */
     exactCluster?: boolean;
+    /** Most faces to return; defaults to MAX_FACES_IN_CLUSTER_DETAIL. */
+    maxFaces?: number;
   }): Promise<FaceClusterDetailResult> {
     const { filter, clusterId, exactCluster = false } = options;
+    const cap = options.maxFaces ?? MAX_FACES_IN_CLUSTER_DETAIL;
     const numericClusterId = faceClusterIdFromString(clusterId);
     if (numericClusterId === null || numericClusterId <= 0) {
       return { cluster: null };
@@ -430,14 +438,14 @@ export class FaceClusterStore {
                      AND COALESCE(faceClusters.personId, faces.clusterId) = ?`
             }
             ORDER BY faces.clusterSimilarity DESC, faces.id
-            LIMIT ${MAX_FACES_IN_CLUSTER_DETAIL}
+            LIMIT ${cap}
           )`
       : useDirectClusterFilter
         ? `WITH limited AS (
              SELECT id FROM faces
              WHERE clusterId > 0 AND clusterId = ?
              ORDER BY clusterSimilarity DESC, id
-             LIMIT ${MAX_FACES_IN_CLUSTER_DETAIL}
+             LIMIT ${cap}
            )`
         : `WITH limited AS (
              SELECT faces.id AS id
@@ -447,26 +455,10 @@ export class FaceClusterStore {
              WHERE faces.clusterId > 0
                AND COALESCE(faceClusters.personId, faces.clusterId) = ?
              ORDER BY faces.clusterSimilarity DESC, faces.id
-             LIMIT ${MAX_FACES_IN_CLUSTER_DETAIL}
+             LIMIT ${cap}
            )`;
 
-    const rows = await this.db.all<{
-      id: number;
-      folder: string;
-      fileName: string;
-      boxX: number;
-      boxY: number;
-      boxWidth: number;
-      boxHeight: number;
-      frameTimeMs: number | null;
-      mimeType: string | null;
-      dimensionWidth: number | null;
-      dimensionHeight: number | null;
-      regions: string | null;
-      dateTaken: number | null;
-    }>(
-      `${limitedCTE}
-       SELECT
+    const detailRowColumns = `
          faces.id,
          faces.folder,
          faces.fileName,
@@ -475,11 +467,16 @@ export class FaceClusterStore {
          faces.boxWidth,
          faces.boxHeight,
          faces.frameTimeMs,
+         faces.clusterSimilarity,
          files.mimeType,
          files.dimensionsWidth AS dimensionWidth,
          files.dimensionsHeight AS dimensionHeight,
          files.regions,
-         files.dateTaken
+         files.dateTaken`;
+
+    let rows = await this.db.all<ClusterDetailRow>(
+      `${limitedCTE}
+       SELECT ${detailRowColumns}
        FROM limited
        JOIN faces
          ON faces.id = limited.id
@@ -545,6 +542,76 @@ export class FaceClusterStore {
                AND COALESCE(faceClusters.personId, faces.clusterId) = ?`,
             faceScopeId,
           );
+
+    // Feedback #153: past the cap, best-match-first starves video faces. A
+    // face cut from a video frame is blurrier than a photo's and scores a
+    // lower clusterSimilarity, so a person with 12% video faces got 1.6% of
+    // the 2000 shown. Over the cap, give videos their proportional share,
+    // taking the person's best-matching video faces. The list stays in
+    // similarity order, which the client's "Best match" / "Least alike first"
+    // sorts rely on. Only capped people pay for the two extra queries.
+    const total = countRow?.count ?? rows.length;
+    if (total > rows.length) {
+      // The person's clusters are resolved first and probed with IN: the
+      // COALESCE join the main query uses walks every faceClusters row, which
+      // cost ~235 ms here against ~22 ms this way for the largest person. A
+      // filter goes on the file side, where "is a video" is mimeType (the
+      // same faces as frameTimeMs IS NOT NULL, measured over every face).
+      const clusterScope = useDirectClusterFilter
+        ? `faces.clusterId = ?`
+        : `faces.clusterId IN (
+             SELECT id FROM faceClusters WHERE COALESCE(personId, id) = ?
+           )`;
+      const videoFaces = whereClause
+        ? `WITH filtered_files AS MATERIALIZED (
+             SELECT folder, fileName FROM files
+             WHERE (${whereClause}) AND mimeType LIKE 'video/%'
+           ),
+           video_faces AS (
+             SELECT faces.id, faces.clusterSimilarity
+             FROM filtered_files
+             CROSS JOIN faces
+               ON faces.folder = filtered_files.folder
+              AND faces.fileName = filtered_files.fileName
+             WHERE faces.clusterId > 0 AND ${clusterScope}
+           )`
+        : `WITH video_faces AS (
+             SELECT faces.id, faces.clusterSimilarity
+             FROM faces
+             WHERE faces.clusterId > 0
+               AND faces.frameTimeMs IS NOT NULL
+               AND ${clusterScope}
+           )`;
+      const videoCountRow = await this.db.get<{ count: number }>(
+        `${videoFaces}
+         SELECT COUNT(*) AS count FROM video_faces`,
+        ...whereParams,
+        faceScopeId,
+      );
+      const quota = videoFaceQuota(cap, total, videoCountRow?.count ?? 0);
+      const shown = rows.filter((row) => row.frameTimeMs !== null).length;
+      if (quota > shown) {
+        const videoRows = await this.db.all<ClusterDetailRow>(
+          `${videoFaces},
+           limited AS (
+             SELECT id FROM video_faces
+             ORDER BY clusterSimilarity DESC, id
+             LIMIT ${quota}
+           )
+           SELECT ${detailRowColumns}
+           FROM limited
+           JOIN faces
+             ON faces.id = limited.id
+           JOIN files
+             ON files.folder = faces.folder
+            AND files.fileName = faces.fileName
+           ORDER BY faces.clusterSimilarity DESC, faces.id`,
+          ...whereParams,
+          faceScopeId,
+        );
+        rows = withVideoFaceShare(rows, videoRows, cap);
+      }
+    }
 
     const faces = rows.map(faceRowToClusterFace);
     const nameRow = await this.db.get<{ name: string | null; tags: string | null }>(

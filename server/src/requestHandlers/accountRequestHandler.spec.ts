@@ -211,6 +211,24 @@ describe("accountRequestHandler", () => {
     await authService.revokeToken(remote);
   });
 
+  it("lists internet sessions above local ones (feedback #152)", async () => {
+    const { accountRequestHandler, authService } = await load();
+    const server = authService.issueToken("faye", "127.0.0.1");
+    const lan = authService.issueToken("faye", "100.64.0.9");
+    const remote = authService.issueToken("faye", "198.51.100.4");
+
+    const listed = createJsonResponse();
+    await accountRequestHandler(makeReq("/api/account/sessions", "GET", lan), listed.res);
+    const { sessions } = listed.getJson<{ sessions: Array<{ location: string }> }>();
+    expect(sessions.map((s) => s.location)).toEqual([
+      "Internet",
+      "Local network",
+      "This server",
+    ]);
+
+    for (const t of [server, lan, remote]) await authService.revokeToken(t);
+  });
+
   it("revokes every other session but keeps the caller signed in", async () => {
     const { accountRequestHandler, authService } = await load();
     const keep = authService.issueToken("frank");

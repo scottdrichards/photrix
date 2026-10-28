@@ -2,7 +2,6 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { CapChange, FaceAnomalyFlag, PersonReview, ReviewFace } from "../api";
 import {
   applyPersonCutoff,
-  buildFaceCropUrl,
   fetchPersonReview,
   refitCluster,
   setFaceVerdicts,
@@ -10,6 +9,7 @@ import {
 } from "../api";
 import { Spinner } from "../Spinner";
 import css from "./PersonReviewPanel.module.css";
+import { FaceCropImage } from "./FaceCropImage";
 
 /**
  * "Which of these aren't actually this person?" — the repair view for a face
@@ -352,9 +352,9 @@ export const PersonReviewPanel = ({
           </p>
           <div className={css.confirmSample}>
             {pendingRemoval.preview.sample.map((sampleFace) => (
-              <img
+              <FaceCropImage
                 key={sampleFace.faceId}
-                src={buildFaceCropUrl(sampleFace)}
+                face={sampleFace}
                 alt={sampleFace.photo.name}
                 className={css.confirmThumb}
                 loading="lazy"
@@ -403,8 +403,8 @@ export const PersonReviewPanel = ({
                   .filter(Boolean)
                   .join(" ")}
               >
-                <img
-                  src={buildFaceCropUrl(face)}
+                <FaceCropImage
+                  face={face}
                   alt={face.photo.name}
                   className={css.image}
                   loading="lazy"
@@ -475,8 +475,8 @@ export const PersonReviewPanel = ({
           <div className={css.grid}>
             {review.rejected.map((face) => (
               <figure key={face.faceId} className={`${css.card} ${css.cardRejected}`}>
-                <img
-                  src={buildFaceCropUrl(face)}
+                <FaceCropImage
+                  face={face}
                   alt={face.photo.name}
                   className={css.image}
                   loading="lazy"
