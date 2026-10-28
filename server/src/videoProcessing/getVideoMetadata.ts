@@ -74,6 +74,9 @@ export type VideoSourceProfile = {
    * Containers that record no average report "0/0"; then r_frame_rate is it.
    */
   frameRate: string;
+  /** Coded (pre-rotation) dimensions of the video stream, when ffprobe reports them. */
+  width?: number;
+  height?: number;
 };
 
 /**
@@ -130,6 +133,8 @@ export const getVideoSourceProfile = (filePath: string): Promise<VideoSourceProf
             video?.avg_frame_rate && video.avg_frame_rate !== "0/0"
               ? video.avg_frame_rate
               : (video?.r_frame_rate ?? ""),
+          width: video?.width,
+          height: video?.height,
         });
       } catch (e) {
         reject(toError(e));
