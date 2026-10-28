@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ImgHTMLAttributes } from "react";
 import { buildFaceCropUrl } from "../api";
 import type { ClusterFace } from "../api/types";
 import { makeFaceCropPlaceholder, peekFaceCropPlaceholder } from "./faceCropPlaceholder";
+import { logFailure } from "../logFailure";
 
 type FaceCropImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "alt"> & {
   face: ClusterFace;
@@ -40,7 +41,7 @@ export const FaceCropImage = ({
         .then((url) => {
           if (!cancelled && url) setPlaceholder(url);
         })
-        .catch(() => undefined);
+        .catch(logFailure("faceCrop.placeholder.failed", "Could not build a face-crop preview"));
     };
     // Follow the image's own laziness: a lazy crop only starts its preview
     // once it is about to scroll into view.

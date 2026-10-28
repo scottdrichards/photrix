@@ -11,6 +11,7 @@ import type { ClusterFace } from "../api/types";
 import type { NamedFace } from "./FaceOverlay";
 import { Spinner } from "../Spinner";
 import css from "./FaceAssignPanel.module.css";
+import { logFailure } from "../logFailure";
 import { FaceCropImage } from "./FaceCropImage";
 
 type NamedPersonOption = { id: string; name: string };
@@ -65,19 +66,16 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
       signal: abortController.signal,
     })
       .then(setPreviewFaces)
-      .catch(() => {
-        // The preview is a confidence-building nicety, not essential — an
-        // empty strip just means "no other sightings shown", not an error.
-      })
+      // A nicety: an empty strip just means no other sightings are shown.
+      .catch(logFailure("faceAssign.preview.failed", "Could not load other photos of this face"))
       .finally(() => {
         if (!abortController.signal.aborted) setPreviewLoading(false);
       });
 
+    // Without the list, naming still works as free text.
     fetchNamedPeople(abortController.signal)
       .then(setNamedPeople)
-      .catch(() => {
-        // Falling back to free-text-only naming is fine if this fails.
-      });
+      .catch(logFailure("faceAssign.people.failed", "Could not load the list of named people"));
 
     return () => abortController.abort();
      

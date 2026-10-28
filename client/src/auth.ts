@@ -1,3 +1,11 @@
+import { readStorage, writeStorage, removeStorage } from "./storage";
+import { attempt } from "./result";
+
+// logFailure reaches diagnostics, which imports this module, so it is loaded lazily.
+const reportFailure =
+  (event: string, message: string) =>
+  (error: unknown): void =>
+    void import("./logFailure").then(({ logFailure }) => logFailure(event, message)(error));
 // The signed-in account's session. Only login/passkey ever writes this.
 const TOKEN_KEY = "photrix_auth_token";
 // A share link's token, kept strictly separate from the account session. Opening
@@ -5,30 +13,6 @@ const TOKEN_KEY = "photrix_auth_token";
 // they were then stuck in the share's scope, and returning to the root domain did
 // not restore their library because the share token *was* their stored token.
 const SHARE_TOKEN_KEY = "photrix_share_token";
-
-const readLocalStorage = (key: string): string | null => {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-};
-
-const writeLocalStorage = (key: string, value: string): void => {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Ignore storage access failures so the app can still render.
-  }
-};
-
-const removeLocalStorage = (key: string): void => {
-  try {
-    window.localStorage.removeItem(key);
-  } catch {
-    // Ignore storage access failures so logout still clears in-memory auth state.
-  }
-};
 
 /** The share token carried by the current URL, if this page is a share view. */
 const shareTokenFromUrl = (): string | null => {
@@ -46,7 +30,7 @@ export const isShareView = (): boolean => shareTokenFromUrl() !== null;
 /** The signed-in account's token, independent of any share link being viewed. */
 export const getAccountToken = (): string | null => {
   if (typeof window === "undefined") return null;
-  return readLocalStorage(TOKEN_KEY);
+  return readStorage(TOKEN_KEY);
 };
 
 /** True when a real account session exists (regardless of share view). */
@@ -54,7 +38,7 @@ export const hasAccountSession = (): boolean => getAccountToken() !== null;
 
 export const getShareToken = (): string | null => {
   if (typeof window === "undefined") return null;
-  return shareTokenFromUrl() ?? readLocalStorage(SHARE_TOKEN_KEY);
+  return shareTokenFromUrl() ?? readStorage(SHARE_TOKEN_KEY);
 };
 
 /**
@@ -77,21 +61,21 @@ export const setToken = (token: string) => {
   if (typeof window === "undefined") {
     return;
   }
-  writeLocalStorage(TOKEN_KEY, token);
+  writeStorage(TOKEN_KEY, token);
 };
 
 export const clearToken = () => {
   if (typeof window === "undefined") {
     return;
   }
-  removeLocalStorage(TOKEN_KEY);
+  removeStorage(TOKEN_KEY);
 };
 
 export const clearShareToken = () => {
   if (typeof window === "undefined") {
     return;
   }
-  removeLocalStorage(SHARE_TOKEN_KEY);
+  removeStorage(SHARE_TOKEN_KEY);
 };
 
 export const getAuthHeaders = (): Record<string, string> => {
@@ -124,7 +108,7 @@ export const extractUrlToken = (): void => {
     return;
   }
   const urlToken = shareTokenFromUrl();
-  if (urlToken) writeLocalStorage(SHARE_TOKEN_KEY, urlToken);
+  if (urlToken) writeStorage(SHARE_TOKEN_KEY, urlToken);
 };
 
 // Returns true if authenticated or auth is not required, false if login needed.
@@ -133,21 +117,23 @@ export const initAuth = async (): Promise<boolean> => {
   const headers: Record<string, string> = token
     ? { Authorization: `Bearer ${token}` }
     : {};
-  try {
-    const response = await fetch("/api/status", { headers });
-    if (response.ok) return true;
-    if (response.status === 401) {
-      // Drop only the credential that was actually rejected: a dead share link
-      // must not sign the account out.
-      if (isShareView()) {
-        clearShareToken();
-        return hasAccountSession();
-      }
-      clearToken();
-      return false;
+  const checked = await attempt(fetch("/api/status", { headers }));
+  if (!checked.ok) {
+    // Offline or the server is unreachable: show the app; its own requests
+    // will surface the problem (or the login screen, on a 401).
+    reportFailure("auth.check.failed", "Could not check the session; showing the app")(checked.error);
+    return true;
+  }
+  const response = checked.value;
+  if (response.status === 401) {
+    // Drop only the credential that was actually rejected: a dead share link
+    // must not sign the account out.
+    if (isShareView()) {
+      clearShareToken();
+      return hasAccountSession();
     }
-  } catch {
-    // Network error — optimistically show the app
+    clearToken();
+    return false;
   }
   return true;
 };
@@ -241,6 +227,10 @@ export const logout = async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
-    }).catch(() => {});
+    }).catch(
+      // The token is already gone from this browser; the server keeps the
+      // session until it expires.
+      reportFailure("auth.logout.failed", "Could not end the session on the server"),
+    );
   }
 };

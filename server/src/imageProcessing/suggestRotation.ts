@@ -4,6 +4,8 @@ import { dirname, join } from "path";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { resolvePythonCommand, buildPythonProcessEnv } from "../python/pythonRuntime.ts";
 import { getLogger } from "../observability/logger.ts";
+import { attempt, attemptSync, isNotFound } from "../common/result.ts";
+import { logFailure } from "../common/logFailure.ts";
 
 const log = getLogger("suggestRotation");
 
@@ -35,14 +37,14 @@ export const suggestRotation = async (
   absoluteFilePath: string,
 ): Promise<RotationSuggestion> => {
   const cachePath = cachePathFor(absoluteFilePath);
-  try {
-    const raw = await readFile(cachePath, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<CachedSuggestion>;
-    if ("angle" in parsed) {
-      return { angle: parsed.angle ?? null, confidence: parsed.confidence };
-    }
-  } catch {
-    // Not cached yet — fall through to compute.
+  const raw = await attempt(readFile(cachePath, "utf-8"));
+  if (!raw.ok && !isNotFound(raw.error)) {
+    log.warn({ err: raw.error }, "Could not read a cached rotation suggestion; recomputing");
+  }
+  const parsed = raw.ok ? attemptSync(() => JSON.parse(raw.value) as Partial<CachedSuggestion>) : null;
+  if (parsed && !parsed.ok) log.warn({ err: parsed.error }, "Corrupt cached rotation suggestion; recomputing");
+  if (parsed?.ok && "angle" in parsed.value) {
+    return { angle: parsed.value.angle ?? null, confidence: parsed.value.confidence };
   }
 
   const pythonCommand = await resolvePythonCommand();
@@ -77,16 +79,15 @@ export const suggestRotation = async (
     });
   });
 
-  // Best-effort cache write — a failure here just means recomputing next time.
-  try {
-    await mkdir(dirname(cachePath), { recursive: true });
-    await writeFile(
-      cachePath,
-      JSON.stringify({ ...result, generatedAt: Date.now() } satisfies CachedSuggestion),
-    );
-  } catch {
-    // ignore
-  }
+  // A failed cache write only means recomputing next time.
+  await mkdir(dirname(cachePath), { recursive: true })
+    .then(() =>
+      writeFile(
+        cachePath,
+        JSON.stringify({ ...result, generatedAt: Date.now() } satisfies CachedSuggestion),
+      ),
+    )
+    .catch(logFailure(log, "Could not cache a rotation suggestion"));
 
   return result;
 };

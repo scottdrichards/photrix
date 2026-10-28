@@ -5,6 +5,7 @@ import type {
 import { getLogger } from "../observability/logger.ts";
 import { recordServerDiagnosticEvent } from "../observability/diagnosticsStore.ts";
 import { isSystemOverloaded, getAvailableMemoryMB } from "./systemLoad.ts";
+import { attempt } from "../common/result.ts";
 
 const log = getLogger("TaskOrchestrator");
 
@@ -576,13 +577,11 @@ export const createTaskOrchestrator = (
       })();
       const tracked = inflight;
       statusInflight.set(id, tracked);
-      // Keep the entry until it settles so later polls reuse it; swallow errors
-      // here so a failed read can never become an unhandled rejection.
-      void tracked
-        .catch(() => undefined)
-        .finally(() => {
-          if (statusInflight.get(id) === tracked) statusInflight.delete(id);
-        });
+      // Keep the entry until it settles so later polls reuse it. Callers await
+      // `tracked` and get its error; this bookkeeping only needs to know it settled.
+      void attempt(tracked).then(() => {
+        if (statusInflight.get(id) === tracked) statusInflight.delete(id);
+      });
     }
 
     const raced = await Promise.race([

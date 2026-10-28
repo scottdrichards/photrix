@@ -1,3 +1,5 @@
+import { logFailure } from "./logFailure";
+
 // Installing Photrix as an app (PWA).
 //
 // The manifest and service worker in /public make the site installable; this
@@ -100,9 +102,10 @@ export const initInstall = (): void => {
 export const registerServiceWorker = (): void => {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
   const register = () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {
-      // Installability is a nicety; never let it surface as an app error.
-    });
+    // Installability is a nicety: the app works without the service worker.
+    navigator.serviceWorker
+      .register("/sw.js")
+      .catch(logFailure("serviceWorker.register.failed", "Service worker registration failed"));
   };
   if (document.readyState === "complete") register();
   else window.addEventListener("load", register, { once: true });

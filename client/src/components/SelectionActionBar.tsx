@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { ArrowDownload24Regular, Dismiss24Regular, Share24Regular } from "@fluentui/react-icons";
-import { updatePhotoMetadata } from "../api";
 import { useSelectionContext } from "./selection/SelectionContext";
 import { ShareOptionsModal } from "./ShareOptionsModal";
 import { StarRating } from "./StarRating";
 import { TagEditor } from "./TagEditor";
 import css from "./SelectionActionBar.module.css";
+import { useMetadataSave } from "./selection/useMetadataSave";
 
 /**
  * Floating bar shown while items are checked in selection mode. Applies a star
@@ -17,8 +17,8 @@ import css from "./SelectionActionBar.module.css";
  * checked.
  */
 export function SelectionActionBar() {
-  const { selectionMode, checkedPaths, items, applyMetadataOverride, exitSelectionMode } =
-    useSelectionContext();
+  const { selectionMode, checkedPaths, items, exitSelectionMode } = useSelectionContext();
+  const { save: saveMetadata, error: saveError } = useMetadataSave();
   const [exportMode, setExportMode] = useState<"share" | "download" | null>(null);
 
   const selectedPhotos = useMemo(
@@ -41,23 +41,31 @@ export function SelectionActionBar() {
   const commonRating = ratings.size === 1 ? [...ratings][0] : 0;
 
   const setRating = (rating: number) => {
-    applyMetadataOverride(paths, { rating: rating > 0 ? rating : null });
-    paths.forEach((path) => {
-      void updatePhotoMetadata(path, { rating }).catch(() => {});
-    });
+    saveMetadata(
+      paths.map((path) => {
+        const r = byPath.get(path)?.metadata?.rating;
+        return {
+          path,
+          patch: { rating },
+          shown: { rating: rating > 0 ? rating : null },
+          previous: { rating: typeof r === "number" && r > 0 ? r : null },
+        };
+      }),
+    );
   };
 
   const addLabel = (label: string) => {
     const trimmed = label.trim();
     if (!trimmed) return;
-    paths.forEach((path) => {
-      const existing = byPath.get(path)?.metadata?.tags;
-      const tags = Array.isArray(existing) ? (existing as string[]) : [];
-      if (tags.some((t) => t.toLowerCase() === trimmed.toLowerCase())) return;
-      const next = [...tags, trimmed];
-      applyMetadataOverride([path], { tags: next });
-      void updatePhotoMetadata(path, { tags: next }).catch(() => {});
-    });
+    saveMetadata(
+      paths.flatMap((path) => {
+        const existing = byPath.get(path)?.metadata?.tags;
+        const tags = Array.isArray(existing) ? (existing as string[]) : [];
+        if (tags.some((t) => t.toLowerCase() === trimmed.toLowerCase())) return [];
+        const next = [...tags, trimmed];
+        return [{ path, patch: { tags: next }, shown: { tags: next }, previous: { tags } }];
+      }),
+    );
   };
 
   return (
@@ -71,6 +79,11 @@ export function SelectionActionBar() {
       )}
       <div className={css.bar} role="toolbar" aria-label="Selection tagging actions">
         <span className={css.count}>{checkedPaths.size} selected</span>
+        {saveError && (
+          <span className={css.error} role="alert">
+            {saveError}
+          </span>
+        )}
         <span className={css.divider} aria-hidden="true" />
         <StarRating
           value={commonRating}

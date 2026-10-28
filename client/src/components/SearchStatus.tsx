@@ -14,6 +14,7 @@ import {
   type SearchSourceOutcome,
 } from "../api";
 import { useSearchActivity } from "./searchActivity";
+import { logFailure } from "../logFailure";
 import css from "./SearchStatus.module.css";
 
 const SOURCE_ORDER: SearchSource[] = ["image", "audio", "transcript"];
@@ -36,8 +37,9 @@ const MAX_RECOVERY_POLL_MS = 120_000;
 
 /**
  * Poll /api/search/status while `active`. Returns the latest per-source model
- * states, or null before the first answer (or when polling is off). Errors are
- * swallowed: this is a best-effort hint, never a reason to break search.
+ * states, or null before the first answer (or when polling is off). A failed
+ * poll is logged and the next one retries: this is a hint, never a reason to
+ * break search.
  */
 export const useSearchModelStates = (
   active: boolean,
@@ -52,7 +54,12 @@ export const useSearchModelStates = (
     const poll = () => {
       fetchSearchStatus(controller.signal)
         .then((next) => setStates(next))
-        .catch(() => {})
+        .catch((error: unknown) => {
+          // Disposal aborts with a string reason, which isAbort doesn't recognise.
+          if (!controller.signal.aborted) {
+            logFailure("search.status.failed", "Could not read search status")(error);
+          }
+        })
         .finally(() => {
           if (!controller.signal.aborted) timer = setTimeout(poll, POLL_MS);
         });

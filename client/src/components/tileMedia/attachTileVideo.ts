@@ -1,6 +1,7 @@
 import Hls from "hls.js";
 import { getToken } from "../../auth";
 import { prefersReducedMotion } from "./tilePlaybackCoordinator";
+import { playVideo } from "../playVideo";
 
 /**
  * A negotiated, preview-safe playback source. `previewMaxSeconds`, when set, is
@@ -69,22 +70,15 @@ export const attachTileVideo = (
   // cap: it's a real encode, so it just plays until the hover ends.
   const handleTimeUpdate = () => {
     if (detached || maxSeconds === undefined) return;
-    if (video.currentTime >= maxSeconds) {
-      try {
-        video.currentTime = 0;
-      } catch {
-        // Seeking can throw before metadata lands; the next tick retries.
-      }
-    }
+    // timeupdate only fires once there is media to play, so the seek is accepted.
+    if (video.currentTime >= maxSeconds) video.currentTime = 0;
   };
 
   const startPlayback = () => {
     if (detached) return;
     // Autoplay is only permitted while muted; a grid preview is silent anyway.
-    void video.play().catch(() => {
-      // Blocked or interrupted by teardown — nothing to recover, the poster
-      // image is still underneath.
-    });
+    // Blocked or interrupted by teardown is fine: the poster is still underneath.
+    playVideo(video);
   };
 
   video.muted = true;
@@ -131,34 +125,22 @@ export const attachTileVideo = (
     video.removeEventListener("timeupdate", handleTimeUpdate);
     video.removeEventListener("loadeddata", startPlayback);
 
-    try {
-      video.pause();
-    } catch {
-      // Detached elements can throw; the rest of teardown still matters.
-    }
+    video.pause();
 
     if (hls) {
       // stopLoad first so no new segment request is issued while destroy runs;
       // destroy() then aborts the in-flight ones and frees the MSE buffers.
-      try {
-        hls.stopLoad();
-        hls.detachMedia();
-        hls.destroy();
-      } catch {
-        // Already destroyed.
-      }
+      hls.stopLoad();
+      hls.detachMedia();
+      hls.destroy();
       hls = null;
     }
 
     // Clearing src + load() is what actually cancels an open range request on
     // the original file. Without it the browser happily keeps downloading a
     // video nobody is looking at.
-    try {
-      video.removeAttribute("src");
-      video.load();
-    } catch {
-      // jsdom / detached element — nothing left to cancel.
-    }
+    video.removeAttribute("src");
+    video.load();
   };
 
   // Never let the ramp chase playbackRate all the way to 0: some engines treat
@@ -177,11 +159,7 @@ export const attachTileVideo = (
     hls?.stopLoad();
 
     if (prefersReducedMotion() || durationMs <= 0) {
-      try {
-        video.pause();
-      } catch {
-        // Already gone.
-      }
+      video.pause();
       onDone();
       return;
     }
@@ -194,17 +172,10 @@ export const attachTileVideo = (
       const t = Math.min(1, (now - startedAt) / durationMs);
       // Ease-out: falls fast at first, coasts gently into the stop.
       const eased = 1 - (1 - t) * (1 - t);
-      try {
-        video.playbackRate = Math.max(MIN_WINDDOWN_RATE, startRate * (1 - eased));
-      } catch {
-        // Some engines reject extreme rates; the final pause() still lands.
-      }
+      // The floor keeps the rate inside the range every engine accepts.
+      video.playbackRate = Math.max(MIN_WINDDOWN_RATE, startRate * (1 - eased));
       if (t >= 1) {
-        try {
-          video.pause();
-        } catch {
-          // Already gone.
-        }
+        video.pause();
         onDone();
         return;
       }

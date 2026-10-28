@@ -95,7 +95,7 @@ describe("accountRequestHandler", () => {
 
     expect(getStatus()).toBe(200);
     expect(getJson<{ username: string }>().username).toBe("bob");
-    authService.revokeToken(token);
+    await authService.revokeToken(token);
   });
 
   it("creates, lists (without leaking the raw token), and revokes an MCP key", async () => {
@@ -135,7 +135,7 @@ describe("accountRequestHandler", () => {
     expect(revoked.getStatus()).toBe(200);
     expect(authService.validateToken(key.token)).toBe(false);
 
-    authService.revokeToken(token);
+    await authService.revokeToken(token);
   });
 
   it("does not let a user revoke another user's MCP key", async () => {
@@ -162,9 +162,9 @@ describe("accountRequestHandler", () => {
     expect(attempt.getStatus()).toBe(404);
     expect(authService.validateToken(carolKey.token)).toBe(true);
 
-    authService.revokeToken(carolToken);
-    authService.revokeToken(malloryToken);
-    authService.revokeApiToken("carol", carolKey.token);
+    await authService.revokeToken(carolToken);
+    await authService.revokeToken(malloryToken);
+    await authService.revokeApiToken("carol", carolKey.token);
   });
 
   it("lists sessions with a current marker and signs out everywhere", async () => {
@@ -207,8 +207,8 @@ describe("accountRequestHandler", () => {
       ]),
     );
 
-    authService.revokeToken(local);
-    authService.revokeToken(remote);
+    await authService.revokeToken(local);
+    await authService.revokeToken(remote);
   });
 
   it("lists internet sessions above local ones (feedback #152)", async () => {
@@ -226,7 +226,7 @@ describe("accountRequestHandler", () => {
       "This server",
     ]);
 
-    for (const t of [server, lan, remote]) authService.revokeToken(t);
+    for (const t of [server, lan, remote]) await authService.revokeToken(t);
   });
 
   it("revokes every other session but keeps the caller signed in", async () => {
@@ -246,7 +246,7 @@ describe("accountRequestHandler", () => {
     expect(authService.validateToken(other1)).toBe(false);
     expect(authService.validateToken(other2)).toBe(false);
 
-    authService.revokeToken(keep);
+    await authService.revokeToken(keep);
   });
 
   it("hides revoked share links from the list", async () => {
@@ -267,7 +267,7 @@ describe("accountRequestHandler", () => {
     const { links } = listed.getJson<{ links: Array<{ label: string }> }>();
     expect(links.map((l) => l.label)).toEqual(["Trip B"]);
 
-    authService.revokeToken(token);
+    await authService.revokeToken(token);
   });
 
   it("only reports passkeysAvailable once a public RP origin is configured", async () => {
@@ -291,7 +291,7 @@ describe("accountRequestHandler", () => {
     await accountRequestHandler(makeReq("/api/account", "GET", token), withOrigin.res);
     expect(withOrigin.getJson<{ passkeysAvailable: boolean }>().passkeysAvailable).toBe(true);
 
-    authService.revokeToken(token);
+    await authService.revokeToken(token);
     if (previous === undefined) delete process.env.PHOTRIX_RP_ORIGIN;
     else process.env.PHOTRIX_RP_ORIGIN = previous;
   });

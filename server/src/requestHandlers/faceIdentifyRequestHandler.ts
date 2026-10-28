@@ -26,6 +26,7 @@ import {
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../utils.ts";
+import { logFailure } from "../common/logFailure.ts";
 
 const log = getLogger("faceIdentify");
 
@@ -451,7 +452,7 @@ const analyzeFrame = async (
       }
     }
   } finally {
-    await rm(tempPath, { force: true }).catch(() => undefined);
+    await rm(tempPath, { force: true }).catch(logFailure(log, "Could not remove a temporary frame"));
   }
 };
 

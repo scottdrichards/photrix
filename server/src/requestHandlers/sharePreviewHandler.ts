@@ -2,6 +2,10 @@ import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getShareLinkLabel, getShareScope } from "../auth/authService.ts";
 import { resolveShareFilter } from "../auth/shareScope.ts";
+import { attempt } from "../common/result.ts";
+import { getLogger } from "../observability/logger.ts";
+
+const log = getLogger("sharePreview");
 
 const escapeHtml = (s: string): string =>
   s
@@ -51,47 +55,50 @@ export const sharePreviewHandler = async (
     shareScope.semanticQuery ??
     "Shared photos";
 
-  let previewPaths: string[] = [];
-  let totalCount = 0;
-  try {
-    // The same resolution every API request makes. The base filter alone is
-    // wider than a semantic share (often `{}`, the whole library), and this page
-    // is unauthenticated: it once advertised the library's total and out-of-scope
-    // file paths in og: tags. If resolution fails, show nothing.
-    const shareFilter = await resolveShareFilter(shareScope, token);
-    // Over-fetch by rating so there is a pool of top-rated candidates to break
-    // ties within; the lead image is what most unfurlers actually show.
-    const result = await database.queryFiles({
-      filter: shareFilter,
-      metadata: ["mimeType", "rating"],
-      pageSize: PREVIEW_CANDIDATE_COUNT,
-      sort: { field: "rating", direction: "desc" },
-    });
-    totalCount = result.total;
-    // Prefer images over videos for the preview mosaic.
-    const candidates = result.items.filter(
-      (f) => !f.mimeType?.startsWith("video/") && !VIDEO_EXTENSIONS.test(f.fileName),
-    );
-    const namedPeople = await database.countNamedPeopleForFiles(candidates);
-    const items = candidates
-      .map((f) => ({
-        file: f,
-        rating: f.rating ?? 0,
-        people: namedPeople.get(f.folder + f.fileName) ?? 0,
-      }))
-      // Best rating first, then the photo with the most recognized people —
-      // a group shot beats an equally-rated landscape as a link thumbnail.
-      .sort((a, b) => b.rating - a.rating || b.people - a.people)
-      .slice(0, 4)
-      .map(({ file }) => file);
-    previewPaths = items.map((f) => {
-      // folder starts and ends with /, so folder + fileName = /path/to/file.jpg
-      const rel = (f.folder + f.fileName).slice(1); // strip leading /
-      return rel.split("/").map(encodeURIComponent).join("/");
-    });
-  } catch {
-    // Best-effort — proceed without images.
+  // The page works without images; failing to pick them is logged, not fatal.
+  const preview = await attempt(
+    (async () => {
+      // The same resolution every API request makes. The base filter alone is
+      // wider than a semantic share (often `{}`, the whole library), and this page
+      // is unauthenticated: it once advertised the library's total and out-of-scope
+      // file paths in og: tags. If resolution fails, show nothing.
+      const shareFilter = await resolveShareFilter(shareScope, token);
+      // Over-fetch by rating so there is a pool of top-rated candidates to break
+      // ties within; the lead image is what most unfurlers actually show.
+      const result = await database.queryFiles({
+        filter: shareFilter,
+        metadata: ["mimeType", "rating"],
+        pageSize: PREVIEW_CANDIDATE_COUNT,
+        sort: { field: "rating", direction: "desc" },
+      });
+      // Prefer images over videos for the preview mosaic.
+      const candidates = result.items.filter(
+        (f) => !f.mimeType?.startsWith("video/") && !VIDEO_EXTENSIONS.test(f.fileName),
+      );
+      const namedPeople = await database.countNamedPeopleForFiles(candidates);
+      const items = candidates
+        .map((f) => ({
+          file: f,
+          rating: f.rating ?? 0,
+          people: namedPeople.get(f.folder + f.fileName) ?? 0,
+        }))
+        // Best rating first, then the photo with the most recognized people —
+        // a group shot beats an equally-rated landscape as a link thumbnail.
+        .sort((a, b) => b.rating - a.rating || b.people - a.people)
+        .slice(0, 4)
+        .map(({ file }) => file);
+      const previewPaths = items.map((f) => {
+        // folder starts and ends with /, so folder + fileName = /path/to/file.jpg
+        const rel = (f.folder + f.fileName).slice(1); // strip leading /
+        return rel.split("/").map(encodeURIComponent).join("/");
+      });
+      return { previewPaths, totalCount: result.total };
+    })(),
+  );
+  if (!preview.ok) {
+    log.warn({ err: preview.error }, "Could not choose share preview images; serving the page without them");
   }
+  const { previewPaths, totalCount } = preview.ok ? preview.value : { previewPaths: [], totalCount: 0 };
 
   const origin = process.env.PHOTRIX_PUBLIC_URL?.replace(/\/$/, "") ?? getOrigin(req);
   const appUrl = `${origin}/?token=${encodeURIComponent(token)}`;

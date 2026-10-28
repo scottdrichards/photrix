@@ -8,18 +8,7 @@ import {
 } from "../api";
 import { Spinner } from "../Spinner";
 import css from "./PhotoStackModal.module.css";
-
-const syncDialogOpenState = (dialog: HTMLDialogElement, isOpen: boolean) => {
-  try {
-    if (isOpen) {
-      if (!dialog.open) dialog.showModal();
-      return;
-    }
-    if (dialog.open) dialog.close();
-  } catch {
-    // Ignore dialog state races.
-  }
-};
+import { syncDialogOpenState } from "./syncDialogOpenState";
 
 type PhotoStackModalProps = {
   /** The cluster to show, or null when the modal is closed. */

@@ -2,7 +2,7 @@ import type * as http from "http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "../indexDatabase/indexDatabase.type.ts";
 import { writeJson } from "../utils.ts";
-import { readJsonBody } from "../common/readBody.ts";
+import { readJsonRequest } from "../common/readBody.ts";
 
 /**
  * Single-user app settings (feedback #95). Currently just the default
@@ -25,13 +25,8 @@ export const settingsRequestHandler = async (
   }
 
   if (url.pathname === "/api/settings/default-exclusion" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req, { ifEmpty: {} });
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    const body = await readJsonRequest<unknown>(req, res, { ifEmpty: {} });
+    if (!body) return;
     const filter = (body as { filter?: QueryOptions["filter"] | null }).filter ?? null;
     await database.setDefaultExclusionFilter(filter);
     writeJson(res, 200, { ok: true });

@@ -1,7 +1,7 @@
 import type * as http from "http";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import { writeJson } from "../../utils.ts";
-import { readJsonBody } from "../../common/readBody.ts";
+import { readJsonRequest } from "../../common/readBody.ts";
 
 /**
  * PATCH /api/files/{path} — update the user-editable tagging fields (star
@@ -21,14 +21,8 @@ export const updateFileMetadataHandler = async (
     return;
   }
 
-  let body: unknown;
-  try {
-    body = await readJsonBody(req, { maxBytes: 64 * 1024, ifEmpty: {} });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Invalid JSON body";
-    writeJson(res, 400, { error: message });
-    return;
-  }
+  const body = await readJsonRequest<unknown>(req, res, { maxBytes: 64 * 1024, ifEmpty: {} });
+  if (!body) return;
 
   if (typeof body !== "object" || body === null) {
     writeJson(res, 400, { error: "Body must be a JSON object" });

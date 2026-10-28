@@ -9,6 +9,7 @@ import {
 import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
+import { attempt } from "../common/result.ts";
 
 const log = getLogger("fileSystemMonitor");
 
@@ -90,10 +91,12 @@ export const fileSystemMonitorFolder = (
     const src = getMirroredCacheBaseDirectory(oldAbsPath);
     const dst = getMirroredCacheBaseDirectory(newAbsPath);
     if (src === dst) return;
-    try {
-      await fsRename(src, dst);
-    } catch {
-      // Cache dir missing or destination occupied — will regenerate naturally.
+    // No cache dir yet, or the destination already has one: either way the
+    // cache regenerates on demand. Anything else is worth knowing about.
+    const moved = await attempt(fsRename(src, dst));
+    const { code } = moved.ok ? {} : (moved.error as NodeJS.ErrnoException);
+    if (!moved.ok && code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") {
+      log.warn({ err: moved.error }, "Could not move a cache directory after a rename");
     }
   };
 

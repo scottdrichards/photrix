@@ -233,11 +233,8 @@ export function SwipePhotoViewer({
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // setPointerCapture is unavailable in some environments (e.g. jsdom)
-    }
+    // Optional call: jsdom has no pointer capture.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const g = gesture.current;
     g.moved = false;
@@ -312,10 +309,8 @@ export function SwipePhotoViewer({
     const g = gesture.current;
     const wasMoved = g.moved;
     pointers.current.delete(e.pointerId);
-    try {
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      // capture may already be gone
     }
 
     if (g.mode === "pinch") {

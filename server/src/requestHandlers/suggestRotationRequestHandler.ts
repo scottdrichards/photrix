@@ -40,7 +40,7 @@ export const suggestRotationRequestHandler = async (
     return;
   }
 
-  const fileRecord = await database.getFileRecord(subPath).catch(() => undefined);
+  const fileRecord = await database.getFileRecord(subPath);
   if (fileRecord?.mimeType && !fileRecord.mimeType.startsWith("image/")) {
     writeJson(res, 200, { angle: null });
     return;

@@ -4,7 +4,7 @@ import {
   listDiagnosticsEvents,
 } from "../observability/diagnosticsStore.ts";
 import { writeJson } from "../utils.ts";
-import { readJsonBody } from "../common/readBody.ts";
+import { readJsonRequest } from "../common/readBody.ts";
 
 type ClientDiagnosticsPayload = {
   events: Array<{
@@ -28,51 +28,44 @@ export const diagnosticsEventsRequestHandler = async (
   res: http.ServerResponse,
 ) => {
   if (req.method === "POST") {
-    try {
-      const payload = await readJsonBody<ClientDiagnosticsPayload>(req);
-      if (!Array.isArray(payload.events) || payload.events.length === 0) {
-        writeJson(res, 400, { error: "'events' must be a non-empty array" });
+    const payload = await readJsonRequest<ClientDiagnosticsPayload>(req, res);
+    if (!payload) return;
+    if (!Array.isArray(payload.events) || payload.events.length === 0) {
+      writeJson(res, 400, { error: "'events' must be a non-empty array" });
+      return;
+    }
+
+    for (const event of payload.events) {
+      if (!event || typeof event !== "object") {
+        writeJson(res, 400, { error: "Each event must be an object" });
         return;
       }
 
-      for (const event of payload.events) {
-        if (!event || typeof event !== "object") {
-          writeJson(res, 400, { error: "Each event must be an object" });
-          return;
-        }
-
-        if (!event.event || typeof event.event !== "string") {
-          writeJson(res, 400, { error: "Each event requires a string 'event'" });
-          return;
-        }
-
-        recordClientDiagnosticEvent({
-          level: event.level ?? "info",
-          event: event.event,
-          ...(event.timestamp ? { timestamp: event.timestamp } : {}),
-          ...(event.message ? { message: event.message } : {}),
-          ...(event.requestId ? { requestId: event.requestId } : {}),
-          ...(event.clientSessionId ? { clientSessionId: event.clientSessionId } : {}),
-          ...(event.clientOperationId
-            ? { clientOperationId: event.clientOperationId }
-            : {}),
-          ...(event.clientRequestId ? { clientRequestId: event.clientRequestId } : {}),
-          ...(event.method ? { method: event.method } : {}),
-          ...(event.url ? { url: event.url } : {}),
-          ...(event.statusCode != null ? { statusCode: event.statusCode } : {}),
-          ...(event.data ? { data: event.data } : {}),
-        });
+      if (!event.event || typeof event.event !== "string") {
+        writeJson(res, 400, { error: "Each event requires a string 'event'" });
+        return;
       }
 
-      writeJson(res, 202, { accepted: payload.events.length });
-      return;
-    } catch (error) {
-      writeJson(res, 400, {
-        error: "Invalid JSON payload",
-        message: error instanceof Error ? error.message : String(error),
+      recordClientDiagnosticEvent({
+        level: event.level ?? "info",
+        event: event.event,
+        ...(event.timestamp ? { timestamp: event.timestamp } : {}),
+        ...(event.message ? { message: event.message } : {}),
+        ...(event.requestId ? { requestId: event.requestId } : {}),
+        ...(event.clientSessionId ? { clientSessionId: event.clientSessionId } : {}),
+        ...(event.clientOperationId
+          ? { clientOperationId: event.clientOperationId }
+          : {}),
+        ...(event.clientRequestId ? { clientRequestId: event.clientRequestId } : {}),
+        ...(event.method ? { method: event.method } : {}),
+        ...(event.url ? { url: event.url } : {}),
+        ...(event.statusCode != null ? { statusCode: event.statusCode } : {}),
+        ...(event.data ? { data: event.data } : {}),
       });
-      return;
     }
+
+    writeJson(res, 202, { accepted: payload.events.length });
+    return;
   }
 
   const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);

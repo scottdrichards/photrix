@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
+import { attempt, isNotFound } from "../common/result.ts";
 
 const log = getLogger("fileSystemRescanRecent");
 
@@ -22,17 +23,16 @@ const collectChangedDirs = async (
   cutoffMs: number,
   changed: string[],
 ): Promise<void> => {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    // Directory vanished mid-walk (moved/deleted concurrently) — nothing to
-    // scope a scan to; the watcher/next full scan reconciles the deletion.
+  // A directory that vanished mid-walk (moved or deleted concurrently) has
+  // nothing to scope a scan to; the watcher or the next full scan reconciles
+  // it. Any other failure is reported and the directory skipped.
+  const listed = await attempt(Promise.all([readdir(dir, { withFileTypes: true }), stat(dir)]));
+  if (!listed.ok) {
+    if (!isNotFound(listed.error)) log.warn({ err: listed.error }, "Could not read a directory while rescanning");
     return;
   }
-
-  const stats = await stat(dir).catch(() => null);
-  if (stats && stats.mtimeMs >= cutoffMs) {
+  const [entries, stats] = listed.value;
+  if (stats.mtimeMs >= cutoffMs) {
     changed.push(dir);
   }
 

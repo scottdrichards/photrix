@@ -52,6 +52,8 @@ import {
   initAuth,
   onUnauthorized,
 } from "./auth";
+import { attempt } from "./result";
+import { logFailure } from "./logFailure";
 
 // Extract a token from the URL immediately (before auth check) so share links self-authenticate.
 extractUrlToken();
@@ -76,13 +78,12 @@ const initialNavFromUrl = (): UrlNavState => {
 };
 
 const copyToClipboard = async (text: string): Promise<boolean> => {
+  // The async clipboard needs a secure context and permission; when it says no,
+  // the legacy path below still works on HTTP and localhost.
   if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // fall through
-    }
+    const copied = await attempt(navigator.clipboard.writeText(text));
+    if (copied.ok) return true;
+    logFailure("clipboard.write.failed", "Async clipboard refused; using the legacy copy")(copied.error);
   }
   // Legacy execCommand — works on HTTP / localhost
   const el = document.createElement("textarea");
@@ -134,9 +135,12 @@ const ThemeToggle = ({ theme, followsSystem, onToggle }: ThemeToggleProps) => {
   );
 };
 
+const SHARE_FAILED_MESSAGE_MS = 4_000;
+
 const ShareButton = () => {
   const { filter } = useFilter();
   const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [modal, setModal] = useState<ShareModalState>(null);
   // A share whose size crossed the threshold and is waiting on confirmation.
   const [pendingLarge, setPendingLarge] = useState<{
@@ -178,24 +182,31 @@ const ShareButton = () => {
       // Size the share before minting. A failure here must not block sharing —
       // the count is a guardrail, not a gate — so fall through to the normal
       // path if it can't be determined.
-      let count: number | null = null;
-      try {
-        count = await fetchShareScopeCount(shareScope);
-      } catch {
-        count = null;
+      const counted = await attempt(fetchShareScopeCount(shareScope));
+      if (!counted.ok) {
+        logFailure("share.count.failed", "Could not size the share; sharing without the large-share check")(
+          counted.error,
+        );
       }
 
-      if (count !== null && count > LARGE_SHARE_THRESHOLD) {
-        setPendingLarge({ scope: shareScope, count });
+      if (counted.ok && counted.value > LARGE_SHARE_THRESHOLD) {
+        setPendingLarge({ scope: shareScope, count: counted.value });
         return;
       }
 
-      await mintAndShow(shareScope);
-    } catch {
-      // nothing — button returns to idle
+      await mint(shareScope);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Mints the link, or says on the button that it couldn't.
+  const mint = async (scope: unknown) => {
+    const minted = await attempt(mintAndShow(scope));
+    if (minted.ok) return;
+    logFailure("share.mint.failed", "Could not create a share link")(minted.error);
+    setFailed(true);
+    setTimeout(() => setFailed(false), SHARE_FAILED_MESSAGE_MS);
   };
 
   const confirmLarge = async () => {
@@ -203,13 +214,8 @@ const ShareButton = () => {
     const { scope } = pendingLarge;
     setPendingLarge(null);
     setLoading(true);
-    try {
-      await mintAndShow(scope);
-    } catch {
-      // nothing — button returns to idle
-    } finally {
-      setLoading(false);
-    }
+    await mint(scope);
+    setLoading(false);
   };
 
   return (
@@ -225,7 +231,9 @@ const ShareButton = () => {
         disabled={loading || isUnscoped}
       >
         <Share24Regular fontSize={20} />
-        <span className={css.btnLabel}>{loading ? "Sharing…" : "Share"}</span>
+        <span className={css.btnLabel} role="status">
+          {loading ? "Sharing…" : failed ? "Couldn't share" : "Share"}
+        </span>
       </button>
 
       {pendingLarge && (

@@ -22,15 +22,7 @@ import {
 } from "../auth/passkeyService.ts";
 import { classifyIp, compareSessionsForList } from "../auth/ipLocation.ts";
 import { writeJson } from "../utils.ts";
-import { readJsonBody } from "../common/readBody.ts";
-
-const readJson = async <T>(req: http.IncomingMessage): Promise<T | null> => {
-  try {
-    return await readJsonBody<T>(req, { ifEmpty: {} });
-  } catch {
-    return null;
-  }
-};
+import { readJsonRequest } from "../common/readBody.ts";
 
 // A stable, non-secret handle for a token so the browser can reference a session
 // or API token for revocation without ever holding the raw bearer value.
@@ -97,11 +89,8 @@ export const accountRequestHandler = async (
   }
 
   if (pathname === "/api/account/mcp-keys" && method === "POST") {
-    const body = await readJson<{ name?: unknown }>(req);
-    if (!body) {
-      writeJson(res, 400, { error: "Invalid JSON" });
-      return;
-    }
+    const body = await readJsonRequest<{ name?: unknown }>(req, res, { ifEmpty: {} });
+    if (!body) return;
     const name =
       typeof body.name === "string" && body.name.trim() ? body.name.trim() : "MCP key";
     const { token: newToken, createdAt } = issueApiToken(username, name);
@@ -111,13 +100,14 @@ export const accountRequestHandler = async (
   }
 
   if (pathname === "/api/account/mcp-keys/revoke" && method === "POST") {
-    const body = await readJson<{ id?: unknown }>(req);
-    if (!body || typeof body.id !== "string") {
+    const body = await readJsonRequest<{ id?: unknown }>(req, res, { ifEmpty: {} });
+    if (!body) return;
+    if (typeof body.id !== "string") {
       writeJson(res, 400, { error: "id required" });
       return;
     }
     const match = (await listApiTokens(username)).find((k) => idOf(k.token) === body.id);
-    if (!match || !revokeApiToken(username, match.token)) {
+    if (!match || !(await revokeApiToken(username, match.token))) {
       writeJson(res, 404, { error: "Key not found" });
       return;
     }
@@ -133,8 +123,9 @@ export const accountRequestHandler = async (
   }
 
   if (pathname === "/api/account/passkeys/remove" && method === "POST") {
-    const body = await readJson<{ credentialId?: unknown }>(req);
-    if (!body || typeof body.credentialId !== "string") {
+    const body = await readJsonRequest<{ credentialId?: unknown }>(req, res, { ifEmpty: {} });
+    if (!body) return;
+    if (typeof body.credentialId !== "string") {
       writeJson(res, 400, { error: "credentialId required" });
       return;
     }
@@ -151,8 +142,9 @@ export const accountRequestHandler = async (
   }
 
   if (pathname === "/api/account/share-links/revoke" && method === "POST") {
-    const body = await readJson<{ token?: unknown }>(req);
-    if (!body || typeof body.token !== "string") {
+    const body = await readJsonRequest<{ token?: unknown }>(req, res, { ifEmpty: {} });
+    if (!body) return;
+    if (typeof body.token !== "string") {
       writeJson(res, 400, { error: "token required" });
       return;
     }
@@ -189,8 +181,9 @@ export const accountRequestHandler = async (
   }
 
   if (pathname === "/api/account/sessions/revoke" && method === "POST") {
-    const body = await readJson<{ id?: unknown }>(req);
-    if (!body || typeof body.id !== "string") {
+    const body = await readJsonRequest<{ id?: unknown }>(req, res, { ifEmpty: {} });
+    if (!body) return;
+    if (typeof body.id !== "string") {
       writeJson(res, 400, { error: "id required" });
       return;
     }
@@ -199,13 +192,13 @@ export const accountRequestHandler = async (
       writeJson(res, 404, { error: "Session not found" });
       return;
     }
-    revokeToken(match.token);
+    await revokeToken(match.token);
     writeJson(res, 200, { ok: true });
     return;
   }
 
   if (pathname === "/api/account/sessions/revoke-all" && method === "POST") {
-    revokeSessionsForUser(username);
+    await revokeSessionsForUser(username);
     writeJson(res, 200, { ok: true });
     return;
   }
@@ -214,7 +207,7 @@ export const accountRequestHandler = async (
   // etc.) while keeping the caller signed in — the non-destructive alternative
   // to "sign out everywhere".
   if (pathname === "/api/account/sessions/revoke-others" && method === "POST") {
-    revokeOtherSessions(username, token);
+    await revokeOtherSessions(username, token);
     writeJson(res, 200, { ok: true });
     return;
   }

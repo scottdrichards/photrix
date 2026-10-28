@@ -55,6 +55,7 @@ import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../utils.ts";
 import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
 import { decodeRequestPath } from "../../common/decodeRequestPath.ts";
+import { attempt } from "../../common/result.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -336,13 +337,11 @@ const tryHLSStream = async (
     let knownDuration = fileRecord?.duration;
 
     if (typeof knownDuration !== "number" || !Number.isFinite(knownDuration)) {
-      try {
-        const probed = await getVideoMetadata(normalizedPath);
-        if (typeof probed.duration === "number" && Number.isFinite(probed.duration)) {
-          knownDuration = probed.duration;
-        }
-      } catch {
-        // ffprobe failed — continue without duration
+      // Without a duration the player still works; it just can't size the scrubber up front.
+      const probed = await attempt(getVideoMetadata(normalizedPath));
+      if (!probed.ok) hlsLog.warn({ err: probed.error }, "ffprobe failed; streaming without a known duration");
+      else if (typeof probed.value.duration === "number" && Number.isFinite(probed.value.duration)) {
+        knownDuration = probed.value.duration;
       }
     }
 

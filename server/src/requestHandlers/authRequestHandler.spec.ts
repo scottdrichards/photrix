@@ -87,8 +87,8 @@ describe("authShareTokenHandler", () => {
       description: '"sunset beach" · Only favorites, 4 stars or more',
     });
 
-    authService.revokeToken(authToken);
-    if (shareToken) authService.revokeToken(shareToken);
+    await authService.revokeToken(authToken);
+    if (shareToken) await authService.revokeToken(shareToken);
   });
 
   it("rejects invalid semantic share source lists", async () => {
@@ -110,7 +110,7 @@ describe("authShareTokenHandler", () => {
 
     expect(getStatus()).toBe(400);
 
-    authService.revokeToken(authToken);
+    await authService.revokeToken(authToken);
   });
 
   it("allows live semantic shares without resolving them up front", async () => {
@@ -133,7 +133,7 @@ describe("authShareTokenHandler", () => {
     expect(getStatus()).toBe(200);
     expect(getJson().token).toBeDefined();
 
-    authService.revokeToken(authToken);
+    await authService.revokeToken(authToken);
   });
 
   it.each([
@@ -152,7 +152,7 @@ describe("authShareTokenHandler", () => {
     expect(getStatus()).toBe(400);
     expect(getJson().token).toBeUndefined();
 
-    authService.revokeToken(authToken);
+    await authService.revokeToken(authToken);
   });
 
   it("refuses an injected field name on a semantic share", async () => {
@@ -170,7 +170,7 @@ describe("authShareTokenHandler", () => {
 
     expect(getStatus()).toBe(400);
 
-    authService.revokeToken(authToken);
+    await authService.revokeToken(authToken);
   });
 
   it("dryRun reports the share size without minting a token", async () => {

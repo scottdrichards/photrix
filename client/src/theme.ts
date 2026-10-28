@@ -1,33 +1,10 @@
+import { readStorage, writeStorage, removeStorage } from "./storage";
 export type Theme = "light" | "dark";
 export type ThemeOverride = Theme | null;
 
 const THEME_KEY = "photrix_theme";
 
 const isTheme = (value: string | null): value is Theme => value === "light" || value === "dark";
-
-const readLocalStorage = (key: string): string | null => {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-};
-
-const writeLocalStorage = (key: string, value: string): void => {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Ignore storage failures so theme selection never blocks rendering.
-  }
-};
-
-const removeLocalStorage = (key: string): void => {
-  try {
-    window.localStorage.removeItem(key);
-  } catch {
-    // Ignore storage failures so theme selection never blocks rendering.
-  }
-};
 
 const getThemeMediaQuery = (): MediaQueryList | null => {
   if (typeof window === "undefined" || !window.matchMedia) return null;
@@ -37,7 +14,7 @@ const getThemeMediaQuery = (): MediaQueryList | null => {
 export const getStoredThemeOverride = (): ThemeOverride => {
   if (typeof window === "undefined") return null;
 
-  const storedTheme = readLocalStorage(THEME_KEY);
+  const storedTheme = readStorage(THEME_KEY);
   return isTheme(storedTheme) ? storedTheme : null;
 };
 
@@ -85,10 +62,10 @@ export const applyTheme = (theme: Theme): void => {
 export const persistThemeOverride = (themeOverride: ThemeOverride): void => {
   if (typeof window === "undefined") return;
   if (themeOverride === null) {
-    removeLocalStorage(THEME_KEY);
+    removeStorage(THEME_KEY);
     return;
   }
-  writeLocalStorage(THEME_KEY, themeOverride);
+  writeStorage(THEME_KEY, themeOverride);
 };
 
 export const subscribeToSystemTheme = (onThemeChange: (theme: Theme) => void): (() => void) => {

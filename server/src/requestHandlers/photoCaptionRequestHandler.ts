@@ -12,6 +12,7 @@ import {
 import { convertImage } from "../imageProcessing/convertImage.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../utils.ts";
+import { attempt } from "../common/result.ts";
 
 // Downscale before sending to the vision model. A full-resolution source
 // (commonly 3000-4000px tall in this library) tokenizes to well over the
@@ -27,6 +28,15 @@ import { writeJson } from "../utils.ts";
 const CAPTION_IMAGE_HEIGHT = 640;
 
 const log = getLogger("photoCaptionRequestHandler");
+
+// Names make a caption better but aren't needed for one, so a failed lookup is
+// logged and the caption is written without them.
+const peopleFacesOrNone = async (database: IndexDatabase, subPath: string) => {
+  const faces = await attempt(database.getPeopleFacesForFile(subPath));
+  if (faces.ok) return faces.value;
+  log.warn({ err: faces.error }, "Could not look up people for a caption; captioning without names");
+  return [];
+};
 
 type Options = {
   database: IndexDatabase;
@@ -72,7 +82,7 @@ const describePhoto = async (
   }, 15_000);
 
   try {
-    const fileRecord = await database.getFileRecord(subPath).catch(() => undefined);
+    const fileRecord = await database.getFileRecord(subPath);
     if (fileRecord?.aiDescription) {
       send({ description: fileRecord.aiDescription });
       return;
@@ -83,7 +93,7 @@ const describePhoto = async (
     }
 
     const [peopleFaces, resizedImagePath] = await Promise.all([
-      database.getPeopleFacesForFile(subPath).catch(() => []),
+      peopleFacesOrNone(database, subPath),
       convertImage(normalizedPath, CAPTION_IMAGE_HEIGHT, { format: "jpeg" }),
     ]);
     const imageBytes = await readFile(resizedImagePath);
@@ -160,7 +170,7 @@ export const photoCaptionRequestHandler = async (
     return;
   }
 
-  const fileRecord = await database.getFileRecord(subPath).catch(() => undefined);
+  const fileRecord = await database.getFileRecord(subPath);
   if (fileRecord?.mimeType && !fileRecord.mimeType.startsWith("image/")) {
     // Captions are photo-only for now (the vision model takes a single
     // still frame, not video) — videos/other files silently get no caption
@@ -171,7 +181,7 @@ export const photoCaptionRequestHandler = async (
 
   try {
     const [peopleFaces, resizedImagePath] = await Promise.all([
-      database.getPeopleFacesForFile(subPath).catch(() => []),
+      peopleFacesOrNone(database, subPath),
       convertImage(normalizedPath, CAPTION_IMAGE_HEIGHT, { format: "jpeg" }),
     ]);
     const imageBytes = await readFile(resizedImagePath);

@@ -117,16 +117,14 @@ describe("StatusModal", () => {
     expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
   });
 
-  it("ignores dialog showModal state races", () => {
+  it("opens the dialog once, however often it re-renders open", () => {
     subscribeStatusStreamMock.mockReturnValue(() => undefined);
-    const showModalSpy = vi
-      .spyOn(HTMLDialogElement.prototype, "showModal")
-      .mockImplementation(() => {
-        throw new DOMException("Already open", "InvalidStateError");
-      });
+    const showModalSpy = vi.spyOn(HTMLDialogElement.prototype, "showModal");
 
-    expect(() => render(<StatusModal isOpen={true} onDismiss={vi.fn()} />)).not.toThrow();
+    const { rerender } = render(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
+    rerender(<StatusModal isOpen={true} onDismiss={vi.fn()} />);
 
+    expect(showModalSpy).toHaveBeenCalledTimes(1);
     showModalSpy.mockRestore();
   });
 

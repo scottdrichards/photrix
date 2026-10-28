@@ -4,7 +4,7 @@ import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
 import { combineFilters } from "../auth/shareScope.ts";
 import { generateShareDescription } from "../shareDescription/generateShareDescription.ts";
 import { writeJson } from "../utils.ts";
-import { readJsonBody } from "../common/readBody.ts";
+import { readJsonRequest } from "../common/readBody.ts";
 
 export const pageTitleHandler = async (
   req: http.IncomingMessage,
@@ -12,13 +12,8 @@ export const pageTitleHandler = async (
   database: IndexDatabase,
   shareFilter: unknown = null,
 ): Promise<void> => {
-  let body: { filter?: FilterElement; semanticQuery?: string };
-  try {
-    body = await readJsonBody<typeof body>(req);
-  } catch {
-    writeJson(res, 400, { error: "Bad request" });
-    return;
-  }
+  const body = await readJsonRequest<{ filter?: FilterElement; semanticQuery?: string }>(req, res);
+  if (!body) return;
 
   const callerFilter: FilterElement = body.filter ?? {};
   const title = await generateShareDescription({
