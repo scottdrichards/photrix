@@ -43,7 +43,16 @@ export const MANIFEST_HREFS: Record<Theme, string> = {
 
 export const applyTheme = (theme: Theme): void => {
   if (typeof document === "undefined") return;
-  document.documentElement.dataset.theme = theme;
+  const root = document.documentElement;
+  // Controls with their own colour transitions (sort segments, the view
+  // toggle) otherwise ease into the new theme 120-250ms after everything
+  // else snaps (feedback #157). Suppress transitions (CSS in styles.css), let
+  // the new colours resolve, then lift it: removing only the transition
+  // property afterwards changes no animated value, so nothing re-animates.
+  root.dataset.themeSwitching = "";
+  root.dataset.theme = theme;
+  void root.offsetHeight; // forces the style flush
+  delete root.dataset.themeSwitching;
   document
     .querySelectorAll('meta[name="theme-color"]')
     .forEach((meta) => meta.setAttribute("content", THEME_COLORS[theme]));

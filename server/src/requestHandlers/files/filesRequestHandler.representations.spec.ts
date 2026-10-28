@@ -14,6 +14,16 @@ import { getMirroredCachedFilePath } from "../../common/cacheUtils.ts";
 // module's other exports or every later import of it fails.
 const actualVideoMetadata = await import("../../videoProcessing/getVideoMetadata.ts");
 
+// The handler imports the share-video export, which imports the HLS module
+// several tests below replace with a partial mock. Stand the export in for
+// the whole file so that import always resolves.
+const exportShareVideo =
+  jest.fn<(filePath: string, shortSide: number) => Promise<string>>();
+jest.unstable_mockModule("../../videoProcessing/exportShareVideo.ts", () => ({
+  exportShareVideo,
+  parseShareVideoShortSide: (value: string | null) => (value === "720" ? 720 : 1080),
+}));
+
 const baseOrchestrator: TaskOrchestrator = {
   setPerformBackgroundTasks: () => {},
   getPerformBackgroundTasks: () => true,
@@ -76,6 +86,59 @@ afterEach(() => {
 });
 
 describe("filesRequestHandler representation paths", () => {
+  it("serves the converted MP4 for representation=shareMp4 at the requested size", async () => {
+    const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-sharemp4-"));
+    const sourceFile = path.join(storageRoot, "clip.mov");
+    const converted = path.join(storageRoot, "cache", "share.720.mp4");
+    mkdirSync(path.dirname(converted), { recursive: true });
+    writeFileSync(sourceFile, "source");
+    writeFileSync(converted, "mp4-content");
+    exportShareVideo.mockReset();
+    exportShareVideo.mockResolvedValue(converted);
+
+    const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const res = createStreamingResponse();
+    const chunks: Buffer[] = [];
+    res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/clip.mov?representation=shareMp4&size=720",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      { database: {} as IndexDatabase, storageRoot, taskOrchestrator: baseOrchestrator },
+    );
+    await once(res, "end");
+
+    expect(exportShareVideo).toHaveBeenCalledWith(sourceFile, 720);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["Content-Type"]).toBe("video/mp4");
+    expect(Buffer.concat(chunks).toString()).toBe("mp4-content");
+  });
+
+  it("refuses shareMp4 for a photo", async () => {
+    const storageRoot = mkdtempSync(
+      path.join(os.tmpdir(), "photrix-files-sharemp4-img-"),
+    );
+    writeFileSync(path.join(storageRoot, "photo.jpg"), "source");
+    exportShareVideo.mockReset();
+
+    const { filesEndpointRequestHandler } = await import("./filesRequestHandler.ts");
+    const { res } = createJsonResponse();
+    await filesEndpointRequestHandler(
+      {
+        url: "/api/files/photo.jpg?representation=shareMp4",
+        headers: { host: "localhost" },
+      } as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
+      res,
+      { database: {} as IndexDatabase, storageRoot, taskOrchestrator: baseOrchestrator },
+    );
+
+    expect(res.writeHead).toHaveBeenCalledWith(415, expect.anything());
+    expect(exportShareVideo).not.toHaveBeenCalled();
+  });
+
   it("serves converted cached image for webSafe representation", async () => {
     const storageRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-files-websafe-"));
     const sourceFile = path.join(storageRoot, "photo.heic");

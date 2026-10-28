@@ -233,4 +233,86 @@ describe("video face queue", () => {
       );
     });
   });
+
+  // Feedback #153: video faces score lower than photo faces, so a capped
+  // person's best-match-first list used to hold none of them.
+  describe("a capped person's detail keeps videos' share", () => {
+    const seedPerson = async (db: IndexDatabase) => {
+      const face = (seed: number, frameTimeMs?: number) => ({
+        box: { x: 0.1, y: 0.2, width: 0.2, height: 0.3 },
+        confidence: 0.9,
+        embedding: unit(seed),
+        ...(frameTimeMs !== undefined ? { frameTimeMs } : {}),
+      });
+      for (let i = 0; i < 6; i++) {
+        await db.addFile({ folder: "/f/", fileName: `p${i}.jpg`, mimeType: "image/jpeg" });
+        await db.saveFaceDetectionResult(`f/p${i}.jpg`, [face(i + 1)]);
+      }
+      for (let i = 0; i < 3; i++) {
+        await addVideo(db, `f/v${i}.mp4`, { duration: 20 });
+        await db.saveFaceDetectionResult(`f/v${i}.mp4`, [face(i + 10, 1_000)]);
+      }
+      while (await db.clusterPendingFaces(256)) {
+        /* drain */
+      }
+      const { clusters } = await db.queryFaceClusters({ filter: {} });
+      expect(clusters).toHaveLength(1);
+      // Pin the ranking: every photo face outscores every video face.
+      await db.asyncSqlite.run(
+        `UPDATE faces SET clusterSimilarity =
+           CASE WHEN frameTimeMs IS NULL THEN 0.9 - id * 0.001 ELSE 0.5 - id * 0.001 END`,
+      );
+      return clusters[0].id;
+    };
+
+    const videoCount = (faces: { frameTimeMs?: number }[]) =>
+      faces.filter((face) => face.frameTimeMs !== undefined).length;
+
+    it.each([
+      ["unfiltered", {}, false],
+      ["filtered", { folder: { folder: "/f/", recursive: true } }, false],
+      // A named person resolves through faceClusters.personId (the IN path).
+      ["unfiltered, named", {}, true],
+      ["filtered, named", { folder: { folder: "/f/", recursive: true } }, true],
+    ])("swaps the weakest photo for a video face (%s)", async (_label, filter, named) => {
+      await withTempDb(async (db) => {
+        const clusterId = await seedPerson(db);
+        if (named) {
+          expect(await db.renameCluster(clusterId, "Riley")).toBe(true);
+          const [root] = await db.asyncSqlite.all<{ personId: number | null }>(
+            "SELECT personId FROM faceClusters WHERE name = 'Riley'",
+          );
+          expect(root.personId).not.toBeNull();
+        }
+        // 3 of 9 faces are video, so 2 of 6 shown should be.
+        const detail = await db.getFaceClusterDetail({ filter, clusterId, maxFaces: 6 });
+        const faces = detail.cluster!.faces;
+        expect(detail.cluster!.count).toBe(9);
+        expect(faces).toHaveLength(6);
+        expect(videoCount(faces)).toBe(2);
+        // Still best match first: the four best photos, then the two videos.
+        expect(faces.map((face) => face.path)).toEqual([
+          "/f/p0.jpg",
+          "/f/p1.jpg",
+          "/f/p2.jpg",
+          "/f/p3.jpg",
+          "/f/v0.mp4",
+          "/f/v1.mp4",
+        ]);
+      });
+    });
+
+    it("shows at least one video face, and every face when under the cap", async () => {
+      await withTempDb(async (db) => {
+        const clusterId = await seedPerson(db);
+        const tight = await db.getFaceClusterDetail({ filter: {}, clusterId, maxFaces: 2 });
+        expect(videoCount(tight.cluster!.faces)).toBe(1);
+        expect(tight.cluster!.faces).toHaveLength(2);
+
+        const all = await db.getFaceClusterDetail({ filter: {}, clusterId });
+        expect(all.cluster!.faces).toHaveLength(9);
+        expect(videoCount(all.cluster!.faces)).toBe(3);
+      });
+    });
+  });
 });

@@ -252,7 +252,11 @@ export const clearVariantOutput = async (
  */
 const rotationFilters = (rotation: number): string => {
   if (rotation === 90) return ",transpose=cclock";
-  if (rotation === 180) return ",hflip,vflip";
+  // Through planar yuv420p first: ffmpeg's hflip on semi-planar NV12 (what a
+  // VAAPI download hands back) wipes the chroma and the clip comes out green.
+  // Measured on a 180° clip: U-plane mean 57.6 against 126.4 in the source,
+  // 3.6 dB PSNR; via yuv420p 45.6 dB. transpose is unaffected.
+  if (rotation === 180) return ",format=yuv420p,hflip,vflip";
   if (rotation === 270) return ",transpose=clock";
   return "";
 };
@@ -330,7 +334,168 @@ const buildIntelGpuFrameFilters = (
 };
 
 /** Which pipeline an encode attempt uses; retried left to right as each fails. */
-type EncodeTier = "gpu-frames" | "system-frames" | "software";
+export type EncodeTier = "gpu-frames" | "system-frames" | "software";
+
+/**
+ * The decode → filter → encode pipeline for one output height, chosen from the
+ * GPU that is present, the source's codec/rotation/bit depth, and the retry
+ * tier. Shared by HLS playback and the MP4 share export so both get the same
+ * GPU paths and the same fallbacks; only the muxer arguments differ.
+ */
+export type EncodePipeline = {
+  hwaccelArgs: string[];
+  vf: string;
+  videoCodec: string;
+  encoderArgs: readonly string[];
+  useCudaPipeline: boolean;
+  useNvidia: boolean;
+  useIntel: boolean;
+  useIntelGpuFrames: boolean;
+  /** Human-readable encoder name for logs. */
+  encoderLabel: string;
+};
+
+export const selectEncodePipeline = (
+  height: number,
+  gpu: GpuAcceleration | null,
+  source: VideoSourceProfile,
+  tier: EncodeTier = "gpu-frames",
+  /** Encoder quality on the vendor's CQ/QP/CRF scale; lower is better. HLS uses 28. */
+  quality = 28,
+): EncodePipeline => {
+  const rotation = source.rotation;
+  const fps = hlsOutputFrameRate(source.frameRate);
+  // Encode pipelines, in order of preference:
+  //
+  // 1. FULL CUDA (NVIDIA, landscape): decode→CUDA frames→scale_cuda→h264_nvenc.
+  //    No CPU roundtrip at all. ~7× realtime for 4K. Requires rotation=0 because
+  //    ffmpeg's auto-rotate (transpose) can't run on GPU-resident frames when
+  //    -hwaccel_output_format cuda keeps them there.
+  //
+  // 2. NVDEC+NVENC (NVIDIA, rotated/portrait): -hwaccel cuda WITHOUT
+  //    -hwaccel_output_format cuda. NVDEC decodes on GPU then transfers frames to
+  //    CPU memory. ffmpeg's auto-rotate runs on those CPU frames. h264_nvenc
+  //    re-uploads and encodes on GPU. ~4-6× realtime vs ~0.3× for pure CPU on
+  //    4K HEVC — critical for phone portrait videos to avoid buffer starvation.
+  //
+  // 3. Intel Quick Sync, GPU frames (VAAPI, server2's iGPU-only box): VAAPI
+  //    decode with frames left on the device and `fps` dropped there. If the
+  //    driver has VPP, scale and rotation run on the GPU too and nothing ever
+  //    reaches system memory (buildIntelVppFilters); if it doesn't, the frames
+  //    are mapped or copied out for a CPU scale and pushed back with
+  //    `hwupload` (buildIntelGpuFrameFilters). Needs a codec the iGPU can
+  //    decode and explicit rotation handling either way. No dedicated VRAM,
+  //    so no ensureGpuHeadroom reclaim.
+  //
+  // 4. Intel Quick Sync, system frames: as above but ffmpeg copies every
+  //    decoded frame back itself and auto-rotates. Slower (a full-resolution
+  //    copy per source frame), but tolerant of any codec — the retry tier.
+  //
+  // 5. CPU (no GPU or GPU-only-decode failed): libx264, all filters on CPU.
+  //
+  // All paths force 8-bit 4:2:0 output. Sources are frequently 10-bit HEVC
+  // (HDR/HLG — default for iPhone and much GoPro footage). h264_nvenc/h264_vaapi
+  // reject 10-bit outright, and browsers can't play 10-bit H.264 anyway. The GPU
+  // paths convert on-chip; the CPU path uses format=yuv420p.
+  const useNvidia = gpu?.vendor === "nvidia";
+  const useCudaPipeline = useNvidia && rotation === 0;
+  const useIntel = gpu?.vendor === "intel";
+  const useIntelGpuFrames =
+    useIntel &&
+    tier === "gpu-frames" &&
+    gpu.hardwareDecodableCodecs.includes(source.codec);
+
+  let hwaccelArgs: string[];
+  let vf: string;
+  let videoCodec: string;
+  let encoderArgs: readonly string[];
+
+  if (useCudaPipeline) {
+    // Full CUDA: frames never leave the GPU.
+    hwaccelArgs = [...(gpu?.hwaccelArgs ?? []), "-hwaccel_output_format", "cuda"];
+    vf = `scale_cuda=-2:${height}:format=yuv420p`;
+    videoCodec = gpu?.h264Codec ?? "libx264";
+    encoderArgs = gpu?.vbrArgs(quality) ?? [
+      "-preset",
+      "veryfast",
+      "-crf",
+      String(quality),
+    ];
+  } else if (useNvidia) {
+    // NVDEC + CPU filters + NVENC: GPU decode, CPU auto-rotate, GPU encode.
+    hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -hwaccel cuda, no output format
+    vf = `fps=${fps},scale=-2:${height},format=yuv420p`;
+    videoCodec = gpu?.h264Codec ?? "libx264";
+    encoderArgs = gpu?.vbrArgs(quality) ?? [
+      "-preset",
+      "veryfast",
+      "-crf",
+      String(quality),
+    ];
+  } else if (useIntelGpuFrames) {
+    // VAAPI decode with frames left on the iGPU. With VPP the whole chain
+    // runs there; without it, frames are mapped/copied out for a CPU scale
+    // and pushed back for the encode.
+    hwaccelArgs = [...gpu.hwaccelArgs, ...gpu.gpuFrameArgs];
+    vf = gpu.supportsVideoProc
+      ? buildIntelVppFilters(height, rotation, fps)
+      : buildIntelGpuFrameFilters(
+          height,
+          rotation,
+          fps,
+          isHighBitDepthPixelFormat(source.pixelFormat),
+          gpu.vfExtra,
+        );
+    videoCodec = gpu.h264Codec;
+    encoderArgs = gpu.vbrArgs(quality);
+  } else if (useIntel) {
+    // VAAPI decode → system memory → CPU scale/rotate → hwupload → VAAPI
+    // encode. See INTEL.hwaccelArgs for why scaling can't move onto this iGPU.
+    // Rotation is explicit rather than ffmpeg's auto-rotate, which for a 180°
+    // clip flips the downloaded NV12 frames directly (see rotationFilters).
+    hwaccelArgs = [...(gpu?.hwaccelArgs ?? []), "-noautorotate"];
+    vf = `fps=${fps},${scaleFilter(height, rotation)}${rotationFilters(rotation)}${gpu?.vfExtra ?? ""}`;
+    videoCodec = gpu?.h264Codec ?? "libx264";
+    encoderArgs = gpu?.vbrArgs(quality) ?? [
+      "-preset",
+      "veryfast",
+      "-crf",
+      String(quality),
+    ];
+  } else {
+    // Pure CPU.
+    hwaccelArgs = [];
+    vf = `fps=${fps},scale=-2:${height},format=yuv420p`;
+    videoCodec = "libx264";
+    encoderArgs = ["-preset", "veryfast", "-crf", String(quality)];
+  }
+
+  const encoderLabel = useCudaPipeline
+    ? `${gpu?.label ?? "NVIDIA"} (full CUDA)`
+    : useNvidia
+      ? `${gpu?.label ?? "NVIDIA"} (NVDEC+NVENC)`
+      : useIntelGpuFrames
+        ? `${gpu?.label ?? "Intel Quick Sync"} (${gpu?.supportsVideoProc ? "full VAAPI" : "GPU frames+CPU scale"})`
+        : useIntel
+          ? `${gpu?.label ?? "Intel Quick Sync"} (system frames+VAAPI)`
+          : "software (libx264)";
+
+  return {
+    hwaccelArgs,
+    vf,
+    videoCodec,
+    encoderArgs,
+    useCudaPipeline,
+    useNvidia,
+    useIntel,
+    useIntelGpuFrames: Boolean(useIntelGpuFrames),
+    encoderLabel,
+  };
+};
+
+/** The tier to retry on after a hardware failure of `pipeline`. */
+export const nextEncodeTier = (pipeline: EncodePipeline): EncodeTier =>
+  pipeline.useIntelGpuFrames ? "system-frames" : "software";
 
 /** Last few ffmpeg stderr lines, for logs and error messages. */
 const stderrTail = (stderr: string): string =>
@@ -361,94 +526,18 @@ const encodeVariant = (
   const fps = hlsOutputFrameRate(source.frameRate);
   const [fpsNum, fpsDen] = fps.split("/").map(Number);
   const maxGopFrames = Math.ceil((fpsNum / fpsDen) * HLS_SEGMENT_SECONDS);
+  const pipeline = selectEncodePipeline(variant.height, gpu, source, tier);
   return new Promise((resolve, reject) => {
-    // Encode pipelines, in order of preference:
-    //
-    // 1. FULL CUDA (NVIDIA, landscape): decode→CUDA frames→scale_cuda→h264_nvenc.
-    //    No CPU roundtrip at all. ~7× realtime for 4K. Requires rotation=0 because
-    //    ffmpeg's auto-rotate (transpose) can't run on GPU-resident frames when
-    //    -hwaccel_output_format cuda keeps them there.
-    //
-    // 2. NVDEC+NVENC (NVIDIA, rotated/portrait): -hwaccel cuda WITHOUT
-    //    -hwaccel_output_format cuda. NVDEC decodes on GPU then transfers frames to
-    //    CPU memory. ffmpeg's auto-rotate runs on those CPU frames. h264_nvenc
-    //    re-uploads and encodes on GPU. ~4-6× realtime vs ~0.3× for pure CPU on
-    //    4K HEVC — critical for phone portrait videos to avoid buffer starvation.
-    //
-    // 3. Intel Quick Sync, GPU frames (VAAPI, server2's iGPU-only box): VAAPI
-    //    decode with frames left on the device and `fps` dropped there. If the
-    //    driver has VPP, scale and rotation run on the GPU too and nothing ever
-    //    reaches system memory (buildIntelVppFilters); if it doesn't, the frames
-    //    are mapped or copied out for a CPU scale and pushed back with
-    //    `hwupload` (buildIntelGpuFrameFilters). Needs a codec the iGPU can
-    //    decode and explicit rotation handling either way. No dedicated VRAM,
-    //    so no ensureGpuHeadroom reclaim.
-    //
-    // 4. Intel Quick Sync, system frames: as above but ffmpeg copies every
-    //    decoded frame back itself and auto-rotates. Slower (a full-resolution
-    //    copy per source frame), but tolerant of any codec — the retry tier.
-    //
-    // 5. CPU (no GPU or GPU-only-decode failed): libx264, all filters on CPU.
-    //
-    // All paths force 8-bit 4:2:0 output. Sources are frequently 10-bit HEVC
-    // (HDR/HLG — default for iPhone and much GoPro footage). h264_nvenc/h264_vaapi
-    // reject 10-bit outright, and browsers can't play 10-bit H.264 anyway. The GPU
-    // paths convert on-chip; the CPU path uses format=yuv420p.
-    const useNvidia = gpu?.vendor === "nvidia";
-    const useCudaPipeline = useNvidia && rotation === 0;
-    const useIntel = gpu?.vendor === "intel";
-    const useIntelGpuFrames =
-      useIntel &&
-      tier === "gpu-frames" &&
-      gpu.hardwareDecodableCodecs.includes(source.codec);
-
-    let hwaccelArgs: string[];
-    let vf: string;
-    let videoCodec: string;
-    let encoderArgs: readonly string[];
-
-    if (useCudaPipeline) {
-      // Full CUDA: frames never leave the GPU.
-      hwaccelArgs = [...(gpu?.hwaccelArgs ?? []), "-hwaccel_output_format", "cuda"];
-      vf = `scale_cuda=-2:${variant.height}:format=yuv420p`;
-      videoCodec = gpu?.h264Codec ?? "libx264";
-      encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
-    } else if (useNvidia) {
-      // NVDEC + CPU filters + NVENC: GPU decode, CPU auto-rotate, GPU encode.
-      hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -hwaccel cuda, no output format
-      vf = `fps=${fps},scale=-2:${variant.height},format=yuv420p`;
-      videoCodec = gpu?.h264Codec ?? "libx264";
-      encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
-    } else if (useIntelGpuFrames) {
-      // VAAPI decode with frames left on the iGPU. With VPP the whole chain
-      // runs there; without it, frames are mapped/copied out for a CPU scale
-      // and pushed back for the encode.
-      hwaccelArgs = [...gpu.hwaccelArgs, ...gpu.gpuFrameArgs];
-      vf = gpu.supportsVideoProc
-        ? buildIntelVppFilters(variant.height, rotation, fps)
-        : buildIntelGpuFrameFilters(
-            variant.height,
-            rotation,
-            fps,
-            isHighBitDepthPixelFormat(source.pixelFormat),
-            gpu.vfExtra,
-          );
-      videoCodec = gpu.h264Codec;
-      encoderArgs = gpu.vbrArgs(28);
-    } else if (useIntel) {
-      // VAAPI decode → system memory → CPU auto-rotate/scale → hwupload → VAAPI
-      // encode. See INTEL.hwaccelArgs for why scaling can't move onto this iGPU.
-      hwaccelArgs = [...(gpu?.hwaccelArgs ?? [])]; // -hwaccel vaapi + -vaapi_device
-      vf = `fps=${fps},scale=-2:${variant.height}${gpu?.vfExtra ?? ""}`;
-      videoCodec = gpu?.h264Codec ?? "libx264";
-      encoderArgs = gpu?.vbrArgs(28) ?? ["-preset", "veryfast", "-crf", "28"];
-    } else {
-      // Pure CPU.
-      hwaccelArgs = [];
-      vf = `fps=${fps},scale=-2:${variant.height},format=yuv420p`;
-      videoCodec = "libx264";
-      encoderArgs = ["-preset", "veryfast", "-crf", "28"];
-    }
+    const {
+      hwaccelArgs,
+      vf,
+      videoCodec,
+      encoderArgs,
+      useCudaPipeline,
+      useNvidia,
+      useIntel,
+      encoderLabel,
+    } = pipeline;
 
     const variantDir = join(hlsDir, `${variant.height}p`);
 
@@ -519,16 +608,6 @@ const encodeVariant = (
       const spawnedAt = Date.now();
       const process = spawn("ffmpeg", args);
       onSpawn?.(process);
-
-      const encoderLabel = useCudaPipeline
-        ? `${gpu?.label ?? "NVIDIA"} (full CUDA)`
-        : useNvidia
-          ? `${gpu?.label ?? "NVIDIA"} (NVDEC+NVENC)`
-          : useIntelGpuFrames
-            ? `${gpu?.label ?? "Intel Quick Sync"} (${gpu?.supportsVideoProc ? "full VAAPI" : "GPU frames+CPU scale"})`
-            : useIntel
-              ? `${gpu?.label ?? "Intel Quick Sync"} (system frames+VAAPI)`
-              : "software (libx264)";
 
       log.info(
         {
@@ -602,7 +681,7 @@ const encodeVariant = (
           // GPU-frame pipeline is the fragile one (it needs a decodable codec
           // and a mappable surface), while the system-frame pipeline still
           // encodes on the iGPU and is many times faster than libx264.
-          const nextTier: EncodeTier = useIntelGpuFrames ? "system-frames" : "software";
+          const nextTier = nextEncodeTier(pipeline);
           log.warn(
             {
               hlsDir: pathToken(hlsDir),

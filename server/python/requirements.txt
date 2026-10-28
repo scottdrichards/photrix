@@ -1,45 +1,33 @@
+# The portable base: installs on Linux, macOS and Windows and runs everything on
+# CPU, or on an Apple Silicon GPU (PyPI's macOS torch has MPS, and the macOS
+# onnxruntime wheel has CoreML).
+#
+# Install with `bun run --filter server python:install`, not by hand. It
+# installs this file and then the GPU build for this machine's profile. The
+# profiles, their pins and why each pin exists are in ../scripts/python-env.mjs.
+#
+# torch and torchvision are pinned WITHOUT a local version (+cu126 and so on) on
+# purpose. Under PEP 440, `torch==2.9.1` is satisfied by an installed
+# `2.9.1+cu126`, so re-running this file never swaps a profile's GPU build back
+# to the default one. Bump the version here and in every profile together.
+#
+# onnxruntime is the CPU package. A GPU profile uninstalls it and installs its
+# own (onnxruntime-gpu, onnxruntime-directml), and both use the same `onnxruntime`
+# import directory. insightface and faster-whisper depend on `onnxruntime` by
+# name, so re-installing this file on its own brings the CPU package back. Run
+# python:install again afterwards.
 insightface==1.0.1
 onnxruntime==1.27.0
-# Face detection on GPU: `npm run face:python:install:gpu` swaps this for
-# `onnxruntime-gpu==1.26.0`. It can't be listed here, because insightface and
-# faster-whisper depend on `onnxruntime` by name and both packages share one
-# import namespace — so re-running a plain install of this file afterwards
-# reinstalls the CPU package over the GPU one; run the gpu script again.
-# 1.26.0 is deliberate: it is the last release built against CUDA 12, which is
-# what the torch pin below brings in (cudart 12.6, cuDNN 9.10.2.21). 1.28+ are
-# built against CUDA 13, which has no kernels for Pascal (sm_61) at all. cuDNN
-# must stay at torch's 9.10.x — 9.27 fails the first convolution on Pascal.
-# The worker falls back to CPU per call if the GPU is full (face_runtime.py).
-# onnxruntime was already present transitively (insightface depends on it) — pinned
-# explicitly since detect_horizon.py (feedback #66's auto-straighten
-# suggestion) now imports it directly.
 opencv-python-headless>=4.9
 numpy==2.4.6
 Pillow==12.2.0
 pillow-heif==1.4.0
-# CLIP semantic search + CLAP audio embeddings run on PyTorch CUDA.
-#
-# torch/torchvision are PINNED, not left to the default "pip install torch"
-# latest, and the pin matters: the default/latest wheel (torch>=2.10, any
-# recent cu12x or cu13x index) silently drops kernel support for this box's
-# GPU (a Quadro P520, Pascal/GP108, compute capability 6.1/sm_61) —
-# `torch.cuda.is_available()` still reports True, but every actual op fails
-# at runtime with "CUDA error: no kernel image is available for execution on
-# the device". Broke live search sitewide on 2026-08-24 after the venv ended
-# up on the latest torch. cu126's sm_60 kernels still run on this sm_61 card
-# (same Pascal generation); cu128/cu129/cu130 dropped it. torchvision is
-# pinned to the exact release PyTorch pairs with 2.9.x — an unpaired
-# torchvision (e.g. whatever installs alongside a newer torch) imports fine
-# but conflicts at the ABI level. python3.14 (this venv's interpreter) is too
-# new for a cu118 build to exist, or this would use one instead — cu126 is
-# the oldest CUDA index that still ships a py3.14 wheel.
---extra-index-url https://download.pytorch.org/whl/cu126
-torch==2.9.1+cu126
-torchvision==0.24.1+cu126
+# CLIP semantic search + CLAP audio embeddings.
+torch==2.9.1
+torchvision==0.24.1
 open_clip_torch>=2.20.0
-# Audio transcription (Whisper) — GPU via CTranslate2/CUDA.
-# For GPU: pip install faster-whisper[cuda]
+# Audio transcription (Whisper). Uses the GPU on CUDA only; CPU elsewhere.
 faster-whisper>=1.1.0
-# Audio embeddings (CLAP) — GPU via PyTorch CUDA (see torch note above).
+# Audio embeddings (CLAP).
 transformers>=4.27.0
 soundfile>=0.12.1
