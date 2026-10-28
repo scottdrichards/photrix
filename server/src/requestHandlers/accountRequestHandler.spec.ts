@@ -226,7 +226,7 @@ describe("accountRequestHandler", () => {
       "This server",
     ]);
 
-    for (const t of [server, lan, remote]) authService.revokeToken(t);
+    for (const t of [server, lan, remote]) await authService.revokeToken(t);
   });
 
   it("revokes every other session but keeps the caller signed in", async () => {

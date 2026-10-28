@@ -239,7 +239,10 @@ export const exportShareVideo = (
   };
 
   const run = queue.then(work, work);
-  queue = run.catch(() => undefined);
+  // The queue only orders encodes; the caller gets this failure through `tracked`.
+  queue = run.catch((error: unknown) => {
+    log.debug({ err: error }, "Share video export failed; starting the next one");
+  });
   const tracked = run.finally(() => inFlight.delete(outputPath));
   inFlight.set(outputPath, tracked);
   return tracked;
