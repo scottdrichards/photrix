@@ -351,6 +351,26 @@ export const renameCluster = async (
   if (!response.ok) throw new Error(`Failed to rename cluster (status ${response.status})`);
 };
 
+/**
+ * Moves one face to another person — an existing one (`personId`) or a new one
+ * (`name`). Only this face changes; the rest of either person is untouched.
+ */
+export const assignFaceToPerson = async (
+  faceId: number,
+  target: { personId: string } | { name: string },
+): Promise<{ personId: string; name: string | null }> => {
+  const response = await fetchWithDiagnostics("/api/people/assign-face", "assign face to person", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ faceId, ...target }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to assign face (status ${response.status})`);
+  }
+  const data = (await response.json()) as { personId: string; name: string | null };
+  return { personId: data.personId, name: data.name };
+};
+
 export const mergeClusters = async (
   sourceClusterIds: string[],
   targetClusterId: string,

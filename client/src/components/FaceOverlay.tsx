@@ -24,18 +24,19 @@ type FaceOverlayProps = {
   faceTableBoxesRaw?: unknown;
   aspectRatio: number;
   /**
-   * Detected faces with resolved People names, rendered as labels. A *named*
-   * face's label itself is not clickable — clicks on it fall through to the
-   * same zoom click as the rest of the image. Only its "✕" (see
-   * `onRejectFace`) takes the pointer. An *unnamed* face instead renders a
-   * real "Who is this?" button — see `onAssignFace`.
+   * Detected faces with resolved People names, rendered as labels. With
+   * `onAssignFace`, a *named* face's name is a button that opens the panel to
+   * change who it is (feedback #160), and its "✕" (see `onRejectFace`) says
+   * "not them"; the rest of the label stays click-through to the zoom click.
+   * An *unnamed* face instead renders a "Who is this?" button.
    */
   namedFaces?: NamedFace[];
   /**
    * When provided, every unnamed face in `namedFaces` renders a clickable
    * "Who is this?" chip instead of nothing, so a viewer can start naming a
-   * cluster right from the photo it appears in. Omitted entirely (not just
-   * disabled) in a read-only/shared view — see FullscreenViewer's `READ_ONLY`.
+   * cluster right from the photo it appears in, and every named face's name
+   * becomes a button for correcting it. Omitted entirely (not just disabled)
+   * in a read-only/shared view — see FullscreenViewer's `READ_ONLY`.
    */
   onAssignFace?: (face: NamedFace) => void;
   /**
@@ -328,7 +329,24 @@ export function FaceOverlay({
                   top: `${(face.box.y - face.box.height / 2) * 100}%`,
                 }}
               >
-                <span className={css.faceLabelName}>{armed ? `Not ${face.name}?` : face.name}</span>
+                {onAssignFace ? (
+                  <button
+                    type="button"
+                    className={`${css.faceLabelName} ${css.faceLabelNameButton}`}
+                    title={`Not ${face.name}? Change who this is`}
+                    aria-label={`Change who this is (${face.name})`}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setArmedRejectFaceId(null);
+                      onAssignFace(face);
+                    }}
+                  >
+                    {armed ? `Not ${face.name}?` : face.name}
+                  </button>
+                ) : (
+                  <span className={css.faceLabelName}>{armed ? `Not ${face.name}?` : face.name}</span>
+                )}
                 {onRejectFace && (
                   <button
                     type="button"

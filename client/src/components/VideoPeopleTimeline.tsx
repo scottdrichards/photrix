@@ -1,5 +1,5 @@
 import type { PhotoPersonFace } from "../api/types";
-import { formatClock, videoPeople } from "./videoPeople";
+import { formatClock, videoTimelineRows } from "./videoPeople";
 import css from "./VideoPeopleTimeline.module.css";
 
 type VideoPeopleTimelineProps = {
@@ -23,7 +23,7 @@ export const VideoPeopleTimeline = ({
   durationMs,
   onSeek,
 }: VideoPeopleTimelineProps) => {
-  const people = videoPeople(faces);
+  const people = videoTimelineRows(faces);
   if (people.length === 0) return null;
   const spanMs = Math.max(
     durationMs ?? 0,
@@ -35,7 +35,9 @@ export const VideoPeopleTimeline = ({
   return (
     <div className={css.timeline} data-testid="video-people">
       {people.map((person) => {
-        const label = person.name ?? "Unnamed";
+        const label =
+          person.name ??
+          (person.pooledCount ? `${person.pooledCount} unnamed` : "Unnamed");
         return (
           <div className={css.row} key={person.personId}>
             <span className={css.name} title={label}>
@@ -59,7 +61,7 @@ export const VideoPeopleTimeline = ({
             </div>
             <button
               type="button"
-              className={`btn btn-ghost ${css.jump}`}
+              className={`btn btn-transparent btn-sm ${css.jump}`}
               onClick={() => onSeek(person.first.startMs)}
               title={`First seen at ${formatClock(person.first.startMs)}`}
             >
@@ -67,7 +69,7 @@ export const VideoPeopleTimeline = ({
             </button>
             <button
               type="button"
-              className={`btn btn-ghost ${css.jump}`}
+              className={`btn btn-transparent btn-sm ${css.jump}`}
               onClick={() => onSeek(person.longest.startMs)}
               title={`Longest stretch: ${formatClock(person.longest.startMs)}–${formatClock(person.longest.endMs)}`}
               disabled={person.appearances.length < 2}

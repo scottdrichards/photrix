@@ -82,6 +82,7 @@ export {
   faceCropRegion,
   renameCluster,
   mergeClusters,
+  assignFaceToPerson,
   separateCluster,
   setPersonTags,
   fetchAllPersonTags,
