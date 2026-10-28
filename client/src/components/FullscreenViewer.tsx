@@ -23,7 +23,7 @@ import { createClientOperationId, logClientEvent } from "../diagnostics";
 import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes, type NamedFace } from "./FaceOverlay";
 import { VideoPeopleTimeline } from "./VideoPeopleTimeline";
 import { VideoLoadingOverlay } from "./VideoLoadingOverlay";
-import { videoPeople } from "./videoPeople";
+import { videoTimelineRows } from "./videoPeople";
 
 // The people timeline under a video: its rows are this tall, and past this many
 // it scrolls rather than squeezing the video further.
@@ -313,8 +313,9 @@ export function FullscreenViewer() {
   }, [photoPath, facesRefreshToken]);
 
   // Feedback #145: "this isn't {name}" from the viewer. A rejected verdict
-  // pulls the face out of that person; the refetch then shows it unnamed, with
-  // the usual "Who is this?" chip for naming it correctly.
+  // pulls the face out of that person, and the refetch drops it from the
+  // overlay (only clustered faces come back). Saying who it *is* instead is the
+  // name button -> FaceAssignPanel's change mode (feedback #160).
   const handleRejectFace = (face: NamedFace) => {
     setFaceVerdicts([face.faceId], "rejected")
       .then(() => setFacesRefreshToken((token) => token + 1))
@@ -647,7 +648,7 @@ export function FullscreenViewer() {
   // Who is in this video and when.
   const videoFaces =
     photo?.mediaType === "video" && peopleFacesPath === photo.path ? peopleFaces : [];
-  const peopleInVideo = videoPeople(videoFaces);
+  const peopleInVideo = videoTimelineRows(videoFaces);
   const peopleTimelinePx =
     peopleInVideo.length > 0
       ? PEOPLE_TIMELINE_PADDING_PX +

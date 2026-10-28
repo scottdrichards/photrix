@@ -454,12 +454,7 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
       )}
     >
       <div className={css.headerRow}>
-        <div>
-          <small>Map filter</small>
-          <small className={css.description}>
-            Pins show items with location metadata.
-          </small>
-        </div>
+        <small>Map filter</small>
         <div className={css.actions}>
           {locationBounds ? (
             <button className="btn btn-sm" onClick={clearMapFilter}>

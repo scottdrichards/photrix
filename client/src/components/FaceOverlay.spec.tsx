@@ -47,3 +47,20 @@ describe("FaceOverlay named-face rejection (feedback #145)", () => {
     expect(screen.queryByRole("button", { name: "Not Alex" })).toBeNull();
   });
 });
+
+describe("FaceOverlay named-face correction (feedback #160)", () => {
+  it("opens the assign panel from a named face's name", () => {
+    const onAssignFace = vi.fn();
+    render(
+      <FaceOverlay regionsRaw={null} aspectRatio={1} namedFaces={[face]} onAssignFace={onAssignFace} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Change who this is (Alex)" }));
+    expect(onAssignFace).toHaveBeenCalledWith(face);
+  });
+
+  it("leaves the name as plain text in a read-only view", () => {
+    render(<FaceOverlay regionsRaw={null} aspectRatio={1} namedFaces={[face]} />);
+    expect(screen.getByText("Alex").tagName).toBe("SPAN");
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+});

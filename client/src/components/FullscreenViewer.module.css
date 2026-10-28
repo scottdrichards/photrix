@@ -273,8 +273,28 @@
   text-overflow: ellipsis;
 }
 
-/* The one clickable part of a named label (feedback #145). The label layer is
-   pointer-events: none, so only this opts back in. */
+/* A named label's name, when it can be corrected (feedback #160): opens the
+   assign panel in "change person" mode. Opts back into the pointer like the
+   reject button below; the label's padding stays click-through. */
+.faceLabelNameButton {
+  pointer-events: auto;
+  cursor: pointer;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.faceLabelNameButton:hover,
+.faceLabelNameButton:focus-visible {
+  text-decoration: underline;
+}
+
+/* The reject control on a named label (feedback #145). The label layer is
+   pointer-events: none, so this opts back in. */
 .faceRejectButton {
   pointer-events: auto;
   cursor: pointer;

@@ -2216,6 +2216,108 @@ export class FaceClusterStore {
     return { clusterId: faceClusterIdToString(created) };
   }
 
+  /**
+   * Moves one face to a different person — the viewer's "that's not Ada, it's
+   * Bo" correction (feedback #160). Either names an existing person
+   * (`personId`, any of their centroid ids) or starts a new one (`name`).
+   *
+   * Three steps, each reusing an existing primitive:
+   * 1. Pull the face out of the cluster it is in now (`rejectFaces`), which
+   *    also takes it off that cluster's running mean.
+   * 2. Give it a cluster of its own under the target person. The radius is 1
+   *    so the cluster accepts no further faces: this face was mis-assigned
+   *    because it looks like the old person, so a cluster at the default
+   *    radius would start drawing the old person's next faces to the new one.
+   * 3. Record a `confirmed` verdict for the target. It replaces the
+   *    `rejected` verdict from step 1 (one verdict row per face); left as
+   *    `rejected`, `reapplyVerdicts` would pull the face back out of its new
+   *    home after the next re-cluster.
+   *
+   * Returns null when the face, its embedding or the target person is missing.
+   */
+  async assignFaceToPerson(
+    faceId: number,
+    target: { personId: string } | { name: string },
+  ): Promise<{ personId: string; name: string | null } | null> {
+    const face = await this.db.get<{
+      clusterId: number | null;
+      personId: number | null;
+      embedding: Buffer | null;
+    }>(
+      `SELECT f.clusterId AS clusterId,
+              COALESCE(fc.personId, f.clusterId) AS personId,
+              fe.embedding AS embedding
+       FROM faces f
+       LEFT JOIN faceClusters fc ON fc.id = f.clusterId
+       LEFT JOIN faceEmbeddings fe ON fe.faceId = f.id
+       WHERE f.id = ?`,
+      faceId,
+    );
+    if (!face?.embedding) return null;
+    const vector = toUnitFloat32(face.embedding);
+    if (!vector) return null;
+
+    let targetRoot: number | null = null;
+    let newName: string | null = null;
+    if ("personId" in target) {
+      const resolved = await this.resolvePersonClusters(target.personId);
+      if (!resolved) return null;
+      targetRoot = resolved.root;
+    } else {
+      newName = target.name.trim();
+      if (!newName) return null;
+    }
+
+    const inRealCluster = face.clusterId !== null && face.clusterId > 0;
+    if (inRealCluster && targetRoot !== null && face.personId === targetRoot) {
+      // Already theirs: the correction is just "yes, this is them".
+      await this.faceClusters.confirmFaces([
+        { id: faceId, clusterId: face.clusterId!, personId: targetRoot },
+      ]);
+      this.invalidateFaceClusterPCACache();
+      return this.describePerson(targetRoot);
+    }
+
+    if (inRealCluster) {
+      await this.faceClusters.rejectFaces([
+        {
+          id: faceId,
+          clusterId: face.clusterId!,
+          personId: face.personId!,
+          embedding: face.embedding,
+        },
+      ]);
+    }
+
+    const created = await this.faceClusters.createCluster(
+      { centre: vector, minSimilarity: 1 },
+      [faceId],
+    );
+    const root = targetRoot ?? created;
+    await this.db.transaction([
+      {
+        sql: "UPDATE faceClusters SET personId = ? WHERE id = ?",
+        params: [root, created],
+      },
+    ]);
+    if (newName !== null) {
+      await this.renameCluster(faceClusterIdToString(created), newName);
+    }
+    await this.faceClusters.confirmFaces([{ id: faceId, clusterId: created, personId: root }]);
+    this.invalidateFaceClusterPCACache();
+    return this.describePerson(root);
+  }
+
+  private async describePerson(
+    root: number,
+  ): Promise<{ personId: string; name: string | null }> {
+    const row = await this.db.get<{ name: string | null }>(
+      "SELECT name FROM faceClusters WHERE id = ?",
+      root,
+    );
+    return { personId: faceClusterIdToString(root), name: row?.name ?? null };
+  }
+
   /** Face crops for a set of face ids, for previewing what a change implicates. */
   private async getFacesByIds(faceIds: number[]): Promise<FaceClusterFace[]> {
     if (!faceIds.length) return [];

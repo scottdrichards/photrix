@@ -293,6 +293,35 @@ export const peopleRequestHandler = async (
     return;
   }
 
+  // POST /api/people/assign-face — move one face to another person, existing
+  // (`personId`) or new (`name`). The viewer's "change who this is" (feedback #160).
+  if (url.pathname === "/api/people/assign-face" && req.method === "POST") {
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
+    const b = body as Record<string, unknown>;
+    if (typeof b.faceId !== "number" || !Number.isFinite(b.faceId)) {
+      writeJson(res, 400, { error: "Missing faceId" });
+      return;
+    }
+    const target =
+      typeof b.personId === "string"
+        ? { personId: b.personId }
+        : typeof b.name === "string" && b.name.trim()
+          ? { name: b.name }
+          : null;
+    if (!target) {
+      writeJson(res, 400, { error: "Give personId or a non-empty name" });
+      return;
+    }
+    const result = await database.faceClusters.assignFaceToPerson(b.faceId, target);
+    if (!result) {
+      writeJson(res, 404, { error: "Face or person not found" });
+      return;
+    }
+    writeJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
   // POST /api/people/new-cluster — give a face its own cluster under the same
   // person. The decline path when growing would have cost too much.
   if (url.pathname === "/api/people/new-cluster" && req.method === "POST") {
