@@ -20,7 +20,7 @@ import {
   isPublicOriginConfigured,
   listPasskeys,
 } from "../auth/passkeyService.ts";
-import { classifyIp } from "../auth/ipLocation.ts";
+import { classifyIp, compareSessionsForList } from "../auth/ipLocation.ts";
 import { writeJson } from "../utils.ts";
 import { readJsonBody } from "../common/readBody.ts";
 
@@ -171,17 +171,19 @@ export const accountRequestHandler = async (
   if (pathname === "/api/account/sessions" && method === "GET") {
     const sessions = listSessions(username);
     writeJson(res, 200, {
-      sessions: sessions.map((s) => {
-        const { ip, label } = classifyIp(s.ip);
-        return {
-          id: idOf(s.token),
-          createdAt: s.createdAt,
-          lastSeenAt: s.lastSeenAt,
-          current: s.token === token,
-          ip,
-          location: label,
-        };
-      }),
+      sessions: sessions
+        .map((s) => {
+          const { ip, label } = classifyIp(s.ip);
+          return {
+            id: idOf(s.token),
+            createdAt: s.createdAt,
+            lastSeenAt: s.lastSeenAt,
+            current: s.token === token,
+            ip,
+            location: label,
+          };
+        })
+        .sort(compareSessionsForList),
     });
     return;
   }
