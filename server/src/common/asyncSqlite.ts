@@ -17,8 +17,6 @@ type RunResult = { changes: number; lastInsertRowid: number };
 
 type CustomFunctionType =
   | "regexp"
-  | "cosine_similarity"
-  | "cosine_similarity_f32"
   | "cosine_similarity_i8";
 
 type AsyncSqliteOptions = {

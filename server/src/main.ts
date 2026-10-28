@@ -189,8 +189,7 @@ const startServer = async () => {
   // Prime semantic search before the background backlog starts churning, so the
   // first query after a restart is fast instead of timing out. Three independent
   // cold costs are warmed:
-  //   - the vector scan reads every image-embedding BLOB; cold, that read alone
-  //     can exceed the search timeout (warmSemanticSearch);
+  //   - the in-memory vector index loads every embedding from the database;
   //   - the CLIP text model loads lazily on first use (~seconds);
   //   - the CLAP audio model likewise — and a search awaits all enabled sources,
   //     so a cold CLAP that times out at 15s pins the whole response there even
@@ -201,11 +200,6 @@ const startServer = async () => {
   // are added below *after* this begins, so none churn until warmup completes.
   // Best-effort: failures are logged, never block startup, and always release
   // the request bracket so background work resumes.
-  // The vector scan warm must run AFTER the ML model warmups — model weight
-  // files are several GBs and their page-cache footprint evicts the 347 MB of
-  // embedding blobs that a concurrent warmSemanticSearch would have just loaded.
-  // Running the scan last (sequentially) ensures it warms pages that will
-  // actually stay hot for the first real queries.
   const warmupLease = taskOrchestrator.beginUserRequest("startup search warmup");
   // Cached models load in ~35 s. A first run downloads them, which takes
   // minutes, and holding the lease that long leaves a new install showing an
@@ -224,11 +218,7 @@ const startServer = async () => {
           logger.info("CLAP text-embedding model warmed"),
         ),
   ]).then(async (modelResults) => {
-    const scanResult = await Promise.allSettled([
-      database
-        .warmSemanticSearch()
-        .then(() => logger.info("Semantic search vector cache warmed")),
-    ]);
+    const scanResult = await Promise.allSettled([database.vectorIndexLoaded]);
     clearTimeout(warmupHoldTimer);
     warmupLease.release();
     for (const r of [...modelResults, ...scanResult]) {

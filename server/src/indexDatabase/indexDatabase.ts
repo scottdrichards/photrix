@@ -34,6 +34,8 @@ import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
 import { prepareTables } from "./prepareTables.ts";
 import { migrateEmbeddingStorage } from "./migrateEmbeddingStorage.ts";
 import { decodeEmbedding, encodeEmbedding } from "./embeddingCodec.ts";
+import { VectorIndex } from "./vectorIndex/vectorIndex.ts";
+import type { EmbeddingKind } from "./vectorIndex/vectorIndexProtocol.ts";
 import {
   FACE_CLUSTER_SIMILARITY_THRESHOLD,
   FaceClusterEngine,
@@ -484,12 +486,10 @@ export class IndexDatabase {
   }
   private dbFilePath!: string;
   private walCheckpointTimer?: ReturnType<typeof setInterval>;
-  // The post-checkpoint semantic warm-scan reads every image embedding (hundreds
-  // of MB) to keep the page cache hot. During active ingestion a checkpoint
-  // writes back frames roughly every interval, so left unthrottled this heavy
-  // scan runs on a read worker every ~60s, competing with user queries and
-  // holding a WAL snapshot that blocks the next TRUNCATE. Rate-limit it.
-  private lastSemanticWarmAt = 0;
+  // In-memory copy of every CLIP/CLAP vector, so semantic search is one pass
+  // over packed memory instead of a full-table SQL scan. Every write to
+  // `fileEmbeddings` below is mirrored into it after the write commits.
+  private vectorIndex!: VectorIndex;
   // The status counts come from a full-table-scan aggregate. Every active
   // background task asks for them on each status poll, and the status SSE stream
   // polls a few times a second, so without coordination the same heavy scan runs
@@ -567,26 +567,21 @@ export class IndexDatabase {
         // WAL at its high-water mark even once frames are written back, so a one-
         // time spike (or a stalled checkpoint) stays on disk forever.
         "journal_size_limit = 67108864",
+        // Read through a memory map (one shared copy in the OS page cache, not a
+        // private copy per connection) plus a 64 MB page cache per connection.
+        // Measured 2026-10-26 on the 3 GB live index: a deep grid page 125 ms →
+        // 48 ms, the status aggregate 360 ms → 150 ms; small indexed queries
+        // unchanged. 4 GB is address space, sized above the database file.
+        // The file must stay on local disk: a mapped read that hits an I/O
+        // error kills the process (SIGBUS) instead of failing the query.
+        "mmap_size = 4294967296",
+        "cache_size = -65536",
       ],
       customFunctions: [
         { name: "REGEXP", options: { deterministic: true }, type: "regexp" },
         {
-          name: "cosine_similarity",
-          options: { deterministic: true },
-          type: "cosine_similarity",
-        },
-        {
-          // Image CLIP embeddings are stored as packed Float32 (see
-          // saveImageEmbedding); this variant reads them with the correct stride
-          // so similarity can be ranked inside SQL.
-          name: "cosine_similarity_f32",
-          options: { deterministic: true },
-          type: "cosine_similarity_f32",
-        },
-        {
-          // Current storage form for every embedding: int8 with a scale header
-          // (see embeddingCodec.ts). Pure integer arithmetic, over blobs a
-          // quarter the size of the Float32 ones the f32 variant reads.
+          // Similarity over int8 embedding blobs (see embeddingCodec.ts), for
+          // queries that compare against a subset of vectors inside SQL.
           name: "cosine_similarity_i8",
           options: { deterministic: true },
           type: "cosine_similarity_i8",
@@ -611,6 +606,15 @@ export class IndexDatabase {
     await this.backfillTags();
 
     this.faceClusters = new FaceClusterEngine(this.db);
+
+    // Loads in the background (~2 s for 177k vectors); a search issued before
+    // it finishes simply waits for it, since the worker handles requests in order.
+    this.vectorIndex = new VectorIndex(this.dbFilePath);
+    const loadStarted = Date.now();
+    void this.vectorIndex.loaded.then(
+      (counts) => log.info({ ...counts, ms: Date.now() - loadStarted }, "Vector index loaded"),
+      (err: unknown) => log.error({ err }, "Vector index failed to load; semantic search is unavailable"),
+    );
 
     await this.db.get<{ count: number }>("SELECT COUNT(*) as count FROM files");
 
@@ -687,23 +691,7 @@ export class IndexDatabase {
           log: number;
           checkpointed: number;
         }>("PRAGMA wal_checkpoint(TRUNCATE)");
-        if (result && result.busy === 0) {
-          // Checkpoint wrote new DB pages that may include freshly indexed
-          // embeddings. Re-warm the scan cache so those new pages stay hot and
-          // the next search doesn't hit a cold page-cache miss — but rate-limited,
-          // since during a long ingestion nearly every checkpoint writes frames
-          // and the warm scan itself is a full-table embedding read.
-          if (result.checkpointed > 0) {
-            const warmIntervalMs =
-              Number(process.env.PHOTRIX_SEMANTIC_WARM_INTERVAL_MS) || 600_000;
-            const nowMs = Date.now();
-            if (nowMs - this.lastSemanticWarmAt >= warmIntervalMs) {
-              this.lastSemanticWarmAt = nowMs;
-              void this.warmSemanticSearch().catch(() => {});
-            }
-          }
-          return;
-        }
+        if (result && result.busy === 0) return;
       } catch (err) {
         log.warn({ err }, "WAL checkpoint failed");
         return;
@@ -791,6 +779,10 @@ export class IndexDatabase {
         params: [newFolder, newFile, oldFolder, oldFile],
       },
     ]);
+    await this.vectorIndex.move(
+      { folder: oldFolder, fileName: oldFile },
+      { folder: newFolder, fileName: newFile },
+    );
     return true;
   }
 
@@ -1876,6 +1868,7 @@ export class IndexDatabase {
       folder,
       fileName,
     ]);
+    await this.removeFromVectorIndex(folder, fileName);
     await this.db.run("DELETE FROM audioSegments WHERE folder = ? AND fileName = ?", [
       folder,
       fileName,
@@ -1902,6 +1895,7 @@ export class IndexDatabase {
       folder,
       fileName,
     );
+    await this.removeFromVectorIndex(folder, fileName);
     const result = await this.db.run(
       `UPDATE files SET
          infoProcessedAt = NULL,
@@ -1960,7 +1954,15 @@ export class IndexDatabase {
     });
 
     await this.db.transaction(statements);
+    for (const relativePath of paths) {
+      const { folder, fileName } = splitPath(relativePath);
+      await this.removeFromVectorIndex(folder, fileName);
+    }
     this.invalidateStatusCountsCache();
+  }
+
+  private async removeFromVectorIndex(folder: string, fileName: string): Promise<void> {
+    await this.vectorIndex.remove({ folder, fileName }, ["image", "audio"]);
   }
 
   async removeFolder(relativePath: string): Promise<void> {
@@ -1982,6 +1984,7 @@ export class IndexDatabase {
       },
     ];
     await this.db.transaction(statements);
+    await this.vectorIndex.removeFolder(base);
     this.invalidateStatusCountsCache();
   }
 
@@ -5175,6 +5178,7 @@ export class IndexDatabase {
         params: [Date.now(), folder, fileName],
       },
     ]);
+    if (encoded) await this.vectorIndex.upsert("image", { folder, fileName }, encoded);
   }
 
   async saveImageEmbeddingError(relativePath: string): Promise<void> {
@@ -5519,6 +5523,7 @@ export class IndexDatabase {
         params: [Date.now(), folder, fileName],
       },
     ]);
+    if (encoded) await this.vectorIndex.upsert("audio", { folder, fileName }, encoded);
   }
 
   async saveAudioEmbeddingError(relativePath: string): Promise<void> {
@@ -5543,6 +5548,7 @@ export class IndexDatabase {
         params: [Date.now(), folder, fileName],
       },
     ]);
+    await this.vectorIndex.remove({ folder, fileName }, ["audio"]);
   }
 
   async getAudioEmbeddingProgress(): Promise<[total: number, done: number]> {
@@ -5562,37 +5568,13 @@ export class IndexDatabase {
     filter: FilterElement,
     limit: number,
   ): Promise<Array<FileRecord & { similarity: number }>> {
-    const { where: whereClause, params: whereParams } = filterToSQL(filter);
-
-    const queryBuffer = encodeEmbedding(queryVector);
-    if (!queryBuffer) return [];
-
-    // The embedding is joined in from fileEmbeddings rather than read off the
-    // row. The join subquery renames its key columns so `folder`/`fileName` in
-    // the caller-supplied filter fragment stay unambiguously `files`'.
-    const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT files.*, cosine_similarity_i8(emb.vector, ?) AS similarity
-       FROM files
-       JOIN (
-         SELECT folder AS embFolder, fileName AS embFileName, audioEmbedding AS vector
-         FROM fileEmbeddings WHERE audioEmbedding IS NOT NULL
-       ) AS emb ON emb.embFolder = files.folder AND emb.embFileName = files.fileName
-       WHERE (
-           (mimeType LIKE 'video/%' AND audioCodec IS NOT NULL)
-           OR mimeType LIKE 'audio/%'
-         )
-         ${whereClause ? `AND (${whereClause})` : ""}
-       ORDER BY similarity DESC
-       LIMIT ?`,
-      queryBuffer,
-      ...whereParams,
+    return this.vectorSearch(
+      "audio",
+      queryVector,
+      "((mimeType LIKE 'video/%' AND audioCodec IS NOT NULL) OR mimeType LIKE 'audio/%')",
+      filter,
       limit,
     );
-
-    return rows.map((row) => ({
-      ...rowToFileRecord(row as Record<string, string | number>),
-      similarity: typeof row.similarity === "number" ? row.similarity : 0,
-    }));
   }
 
   async audioTranscriptSearch(
@@ -5640,62 +5622,82 @@ export class IndexDatabase {
     filter: FilterElement,
     limit: number,
   ): Promise<Array<FileRecord & { similarity: number }>> {
-    const { where: whereClause, params: whereParams } = filterToSQL(filter);
-
-    // Rank and truncate inside SQLite. The previous implementation pulled every
-    // embedding-bearing row (BLOBs and all columns) onto the JS heap and scored
-    // them here; on a large library that materialised the whole table twice (once
-    // in the read worker, once cloned across the worker boundary) and exhausted
-    // V8's heap. Pushing the similarity into the ORDER BY ... LIMIT keeps the
-    // per-row embedding work in C and returns only `limit` rows.
-    const queryBuffer = encodeEmbedding(queryVector);
-    if (!queryBuffer) return [];
-
-    const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT files.*, cosine_similarity_i8(emb.vector, ?) AS similarity
-       FROM files
-       JOIN (
-         SELECT folder AS embFolder, fileName AS embFileName, imageEmbedding AS vector
-         FROM fileEmbeddings WHERE imageEmbedding IS NOT NULL
-       ) AS emb ON emb.embFolder = files.folder AND emb.embFileName = files.fileName
-       WHERE (mimeType LIKE 'image/%')
-         ${whereClause ? `AND (${whereClause})` : ""}
-       ORDER BY similarity DESC
-       LIMIT ?`,
-      queryBuffer,
-      ...whereParams,
-      limit,
-    );
-
-    return rows.map((row) => ({
-      ...rowToFileRecord(row as Record<string, string | number>),
-      similarity: typeof row.similarity === "number" ? row.similarity : 0,
-    }));
+    return this.vectorSearch("image", queryVector, "mimeType LIKE 'image/%'", filter, limit);
   }
 
   /**
-   * Prime the OS page cache for image semantic search.
+   * Nearest neighbours from the in-memory index, filtered through SQL.
    *
-   * `semanticSearch` scans every image-embedding BLOB (hundreds of MB on a large
-   * library). Cold — right after a restart, before background analysis has
-   * touched those pages — that read alone can exceed the search request timeout,
-   * so the first user query times out and returns nothing. That is the dominant
-   * cause of "semantic search failed" immediately after the server starts.
-   *
-   * Running one throwaway scan in the background at boot pulls the embedding
-   * pages into cache so the first real query is warm. Best-effort: the score is
-   * irrelevant (a zero query vector ranks nothing), the point is the read, and
-   * any failure is swallowed so a warmup problem never blocks startup.
+   * The index ranks everything; SQL decides what may be returned, so the share
+   * scope, folder and user filters are enforced by the same `filterToSQL` as
+   * every other query, on every path. Normally the top few thousand candidates
+   * contain enough that pass. When a filter is selective enough that they
+   * don't (a small folder, a narrow share), the allowed set is read from SQL
+   * once and only those files are ranked.
    */
-  async warmSemanticSearch(): Promise<void> {
-    // CLIP ViT-B-32 image-embedding dimension. An exact match is not required —
-    // even a length-mismatched probe forces SQLite to load every embedding BLOB
-    // to hand it to the scoring function — but matching keeps the scan realistic.
-    const probe = new Float32Array(512);
-    // Record the warm so the post-checkpoint throttle counts explicit warms
-    // (startup, search-warmup) too, and doesn't immediately re-scan right after.
-    this.lastSemanticWarmAt = Date.now();
-    await this.semanticSearch(probe, {}, 1);
+  private async vectorSearch(
+    kind: EmbeddingKind,
+    queryVector: Float32Array,
+    mediaCondition: string,
+    filter: FilterElement,
+    limit: number,
+  ): Promise<Array<FileRecord & { similarity: number }>> {
+    const query = encodeEmbedding(queryVector);
+    if (!query) return [];
+    const { where, params } = filterToSQL(filter);
+    const condition = where ? `${mediaCondition} AND (${where})` : mediaCondition;
+
+    const candidateLimit = Math.max(limit * 4, 2_000);
+    const candidates = await this.vectorIndex.search(kind, query, candidateLimit);
+    const passing = await this.fetchRankedFiles(candidates, condition, params);
+    if (passing.length >= limit || candidates.length < candidateLimit) {
+      return passing.slice(0, limit);
+    }
+
+    const allowed = await this.db.all<{ folder: string; fileName: string }>(
+      `SELECT folder, fileName FROM files WHERE ${condition}`,
+      ...params,
+    );
+    const ranked = await this.vectorIndex.search(
+      kind,
+      query,
+      limit,
+      allowed.map(({ folder, fileName }) => [folder, fileName]),
+    );
+    return this.fetchRankedFiles(ranked, condition, params);
+  }
+
+  /** The rows for `ranked` that satisfy `condition`, in the same order. */
+  private async fetchRankedFiles(
+    ranked: Array<{ folder: string; fileName: string; similarity: number }>,
+    condition: string,
+    params: unknown[],
+  ): Promise<Array<FileRecord & { similarity: number }>> {
+    if (ranked.length === 0) return [];
+    // The ranking travels as one JSON parameter. Its columns get names no
+    // `files` column has, so the caller's unqualified filter SQL stays unambiguous.
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT files.*, ranked.vectorSimilarity
+       FROM (
+         SELECT key AS vectorRank, value->>0 AS vectorFolder, value->>1 AS vectorFileName,
+                value->>2 AS vectorSimilarity
+         FROM json_each(?)
+       ) AS ranked
+       JOIN files ON files.folder = ranked.vectorFolder AND files.fileName = ranked.vectorFileName
+       WHERE ${condition}
+       ORDER BY ranked.vectorRank`,
+      JSON.stringify(ranked.map(({ folder, fileName, similarity }) => [folder, fileName, similarity])),
+      ...params,
+    );
+    return rows.map((row) => ({
+      ...rowToFileRecord(row as Record<string, string | number>),
+      similarity: row.vectorSimilarity as number,
+    }));
+  }
+
+  /** Settles once the in-memory vector index has loaded (or failed to). */
+  get vectorIndexLoaded(): Promise<unknown> {
+    return this.vectorIndex.loaded;
   }
 
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(

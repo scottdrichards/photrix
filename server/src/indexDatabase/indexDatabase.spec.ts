@@ -1732,6 +1732,68 @@ describe("IndexDatabase", () => {
         expect(results.map((r) => r.fileName)).toEqual(["embedded.jpg"]);
       });
     });
+
+    it("only returns files the filter allows, even when better matches exist outside it", async () => {
+      await withTempDb(async (db) => {
+        await addImageWithEmbedding(db, "elsewhere/best.jpg", [1, 0, 0, 0]);
+        await addImageWithEmbedding(db, "trip/good.jpg", [0.9, 0.1, 0, 0]);
+
+        const results = await db.semanticSearch(
+          Float32Array.from([1, 0, 0, 0]),
+          { folder: { folder: "trip", recursive: true } },
+          10,
+        );
+
+        expect(results.map((r) => r.fileName)).toEqual(["good.jpg"]);
+      });
+    });
+
+    it("still fills the page when a selective filter rejects every top candidate", async () => {
+      await withTempDb(async (db) => {
+        // More near-perfect matches outside the folder than the over-fetch
+        // considers, so the answer can only come from ranking the allowed set.
+        const decoys = Array.from({ length: 2_100 }, (_, i) => `decoys/${i}.jpg`);
+        await db.addPaths(decoys);
+        for (const path of decoys) await db.saveImageEmbedding(path, Float32Array.from([1, 0.01, 0, 0]));
+        await addImageWithEmbedding(db, "trip/a.jpg", [0.6, 0.4, 0, 0]);
+        await addImageWithEmbedding(db, "trip/b.jpg", [0.2, 0.8, 0, 0]);
+
+        const results = await db.semanticSearch(
+          Float32Array.from([1, 0, 0, 0]),
+          { folder: { folder: "trip", recursive: true } },
+          10,
+        );
+
+        expect(results.map((r) => r.fileName)).toEqual(["a.jpg", "b.jpg"]);
+      });
+    }, 60_000);
+
+    it("finds a moved file under its new name and forgets deleted ones", async () => {
+      await withTempDb(async (db) => {
+        await addImageWithEmbedding(db, "old.jpg", [1, 0, 0, 0]);
+        await addImageWithEmbedding(db, "gone.jpg", [0.9, 0.1, 0, 0]);
+
+        await db.moveFile("old.jpg", "renamed.jpg");
+        await db.removeFile("gone.jpg");
+        const results = await db.semanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 10);
+
+        expect(results.map((r) => r.fileName)).toEqual(["renamed.jpg"]);
+      });
+    });
+
+    it("ranks audio-bearing files for audio search and skips everything else", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("song.mp3", { mimeType: "audio/mpeg" }));
+        await db.saveAudioEmbedding("song.mp3", Float32Array.from([1, 0, 0, 0]));
+        await db.addFile(createRecord("silent.jpg", { mimeType: "image/jpeg" }));
+        await db.saveAudioEmbedding("silent.jpg", Float32Array.from([1, 0, 0, 0]));
+
+        const results = await db.audioSemanticSearch(Float32Array.from([1, 0, 0, 0]), {}, 10);
+
+        expect(results.map((r) => r.fileName)).toEqual(["song.mp3"]);
+        expect(results[0]?.similarity).toBeCloseTo(1, 5);
+      });
+    });
   });
 
   describe("queryGeoClusters", () => {

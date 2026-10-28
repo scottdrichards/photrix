@@ -5,9 +5,8 @@
  * be compared directly with EXIF `Regions` data and rendered by the existing
  * client `FaceOverlay` without knowing the source resolution.
  *
- * Embeddings are stored as Float64Array so they line up with the existing
- * `cosine_similarity` SQLite function (which expects Float64Array-backed
- * BLOBs).
+ * Embeddings are quantized to int8 for storage (see
+ * indexDatabase/embeddingCodec.ts).
  */
 /**
  * "Photo ready" attributes for a single face, each 0..1. Every field is
