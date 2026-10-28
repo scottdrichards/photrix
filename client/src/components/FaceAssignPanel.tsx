@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Dismiss24Regular } from "@fluentui/react-icons";
 import {
-  buildFaceCropUrl,
   fetchClusterFacePreview,
   fetchNamedPeople,
   mergeClusters,
@@ -11,6 +10,7 @@ import type { ClusterFace } from "../api/types";
 import type { NamedFace } from "./FaceOverlay";
 import { Spinner } from "../Spinner";
 import css from "./FaceAssignPanel.module.css";
+import { FaceCropImage } from "./FaceCropImage";
 
 type NamedPersonOption = { id: string; name: string };
 
@@ -141,10 +141,10 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
       ) : previewFaces.length > 0 ? (
         <div className={css.previewRow}>
           {previewFaces.map((previewFace, index) => (
-            <img
+            <FaceCropImage
               key={index}
               className={css.previewThumb}
-              src={buildFaceCropUrl(previewFace, 96)}
+              face={previewFace} size={96}
               alt="Another crop of this face"
               loading="lazy"
             />
