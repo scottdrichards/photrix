@@ -4,8 +4,9 @@ CLAP audio embedding worker.
 Maps audio and text to a shared 512-dim embedding space for semantic audio search.
 Communicates via stdin/stdout JSON lines, same protocol as image_analysis_worker.py.
 
-Install: pip install transformers soundfile torch
-GPU:     pip install torch --index-url https://download.pytorch.org/whl/cu121
+Install: `bun run --filter server python:install` (picks the GPU build of torch)
+Device:  PHOTRIX_CLAP_DEVICE, else PHOTRIX_TORCH_DEVICE (set by the server from
+         accel_probe.py), else whatever accel.pick_torch_device finds.
 Model:   laion/larger_clap_music_and_speech (auto-downloaded on first run)
 
 Request (embed audio from a video/audio file):
@@ -25,6 +26,7 @@ import sys
 
 import numpy as np
 
+from accel import CPU, empty_cache, is_gpu_device, pick_torch_device
 from gpu_memory import clap_gpu_plan, gpu_memory_mib
 from worker_memory import trim_heap
 
@@ -119,19 +121,27 @@ def embed_text(model, processor, text: str, device: str) -> list:
     return features.cpu().float().numpy()[0].tolist()
 
 
-def _place_model(model, torch):
-    """Move the model to the GPU if it fits, else keep it on CPU."""
-    if not torch.cuda.is_available():
-        return model, "cpu"
+def _requested_device() -> str | None:
+    for name in ("PHOTRIX_CLAP_DEVICE", "PHOTRIX_TORCH_DEVICE"):
+        value = (os.environ.get(name) or "").strip().lower()
+        if value:
+            return value
+    return None
+
+
+def _place_model(model, torch, device: str):
+    """Move the model to `device` if it fits, else keep it on CPU."""
+    if not is_gpu_device(device):
+        return model, CPU
     try:
-        return model.to("cuda"), "cuda"
+        return model.to(device), device
     except RuntimeError as exc:  # torch.OutOfMemoryError subclasses RuntimeError
         if "out of memory" not in str(exc).lower():
             raise
         print(f"CLAP: GPU out of memory, running on CPU: {exc}", file=sys.stderr)
-        model = model.to("cpu")
-        torch.cuda.empty_cache()
-        return model, "cpu"
+        model = model.to(CPU)
+        empty_cache(torch, device)
+        return model, CPU
 
 
 def main():
@@ -141,18 +151,27 @@ def main():
         # far faster on the GPU. Decided with nvidia-smi before torch is
         # imported, because a CPU fallback that had already created a CUDA
         # context would still hold a few hundred MiB of the card.
-        use_gpu, reason = clap_gpu_plan(os.environ, *gpu_memory_mib())
-        if not use_gpu:
-            print(f"CLAP: running on CPU: {reason}", file=sys.stderr)
-            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        #
+        # That memory plan reads nvidia-smi, so it only applies to CUDA. Other
+        # GPUs go straight to the device, with the out-of-memory fallback in
+        # _place_model.
+        device = _requested_device()
+        if device in (None, "cuda"):
+            use_gpu, reason = clap_gpu_plan(os.environ, *gpu_memory_mib())
+            if not use_gpu:
+                print(f"CLAP: running on CPU: {reason}", file=sys.stderr)
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
+                device = CPU
 
         import torch
+        if device is None:
+            device, _rejected = pick_torch_device(torch)
         from transformers import ClapModel, ClapProcessor
 
         hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
         model = ClapModel.from_pretrained(MODEL_ID, cache_dir=hf_home)
         processor = ClapProcessor.from_pretrained(MODEL_ID, cache_dir=hf_home)
-        model, device = _place_model(model, torch)
+        model, device = _place_model(model, torch, device)
         model.eval()
     except Exception as e:
         send({"type": "error", "error": f"Failed to load CLAP model: {e}"})
@@ -192,14 +211,10 @@ def main():
         except Exception as e:
             send({"id": req_id, "error": str(e)})
         finally:
-            # Hand transient CUDA blocks back to the driver between requests so an
+            # Hand transient GPU blocks back to the driver between requests so an
             # on-demand video transcode can claim the headroom. Model weights stay
             # resident. CLAP requests are infrequent, so the cost is negligible.
-            if device == "cuda":
-                try:
-                    torch.cuda.empty_cache()
-                except Exception:
-                    pass
+            empty_cache(torch, device)
 
 
 if __name__ == "__main__":

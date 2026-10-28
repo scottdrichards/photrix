@@ -221,7 +221,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
 
       // Hold the GPU init slot for the duration of model loading so a CLAP
       // worker that also wants CUDA doesn't race us for GPU memory.
-      const releaseGpuSlot = clipDevice === "cuda" ? await acquireGpuInitSlot() : null;
+      const releaseGpuSlot = clipDevice !== "cpu" ? await acquireGpuInitSlot() : null;
 
       log.info(
         { label, faceProvider, clipDevice },
