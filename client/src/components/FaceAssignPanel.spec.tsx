@@ -7,11 +7,13 @@ import type { NamedFace } from "./FaceOverlay";
 // mock fns have to be created inside vi.hoisted rather than referenced from a
 // plain module-scope const (same pattern as FaceFilterPanel.spec.tsx).
 const {
+  assignFaceToPersonMock,
   fetchClusterFacePreviewMock,
   fetchNamedPeopleMock,
   mergeClustersMock,
   renameClusterMock,
 } = vi.hoisted(() => ({
+  assignFaceToPersonMock: vi.fn(async () => ({ personId: "person-1", name: "x" })),
   fetchClusterFacePreviewMock: vi.fn(async () => [] as unknown[]),
   fetchNamedPeopleMock: vi.fn(async () => [] as Array<{ id: string; name: string }>),
   mergeClustersMock: vi.fn(async () => undefined),
@@ -22,6 +24,7 @@ vi.mock("../api", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("../api");
   return {
     ...actual,
+    assignFaceToPerson: assignFaceToPersonMock,
     fetchClusterFacePreview: fetchClusterFacePreviewMock,
     fetchNamedPeople: fetchNamedPeopleMock,
     mergeClusters: mergeClustersMock,
@@ -43,6 +46,7 @@ describe("FaceAssignPanel", () => {
     fetchNamedPeopleMock.mockClear();
     mergeClustersMock.mockClear();
     renameClusterMock.mockClear();
+    assignFaceToPersonMock.mockClear();
     fetchClusterFacePreviewMock.mockResolvedValue([]);
     fetchNamedPeopleMock.mockResolvedValue([]);
   });
@@ -139,5 +143,40 @@ describe("FaceAssignPanel", () => {
 
     expect(await screen.findByText(/couldn't save that name/i)).toBeInTheDocument();
     expect(onAssigned).not.toHaveBeenCalled();
+  });
+
+  describe("changing a named face (feedback #160)", () => {
+    const named: NamedFace = { ...face, personId: "person-3", name: "Ada" };
+
+    it("moves only this face to the picked person, never offering the current one", async () => {
+      fetchNamedPeopleMock.mockResolvedValueOnce([
+        { id: "person-3", name: "Ada" },
+        { id: "person-9", name: "Bo" },
+      ]);
+      const onAssigned = vi.fn();
+      render(<FaceAssignPanel face={named} onClose={vi.fn()} onAssigned={onAssigned} />);
+
+      expect(screen.getByRole("heading", { name: "Not Ada? Who is this?" })).toBeInTheDocument();
+      fireEvent.click(await screen.findByRole("button", { name: "Bo" }));
+      expect(screen.queryByRole("button", { name: "Ada" })).not.toBeInTheDocument();
+
+      await waitFor(() => expect(onAssigned).toHaveBeenCalled());
+      expect(assignFaceToPersonMock).toHaveBeenCalledWith(42, { personId: "person-9" });
+      expect(mergeClustersMock).not.toHaveBeenCalled();
+      expect(renameClusterMock).not.toHaveBeenCalled();
+      // The preview would show the person the face is leaving.
+      expect(fetchClusterFacePreviewMock).not.toHaveBeenCalled();
+    });
+
+    it("a brand-new name starts a new person from this face alone", async () => {
+      const onAssigned = vi.fn();
+      render(<FaceAssignPanel face={named} onClose={vi.fn()} onAssigned={onAssigned} />);
+      fireEvent.change(screen.getByLabelText(/person's name/i), { target: { value: "Cy" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(onAssigned).toHaveBeenCalled());
+      expect(assignFaceToPersonMock).toHaveBeenCalledWith(42, { name: "Cy" });
+      expect(renameClusterMock).not.toHaveBeenCalled();
+    });
   });
 });
