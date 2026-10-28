@@ -1,5 +1,5 @@
 import type { ClusterFace } from "../../api";
-import { buildFaceCropUrl } from "../../api";
+import { FaceCropImage } from "../FaceCropImage";
 import css from "../PeopleView.module.css";
 
 type FaceImageProps = {
@@ -17,8 +17,8 @@ type FaceImageProps = {
 };
 
 export const FaceImage = ({ face, className, priority }: FaceImageProps) => (
-  <img
-    src={buildFaceCropUrl(face)}
+  <FaceCropImage
+    face={face}
     alt={face.photo.name}
     className={className}
     loading={priority === "high" ? "eager" : "lazy"}

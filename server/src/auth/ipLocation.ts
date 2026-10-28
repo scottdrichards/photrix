@@ -10,7 +10,8 @@ import type http from "node:http";
  * conflicts with the privacy/no-network-dependency stance taken elsewhere in
  * this codebase. Instead we classify an address as "local network" (private /
  * loopback / link-local ranges — someone on the LAN, or a reverse proxy that
- * forwards the internal hop) vs "public internet", which is enough for a user
+ * forwards the internal hop) vs "public internet" (plus loopback, "This
+ * server"), which is enough for a user
  * to sanity-check whether a listed session came from their own network or
  * somewhere else. Precise region/country geolocation is deferred to a future
  * bundled GeoIP dataset if that's ever worth the size/maintenance cost.
@@ -28,24 +29,54 @@ const isIPv4PrivateOrReserved = (octets: number[]): boolean => {
   return false;
 };
 
-const classifyAddress = (ip: string): "local" | "public" => {
+type AddressKind = "server" | "local" | "public";
+
+const classifyAddress = (ip: string): AddressKind => {
   const v4 = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
   const v4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v4);
   if (v4Match) {
     const octets = v4Match.slice(1, 5).map(Number);
+    if (octets[0] === 127) return "server";
     return isIPv4PrivateOrReserved(octets) ? "local" : "public";
   }
   const lower = ip.toLowerCase();
-  if (lower === "::1") return "local";
+  if (lower === "::1") return "server";
   if (lower.startsWith("fc") || lower.startsWith("fd")) return "local"; // fc00::/7 ULA
   if (lower.startsWith("fe80")) return "local"; // link-local
   return "public";
 };
 
+/**
+ * Loopback is its own label: a request only arrives from loopback when
+ * something on the server host itself signed in (a script, a test run, a
+ * maintenance tool), since browsers reach the app through the reverse proxy,
+ * which forwards their real address. Calling those "Local network" made a
+ * list of scripts look like a house full of devices.
+ */
+const LABELS: Record<AddressKind, string> = {
+  public: "Internet",
+  local: "Local network",
+  server: "This server",
+};
+
 export const classifyIp = (ip: string | null): IpLocation => {
   if (!ip) return { ip: null, label: "Unknown" };
-  return { ip, label: classifyAddress(ip) === "local" ? "Local network" : "Internet" };
+  return { ip, label: LABELS[classifyAddress(ip)] };
 };
+
+/**
+ * Sessions list order (feedback #152): internet sessions first, since those
+ * are the ones worth checking, then the local network, the server itself,
+ * and sessions too old to have recorded an address.
+ */
+const LABEL_ORDER = ["Internet", "Local network", "This server", "Unknown"];
+
+export const compareSessionsForList = (
+  a: { location: string; lastSeenAt: number },
+  b: { location: string; lastSeenAt: number },
+): number =>
+  LABEL_ORDER.indexOf(a.location) - LABEL_ORDER.indexOf(b.location) ||
+  b.lastSeenAt - a.lastSeenAt;
 
 /**
  * Best-effort client address for a request: the first hop of X-Forwarded-For

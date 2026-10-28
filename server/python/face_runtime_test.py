@@ -151,5 +151,24 @@ class FaceRuntimeTest(unittest.TestCase):
         self.assertFalse(is_gpu_resource_error(ValueError("image file is truncated")))
 
 
+class GpuResourceErrorTest(unittest.TestCase):
+    def test_every_provider_family_counts(self) -> None:
+        for text in (
+            "CUDA error: out of memory",
+            "MPS backend out of memory (MPS allocated: 9 GB)",
+            "DML: D3D12 device removed",
+            "CoreML failed to compile model",
+            "XPU out of memory",
+            "MIOpen Error: miopenStatusAllocFailed",
+        ):
+            self.assertTrue(is_gpu_resource_error(RuntimeError(text)), text)
+
+    def test_short_names_need_a_whole_word(self) -> None:
+        self.assertFalse(is_gpu_resource_error(ValueError("bad timestamps in /photos/hip-hop.jpg")))
+        self.assertFalse(is_gpu_resource_error(ValueError("cannot identify image file")))
+        self.assertFalse(is_gpu_resource_error(OSError(r"C:\\photos\\mps\\a.jpg not found")))
+        self.assertFalse(is_gpu_resource_error(OSError("/photos/xpu.jpg not found")))
+
+
 if __name__ == "__main__":
     unittest.main()

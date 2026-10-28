@@ -318,13 +318,19 @@ export const fetchFaceClustersPCA = async ({
 // there's headroom for hair/chin without shrinking the face too far.
 const FACE_CROP_PADDING = 0.6;
 
-export const buildFaceCropUrl = (face: ClusterFace, size = 320): string => {
+/** The padded face region, as fractions of the photo, that a face crop shows. */
+export const faceCropRegion = (face: ClusterFace) => {
   const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
   const grow = 1 + 2 * FACE_CROP_PADDING;
   const w = clamp01(face.box.width * grow);
   const h = clamp01(face.box.height * grow);
   const x = clamp01(Math.min(Math.max(face.box.x - w / 2, 0), 1 - w));
   const y = clamp01(Math.min(Math.max(face.box.y - h / 2, 0), 1 - h));
+  return { x, y, w, h };
+};
+
+export const buildFaceCropUrl = (face: ClusterFace, size = 320): string => {
+  const { x, y, w, h } = faceCropRegion(face);
   return buildFileUrl(face.photo.path, {
     crop: `${x},${y},${w},${h}`,
     height: String(size),

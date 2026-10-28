@@ -36,18 +36,30 @@ let similarity ranking run inside SQLite instead of materializing every
 embedding on the JS heap). So: `bun install` / `bun run <script>`, never
 `bun <file.ts>` or `bun test`.
 
-Then install the Python dependencies for face detection:
+Then install the Python ML stack (face detection, CLIP and CLAP search,
+Whisper). It picks the right GPU build for the machine, installs it, and
+checks the GPU is really in use:
 
 ```bash
-bun run --filter server face:python:install
+bun run --filter server python:install                      # auto-detect
+bun run --filter server python:install -- --profile cpu     # or name one
+bun run --filter server python:profiles                     # list them
+bun run --filter server python:report                       # what the server will use
 ```
 
-Optional GPU acceleration:
+| Profile | For | CLIP / CLAP | Faces |
+|---|---|---|---|
+| `cuda` | NVIDIA, compute capability 7.5+ | CUDA | CUDA |
+| `cuda-legacy` | NVIDIA Pascal/Volta (GTX 10xx, Quadro P) | CUDA | CUDA |
+| `mac` | Apple Silicon | MPS | CoreML |
+| `rocm` | AMD on Linux | ROCm | CPU |
+| `xpu` | Intel Arc / Core Ultra (pick by hand) | XPU | CPU |
+| `directml` | Windows on AMD/Intel | CPU | DirectML |
+| `cpu` | anything | CPU | CPU |
 
-```bash
-bun run --filter server face:python:install:gpu
-bun run --filter server clip:python:install:gpu
-```
+Whisper uses the GPU on CUDA only. Any setting can be forced in `server/.env`:
+`PHOTRIX_TORCH_DEVICE`, `PHOTRIX_CLIP_DEVICE`, `PHOTRIX_CLAP_DEVICE`,
+`PHOTRIX_INSIGHTFACE_PROVIDER`.
 
 ## 3) Configure environment
 
