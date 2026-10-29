@@ -285,3 +285,89 @@ describe("SearchBar natural-language interpretation", () => {
     expect(screen.queryByTitle(/Transcript/)).not.toBeInTheDocument();
   });
 });
+
+describe("SearchBar person chips stay in step with the filter (feedback #166)", () => {
+  const rachel: SearchInterpretation = {
+    interpreted: true,
+    query: "rachel",
+    filter: { faceClusterFilter: ["person-7"] },
+    chips: [{ field: "faceClusterFilter", label: "Rachel Johnson Shepherd", value: "person-7" }],
+    ignored: [],
+  };
+
+  /** Stands in for the face filter panel: another control editing the same field. */
+  const ClearFaces = () => {
+    const { setFilter } = useFilter();
+    return (
+      <button type="button" onClick={() => setFilter({ faceClusterFilter: undefined })}>
+        clear faces
+      </button>
+    );
+  };
+
+  const renderWithFaceControl = () =>
+    render(
+      <FilterProvider>
+        <SearchBar />
+        <ClearFaces />
+        <FilterProbe />
+      </FilterProvider>,
+    );
+
+  const input = () =>
+    screen.getByLabelText("Search your photos", { selector: "input" }) as HTMLInputElement;
+
+  beforeEach(() => {
+    interpretSearchQuery.mockReset();
+    interpretSearchQuery.mockResolvedValue(rachel);
+    window.localStorage.clear();
+  });
+
+  it("empties the box when the last chip is removed", async () => {
+    renderWithFaceControl();
+    submit("rachel");
+    await screen.findByText("AI search");
+
+    fireEvent.click(screen.getByLabelText("Remove filter Rachel Johnson Shepherd"));
+
+    expect(currentFilter().faceClusterFilter).toBeUndefined();
+    expect(input().value).toBe("");
+    expect(screen.queryByLabelText("Clear search")).not.toBeInTheDocument();
+  });
+
+  it("drops the chip and the query when the person is removed elsewhere", async () => {
+    renderWithFaceControl();
+    submit("rachel");
+    await screen.findByText("AI search");
+
+    fireEvent.click(screen.getByRole("button", { name: "clear faces" }));
+
+    await waitFor(() => expect(screen.queryByText("AI search")).not.toBeInTheDocument());
+    expect(input().value).toBe("");
+    expect(currentFilter().semanticQuery).toBeUndefined();
+  });
+
+  it("can search the typed name as text instead of the person", async () => {
+    renderWithFaceControl();
+    submit("rachel");
+    await screen.findByText("AI search");
+
+    fireEvent.click(screen.getByLabelText("Search Rachel Johnson Shepherd as text instead"));
+
+    const filter = currentFilter();
+    expect(filter.faceClusterFilter).toBeUndefined();
+    expect(filter.semanticQuery).toBe("rachel");
+    expect(input().value).toBe("rachel");
+    expect(screen.queryByText("AI search")).not.toBeInTheDocument();
+  });
+
+  it("offers text search only on person chips", async () => {
+    interpretSearchQuery.mockResolvedValue(interpretation);
+    renderWithFaceControl();
+    submit("photos of Sarah at the beach last summer");
+    await screen.findByText("AI search");
+
+    expect(screen.getByLabelText("Search Sarah as text instead")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Search Summer 2025 as text instead")).not.toBeInTheDocument();
+  });
+});
