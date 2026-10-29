@@ -601,6 +601,23 @@
   word-break: break-word;
 }
 
+.infoPathLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 255, 255, 0.4);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.infoPathLink:hover,
+.infoPathLink:focus-visible {
+  text-decoration-color: currentColor;
+}
+
 .infoDescription {
   margin: var(--space-s) 0 0;
   color: rgba(255, 255, 255, 0.95);

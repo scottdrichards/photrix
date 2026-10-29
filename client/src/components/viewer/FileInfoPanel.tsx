@@ -19,10 +19,58 @@ type FileInfoPanelProps = {
   photo: PhotoItem;
   aiDescription: ReturnType<typeof useAiDescription>;
   onSaveDescription: (next: string) => void;
+  /** Opens a folder in the library (`a/b/`). Absent: the path is plain text. */
+  onOpenFolder?: (folderPath: string) => void;
+};
+
+/**
+ * The file's path with every folder as a link to that folder (feedback #164),
+ * so a photo found through search or a filter can be seen among its neighbours.
+ */
+const FolderPath = ({
+  path,
+  onOpenFolder,
+}: {
+  path: string;
+  onOpenFolder?: (folderPath: string) => void;
+}) => {
+  // Library paths are rooted ("/2022/04/x.jpg") but filter paths are not
+  // ("2022/04/"): a leading slash would build a "//2022/04" URL.
+  const rooted = path.startsWith("/");
+  const parts = path.replace(/^\/+/, "").split("/");
+  const fileName = parts.pop() ?? "";
+  if (!onOpenFolder || parts.length === 0) return <>{path}</>;
+  return (
+    <>
+      {rooted && "/"}
+      {parts.map((part, i) => {
+        const folderPath = `${parts.slice(0, i + 1).join("/")}/`;
+        return (
+          <span key={folderPath}>
+            <button
+              type="button"
+              className={css.infoPathLink}
+              title={`Open folder ${folderPath}`}
+              onClick={() => onOpenFolder(folderPath)}
+            >
+              {part}
+            </button>
+            /
+          </span>
+        );
+      })}
+      <span>{fileName}</span>
+    </>
+  );
 };
 
 /** The viewer's side panel: description, AI description, camera, capture settings, file details. */
-export const FileInfoPanel = ({ photo, aiDescription, onSaveDescription }: FileInfoPanelProps) => {
+export const FileInfoPanel = ({
+  photo,
+  aiDescription,
+  onSaveDescription,
+  onOpenFolder,
+}: FileInfoPanelProps) => {
   const meta = photo.metadata;
   const { stored: storedAiDescription, description, retry } = aiDescription;
   return (
@@ -200,7 +248,9 @@ export const FileInfoPanel = ({ photo, aiDescription, onSaveDescription }: FileI
           </div>
           <div className={css.infoRow}>
             <dt>Path</dt>
-            <dd>{photo.path}</dd>
+            <dd>
+              <FolderPath path={photo.path} onOpenFolder={READ_ONLY ? undefined : onOpenFolder} />
+            </dd>
           </div>
           {meta?.dateTaken && (
             <div className={css.infoRow}>

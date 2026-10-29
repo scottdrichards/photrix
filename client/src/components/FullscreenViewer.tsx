@@ -51,6 +51,7 @@ import { attemptSync } from "../result";
 import { useVideoPlayback } from "./viewer/useVideoPlayback";
 import { useAiDescription } from "./viewer/useAiDescription";
 import { FileInfoPanel } from "./viewer/FileInfoPanel";
+import { useOptionalFilter } from "./filter/FilterContext";
 import { segmentsToWebVTT } from "./viewer/segmentsToWebVTT";
 import { playVideo } from "./playVideo";
 
@@ -122,6 +123,39 @@ export function FullscreenViewer() {
     selectPrevious,
   } = useSelectionContext();
   const photo = selectedPhoto;
+  const filterContext = useOptionalFilter();
+  // Feedback #164: a folder in the file-info path opens that folder. Search and
+  // content filters are dropped so all the photo's neighbours show. The viewer
+  // closes first and the folder is applied in the effect below, in the same
+  // render as the URL's preview going away, so it is one history entry: Back
+  // returns to the search with this photo open.
+  const pendingFolderRef = useRef<string | null>(null);
+  const openFolder = filterContext
+    ? (folderPath: string) => {
+        pendingFolderRef.current = folderPath;
+        setSelected(null);
+      }
+    : undefined;
+  const setFilter = filterContext?.setFilter;
+  useEffect(() => {
+    const folderPath = pendingFolderRef.current;
+    if (photo || folderPath === null || !setFilter) return;
+    pendingFolderRef.current = null;
+    setFilter((prev) => ({
+      ...prev,
+      path: folderPath,
+      semanticQuery: undefined,
+      expandToFolder: false,
+      peopleInImageFilter: undefined,
+      faceClusterFilter: undefined,
+      faceAttributeFilter: undefined,
+      cameraModelFilter: undefined,
+      lensFilter: undefined,
+      ratingFilter: undefined,
+      locationBounds: undefined,
+      dateRange: undefined,
+    }));
+  }, [photo, setFilter]);
 
   // While the viewer is open, the grid behind it must not keep animating a
   // live photo the user isn't looking at — see feedback #80. Reuses the same
@@ -1135,6 +1169,7 @@ export function FullscreenViewer() {
               <FileInfoPanel
                 photo={photo}
                 aiDescription={aiDescription}
+                onOpenFolder={openFolder}
                 onSaveDescription={(next) =>
                   persistTagging({ description: next.length > 0 ? next : null })
                 }

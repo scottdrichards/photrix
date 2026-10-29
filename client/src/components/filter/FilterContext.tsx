@@ -32,6 +32,12 @@ export const useFilter = () => {
   return context;
 };
 
+/**
+ * The filter context, or null outside a FilterProvider: for components that
+ * offer filter shortcuts but must also render standalone (the viewer's tests).
+ */
+export const useOptionalFilter = () => useContext(FilterContext);
+
 const createInitialFilterFromURL = (): FilterState => {
   return {
     mediaTypeFilter: "all",
