@@ -62,6 +62,16 @@ export const UPSWITCH_HEADROOM_FACTOR = 1.5;
 /** Consecutive good samples required before an upswitch is allowed (rejects a single lucky sample). */
 export const UPSWITCH_SUSTAIN_SAMPLES = 3;
 
+/**
+ * Seconds of media that must already be buffered before climbing a rung. The
+ * rung above has no encode running yet, and a cold one takes 1-4 s to produce
+ * its first segment on a busy server (measured with e2e/playback-lab), so a
+ * climb on a thin buffer is a stall. This also covers the start of playback:
+ * the first rung is held until the buffer is this deep, rather than letting
+ * hls.js climb the moment its first fast download comes in.
+ */
+export const UPSWITCH_MIN_BUFFER_S = 10;
+
 /** How often the guard re-samples hls.js's bandwidth estimate to evaluate an upswitch. */
 export const ABR_GUARD_POLL_INTERVAL_MS = 1000;
 
@@ -158,7 +168,11 @@ export const shouldUpswitch = (
   state: AbrGuardState,
   now: number,
   candidateBitrateBps: number,
+  /** Seconds buffered ahead of the playhead. */
+  bufferAheadS = Infinity,
 ): boolean => {
+  if (bufferAheadS < UPSWITCH_MIN_BUFFER_S) return false;
+
   if (state.lastDownswitchAt !== null) {
     const dwellMs = dwellForOscillationCount(state.oscillationCount);
     if (now - state.lastDownswitchAt < dwellMs) return false;
@@ -168,6 +182,20 @@ export const shouldUpswitch = (
 
   const requiredBps = candidateBitrateBps * UPSWITCH_HEADROOM_FACTOR;
   return state.recentBandwidthSamplesBps.every((sample) => sample >= requiredBps);
+};
+
+/** Seconds buffered contiguously ahead of the playhead. */
+export const forwardBufferSeconds = (
+  media: Pick<HTMLMediaElement, "currentTime" | "buffered"> | null,
+): number => {
+  if (!media) return 0;
+  const { currentTime, buffered } = media;
+  for (let i = 0; i < buffered.length; i++) {
+    if (buffered.start(i) <= currentTime + 0.5 && buffered.end(i) > currentTime) {
+      return buffered.end(i) - currentTime;
+    }
+  }
+  return 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -190,7 +218,12 @@ export const attachHlsAbrUpswitchGuard = (hls: Hls): (() => void) => {
     // Only react to hls.js's own Auto-mode decisions. A manual quality-selector
     // pick (see FullscreenViewer's quality <select>) is the user overriding ABR
     // entirely and should not be reinterpreted as a downswitch to guard against.
-    if (hls.autoLevelEnabled && previousLevel !== null && data.level < previousLevel) {
+    if (hls.autoLevelEnabled && previousLevel === null) {
+      // The stream's first rung: hold Auto here until the buffer is deep enough
+      // to absorb the next rung's cold start (see UPSWITCH_MIN_BUFFER_S).
+      state = { ...state, capIndex: data.level };
+      hls.autoLevelCapping = data.level;
+    } else if (hls.autoLevelEnabled && previousLevel !== null && data.level < previousLevel) {
       state = applyDownswitch(state, Date.now(), data.level);
       hls.autoLevelCapping = data.level;
     }
@@ -219,7 +252,7 @@ export const attachHlsAbrUpswitchGuard = (hls: Hls): (() => void) => {
     const candidateLevel = hls.levels[candidateIndex];
     if (!candidateLevel) return;
 
-    if (shouldUpswitch(state, now, candidateLevel.maxBitrate)) {
+    if (shouldUpswitch(state, now, candidateLevel.maxBitrate, forwardBufferSeconds(hls.media))) {
       const isTopLevel = candidateIndex >= hls.levels.length - 1;
       const nextCap = isTopLevel ? -1 : candidateIndex;
       state = applyUpswitch(state, now, candidateIndex);
