@@ -8,6 +8,7 @@
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
+    "test:playback-lab": "playwright test --config playback-lab/playback-lab.config.ts",
     "report": "playwright show-report",
     "install:browsers": "playwright install chromium"
   },
