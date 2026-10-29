@@ -80,6 +80,9 @@
 }
 
 .videoWrapper {
+  /* The positioning context for what floats over the video itself: the
+     loading overlay and the caption search (feedback #169). */
+  position: relative;
   /* --people-h makes room below the video for the people timeline, so it
      never covers the player's own controls. */
   width: min(100%, 90vw, calc((90vh - var(--people-h, 0px)) * var(--video-ar, 1.7778)));

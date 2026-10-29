@@ -12,6 +12,7 @@ import {
   Live24Regular,
   Print24Regular,
   ScanPerson24Regular,
+  DocumentSearch24Regular,
   Share24Regular,
 } from "@fluentui/react-icons";
 import { consumeLiveOpenIntent } from "./tileMedia/liveOpenIntent";
@@ -51,6 +52,8 @@ import { attemptSync } from "../result";
 import { useVideoPlayback } from "./viewer/useVideoPlayback";
 import { useAiDescription } from "./viewer/useAiDescription";
 import { FileInfoPanel } from "./viewer/FileInfoPanel";
+import { TranscriptSearch } from "./viewer/TranscriptSearch";
+import type { TranscriptSegment } from "../api/types";
 import { useOptionalFilter } from "./filter/FilterContext";
 import { segmentsToWebVTT } from "./viewer/segmentsToWebVTT";
 import { playVideo } from "./playVideo";
@@ -233,6 +236,9 @@ export function FullscreenViewer() {
   const savedSvgId = `pev-${rawSavedSvgId.replace(/:/g, "")}`;
   const [cropContainerEl, setCropContainerEl] = useState<HTMLDivElement | null>(null);
   const [transcriptTrackUrl, setTranscriptTrackUrl] = useState<string | null>(null);
+  // The transcript itself, for finding where something is said (feedback #169).
+  const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
+  const [showTranscriptSearch, setShowTranscriptSearch] = useState(false);
   const captionBlobUrlRef = useRef<string | null>(null);
   const {
     videoStatus,
@@ -306,6 +312,8 @@ export function FullscreenViewer() {
       captionBlobUrlRef.current = null;
     }
     setTranscriptTrackUrl(null);
+    setTranscriptSegments([]);
+    setShowTranscriptSearch(false);
     setShowCaptions(false);
 
     if (photo?.mediaType === "video") {
@@ -432,6 +440,7 @@ export function FullscreenViewer() {
     )
       .then((segments) => {
         if (segments.length === 0) return;
+        setTranscriptSegments(segments);
         const vtt = segmentsToWebVTT(segments);
         const blob = new Blob([vtt], { type: "text/vtt" });
         const url = URL.createObjectURL(blob);
@@ -800,6 +809,18 @@ export function FullscreenViewer() {
                     <Print24Regular />
                   </button>
                 )}
+                {photo.mediaType === "video" && transcriptSegments.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowTranscriptSearch((current) => !current)}
+                    className={css.faceButton}
+                    aria-label="Search captions"
+                    aria-pressed={showTranscriptSearch}
+                    title="Find where something is said"
+                  >
+                    <DocumentSearch24Regular />
+                  </button>
+                )}
                 {photo.mediaType === "video" && transcriptTrackUrl && (
                   <button
                     type="button"
@@ -947,6 +968,17 @@ export function FullscreenViewer() {
                       />
                       Your browser does not support HTML video playback.
                     </video>
+                    {showTranscriptSearch && transcriptSegments.length > 0 && (
+                      <TranscriptSearch
+                        segments={transcriptSegments}
+                        onSeek={(seconds) => {
+                          // Show the line that was searched for as it plays.
+                          setShowCaptions(true);
+                          seekVideo(seconds * 1000);
+                        }}
+                        onClose={() => setShowTranscriptSearch(false)}
+                      />
+                    )}
                     <VideoLoadingOverlay
                       state={playback}
                       lastDataAtRef={lastDataAtRef}

@@ -1,0 +1,109 @@
+/* Floats over the top of the video so it never fights the people timeline,
+   which sits along the bottom. */
+.panel {
+  position: absolute;
+  top: var(--space-s);
+  right: var(--space-s);
+  z-index: 110;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  width: min(360px, calc(100% - 2 * var(--space-s)));
+  max-height: 60%;
+  padding: var(--space-s);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.78);
+  color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(6px);
+}
+
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+}
+
+.input:focus {
+  outline: 2px solid var(--brand);
+  border-color: transparent;
+}
+
+.close {
+  display: inline-flex;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.count {
+  margin: 0;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.result {
+  display: flex;
+  gap: var(--space-s);
+  width: 100%;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.result:hover,
+.result:focus-visible {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.time {
+  flex-shrink: 0;
+  min-width: 3.2em;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.text mark {
+  background: color-mix(in srgb, var(--brand, #2563eb) 55%, transparent);
+  color: inherit;
+  border-radius: 2px;
+}
+
+/* A phone's video is short and has empty space above it: sit there instead of
+   covering the picture while choosing a moment. */
+@media (max-width: 600px) {
+  .panel {
+    top: auto;
+    bottom: calc(100% + var(--space-s));
+    left: 0;
+    right: 0;
+    width: auto;
+    max-height: 40vh;
+  }
+}
