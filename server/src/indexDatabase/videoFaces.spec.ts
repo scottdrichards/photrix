@@ -315,5 +315,42 @@ describe("video face queue", () => {
         expect(videoCount(all.cluster!.faces)).toBe(3);
       });
     });
+
+    // The app always sends a filter (at least the standing default-exclusion
+    // filter), so the filtered path is the one people actually hit.
+    describe("a person's detail under a filter", () => {
+      it.each([
+        ["a positive filter", { mimeType: "image/jpeg" }, false],
+        ["a not filter, like the default exclusion", { operation: "not", conditions: [{ mimeType: "video/mp4" }] }, false],
+        ["a positive filter, named", { mimeType: "image/jpeg" }, true],
+        ["a not filter, named", { operation: "not", conditions: [{ mimeType: "video/mp4" }] }, true],
+      ])("keeps only the faces whose files pass (%s)", async (_label, filter, named) => {
+        await withTempDb(async (db) => {
+          const clusterId = await seedPerson(db);
+          if (named) expect(await db.faceClusters.renameCluster(clusterId, "Riley")).toBe(true);
+          const detail = await db.faceClusters.getFaceClusterDetail({
+            filter: filter as Parameters<typeof db.faceClusters.getFaceClusterDetail>[0]["filter"],
+            clusterId,
+          });
+          const cluster = detail.cluster!;
+          expect(cluster.count).toBe(6);
+          expect(cluster.faces.map((face) => face.path).sort()).toEqual(
+            ["/f/p0.jpg", "/f/p1.jpg", "/f/p2.jpg", "/f/p3.jpg", "/f/p4.jpg", "/f/p5.jpg"],
+          );
+          expect(cluster.centroids).toEqual([expect.objectContaining({ id: clusterId, count: 6 })]);
+        });
+      });
+
+      it("returns no person when the filter leaves none of their faces", async () => {
+        await withTempDb(async (db) => {
+          const clusterId = await seedPerson(db);
+          const detail = await db.faceClusters.getFaceClusterDetail({
+            filter: { mimeType: "image/png" },
+            clusterId,
+          });
+          expect(detail.cluster).toBeNull();
+        });
+      });
+    });
   });
 });

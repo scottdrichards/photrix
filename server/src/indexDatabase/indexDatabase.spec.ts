@@ -1498,6 +1498,19 @@ describe("IndexDatabase", () => {
         expect(detail.cluster?.mergeSuggestions).not.toEqual(
           expect.arrayContaining([expect.objectContaining({ id: taylor!.id })]),
         );
+
+        // Suggestions are cached per person; acting on one must clear it.
+        await expect(db.faceClusters.mergeClusters(casey!.id, alex!.id)).resolves.toBe(true);
+        const afterMerge = await db.faceClusters.getFaceClusterDetail({
+          filter: {},
+          clusterId: alex!.id,
+        });
+        expect(afterMerge.cluster?.mergeSuggestions).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: casey!.id })]),
+        );
+        expect(afterMerge.cluster?.centroids).toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: casey!.id, count: 2 })]),
+        );
       });
     });
 
