@@ -54,6 +54,46 @@ const snapshotInterpretedFields = (state: FilterState): InterpretedSearchFilter 
   semanticQuery: state.semanticQuery,
 });
 
+const PERSON_CHIP_FIELDS = new Set(["faceClusterFilter", "peopleInImageFilter"]);
+
+const isPersonChip = (chip: InterpretedFilterChip): boolean =>
+  chip.value !== undefined && PERSON_CHIP_FIELDS.has(chip.field);
+
+/**
+ * Whether the filter still carries what this chip added. Other controls (the
+ * face filter panel, the date histogram) edit the same fields, so a chip can
+ * be undone from outside the search bar (feedback #166).
+ */
+const isChipStillApplied = (
+  chip: InterpretedFilterChip,
+  filter: FilterState,
+  previous: InterpretedSearchFilter,
+): boolean => {
+  if (chip.value !== undefined) {
+    const key = chip.field === "faceClusterFilter" ? "faceClusterFilter" : "peopleInImageFilter";
+    return (filter[key] ?? []).includes(chip.value);
+  }
+  if (chip.field === "path") {
+    return filter.path !== previous.path || filter.includeSubfolders !== previous.includeSubfolders;
+  }
+  const field = chip.field as keyof InterpretedSearchFilter;
+  return JSON.stringify(filter[field]) !== JSON.stringify(previous[field]);
+};
+
+/**
+ * The words of the typed query that named this person: "rachel" for a chip
+ * labelled "Rachel Johnson Shepherd". Falls back to the label itself.
+ */
+const typedTermForChip = (query: string, chip: InterpretedFilterChip): string => {
+  const nameWords = new Set(chip.label.toLowerCase().split(/\s+/).filter(Boolean));
+  const typed = query
+    .split(/\s+/)
+    .filter((word) => nameWords.has(word.toLowerCase().replace(/['’]s$|[^\p{L}\p{N}'’-]/gu, "")));
+  return typed.length > 0
+    ? typed.map((word) => word.replace(/['’]s$|[^\p{L}\p{N}'’-]/gu, "")).join(" ")
+    : chip.label;
+};
+
 type ActiveInterpretation = {
   /** The query the user typed, kept so "Undo" can restore it verbatim. */
   query: string;
@@ -92,6 +132,28 @@ export const SearchBar = () => {
   }, []);
 
   const hasActiveQuery = !!query || !!interpretation;
+
+  /** The box shows whatever free text is still being searched for. */
+  const showLeftoverQuery = (semanticQuery: string | undefined) => {
+    if (inputRef.current) inputRef.current.value = semanticQuery ?? "";
+  };
+
+  // Feedback #166: a derived filter removed from somewhere else (the face
+  // filter panel) takes its chip with it, and once nothing derived is left the
+  // box stops showing a query that is no longer being searched.
+  useEffect(() => {
+    if (!interpretation) return;
+    const live = interpretation.chips.filter((chip) =>
+      isChipStillApplied(chip, filter, interpretation.previous),
+    );
+    if (live.length === interpretation.chips.length) return;
+    if (live.length > 0) {
+      setInterpretation({ ...interpretation, chips: live });
+      return;
+    }
+    setInterpretation(null);
+    showLeftoverQuery(filter.semanticQuery);
+  }, [filter, interpretation]);
 
   /** Put every field an interpretation changed back the way it was. */
   const revertInterpretation = (
@@ -143,9 +205,10 @@ export const SearchBar = () => {
   };
 
   /** Drop one derived filter, keeping the rest of the interpretation in place. */
-  const handleRemoveChip = (chip: InterpretedFilterChip) => {
+  const handleRemoveChip = (chip: InterpretedFilterChip, extraText?: string) => {
     const active = interpretation;
     if (!active) return;
+    const leftover = [filter.semanticQuery, extraText].filter(Boolean).join(" ") || undefined;
 
     const remaining = active.chips.filter(
       (candidate) =>
@@ -170,10 +233,22 @@ export const SearchBar = () => {
       } else {
         next[chip.field] = active.previous[chip.field] as never;
       }
+      if (extraText) next.semanticQuery = leftover;
       return next;
     });
 
     setInterpretation(remaining.length > 0 ? { ...active, chips: remaining } : null);
+    // With the last derived filter gone, the box shows what is still searched.
+    if (remaining.length === 0 || extraText) showLeftoverQuery(leftover);
+  };
+
+  /**
+   * Feedback #166: search for the name as words (tags, captions, transcripts)
+   * instead of as this one person, e.g. a different Rachel or a tag.
+   */
+  const handleSearchChipAsText = (chip: InterpretedFilterChip) => {
+    if (!interpretation) return;
+    handleRemoveChip(chip, typedTermForChip(interpretation.query, chip));
   };
 
   const handleUndoInterpretation = () => {
@@ -267,7 +342,9 @@ export const SearchBar = () => {
           query={interpretation.query}
           chips={interpretation.chips}
           ignored={interpretation.ignored}
-          onRemoveChip={handleRemoveChip}
+          onRemoveChip={(chip) => handleRemoveChip(chip)}
+          canSearchAsText={isPersonChip}
+          onSearchChipAsText={handleSearchChipAsText}
           onUndo={handleUndoInterpretation}
         />
       )}

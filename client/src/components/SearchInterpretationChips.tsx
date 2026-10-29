@@ -1,4 +1,4 @@
-import { Dismiss12Regular, Sparkle16Filled } from "@fluentui/react-icons";
+import { Dismiss12Regular, Sparkle16Filled, TextT16Regular } from "@fluentui/react-icons";
 import type { InterpretedFilterChip } from "../../../shared/filter-contract/src";
 import css from "./SearchInterpretationChips.module.css";
 
@@ -9,6 +9,10 @@ type Props = {
   /** People/places the query named that do not exist in this library. */
   ignored: string[];
   onRemoveChip: (chip: InterpretedFilterChip) => void;
+  /** Which chips can be demoted to plain search text (people). */
+  canSearchAsText?: (chip: InterpretedFilterChip) => boolean;
+  /** Replace the chip's filter with the words the user typed for it. */
+  onSearchChipAsText?: (chip: InterpretedFilterChip) => void;
   /** Restore the plain search: original query text, no derived filters. */
   onUndo: () => void;
 };
@@ -26,6 +30,8 @@ export const SearchInterpretationChips = ({
   chips,
   ignored,
   onRemoveChip,
+  canSearchAsText,
+  onSearchChipAsText,
   onUndo,
 }: Props) => {
   if (chips.length === 0) return null;
@@ -41,6 +47,17 @@ export const SearchInterpretationChips = ({
         {chips.map((chip) => (
           <span key={`${chip.field}:${chip.value ?? chip.label}`} className={css.chip}>
             {chip.label}
+            {onSearchChipAsText && canSearchAsText?.(chip) && (
+              <button
+                type="button"
+                className={css.chipRemove}
+                onClick={() => onSearchChipAsText(chip)}
+                aria-label={`Search ${chip.label} as text instead`}
+                title="Search the name as text instead of this person"
+              >
+                <TextT16Regular />
+              </button>
+            )}
             <button
               type="button"
               className={css.chipRemove}
