@@ -30,7 +30,7 @@ export const momentClustersRequestHandler = async (
       writeJson(res, 400, { error: "Missing clusterId or path" });
       return;
     }
-    const ok = await database.setMomentClusterRepresentative(b.clusterId, b.path);
+    const ok = await database.moments.setMomentClusterRepresentative(b.clusterId, b.path);
     if (!ok) {
       writeJson(res, 404, { error: "Cluster or member not found" });
       return;
@@ -51,7 +51,7 @@ export const momentClustersRequestHandler = async (
       writeJson(res, 400, { error: "Missing clusterId" });
       return;
     }
-    const ok = await database.dissolveMomentCluster(b.clusterId);
+    const ok = await database.moments.dissolveMomentCluster(b.clusterId);
     if (!ok) {
       writeJson(res, 404, { error: "Cluster not found" });
       return;

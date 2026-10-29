@@ -30,7 +30,7 @@ export const peopleRequestHandler = async (
       return;
     }
     const { clusterId, name } = body as { clusterId: string; name?: string | null };
-    const ok = await database.renameCluster(clusterId, name ?? null);
+    const ok = await database.faceClusters.renameCluster(clusterId, name ?? null);
     if (!ok) {
       writeJson(res, 404, { error: "Cluster not found" });
       return;
@@ -50,7 +50,7 @@ export const peopleRequestHandler = async (
     }
     const sourceIds = b.sourceClusterIds as string[];
     for (const sourceId of sourceIds) {
-      await database.mergeClusters(sourceId, b.targetClusterId);
+      await database.faceClusters.mergeClusters(sourceId, b.targetClusterId);
     }
     writeJson(res, 200, { ok: true });
     return;
@@ -58,7 +58,7 @@ export const peopleRequestHandler = async (
 
   // GET /api/people/tags — distinct tags across every person, for suggestions
   if (url.pathname === "/api/people/tags" && req.method === "GET") {
-    const tags = await database.getAllPersonTags();
+    const tags = await database.faceClusters.getAllPersonTags();
     writeJson(res, 200, { tags });
     return;
   }
@@ -66,7 +66,7 @@ export const peopleRequestHandler = async (
   // GET /api/people/named — every named person (id + name), for the
   // fullscreen face-assign panel's "type an existing name" autocomplete.
   if (url.pathname === "/api/people/named" && req.method === "GET") {
-    const people = await database.listNamedPeople();
+    const people = await database.faces.listNamedPeople();
     writeJson(res, 200, { people });
     return;
   }
@@ -87,7 +87,7 @@ export const peopleRequestHandler = async (
     const parsedExcludeFaceId = excludeFaceIdParam
       ? Number.parseInt(excludeFaceIdParam, 10)
       : NaN;
-    const faces = await database.getClusterFacePreview(clusterId, {
+    const faces = await database.faces.getClusterFacePreview(clusterId, {
       ...(Number.isFinite(parsedLimit) ? { limit: parsedLimit } : {}),
       ...(Number.isFinite(parsedExcludeFaceId) ? { excludeFaceId: parsedExcludeFaceId } : {}),
     });
@@ -105,7 +105,7 @@ export const peopleRequestHandler = async (
       return;
     }
     const tags = b.tags.filter((t): t is string => typeof t === "string");
-    const ok = await database.setClusterTags(b.clusterId, tags);
+    const ok = await database.faceClusters.setClusterTags(b.clusterId, tags);
     if (!ok) {
       writeJson(res, 404, { error: "Cluster not found" });
       return;
@@ -123,7 +123,7 @@ export const peopleRequestHandler = async (
       writeJson(res, 400, { error: "Missing faceId" });
       return;
     }
-    const ok = await database.excludeFaceFromCluster(faceId);
+    const ok = await database.faceClusters.excludeFaceFromCluster(faceId);
     if (!ok) {
       writeJson(res, 404, { error: "Face not found or not currently clustered" });
       return;
@@ -134,14 +134,14 @@ export const peopleRequestHandler = async (
 
   // GET /api/people/review — one person's faces ordered by distance from their
   // reference point, each with its anomaly signals, plus a suggested cut line.
-  // The backing view for the review UI; see indexDatabase.getFaceClusterReview.
+  // The backing view for the review UI; see indexDatabase.faceClusters.getFaceClusterReview.
   if (url.pathname === "/api/people/review" && req.method === "GET") {
     const clusterId = url.searchParams.get("clusterId");
     if (!clusterId) {
       writeJson(res, 400, { error: "Missing clusterId parameter" });
       return;
     }
-    const review = await database.getFaceClusterReview(clusterId);
+    const review = await database.faceClusters.getFaceClusterReview(clusterId);
     if (!review) {
       writeJson(res, 404, { error: "Cluster not found" });
       return;
@@ -164,7 +164,7 @@ export const peopleRequestHandler = async (
       return;
     }
     if (b.threshold === null) {
-      const cleared = await database.clearFaceClusterRadius(b.clusterId);
+      const cleared = await database.faceClusters.clearFaceClusterRadius(b.clusterId);
       if (!cleared) {
         writeJson(res, 404, { error: "Cluster not found" });
         return;
@@ -176,7 +176,7 @@ export const peopleRequestHandler = async (
       writeJson(res, 400, { error: "threshold must be a number or null" });
       return;
     }
-    const result = await database.applyFaceClusterCutoff(b.clusterId, b.threshold, {
+    const result = await database.faceClusters.applyFaceClusterCutoff(b.clusterId, b.threshold, {
       dryRun: b.dryRun === true,
     });
     if (!result) {
@@ -205,7 +205,7 @@ export const peopleRequestHandler = async (
       writeJson(res, 400, { error: "verdict must be confirmed, rejected or null" });
       return;
     }
-    const applied = await database.setFaceVerdicts(faceIds, b.verdict);
+    const applied = await database.faceClusters.setFaceVerdicts(faceIds, b.verdict);
     writeJson(res, 200, { ok: true, applied });
     return;
   }
@@ -214,7 +214,7 @@ export const peopleRequestHandler = async (
   // proposal is a normal /merge or /cutoff call; nothing here changes state.
   if (url.pathname === "/api/people/optimize" && req.method === "GET") {
     const minWeightParam = Number.parseInt(url.searchParams.get("minWeight") ?? "", 10);
-    const proposals = await database.planFaceClusterOptimization(
+    const proposals = await database.faceClusters.planFaceClusterOptimization(
       Number.isFinite(minWeightParam) ? { minWeight: minWeightParam } : {},
     );
     writeJson(res, 200, { proposals });
@@ -234,7 +234,7 @@ export const peopleRequestHandler = async (
       writeJson(res, 400, { error: "Missing clusterId" });
       return;
     }
-    const result = await database.refitFaceCluster(b.clusterId);
+    const result = await database.faceClusters.refitFaceCluster(b.clusterId);
     if (!result) {
       writeJson(res, 404, { error: "Cluster not found or has no members" });
       return;
@@ -258,7 +258,7 @@ export const peopleRequestHandler = async (
       writeJson(res, 400, { error: "Missing clusterId or faceId" });
       return;
     }
-    const result = await database.shrinkToExcludeFace(b.clusterId, b.faceId, {
+    const result = await database.faceClusters.shrinkToExcludeFace(b.clusterId, b.faceId, {
       dryRun: b.dryRun === true,
     });
     if (!result) {
@@ -281,7 +281,7 @@ export const peopleRequestHandler = async (
       writeJson(res, 400, { error: "Missing clusterId or faceId" });
       return;
     }
-    const result = await database.growToIncludeFace(b.clusterId, b.faceId, {
+    const result = await database.faceClusters.growToIncludeFace(b.clusterId, b.faceId, {
       dryRun: b.dryRun === true,
       includeCollateral: b.includeCollateral === true,
     });
@@ -313,7 +313,7 @@ export const peopleRequestHandler = async (
       writeJson(res, 400, { error: "Give personId or a non-empty name" });
       return;
     }
-    const result = await database.assignFaceToPerson(b.faceId, target);
+    const result = await database.faceClusters.assignFaceToPerson(b.faceId, target);
     if (!result) {
       writeJson(res, 404, { error: "Face or person not found" });
       return;
@@ -332,7 +332,7 @@ export const peopleRequestHandler = async (
       writeJson(res, 400, { error: "Missing clusterId or faceId" });
       return;
     }
-    const result = await database.startClusterForFace(b.clusterId, b.faceId);
+    const result = await database.faceClusters.startClusterForFace(b.clusterId, b.faceId);
     if (!result) {
       writeJson(res, 404, { error: "Cluster or face not found" });
       return;
@@ -353,7 +353,7 @@ export const peopleRequestHandler = async (
       writeJson(res, 400, { error: "Missing clusterId" });
       return;
     }
-    const ok = await database.separateCluster((body as { clusterId: string }).clusterId);
+    const ok = await database.faceClusters.separateCluster((body as { clusterId: string }).clusterId);
     if (!ok) {
       writeJson(res, 404, { error: "Cluster not found or cannot be separated" });
       return;

@@ -94,7 +94,7 @@ const getCentroids = async (database: IndexDatabase): Promise<PreparedCentroid[]
   // Memoized so a burst arriving on a cold cache reads the table once.
   if (!centroidLoad) {
     centroidLoad = database
-      .getNamedFaceCentroids()
+      .faceClusters.getNamedFaceCentroids()
       .then((rows) => {
         const centroids = prepareCentroids(rows);
         centroidCache = { at: Date.now(), centroids };

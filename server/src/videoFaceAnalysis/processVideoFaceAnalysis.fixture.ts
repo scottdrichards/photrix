@@ -37,28 +37,32 @@ export const fakeDatabase = (videos: QueuedTestVideo[], storagePath = "/media") 
     decodeErrors,
     db: {
       storagePath,
-      getVideosNeedingFaceAnalysis: async () =>
-        queue.map((v) => ({ failedBefore: false, ...v })),
-      saveFaceDetectionResult: async (relativePath: string, faces: DetectedFace[]) => {
-        saved.set(relativePath, faces);
-        take(relativePath);
+      analysis: {
+        getVideosNeedingFaceAnalysis: async () =>
+          queue.map((v) => ({ failedBefore: false, ...v })),
+        saveVideoFaceAnalysisError: async (relativePath: string) => {
+          errors.push(relativePath);
+          take(relativePath);
+        },
+        saveImageAnalysisDecodeError: async (relativePath: string) => {
+          decodeErrors.push(relativePath);
+          take(relativePath);
+        },
+        getVideoFaceAnalysisProgress: async () => ({
+          total: videos.length,
+          remaining: queue.length,
+          coolingDown: errors.length,
+          unreadable: decodeErrors.length,
+        }),
+        getVideoFaceQueueCostInputs: async () =>
+          queue.map(({ relativePath: _, ...cost }) => cost),
       },
-      saveVideoFaceAnalysisError: async (relativePath: string) => {
-        errors.push(relativePath);
-        take(relativePath);
+      faces: {
+        saveFaceDetectionResult: async (relativePath: string, faces: DetectedFace[]) => {
+          saved.set(relativePath, faces);
+          take(relativePath);
+        },
       },
-      saveImageAnalysisDecodeError: async (relativePath: string) => {
-        decodeErrors.push(relativePath);
-        take(relativePath);
-      },
-      getVideoFaceAnalysisProgress: async () => ({
-        total: videos.length,
-        remaining: queue.length,
-        coolingDown: errors.length,
-        unreadable: decodeErrors.length,
-      }),
-      getVideoFaceQueueCostInputs: async () =>
-        queue.map(({ relativePath: _, ...cost }) => cost),
     },
   };
 };

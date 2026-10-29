@@ -47,7 +47,9 @@ const makeReq = (token: string, body: unknown, url = "/api/auth/share-token") =>
 // Share titling only reaches the database to resolve face-cluster names, which
 // none of these filters use.
 const fakeDatabase = {
-  getFaceClusterNames: () => Promise.resolve(new Map<number, string>()),
+  faces: {
+    getFaceClusterNames: () => Promise.resolve(new Map<number, string>()),
+  },
 } as unknown as import("../indexDatabase/indexDatabase.ts").IndexDatabase;
 
 const loadShareHandler = async () => {
@@ -182,8 +184,10 @@ describe("authShareTokenHandler", () => {
 
     const queryFiles = jest.fn(() => Promise.resolve({ items: [], total: 4321 }));
     const database = {
-      getFaceClusterNames: () => Promise.resolve(new Map<number, string>()),
       queryFiles,
+      faces: {
+        getFaceClusterNames: () => Promise.resolve(new Map<number, string>()),
+      },
     } as unknown as import("../indexDatabase/indexDatabase.ts").IndexDatabase;
 
     await handler(

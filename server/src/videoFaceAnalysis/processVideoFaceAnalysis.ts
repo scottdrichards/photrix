@@ -5,6 +5,8 @@ import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { getLogger } from "../observability/logger.ts";
 import { recordServerDiagnosticEvent } from "../observability/diagnosticsStore.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
+import type { AnalysisStore } from "../indexDatabase/analysisStore.ts";
+import type { FaceStore } from "../indexDatabase/faceStore.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
 import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
@@ -48,16 +50,17 @@ export type ExtractFrames = (
   outDir: string,
 ) => Promise<AnalysisFrame[]>;
 
-type VideoFaceDatabase = Pick<
-  IndexDatabase,
-  | "storagePath"
-  | "getVideosNeedingFaceAnalysis"
-  | "saveFaceDetectionResult"
-  | "saveVideoFaceAnalysisError"
-  | "saveImageAnalysisDecodeError"
-  | "getVideoFaceAnalysisProgress"
-  | "getVideoFaceQueueCostInputs"
->;
+type VideoFaceDatabase = Pick<IndexDatabase, "storagePath"> & {
+  analysis: Pick<
+    AnalysisStore,
+    | "getVideosNeedingFaceAnalysis"
+    | "saveVideoFaceAnalysisError"
+    | "saveImageAnalysisDecodeError"
+    | "getVideoFaceAnalysisProgress"
+    | "getVideoFaceQueueCostInputs"
+  >;
+  faces: Pick<FaceStore, "saveFaceDetectionResult">;
+};
 
 type QueuedVideo = QueuedVideoFaces;
 
@@ -109,7 +112,7 @@ export const processVideoFaceAnalysis = (
   const eta = createVideoFaceEta(now);
   let progressCache: {
     at: number;
-    value: Awaited<ReturnType<VideoFaceDatabase["getVideoFaceAnalysisProgress"]>>;
+    value: Awaited<ReturnType<VideoFaceDatabase["analysis"]["getVideoFaceAnalysisProgress"]>>;
   } | null = null;
   let queueCostCache: { at: number; value: VideoFaceCostInputs[] } | null = null;
   const run: Record<VideoOutcome, number> & { faces: number; lastSummaryAt: number } = {
@@ -122,14 +125,14 @@ export const processVideoFaceAnalysis = (
 
   const readProgress = async () => {
     if (!progressCache || now() - progressCache.at > PROGRESS_CACHE_MS) {
-      progressCache = { at: now(), value: await database.getVideoFaceAnalysisProgress() };
+      progressCache = { at: now(), value: await database.analysis.getVideoFaceAnalysisProgress() };
     }
     return progressCache.value;
   };
 
   const readEtaMs = async (): Promise<number | undefined> => {
     if (!queueCostCache || now() - queueCostCache.at > QUEUE_COST_CACHE_MS) {
-      queueCostCache = { at: now(), value: await database.getVideoFaceQueueCostInputs() };
+      queueCostCache = { at: now(), value: await database.analysis.getVideoFaceQueueCostInputs() };
     }
     return eta.estimateMs(queueCostCache.value);
   };
@@ -243,11 +246,11 @@ export const processVideoFaceAnalysis = (
         const { error } = extracted;
         if (error instanceof VideoUnreadableError) {
           log.warn({ err: error, path: relativePath }, "Video unreadable; dropped");
-          await database.saveImageAnalysisDecodeError(relativePath);
+          await database.analysis.saveImageAnalysisDecodeError(relativePath);
           return "unreadable";
         }
         log.warn({ err: error, path: relativePath }, "Video frame extraction failed");
-        await database.saveVideoFaceAnalysisError(relativePath);
+        await database.analysis.saveVideoFaceAnalysisError(relativePath);
         return "failed";
       }
       const { frames } = extracted;
@@ -255,7 +258,7 @@ export const processVideoFaceAnalysis = (
       if (frames.length === 0) {
         // ffmpeg ran cleanly and found nothing to decode: that won't change.
         log.warn({ path: relativePath }, "Video has no decodable frames");
-        await database.saveImageAnalysisDecodeError(relativePath);
+        await database.analysis.saveImageAnalysisDecodeError(relativePath);
         eta.record(video, { extractMs, detectMs: 0, frames: 0 });
         return "done";
       }
@@ -265,7 +268,7 @@ export const processVideoFaceAnalysis = (
       const faces = collapseFaceTracks(frameFaces);
       // No `regions` write, unlike photos: regions drive the box overlay in the
       // viewer, and a box from one frame means nothing over a playing video.
-      await database.saveFaceDetectionResult(relativePath, faces);
+      await database.faces.saveFaceDetectionResult(relativePath, faces);
       const predicted = eta.record(video, {
         extractMs,
         detectMs,
@@ -293,7 +296,7 @@ export const processVideoFaceAnalysis = (
       if (error instanceof WorkerEvicted) throw error;
       if (ctrl.state === "cancelled") throw error;
       log.warn({ err: error, path: relativePath }, "Video face analysis failed");
-      await database.saveVideoFaceAnalysisError(relativePath);
+      await database.analysis.saveVideoFaceAnalysisError(relativePath);
       return "failed";
     } finally {
       await removeWorkDir(extracted);
@@ -324,7 +327,7 @@ export const processVideoFaceAnalysis = (
    */
   const nextVideo = async (inFlight?: string): Promise<QueuedVideo | undefined> => {
     if (!batch.length) {
-      batch = orderVideoFaceQueue(await database.getVideosNeedingFaceAnalysis(), now())
+      batch = orderVideoFaceQueue(await database.analysis.getVideosNeedingFaceAnalysis(), now())
         .filter((video) => video.relativePath !== inFlight)
         .slice(0, DB_BATCH_SIZE);
     }

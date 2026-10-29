@@ -22,6 +22,9 @@ const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
     const db = new IndexDatabase(mediaRoot);
     await db.init();
     await db.startupMaintenance;
+    // The vector index loads in the background too; let it finish before the
+    // test (and its cleanup, which deletes the database directory) runs.
+    await db.vectorIndexLoaded;
     await testFn(db);
   } finally {
     rmSync(mediaRoot, { recursive: true, force: true });
@@ -45,7 +48,7 @@ const addFacePhoto = async (
 ) => {
   const { folder, fileName } = splitPath(relativePath);
   await db.addFile({ folder, fileName, mimeType: "image/jpeg" });
-  await db.saveFaceDetectionResult(
+  await db.faces.saveFaceDetectionResult(
     relativePath,
     [
       {
@@ -59,13 +62,13 @@ const addFacePhoto = async (
 };
 
 const drain = async (db: IndexDatabase) => {
-  while (await db.clusterPendingFaces(256)) {
+  while (await db.faceClusters.clusterPendingFaces(256)) {
     /* until nothing pending */
   }
 };
 
 const faceIdOf = async (db: IndexDatabase, relativePath: string) =>
-  (await db.getFacesForFile(relativePath))[0].id;
+  (await db.faces.getFacesForFile(relativePath))[0].id;
 
 describe("cluster geometry", () => {
   it("shrinks to evict an outlying face and reports what goes with it", async () => {
@@ -78,24 +81,24 @@ describe("cluster geometry", () => {
       await addFacePhoto(db, "p/far-b.jpg", 0.6);
       await drain(db);
 
-      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
+      const personId = (await db.faces.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
       const farB = await faceIdOf(db, "p/far-b.jpg");
 
       // Preview first: it must name both stragglers, since evicting the outer
       // one cannot leave the one beyond it behind.
-      const preview = (await db.shrinkToExcludeFace(personId, farB, { dryRun: true }))!;
+      const preview = (await db.faceClusters.shrinkToExcludeFace(personId, farB, { dryRun: true }))!;
       expect(preview.excludable).toBe(true);
       expect(preview.affected).toBe(1);
       expect(preview.sample).toHaveLength(1);
 
       // Nothing changed yet.
-      let review = (await db.getFaceClusterReview(personId))!;
+      let review = (await db.faceClusters.getFaceClusterReview(personId))!;
       expect(review.faces).toHaveLength(12);
 
-      const applied = (await db.shrinkToExcludeFace(personId, farB))!;
+      const applied = (await db.faceClusters.shrinkToExcludeFace(personId, farB))!;
       expect(applied.affected).toBe(1);
 
-      review = (await db.getFaceClusterReview(personId))!;
+      review = (await db.faceClusters.getFaceClusterReview(personId))!;
       expect(review.faces.map((f) => f.fileName)).not.toContain("far-b.jpg");
       // Evicted, not rejected — it is free to be re-homed elsewhere.
       expect(review.rejected).toHaveLength(0);
@@ -115,10 +118,10 @@ describe("cluster geometry", () => {
       await addFacePhoto(db, "p/interior.jpg", 0.4);
       await drain(db);
 
-      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
+      const personId = (await db.faces.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
       const interior = await faceIdOf(db, "p/interior.jpg");
 
-      const preview = (await db.shrinkToExcludeFace(personId, interior, { dryRun: true }))!;
+      const preview = (await db.faceClusters.shrinkToExcludeFace(personId, interior, { dryRun: true }))!;
       // Removing it costs the whole band — the signal the UI uses to offer a
       // per-face rejection instead.
       expect(preview.affected).toBeGreaterThanOrEqual(10);
@@ -131,7 +134,7 @@ describe("cluster geometry", () => {
         await addFacePhoto(db, `p/band-${i}.jpg`, 0.02 * i);
       }
       await drain(db);
-      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
+      const personId = (await db.faces.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
 
       // Both have to sit beyond the global threshold (cos 0.62 ~ 0.90 rad) or
       // they would simply have joined the band on their own and there would be
@@ -141,15 +144,15 @@ describe("cluster geometry", () => {
       await drain(db);
 
       const wanted = await faceIdOf(db, "p/wanted.jpg");
-      const strangerPerson = (await db.getPeopleFacesForFile("p/stranger.jpg"))[0].personId;
+      const strangerPerson = (await db.faces.getPeopleFacesForFile("p/stranger.jpg"))[0].personId;
       expect(strangerPerson).not.toBe(personId);
 
-      const preview = (await db.growToIncludeFace(personId, wanted, { dryRun: true }))!;
+      const preview = (await db.faceClusters.growToIncludeFace(personId, wanted, { dryRun: true }))!;
       // The stranger is on the far side, so the moved centre must not reach it.
       expect(preview.faceIds).not.toContain(await faceIdOf(db, "p/stranger.jpg"));
 
-      await db.growToIncludeFace(personId, wanted);
-      const review = (await db.getFaceClusterReview(personId))!;
+      await db.faceClusters.growToIncludeFace(personId, wanted);
+      const review = (await db.faceClusters.getFaceClusterReview(personId))!;
       expect(review.faces.map((f) => f.fileName)).toContain("wanted.jpg");
       expect(review.faces.map((f) => f.fileName)).not.toContain("stranger.jpg");
     });
@@ -161,18 +164,18 @@ describe("cluster geometry", () => {
         await addFacePhoto(db, `p/band-${i}.jpg`, 0.02 * i);
       }
       await drain(db);
-      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
-      await db.renameCluster(personId, "Ada");
+      const personId = (await db.faces.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
+      await db.faceClusters.renameCluster(personId, "Ada");
 
       await addFacePhoto(db, "p/other-look.jpg", 1.1);
       await drain(db);
       const other = await faceIdOf(db, "p/other-look.jpg");
 
-      const created = (await db.startClusterForFace(personId, other))!;
+      const created = (await db.faceClusters.startClusterForFace(personId, other))!;
       expect(created.clusterId).not.toBe(personId);
 
       // It belongs to the same person, so the review view still sees the face.
-      const review = (await db.getFaceClusterReview(personId))!;
+      const review = (await db.faceClusters.getFaceClusterReview(personId))!;
       expect(review.name).toBe("Ada");
       expect(review.faces.map((f) => f.fileName)).toContain("other-look.jpg");
     });
@@ -188,21 +191,21 @@ describe("cluster geometry", () => {
       }
       await addFacePhoto(db, "p/misfiled.jpg", 0.8);
       await drain(db);
-      const ada = (await db.getPeopleFacesForFile("p/ada-0.jpg"))[0].personId;
-      const bo = (await db.getPeopleFacesForFile("p/bo-0.jpg"))[0].personId;
+      const ada = (await db.faces.getPeopleFacesForFile("p/ada-0.jpg"))[0].personId;
+      const bo = (await db.faces.getPeopleFacesForFile("p/bo-0.jpg"))[0].personId;
       expect(ada).not.toBe(bo);
-      await db.renameCluster(ada, "Ada");
-      await db.renameCluster(bo, "Bo");
-      expect((await db.getPeopleFacesForFile("p/misfiled.jpg"))[0].name).toBe("Ada");
+      await db.faceClusters.renameCluster(ada, "Ada");
+      await db.faceClusters.renameCluster(bo, "Bo");
+      expect((await db.faces.getPeopleFacesForFile("p/misfiled.jpg"))[0].name).toBe("Ada");
 
       const faceId = await faceIdOf(db, "p/misfiled.jpg");
-      const result = await db.assignFaceToPerson(faceId, { personId: bo });
+      const result = await db.faceClusters.assignFaceToPerson(faceId, { personId: bo });
       expect(result).toEqual({ personId: bo, name: "Bo" });
 
-      const [moved] = await db.getPeopleFacesForFile("p/misfiled.jpg");
+      const [moved] = await db.faces.getPeopleFacesForFile("p/misfiled.jpg");
       expect(moved).toMatchObject({ faceId, personId: bo, name: "Bo" });
       // Ada lost exactly that face; nobody else moved.
-      const adaReview = (await db.getFaceClusterReview(ada))!;
+      const adaReview = (await db.faceClusters.getFaceClusterReview(ada))!;
       expect(adaReview.faces.map((f) => f.fileName)).not.toContain("misfiled.jpg");
       expect(adaReview.faces).toHaveLength(6);
 
@@ -211,12 +214,12 @@ describe("cluster geometry", () => {
       // default threshold of the moved face, so only the radius keeps it out.
       await addFacePhoto(db, "p/look-alike.jpg", 1.0);
       await drain(db);
-      expect((await db.getPeopleFacesForFile("p/look-alike.jpg"))[0].name).toBeNull();
+      expect((await db.faces.getPeopleFacesForFile("p/look-alike.jpg"))[0].name).toBeNull();
 
       // And the verdict is "confirmed for Bo", so re-applying verdicts after a
       // re-cluster leaves it where it is.
-      await db.reapplyFaceVerdicts();
-      expect((await db.getPeopleFacesForFile("p/misfiled.jpg"))[0].name).toBe("Bo");
+      await db.faceClusters.reapplyFaceVerdicts();
+      expect((await db.faces.getPeopleFacesForFile("p/misfiled.jpg"))[0].name).toBe("Bo");
     });
   });
 
@@ -226,15 +229,15 @@ describe("cluster geometry", () => {
         await addFacePhoto(db, `p/ada-${i}.jpg`, 0.02 * i);
       }
       await drain(db);
-      const ada = (await db.getPeopleFacesForFile("p/ada-0.jpg"))[0].personId;
-      await db.renameCluster(ada, "Ada");
+      const ada = (await db.faces.getPeopleFacesForFile("p/ada-0.jpg"))[0].personId;
+      await db.faceClusters.renameCluster(ada, "Ada");
 
       const faceId = await faceIdOf(db, "p/ada-3.jpg");
-      const result = (await db.assignFaceToPerson(faceId, { name: "  Cy " }))!;
+      const result = (await db.faceClusters.assignFaceToPerson(faceId, { name: "  Cy " }))!;
       expect(result.name).toBe("Cy");
       expect(result.personId).not.toBe(ada);
-      expect((await db.getPeopleFacesForFile("p/ada-3.jpg"))[0].name).toBe("Cy");
-      expect((await db.listNamedPeople()).map((p) => p.name).sort()).toEqual(["Ada", "Cy"]);
+      expect((await db.faces.getPeopleFacesForFile("p/ada-3.jpg"))[0].name).toBe("Cy");
+      expect((await db.faces.listNamedPeople()).map((p) => p.name).sort()).toEqual(["Ada", "Cy"]);
     });
   });
 
@@ -243,9 +246,9 @@ describe("cluster geometry", () => {
       await addFacePhoto(db, "p/a.jpg", 0);
       await drain(db);
       const faceId = await faceIdOf(db, "p/a.jpg");
-      expect(await db.assignFaceToPerson(987654, { name: "X" })).toBeNull();
-      expect(await db.assignFaceToPerson(faceId, { personId: "person-987654" })).toBeNull();
-      expect(await db.assignFaceToPerson(faceId, { name: "   " })).toBeNull();
+      expect(await db.faceClusters.assignFaceToPerson(987654, { name: "X" })).toBeNull();
+      expect(await db.faceClusters.assignFaceToPerson(faceId, { personId: "person-987654" })).toBeNull();
+      expect(await db.faceClusters.assignFaceToPerson(faceId, { name: "   " })).toBeNull();
     });
   });
 
@@ -257,16 +260,16 @@ describe("cluster geometry", () => {
       await addFacePhoto(db, "p/far.jpg", 0.6);
       await drain(db);
 
-      const personId = (await db.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
-      const before = (await db.getFaceClusterReview(personId))!;
+      const personId = (await db.faces.getPeopleFacesForFile("p/band-0.jpg"))[0].personId;
+      const before = (await db.faceClusters.getFaceClusterReview(personId))!;
 
       // Reject the straggler that was dragging the centre, then refit.
-      await db.setFaceVerdicts([await faceIdOf(db, "p/far.jpg")], "rejected");
-      const result = (await db.refitFaceCluster(personId))!;
+      await db.faceClusters.setFaceVerdicts([await faceIdOf(db, "p/far.jpg")], "rejected");
+      const result = (await db.faceClusters.refitFaceCluster(personId))!;
       expect(result.caps).toBeGreaterThanOrEqual(1);
       expect(result.uncovered).toBe(0);
 
-      const after = (await db.getFaceClusterReview(personId))!;
+      const after = (await db.faceClusters.getFaceClusterReview(personId))!;
       expect(after.faces).toHaveLength(10);
       // With the outlier gone and the centre re-derived, the survivors sit
       // closer to it than they did before.
@@ -284,16 +287,16 @@ describe("cluster geometry", () => {
       await addFacePhoto(db, "p/stranger.jpg", 0.45);
       await drain(db);
 
-      const personId = (await db.getPeopleFacesForFile("p/young-0.jpg"))[0].personId;
-      const review = (await db.getFaceClusterReview(personId))!;
+      const personId = (await db.faces.getPeopleFacesForFile("p/young-0.jpg"))[0].personId;
+      const review = (await db.faceClusters.getFaceClusterReview(personId))!;
       // All eleven landed together, which is the situation worth repairing.
       expect(review.faces.length).toBe(11);
 
-      await db.setFaceVerdicts([await faceIdOf(db, "p/stranger.jpg")], "rejected");
-      const result = (await db.refitFaceCluster(personId))!;
+      await db.faceClusters.setFaceVerdicts([await faceIdOf(db, "p/stranger.jpg")], "rejected");
+      const result = (await db.faceClusters.refitFaceCluster(personId))!;
 
       expect(result.caps).toBeGreaterThanOrEqual(2);
-      const after = (await db.getFaceClusterReview(personId))!;
+      const after = (await db.faceClusters.getFaceClusterReview(personId))!;
       // Both looks still belong to the one person, across two caps.
       expect(after.faces).toHaveLength(10);
       expect(after.faces.map((f) => f.fileName)).toContain("young-0.jpg");

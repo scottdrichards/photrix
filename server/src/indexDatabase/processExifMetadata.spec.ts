@@ -70,10 +70,12 @@ describe("processExifMetadata", () => {
       ) => {
         updates.push({ relativePath, data });
       },
-      saveFacesFromMetadataRegions: async (relativePath: string, regions: unknown[]) => {
-        metadataFaceWrites.push({ relativePath, regions });
-      },
       getImagesMissingDimensions: () => [],
+      faces: {
+        saveFacesFromMetadataRegions: async (relativePath: string, regions: unknown[]) => {
+          metadataFaceWrites.push({ relativePath, regions });
+        },
+      },
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -130,8 +132,10 @@ describe("processExifMetadata", () => {
         };
       })(),
       addOrUpdateFileData: async () => undefined,
-      saveFacesFromMetadataRegions: async () => undefined,
       getImagesMissingDimensions: () => [],
+      faces: {
+        saveFacesFromMetadataRegions: async () => undefined,
+      },
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -177,8 +181,10 @@ describe("processExifMetadata", () => {
         { relativePath: "file2.jpg", sizeInBytes: 100 },
       ],
       addOrUpdateFileData: async () => undefined,
-      saveFacesFromMetadataRegions: async () => undefined,
       getImagesMissingDimensions: () => [],
+      faces: {
+        saveFacesFromMetadataRegions: async () => undefined,
+      },
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -224,8 +230,10 @@ describe("processExifMetadata", () => {
       addOrUpdateFileData: async () => {
         missingMediaMetadata = Math.max(0, missingMediaMetadata - 1);
       },
-      saveFacesFromMetadataRegions: async () => undefined,
       getImagesMissingDimensions: () => [],
+      faces: {
+        saveFacesFromMetadataRegions: async () => undefined,
+      },
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -270,8 +278,10 @@ describe("processExifMetadata", () => {
       addOrUpdateFileData: async () => {
         metadataPassComplete = true;
       },
-      saveFacesFromMetadataRegions: async () => undefined,
       getImagesMissingDimensions: jest.fn(async () => [{ relativePath: "stubborn.jpg" }]),
+      faces: {
+        saveFacesFromMetadataRegions: async () => undefined,
+      },
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");
@@ -324,8 +334,10 @@ describe("processExifMetadata", () => {
       removeFile: async (relativePath: string) => {
         removed.push(relativePath);
       },
-      saveFacesFromMetadataRegions: async () => undefined,
       getImagesMissingDimensions: () => [],
+      faces: {
+        saveFacesFromMetadataRegions: async () => undefined,
+      },
     } as unknown as IndexDatabase;
 
     const { processExifMetadata } = await import("./processExifMetadata.ts");

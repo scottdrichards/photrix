@@ -27,30 +27,33 @@ const makeDb = (
 
   const db = {
     storagePath: path.join(os.tmpdir(), "photrix-face-attributes-test"),
-    getFilesNeedingFaceAttributes: jest.fn(async (limit: number) => {
-      queryCount += 1;
-      return [...pending.entries()]
-        .filter(([, ids]) => ids.size > 0)
-        .slice(0, limit)
-        .map(([relativePath]) => relativePath);
-    }),
-    getFaceBoxesForAttributes: jest.fn(async (relativePath: string) =>
-      [...(pending.get(relativePath) ?? [])].map((id) => ({
-        id,
-        box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
-      })),
-    ),
-    saveFaceAttributes: jest.fn(async (results: SavedResult[]) => {
-      for (const result of results) {
-        saved.push(result);
-        for (const ids of pending.values()) ids.delete(result.id);
-      }
-    }),
-    countFacesTotal: jest.fn(async () => 10),
-    countFacesNeedingAttributes: jest.fn(async () =>
-      [...pending.values()].reduce((total, ids) => total + ids.size, 0),
-    ),
     ...overrides,
+    faces: {
+      getFilesNeedingFaceAttributes: jest.fn(async (limit: number) => {
+        queryCount += 1;
+        return [...pending.entries()]
+          .filter(([, ids]) => ids.size > 0)
+          .slice(0, limit)
+          .map(([relativePath]) => relativePath);
+      }),
+      getFaceBoxesForAttributes: jest.fn(async (relativePath: string) =>
+        [...(pending.get(relativePath) ?? [])].map((id) => ({
+          id,
+          box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
+        })),
+      ),
+      saveFaceAttributes: jest.fn(async (results: SavedResult[]) => {
+        for (const result of results) {
+          saved.push(result);
+          for (const ids of pending.values()) ids.delete(result.id);
+        }
+      }),
+      countFacesTotal: jest.fn(async () => 10),
+      countFacesNeedingAttributes: jest.fn(async () =>
+        [...pending.values()].reduce((total, ids) => total + ids.size, 0),
+      ),
+      ...(overrides.faces as object),
+    },
   } as unknown as IndexDatabase;
 
   return { db, saved, getQueryCount: () => queryCount, pending };

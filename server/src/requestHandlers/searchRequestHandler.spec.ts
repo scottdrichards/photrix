@@ -70,9 +70,11 @@ describe("searchRequestHandler resilience", () => {
     });
 
     const database = {
-      semanticSearch: jest.fn(async () => []),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => [transcriptRow]),
+      analysis: {
+        semanticSearch: jest.fn(async () => []),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => [transcriptRow]),
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus, getJson } = createJsonResponse();
@@ -97,9 +99,11 @@ describe("searchRequestHandler resilience", () => {
     });
 
     const database = {
-      semanticSearch: jest.fn(async () => []),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => [transcriptRow]),
+      analysis: {
+        semanticSearch: jest.fn(async () => []),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => [transcriptRow]),
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus, getJson } = createJsonResponse();
@@ -133,9 +137,11 @@ describe("searchRequestHandler resilience", () => {
     }));
 
     const database = {
-      semanticSearch: jest.fn(async () => [imageHit]),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => transcriptHits),
+      analysis: {
+        semanticSearch: jest.fn(async () => [imageHit]),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => transcriptHits),
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus, getJson } = createJsonResponse();
@@ -163,9 +169,11 @@ describe("searchRequestHandler resilience", () => {
     };
 
     const database = {
-      semanticSearch: jest.fn(async () => [imageOnly, shared]),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => [shared]),
+      analysis: {
+        semanticSearch: jest.fn(async () => [imageOnly, shared]),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => [shared]),
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus, getJson } = createJsonResponse();
@@ -194,9 +202,11 @@ describe("searchRequestHandler resilience", () => {
     };
 
     const database = {
-      semanticSearch: jest.fn(async () => [imageOnly, shared]),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => [shared]),
+      analysis: {
+        semanticSearch: jest.fn(async () => [imageOnly, shared]),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => [shared]),
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus, getJson } = createJsonResponse();
@@ -225,9 +235,11 @@ describe("searchRequestHandler resilience", () => {
     const semanticSearch = jest.fn(async () => []);
     const audioSemanticSearch = jest.fn(async () => []);
     const database = {
-      semanticSearch,
-      audioSemanticSearch,
-      audioTranscriptSearch: jest.fn(async () => [transcriptHit]),
+      analysis: {
+        semanticSearch,
+        audioSemanticSearch,
+        audioTranscriptSearch: jest.fn(async () => [transcriptHit]),
+      },
     } as unknown as IndexDatabase;
 
     const req = {
@@ -255,9 +267,11 @@ describe("searchRequestHandler resilience", () => {
     const handler = await loadHandler({ embedText });
 
     const database = {
-      semanticSearch: jest.fn(async () => []),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => []),
+      analysis: {
+        semanticSearch: jest.fn(async () => []),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => []),
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus } = createJsonResponse();
@@ -282,9 +296,11 @@ describe("searchRequestHandler resilience", () => {
       headers: { host: "localhost" },
     } as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
     const database = {
-      semanticSearch,
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch,
+      analysis: {
+        semanticSearch,
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch,
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus, getJson } = createJsonResponse();
@@ -327,9 +343,11 @@ describe("searchRequestHandler resilience", () => {
     };
 
     const database = {
-      semanticSearch: jest.fn(async () => []),
-      audioSemanticSearch: jest.fn(async () => [confidentVideo, noiseVideo]),
-      audioTranscriptSearch: jest.fn(async () => []),
+      analysis: {
+        semanticSearch: jest.fn(async () => []),
+        audioSemanticSearch: jest.fn(async () => [confidentVideo, noiseVideo]),
+        audioTranscriptSearch: jest.fn(async () => []),
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus, getJson } = createJsonResponse();
@@ -352,9 +370,11 @@ describe("searchRequestHandler resilience", () => {
     });
 
     const database = {
-      semanticSearch: jest.fn(async () => []),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => []),
+      analysis: {
+        semanticSearch: jest.fn(async () => []),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => []),
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus, getJson } = createJsonResponse();
@@ -398,9 +418,11 @@ describe("searchRequestHandler resilience", () => {
     ];
 
     const database = {
-      semanticSearch: jest.fn(async () => imageHits),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => []),
+      analysis: {
+        semanticSearch: jest.fn(async () => imageHits),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => []),
+      },
     } as unknown as IndexDatabase;
 
     const req = {
@@ -443,9 +465,11 @@ describe("searchRequestHandler resilience", () => {
     ];
 
     const database = {
-      semanticSearch: jest.fn(async () => imageHits),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => []),
+      analysis: {
+        semanticSearch: jest.fn(async () => imageHits),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => []),
+      },
     } as unknown as IndexDatabase;
 
     const fetchPage = async (offset: number) => {
@@ -465,7 +489,7 @@ describe("searchRequestHandler resilience", () => {
       "2020.jpg",
     ]);
     // Same candidate set for both pages, regardless of offset.
-    const limits = (database.semanticSearch as jest.Mock).mock.calls.map((c) => c[2]);
+    const limits = (database.analysis.semanticSearch as jest.Mock).mock.calls.map((c) => c[2]);
     expect(new Set(limits).size).toBe(1);
   });
 
@@ -494,9 +518,11 @@ describe("searchRequestHandler resilience", () => {
     ];
 
     const database = {
-      semanticSearch: jest.fn(async () => imageHits),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => []),
+      analysis: {
+        semanticSearch: jest.fn(async () => imageHits),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => []),
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus, getJson } = createJsonResponse();
@@ -521,9 +547,11 @@ describe("searchRequestHandler resilience", () => {
     }));
 
     const database = {
-      semanticSearch: jest.fn(async () => imageHits),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => []),
+      analysis: {
+        semanticSearch: jest.fn(async () => imageHits),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => []),
+      },
     } as unknown as IndexDatabase;
 
     const { res, getStatus, getJson } = createJsonResponse();
@@ -538,7 +566,7 @@ describe("searchRequestHandler resilience", () => {
     // page limit, not just `limit` itself — that's what makes `total` above
     // meaningfully more than the page size.
     const requestedLimit = (
-      database.semanticSearch as jest.MockedFunction<typeof database.semanticSearch>
+      database.analysis.semanticSearch as jest.MockedFunction<typeof database.analysis.semanticSearch>
     ).mock.calls[0][2];
     expect(requestedLimit).toBeGreaterThan(2);
   });
@@ -558,9 +586,11 @@ describe("searchRequestHandler resilience", () => {
     }));
 
     const database = {
-      semanticSearch: jest.fn(async () => imageHits),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => []),
+      analysis: {
+        semanticSearch: jest.fn(async () => imageHits),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => []),
+      },
     } as unknown as IndexDatabase;
 
     const { res: res1, getJson: getJson1 } = createJsonResponse();
@@ -590,9 +620,11 @@ describe("searchRequestHandler resilience", () => {
 describe("searchRequestHandler source status", () => {
   const database = () =>
     ({
-      semanticSearch: jest.fn(async () => []),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => [transcriptRow]),
+      analysis: {
+        semanticSearch: jest.fn(async () => []),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => [transcriptRow]),
+      },
     }) as unknown as IndexDatabase;
 
   it("reports a source that timed out while its model was cold as 'loading'", async () => {
@@ -643,9 +675,11 @@ describe("searchRequestHandler source status", () => {
       audioState: "cold",
     });
     const empty = {
-      semanticSearch: jest.fn(async () => []),
-      audioSemanticSearch: jest.fn(async () => []),
-      audioTranscriptSearch: jest.fn(async () => []),
+      analysis: {
+        semanticSearch: jest.fn(async () => []),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => []),
+      },
     } as unknown as IndexDatabase;
     const { res, getStatus, getJson } = createJsonResponse();
     await handler(makeReq("beach"), res, { database: empty });

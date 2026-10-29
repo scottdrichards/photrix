@@ -27,7 +27,9 @@ describe("sharePreviewHandler redirect", () => {
 
     const database = {
       queryFiles: jest.fn(() => Promise.resolve({ items: [], total: 0 })),
-      countNamedPeopleForFiles: jest.fn(() => Promise.resolve(new Map())),
+      faces: {
+        countNamedPeopleForFiles: jest.fn(() => Promise.resolve(new Map())),
+      },
     } as unknown as IndexDatabase;
 
     await sharePreviewHandler(req, res, database);

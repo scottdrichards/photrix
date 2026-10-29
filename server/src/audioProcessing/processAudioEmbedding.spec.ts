@@ -28,15 +28,17 @@ describe("processAudioEmbedding", () => {
     const saves: string[] = [];
     const db = {
       storagePath: path.join(os.tmpdir(), "photrix-audio-embedding-test"),
-      getFilesNeedingAudioEmbedding: jest.fn(async () => {
-        if (served) return [];
-        served = true;
-        return rows;
-      }),
-      saveAudioEmbedding: jest.fn(async (relativePath: string) => {
-        saves.push(relativePath);
-      }),
-      saveAudioEmbeddingError: jest.fn(async () => undefined),
+      analysis: {
+        getFilesNeedingAudioEmbedding: jest.fn(async () => {
+          if (served) return [];
+          served = true;
+          return rows;
+        }),
+        saveAudioEmbedding: jest.fn(async (relativePath: string) => {
+          saves.push(relativePath);
+        }),
+        saveAudioEmbeddingError: jest.fn(async () => undefined),
+      },
     } as unknown as IndexDatabase;
 
     const gate = createDeferred();

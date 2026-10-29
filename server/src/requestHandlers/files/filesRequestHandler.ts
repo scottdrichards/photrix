@@ -809,7 +809,7 @@ const fileHandler = async (
   };
 
   if (representation === "transcript") {
-    const segments = await database.getAudioSegments(subPath);
+    const segments = await database.analysis.getAudioSegments(subPath);
     writeJson(res, 200, { segments });
     return;
   }

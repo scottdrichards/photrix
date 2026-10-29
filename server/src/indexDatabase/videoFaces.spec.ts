@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { splitPath } from "./utils/pathUtils.ts";
+import { AnalysisStore } from "./analysisStore.ts";
 
 const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
   const mediaRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-media-root-"));
@@ -56,7 +57,7 @@ describe("video face queue", () => {
       });
       await addVideo(db, "v/no-exif.mp4", { exif: false });
 
-      const queued = await db.getVideosNeedingFaceAnalysis();
+      const queued = await db.analysis.getVideosNeedingFaceAnalysis();
       expect(queued).toHaveLength(2);
       expect(queued[0]).toMatchObject({
         relativePath: "/v/new.mp4",
@@ -84,9 +85,9 @@ describe("video face queue", () => {
         exifProcessedAt: new Date(),
       });
 
-      const queued = (await db.getVideosNeedingFaceAnalysis()).map((v) => v.relativePath);
+      const queued = (await db.analysis.getVideosNeedingFaceAnalysis()).map((v) => v.relativePath);
       expect(queued).toEqual(["/lp/solo.mp4"]);
-      const progress = await db.getVideoFaceAnalysisProgress();
+      const progress = await db.analysis.getVideoFaceAnalysisProgress();
       expect(progress).toEqual({ total: 2, remaining: 1, coolingDown: 0, unreadable: 0 });
     });
   });
@@ -94,33 +95,33 @@ describe("video face queue", () => {
   it("holds a failed video back for the whole cooldown instead of retrying it", async () => {
     await withTempDb(async (db) => {
       await addVideo(db, "v/bad.mp4");
-      await db.saveVideoFaceAnalysisError("v/bad.mp4");
+      await db.analysis.saveVideoFaceAnalysisError("v/bad.mp4");
 
-      expect(await db.getVideosNeedingFaceAnalysis()).toEqual([]);
+      expect(await db.analysis.getVideosNeedingFaceAnalysis()).toEqual([]);
       // Back after the cooldown, and marked so it goes behind fresh work.
       const later = jest
         .spyOn(Date, "now")
-        .mockReturnValue(Date.now() + IndexDatabase.VIDEO_FACE_RETRY_COOLDOWN_MS + 1);
-      expect(await db.getVideosNeedingFaceAnalysis()).toMatchObject([
+        .mockReturnValue(Date.now() + AnalysisStore.VIDEO_FACE_RETRY_COOLDOWN_MS + 1);
+      expect(await db.analysis.getVideosNeedingFaceAnalysis()).toMatchObject([
         { relativePath: "/v/bad.mp4", failedBefore: true },
       ]);
       later.mockRestore();
       // Still owed, so progress doesn't claim it is done, and says why.
-      expect(await db.getVideoFaceAnalysisProgress()).toMatchObject({
+      expect(await db.analysis.getVideoFaceAnalysisProgress()).toMatchObject({
         remaining: 1,
         coolingDown: 1,
       });
       // Not this run's work, so the ETA doesn't price it.
-      expect(await db.getVideoFaceQueueCostInputs()).toEqual([]);
+      expect(await db.analysis.getVideoFaceQueueCostInputs()).toEqual([]);
     });
   });
 
   it("drops a video whose frames can't be decoded from the queue for good", async () => {
     await withTempDb(async (db) => {
       await addVideo(db, "v/corrupt.mp4");
-      await db.saveImageAnalysisDecodeError("v/corrupt.mp4");
-      expect(await db.getVideosNeedingFaceAnalysis()).toEqual([]);
-      expect(await db.getVideoFaceAnalysisProgress()).toMatchObject({
+      await db.analysis.saveImageAnalysisDecodeError("v/corrupt.mp4");
+      expect(await db.analysis.getVideosNeedingFaceAnalysis()).toEqual([]);
+      expect(await db.analysis.getVideoFaceAnalysisProgress()).toMatchObject({
         remaining: 0,
         unreadable: 1,
       });
@@ -140,10 +141,10 @@ describe("video face queue", () => {
         dimensionHeight: 2160,
         exifProcessedAt: new Date(),
       });
-      expect(await db.getVideoFaceQueueCostInputs()).toEqual([
+      expect(await db.analysis.getVideoFaceQueueCostInputs()).toEqual([
         { durationSeconds: 40, sizeBytes: 300e6, width: 3840, height: 2160 },
       ]);
-      expect((await db.getVideosNeedingFaceAnalysis())[0]).toMatchObject({
+      expect((await db.analysis.getVideosNeedingFaceAnalysis())[0]).toMatchObject({
         relativePath: "/v/4k.mp4",
         sizeBytes: 300e6,
       });
@@ -157,7 +158,7 @@ describe("video face queue", () => {
         { startMs: 0, endMs: 3_000 },
         { startMs: 9_000, endMs: 15_000 },
       ];
-      await db.saveFaceDetectionResult("v/party.mp4", [
+      await db.faces.saveFaceDetectionResult("v/party.mp4", [
         {
           box: { x: 0.1, y: 0.2, width: 0.2, height: 0.3 },
           confidence: 0.9,
@@ -166,15 +167,15 @@ describe("video face queue", () => {
           appearances,
         },
       ]);
-      while (await db.clusterPendingFaces(256)) {
+      while (await db.faceClusters.clusterPendingFaces(256)) {
         /* drain */
       }
 
-      const [face] = await db.getPeopleFacesForFile("v/party.mp4");
+      const [face] = await db.faces.getPeopleFacesForFile("v/party.mp4");
       expect(face).toMatchObject({ frameTimeMs: 10_000, appearances });
 
       // Re-detection replaces them, and removing the file leaves no orphans.
-      await db.saveFaceDetectionResult("v/party.mp4", [
+      await db.faces.saveFaceDetectionResult("v/party.mp4", [
         {
           box: { x: 0.1, y: 0.2, width: 0.2, height: 0.3 },
           confidence: 0.9,
@@ -194,7 +195,7 @@ describe("video face queue", () => {
   it("stores each face's frame time and hands it back with the People faces", async () => {
     await withTempDb(async (db) => {
       await addVideo(db, "v/party.mp4", { duration: 20 });
-      await db.saveFaceDetectionResult("v/party.mp4", [
+      await db.faces.saveFaceDetectionResult("v/party.mp4", [
         {
           box: { x: 0.1, y: 0.2, width: 0.2, height: 0.3 },
           confidence: 0.9,
@@ -204,22 +205,22 @@ describe("video face queue", () => {
       ]);
       // A photo face alongside it, with no frame time.
       await db.addFile({ folder: "/p/", fileName: "a.jpg", mimeType: "image/jpeg" });
-      await db.saveFaceDetectionResult("p/a.jpg", [
+      await db.faces.saveFaceDetectionResult("p/a.jpg", [
         {
           box: { x: 0.1, y: 0.2, width: 0.2, height: 0.3 },
           confidence: 0.9,
           embedding: unit(2),
         },
       ]);
-      while (await db.clusterPendingFaces(256)) {
+      while (await db.faceClusters.clusterPendingFaces(256)) {
         /* drain */
       }
 
-      expect(await db.getVideosNeedingFaceAnalysis()).toEqual([]);
+      expect(await db.analysis.getVideosNeedingFaceAnalysis()).toEqual([]);
 
-      const result = await db.queryFaceClusters({ filter: {} });
+      const result = await db.faceClusters.queryFaceClusters({ filter: {} });
       expect(result.clusters).toHaveLength(1);
-      const detail = await db.getFaceClusterDetail({
+      const detail = await db.faceClusters.getFaceClusterDetail({
         filter: {},
         clusterId: result.clusters[0].id,
       });
@@ -227,7 +228,7 @@ describe("video face queue", () => {
       expect(byPath.get("/v/party.mp4")?.frameTimeMs).toBe(4_500);
       expect(byPath.get("/p/a.jpg")).not.toHaveProperty("frameTimeMs");
 
-      const preview = await db.getClusterFacePreview(result.clusters[0].id);
+      const preview = await db.faces.getClusterFacePreview(result.clusters[0].id);
       expect(preview.find((face) => face.path === "/v/party.mp4")?.frameTimeMs).toBe(
         4_500,
       );
@@ -246,16 +247,16 @@ describe("video face queue", () => {
       });
       for (let i = 0; i < 6; i++) {
         await db.addFile({ folder: "/f/", fileName: `p${i}.jpg`, mimeType: "image/jpeg" });
-        await db.saveFaceDetectionResult(`f/p${i}.jpg`, [face(i + 1)]);
+        await db.faces.saveFaceDetectionResult(`f/p${i}.jpg`, [face(i + 1)]);
       }
       for (let i = 0; i < 3; i++) {
         await addVideo(db, `f/v${i}.mp4`, { duration: 20 });
-        await db.saveFaceDetectionResult(`f/v${i}.mp4`, [face(i + 10, 1_000)]);
+        await db.faces.saveFaceDetectionResult(`f/v${i}.mp4`, [face(i + 10, 1_000)]);
       }
-      while (await db.clusterPendingFaces(256)) {
+      while (await db.faceClusters.clusterPendingFaces(256)) {
         /* drain */
       }
-      const { clusters } = await db.queryFaceClusters({ filter: {} });
+      const { clusters } = await db.faceClusters.queryFaceClusters({ filter: {} });
       expect(clusters).toHaveLength(1);
       // Pin the ranking: every photo face outscores every video face.
       await db.asyncSqlite.run(
@@ -278,14 +279,14 @@ describe("video face queue", () => {
       await withTempDb(async (db) => {
         const clusterId = await seedPerson(db);
         if (named) {
-          expect(await db.renameCluster(clusterId, "Riley")).toBe(true);
+          expect(await db.faceClusters.renameCluster(clusterId, "Riley")).toBe(true);
           const [root] = await db.asyncSqlite.all<{ personId: number | null }>(
             "SELECT personId FROM faceClusters WHERE name = 'Riley'",
           );
           expect(root.personId).not.toBeNull();
         }
         // 3 of 9 faces are video, so 2 of 6 shown should be.
-        const detail = await db.getFaceClusterDetail({ filter, clusterId, maxFaces: 6 });
+        const detail = await db.faceClusters.getFaceClusterDetail({ filter, clusterId, maxFaces: 6 });
         const faces = detail.cluster!.faces;
         expect(detail.cluster!.count).toBe(9);
         expect(faces).toHaveLength(6);
@@ -305,11 +306,11 @@ describe("video face queue", () => {
     it("shows at least one video face, and every face when under the cap", async () => {
       await withTempDb(async (db) => {
         const clusterId = await seedPerson(db);
-        const tight = await db.getFaceClusterDetail({ filter: {}, clusterId, maxFaces: 2 });
+        const tight = await db.faceClusters.getFaceClusterDetail({ filter: {}, clusterId, maxFaces: 2 });
         expect(videoCount(tight.cluster!.faces)).toBe(1);
         expect(tight.cluster!.faces).toHaveLength(2);
 
-        const all = await db.getFaceClusterDetail({ filter: {}, clusterId });
+        const all = await db.faceClusters.getFaceClusterDetail({ filter: {}, clusterId });
         expect(all.cluster!.faces).toHaveLength(9);
         expect(videoCount(all.cluster!.faces)).toBe(3);
       });

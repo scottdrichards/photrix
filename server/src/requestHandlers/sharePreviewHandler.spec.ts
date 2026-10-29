@@ -42,7 +42,9 @@ const renderPreviewPage = async (
 
   const database = {
     queryFiles: jest.fn(() => Promise.resolve({ items: files, total: files.length })),
-    countNamedPeopleForFiles: jest.fn(() => Promise.resolve(new Map(Object.entries(namedPeople)))),
+    faces: {
+      countNamedPeopleForFiles: jest.fn(() => Promise.resolve(new Map(Object.entries(namedPeople)))),
+    },
   } as unknown as IndexDatabase;
 
   await sharePreviewHandler(req, res, database);

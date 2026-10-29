@@ -4,10 +4,12 @@ import { generateShareDescription } from "./generateShareDescription.ts";
 
 const databaseWithNames = (names: Record<number, string>) =>
   ({
-    getFaceClusterNames: (ids: number[]) =>
-      Promise.resolve(
-        new Map(ids.flatMap((id) => (names[id] ? [[id, names[id]] as const] : []))),
-      ),
+    faces: {
+      getFaceClusterNames: (ids: number[]) =>
+        Promise.resolve(
+          new Map(ids.flatMap((id) => (names[id] ? [[id, names[id]] as const] : []))),
+        ),
+    },
   }) as unknown as IndexDatabase;
 
 // PHOTRIX_OLLAMA_URL is unset in the test env, so ollamaGenerate short-circuits
