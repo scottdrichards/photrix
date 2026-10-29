@@ -1,5 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { isAbort, logFailure } from "../logFailure";
+import { attempt } from "../result";
 import css from "./ShareLinkModal.module.css";
 
 type Props = {
@@ -8,8 +10,38 @@ type Props = {
   onClose: () => void;
 };
 
+/**
+ * Feedback #156: the link is minted after two network round-trips, so the copy
+ * done then can be refused, and an installed app has no browser menu to share
+ * from. Both buttons here run from a fresh tap instead.
+ */
+const canNativeShare = () => typeof navigator.share === "function";
+
 export const ShareLinkModal = ({ url, copied, onClose }: Props) => {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [isCopied, setIsCopied] = useState(copied);
+
+  const copyLink = async () => {
+    // No async clipboard outside a secure context: leave the link selected.
+    if (!navigator.clipboard) {
+      inputRef.current?.select();
+      return;
+    }
+    const result = await attempt(navigator.clipboard.writeText(url));
+    if (result.ok) {
+      setIsCopied(true);
+      return;
+    }
+    logFailure("share.copy.failed", "Could not copy the share link")(result.error);
+    inputRef.current?.select();
+  };
+
+  const shareLink = async () => {
+    const result = await attempt(navigator.share({ url, title: document.title }));
+    if (!result.ok && !isAbort(result.error)) {
+      logFailure("share.native.failed", "The system share sheet failed")(result.error);
+    }
+  };
 
   // Select the full URL on open so Ctrl+C works immediately
   useEffect(() => {
@@ -57,7 +89,18 @@ export const ShareLinkModal = ({ url, copied, onClose }: Props) => {
           />
         </div>
 
-        {copied && <p className={css.copiedNote}>Copied to clipboard</p>}
+        <div className={css.actions}>
+          {canNativeShare() && (
+            <button className="btn btn-primary" onClick={() => void shareLink()}>
+              Share…
+            </button>
+          )}
+          <button className="btn btn-subtle" onClick={() => void copyLink()}>
+            Copy link
+          </button>
+        </div>
+
+        {isCopied && <p className={css.copiedNote}>Copied to clipboard</p>}
 
         <button className={`btn btn-subtle ${css.cancel}`} onClick={onClose}>
           Close

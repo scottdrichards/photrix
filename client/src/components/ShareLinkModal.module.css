@@ -87,6 +87,16 @@
   border-color: var(--brand);
 }
 
+.actions {
+  display: flex;
+  gap: var(--space-s);
+}
+
+.actions > :global(.btn) {
+  flex: 1;
+  justify-content: center;
+}
+
 .copiedNote {
   font-size: 0.85rem;
   color: var(--success, #2e7d32);
