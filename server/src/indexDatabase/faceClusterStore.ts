@@ -151,6 +151,20 @@ export class FaceClusterStore {
   private pcaCacheInflight: Promise<FaceClusterPCAResult> | null = null;
   private seedsCache: FaceClusterPCASeed[] | null = null;
   private seedsCacheInflight: Promise<FaceClusterPCASeed[]> | null = null;
+  /**
+   * Results derived from the seeds and the faces, kept until the next
+   * invalidateFaceClusterPCACache (any face, cluster, name or merge change).
+   * Opening a person re-ran all of them: ranking merge suggestions alone is
+   * ~1.1 s of dot products for a person with many sub-clusters, and the
+   * suggestions' date ranges and filtered counts ~0.6 s of SQL even for a
+   * tiny person. `derivedGeneration` keeps a computation that overlapped an
+   * invalidation from storing what it read before it.
+   */
+  private derivedGeneration = 0;
+  private suggestionRankingCache = new Map<number, FaceClusterPCASeed[]>();
+  private yearRangeLabelCache = new Map<number, string | null>();
+  /** Keyed by the filter's SQL and params, then by clusterId. */
+  private filteredCountCache = new Map<string, Map<number, number>>();
 
   constructor(
     private readonly db: AsyncSqlite,
@@ -411,52 +425,41 @@ export class FaceClusterStore {
 
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
 
-    // The `limited` CTE selects the top-N face ids entirely inside covering
-    // indexes (by_cluster unfiltered; filtered_files probing by_file_v3 under
-    // a filter — MATERIALIZED + CROSS JOIN force that join order, see
-    // queryFaceClusters). Only the N surviving rows are then fetched from
-    // faces/files for box and dimension columns, keeping the embedding-BLOB
-    // page drag proportional to the response, not the cluster size. The
-    // redundant clusterId > 0 term lets the planner prove the by_cluster
-    // partial index applies even though the cluster id is a bound parameter.
-    const limitedCTE = whereClause
-      ? `WITH filtered_files AS MATERIALIZED (
-           SELECT folder, fileName FROM files WHERE ${whereClause}
-          ),
-          limited AS (
-            SELECT faces.id AS id
-            FROM filtered_files
-            CROSS JOIN faces
-              ON faces.folder = filtered_files.folder
-             AND faces.fileName = filtered_files.fileName
-            ${
-              useDirectClusterFilter
-                ? `WHERE faces.clusterId > 0 AND faces.clusterId = ?`
-                : `JOIN faceClusters
-                     ON faceClusters.id = faces.clusterId
-                   WHERE faces.clusterId > 0
-                     AND COALESCE(faceClusters.personId, faces.clusterId) = ?`
-            }
-            ORDER BY faces.clusterSimilarity DESC, faces.id
-            LIMIT ${cap}
-          )`
-      : useDirectClusterFilter
-        ? `WITH limited AS (
-             SELECT id FROM faces
-             WHERE clusterId > 0 AND clusterId = ?
-             ORDER BY clusterSimilarity DESC, id
-             LIMIT ${cap}
-           )`
-        : `WITH limited AS (
-             SELECT faces.id AS id
-             FROM faces
-             JOIN faceClusters
-               ON faceClusters.id = faces.clusterId
-             WHERE faces.clusterId > 0
-               AND COALESCE(faceClusters.personId, faces.clusterId) = ?
-             ORDER BY faces.clusterSimilarity DESC, faces.id
-             LIMIT ${cap}
-           )`;
+    // Every query below starts from the person's own faces and checks each
+    // face's file against the filter, so its cost follows the person's size.
+    // It used to start from the files that pass the filter (MATERIALIZED +
+    // CROSS JOIN, the right shape for queryFaceClusters, which wants every
+    // cluster) and so paid for the whole library on every query: ~625 ms
+    // each, whatever the person's size. A filter is the normal case, not the
+    // exception — the standing default-exclusion filter (feedback #95)
+    // applies to every request — so a 27-face person's page took ~2.5 s.
+    // Person-first, the same counts take 3 ms (27 faces), 14 ms (1,420) and
+    // 107 ms (18,176).
+    //
+    // A merged person's clusters are resolved first and probed with IN; the
+    // COALESCE join over faceClusters walks every row (~130 ms) to find
+    // them. An unmerged cluster or an exactCluster request is one clusterId,
+    // which walks the by_cluster index in similarity order.
+    const scopedFaces = (direct: boolean, extra = "") =>
+      `faces.clusterId > 0
+       AND ${
+         direct
+           ? "faces.clusterId = ?"
+           : `faces.clusterId IN (
+                SELECT id FROM faceClusters WHERE COALESCE(personId, id) = ?
+              )`
+       }${extra}${
+         whereClause
+           ? `
+       AND EXISTS (
+         SELECT 1 FROM files
+         WHERE files.folder = faces.folder
+           AND files.fileName = faces.fileName
+           AND (${whereClause})
+       )`
+           : ""
+       }`;
+    const scopeParams = (scopeId: number) => [scopeId, ...whereParams];
 
     const detailRowColumns = `
          faces.id,
@@ -474,74 +477,43 @@ export class FaceClusterStore {
          files.regions,
          files.dateTaken`;
 
-    let rows = await this.db.all<ClusterDetailRow>(
-      `${limitedCTE}
-       SELECT ${detailRowColumns}
-       FROM limited
-       JOIN faces
-         ON faces.id = limited.id
-       JOIN files
-         ON files.folder = faces.folder
-        AND files.fileName = faces.fileName
-       ORDER BY faces.clusterSimilarity DESC, faces.id`,
-      ...whereParams,
-      faceScopeId,
-    );
+    // The top-N face ids are picked inside the indexes, and only those N rows
+    // are then fetched with their file's columns.
+    const detailRows = (extra: string, limit: number) =>
+      this.db.all<ClusterDetailRow>(
+        `WITH limited AS (
+           SELECT faces.id AS id
+           FROM faces
+           WHERE ${scopedFaces(useDirectClusterFilter, extra)}
+           ORDER BY faces.clusterSimilarity DESC, faces.id
+           LIMIT ${limit}
+         )
+         SELECT ${detailRowColumns}
+         FROM limited
+         JOIN faces
+           ON faces.id = limited.id
+         JOIN files
+           ON files.folder = faces.folder
+          AND files.fileName = faces.fileName
+         ORDER BY faces.clusterSimilarity DESC, faces.id`,
+        ...scopeParams(faceScopeId),
+      );
+    const countFaces = (extra = "") =>
+      this.db.get<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM faces
+         WHERE ${scopedFaces(useDirectClusterFilter, extra)}`,
+        ...scopeParams(faceScopeId),
+      );
+
+    let rows = await detailRows("", cap);
 
     if (!rows.length) {
       return { cluster: null };
     }
 
     // `count` reflects the whole cluster within the filter even when the faces
-    // list is capped; the unfiltered unmerged path is pure index-only (1ms);
-    // the COALESCE variant is kept only for merged persons and filtered queries.
-    const countRow = whereClause
-      ? useDirectClusterFilter
-        ? await this.db.get<{ count: number }>(
-            `WITH filtered_files AS MATERIALIZED (
-               SELECT folder, fileName FROM files WHERE ${whereClause}
-             )
-             SELECT COUNT(*) AS count
-             FROM filtered_files
-             CROSS JOIN faces
-               ON faces.folder = filtered_files.folder
-              AND faces.fileName = filtered_files.fileName
-             WHERE faces.clusterId = ?
-               AND faces.clusterId > 0`,
-            ...whereParams,
-            faceScopeId,
-          )
-        : await this.db.get<{ count: number }>(
-            `WITH filtered_files AS MATERIALIZED (
-               SELECT folder, fileName FROM files WHERE ${whereClause}
-             )
-             SELECT COUNT(*) AS count
-             FROM filtered_files
-             CROSS JOIN faces
-               ON faces.folder = filtered_files.folder
-              AND faces.fileName = filtered_files.fileName
-             JOIN faceClusters
-               ON faceClusters.id = faces.clusterId
-             WHERE COALESCE(faceClusters.personId, faces.clusterId) = ?
-               AND faces.clusterId > 0`,
-            ...whereParams,
-            faceScopeId,
-          )
-      : useDirectClusterFilter
-        ? await this.db.get<{ count: number }>(
-            `SELECT COUNT(*) AS count FROM faces
-             WHERE clusterId > 0 AND clusterId = ?`,
-            faceScopeId,
-          )
-        : await this.db.get<{ count: number }>(
-            `SELECT COUNT(*) AS count
-             FROM faces
-             JOIN faceClusters
-               ON faceClusters.id = faces.clusterId
-             WHERE faces.clusterId > 0
-               AND COALESCE(faceClusters.personId, faces.clusterId) = ?`,
-            faceScopeId,
-          );
+    // list is capped.
+    const countRow = await countFaces();
 
     // Feedback #153: past the cap, best-match-first starves video faces. A
     // face cut from a video frame is blurrier than a photo's and scores a
@@ -552,64 +524,12 @@ export class FaceClusterStore {
     // sorts rely on. Only capped people pay for the two extra queries.
     const total = countRow?.count ?? rows.length;
     if (total > rows.length) {
-      // The person's clusters are resolved first and probed with IN: the
-      // COALESCE join the main query uses walks every faceClusters row, which
-      // cost ~235 ms here against ~22 ms this way for the largest person. A
-      // filter goes on the file side, where "is a video" is mimeType (the
-      // same faces as frameTimeMs IS NOT NULL, measured over every face).
-      const clusterScope = useDirectClusterFilter
-        ? `faces.clusterId = ?`
-        : `faces.clusterId IN (
-             SELECT id FROM faceClusters WHERE COALESCE(personId, id) = ?
-           )`;
-      const videoFaces = whereClause
-        ? `WITH filtered_files AS MATERIALIZED (
-             SELECT folder, fileName FROM files
-             WHERE (${whereClause}) AND mimeType LIKE 'video/%'
-           ),
-           video_faces AS (
-             SELECT faces.id, faces.clusterSimilarity
-             FROM filtered_files
-             CROSS JOIN faces
-               ON faces.folder = filtered_files.folder
-              AND faces.fileName = filtered_files.fileName
-             WHERE faces.clusterId > 0 AND ${clusterScope}
-           )`
-        : `WITH video_faces AS (
-             SELECT faces.id, faces.clusterSimilarity
-             FROM faces
-             WHERE faces.clusterId > 0
-               AND faces.frameTimeMs IS NOT NULL
-               AND ${clusterScope}
-           )`;
-      const videoCountRow = await this.db.get<{ count: number }>(
-        `${videoFaces}
-         SELECT COUNT(*) AS count FROM video_faces`,
-        ...whereParams,
-        faceScopeId,
-      );
+      const videoOnly = "\n       AND faces.frameTimeMs IS NOT NULL";
+      const videoCountRow = await countFaces(videoOnly);
       const quota = videoFaceQuota(cap, total, videoCountRow?.count ?? 0);
       const shown = rows.filter((row) => row.frameTimeMs !== null).length;
       if (quota > shown) {
-        const videoRows = await this.db.all<ClusterDetailRow>(
-          `${videoFaces},
-           limited AS (
-             SELECT id FROM video_faces
-             ORDER BY clusterSimilarity DESC, id
-             LIMIT ${quota}
-           )
-           SELECT ${detailRowColumns}
-           FROM limited
-           JOIN faces
-             ON faces.id = limited.id
-           JOIN files
-             ON files.folder = faces.folder
-            AND files.fileName = faces.fileName
-           ORDER BY faces.clusterSimilarity DESC, faces.id`,
-          ...whereParams,
-          faceScopeId,
-        );
-        rows = withVideoFaceShare(rows, videoRows, cap);
+        rows = withVideoFaceShare(rows, await detailRows(videoOnly, quota), cap);
       }
     }
 
@@ -619,53 +539,24 @@ export class FaceClusterStore {
       effectivePersonId,
     );
 
-    const centroidAggregateRows = whereClause
-      ? await this.db.all<{ clusterId: number; count: number; id: number }>(
-          `WITH filtered_files AS MATERIALIZED (
-             SELECT folder, fileName FROM files WHERE ${whereClause}
-           )
-           SELECT
-             faces.clusterId AS clusterId,
-             COUNT(*) AS count,
-             MAX(faces.clusterSimilarity) AS representativeSimilarity,
-             faces.id AS id
-           FROM filtered_files
-           CROSS JOIN faces
-             ON faces.folder = filtered_files.folder
-            AND faces.fileName = filtered_files.fileName
-           JOIN faceClusters
-             ON faceClusters.id = faces.clusterId
-           WHERE faces.clusterId > 0
-             AND COALESCE(faceClusters.personId, faces.clusterId) = ?
-           GROUP BY faces.clusterId
-           ORDER BY COUNT(*) DESC, faces.clusterId`,
-          ...whereParams,
-          effectivePersonId,
-        )
-      : isUnmerged
-        ? await this.db.all<{ clusterId: number; count: number; id: number }>(
-            `SELECT clusterId, COUNT(*) AS count,
-                    MAX(clusterSimilarity) AS representativeSimilarity, id
-             FROM faces
-             WHERE clusterId > 0 AND clusterId = ?
-             GROUP BY clusterId`,
-            effectivePersonId,
-          )
-        : await this.db.all<{ clusterId: number; count: number; id: number }>(
-            `SELECT
-               faces.clusterId AS clusterId,
-               COUNT(*) AS count,
-               MAX(faces.clusterSimilarity) AS representativeSimilarity,
-               faces.id AS id
-             FROM faces
-             JOIN faceClusters
-               ON faceClusters.id = faces.clusterId
-             WHERE faces.clusterId > 0
-               AND COALESCE(faceClusters.personId, faces.clusterId) = ?
-             GROUP BY faces.clusterId
-             ORDER BY COUNT(*) DESC, faces.clusterId`,
-            effectivePersonId,
-          );
+    // Match Groups: always the whole person (effectivePersonId), even for an
+    // exactCluster request.
+    const centroidAggregateRows = await this.db.all<{
+      clusterId: number;
+      count: number;
+      id: number;
+    }>(
+      `SELECT
+         faces.clusterId AS clusterId,
+         COUNT(*) AS count,
+         MAX(faces.clusterSimilarity) AS representativeSimilarity,
+         faces.id AS id
+       FROM faces
+       WHERE ${scopedFaces(isUnmerged)}
+       GROUP BY faces.clusterId
+       ORDER BY COUNT(*) DESC, faces.clusterId`,
+      ...scopeParams(effectivePersonId),
+    );
 
     const centroidRepresentatives = new Map<number, FaceClusterFace>();
     if (centroidAggregateRows.length > 0) {
@@ -764,6 +655,10 @@ export class FaceClusterStore {
     this.pcaCacheInflight = null;
     this.seedsCache = null;
     this.seedsCacheInflight = null;
+    this.derivedGeneration++;
+    this.suggestionRankingCache.clear();
+    this.yearRangeLabelCache.clear();
+    this.filteredCountCache.clear();
   }
 
   private buildFaceClustersPCAResult(
@@ -819,29 +714,10 @@ export class FaceClusterStore {
     personId: number,
     filter: QueryOptions["filter"],
   ): Promise<FaceClusterSummary[]> {
-    const seeds = await this.listFaceClusterPCASeeds(MIN_FACE_CLUSTER_SIZE);
-    const personClusterRows = await this.db.all<{ id: number }>(
-      `SELECT id FROM faceClusters
-       WHERE id = ? OR personId = ?`,
-      personId,
-      personId,
-    );
-    const personClusterIds = new Set(personClusterRows.map((row) => row.id));
-    const focusedSeeds = seeds.filter((seed) => personClusterIds.has(seed.clusterId));
-    if (focusedSeeds.length === 0) return [];
-
-    const suggestedSeeds = seeds
-      .filter((seed) => seed.personId === null && !personClusterIds.has(seed.clusterId))
-      .map((seed) => ({
-        seed,
-        similarity: Math.max(
-          ...focusedSeeds.map((focusedSeed) =>
-            dotFaceClusterVectors(seed.vector, focusedSeed.vector),
-          ),
-        ),
-      }))
-      .sort((a, b) => b.similarity - a.similarity || b.seed.count - a.seed.count)
-      .slice(0, MAX_MERGE_SUGGESTIONS);
+    const suggestedSeeds = (await this.rankMergeSuggestions(personId)).map((seed) => ({
+      seed,
+    }));
+    if (suggestedSeeds.length === 0) return [];
 
     // The rest of the detail (faces, count, Match Groups) is scoped to the
     // active filter, so scope the suggested counts to it too — otherwise a
@@ -880,10 +756,54 @@ export class FaceClusterStore {
   }
 
   /**
+   * The unmerged clusters most like any of the person's clusters, best first.
+   * Cached per person (see derivedGeneration).
+   */
+  private async rankMergeSuggestions(personId: number): Promise<FaceClusterPCASeed[]> {
+    const cached = this.suggestionRankingCache.get(personId);
+    if (cached) return cached;
+    const generation = this.derivedGeneration;
+
+    const seeds = await this.listFaceClusterPCASeeds(MIN_FACE_CLUSTER_SIZE);
+    const personClusterRows = await this.db.all<{ id: number }>(
+      `SELECT id FROM faceClusters
+       WHERE id = ? OR personId = ?`,
+      personId,
+      personId,
+    );
+    const personClusterIds = new Set(personClusterRows.map((row) => row.id));
+    const focusedVectors = seeds
+      .filter((seed) => personClusterIds.has(seed.clusterId))
+      .map((seed) => seed.vector);
+
+    const ranked: FaceClusterPCASeed[] = [];
+    if (focusedVectors.length > 0) {
+      const scored: Array<{ seed: FaceClusterPCASeed; similarity: number }> = [];
+      for (const seed of seeds) {
+        if (seed.personId !== null || personClusterIds.has(seed.clusterId)) continue;
+        let similarity = Number.NEGATIVE_INFINITY;
+        for (const vector of focusedVectors) {
+          const dot = dotFaceClusterVectors(seed.vector, vector);
+          if (dot > similarity) similarity = dot;
+        }
+        scored.push({ seed, similarity });
+      }
+      scored.sort((a, b) => b.similarity - a.similarity || b.seed.count - a.seed.count);
+      for (const { seed } of scored.slice(0, MAX_MERGE_SUGGESTIONS)) ranked.push(seed);
+    }
+
+    if (generation === this.derivedGeneration) {
+      this.suggestionRankingCache.set(personId, ranked);
+    }
+    return ranked;
+  }
+
+  /**
    * Per-cluster face counts restricted to the files that pass `filter`. Returns
    * `null` when there is no filter (callers keep their unfiltered counts) so the
-   * default People path pays for no extra query. Uses the same MATERIALIZED +
-   * CROSS JOIN join-order forcing as queryFaceClusters to stay index-only.
+   * default People path pays for no extra query. Starts from the few clusters'
+   * faces and checks each face's file, rather than from every file that passes
+   * the filter (see getFaceClusterDetail).
    */
   private async getFilteredClusterFaceCounts(
     clusterIds: number[],
@@ -894,22 +814,32 @@ export class FaceClusterStore {
     const uniqueClusterIds = [...new Set(clusterIds.filter((id) => id > 0))];
     if (uniqueClusterIds.length === 0) return new Map();
 
+    const generation = this.derivedGeneration;
+    const cacheKey = `${whereClause}\u0000${JSON.stringify(whereParams)}`;
+    const cached = this.filteredCountCache.get(cacheKey) ?? new Map<number, number>();
+    const missing = uniqueClusterIds.filter((id) => !cached.has(id));
+    if (missing.length === 0) return cached;
+
     const rows = await this.db.all<{ clusterId: number; count: number }>(
-      `WITH filtered_files AS MATERIALIZED (
-         SELECT folder, fileName FROM files WHERE ${whereClause}
-       )
-       SELECT faces.clusterId AS clusterId, COUNT(*) AS count
-       FROM filtered_files
-       CROSS JOIN faces
-         ON faces.folder = filtered_files.folder
-        AND faces.fileName = filtered_files.fileName
-       WHERE faces.clusterId IN (${uniqueClusterIds.map(() => "?").join(", ")})
+      `SELECT faces.clusterId AS clusterId, COUNT(*) AS count
+       FROM faces
+       WHERE faces.clusterId IN (${missing.map(() => "?").join(", ")})
+         AND EXISTS (
+           SELECT 1 FROM files
+           WHERE files.folder = faces.folder
+             AND files.fileName = faces.fileName
+             AND (${whereClause})
+         )
        GROUP BY faces.clusterId`,
+      ...missing,
       ...whereParams,
-      ...uniqueClusterIds,
     );
 
-    return new Map(rows.map((row) => [row.clusterId, row.count]));
+    const counts = new Map(cached);
+    for (const id of missing) counts.set(id, 0);
+    for (const row of rows) counts.set(row.clusterId, row.count);
+    if (generation === this.derivedGeneration) this.filteredCountCache.set(cacheKey, counts);
+    return counts;
   }
 
   private async getFaceClusterYearRangeLabels(
@@ -920,7 +850,9 @@ export class FaceClusterStore {
     ];
     if (uniqueClusterIds.length === 0) return new Map();
 
-    const rows = await this.db.all<{
+    const generation = this.derivedGeneration;
+    const missing = uniqueClusterIds.filter((id) => !this.yearRangeLabelCache.has(id));
+    const rows = missing.length === 0 ? [] : await this.db.all<{
       clusterId: number;
       minDate: number | null;
       maxDate: number | null;
@@ -933,17 +865,25 @@ export class FaceClusterStore {
        JOIN files
          ON files.folder = faces.folder
         AND files.fileName = faces.fileName
-       WHERE faces.clusterId IN (${uniqueClusterIds.map(() => "?").join(", ")})
+       WHERE faces.clusterId IN (${missing.map(() => "?").join(", ")})
        GROUP BY faces.clusterId`,
-      ...uniqueClusterIds,
+      ...missing,
     );
 
-    return new Map(
-      rows.flatMap((row) => {
-        const label = formatYearRangeLabel(row.minDate, row.maxDate);
-        return label ? [[row.clusterId, label] as const] : [];
-      }),
-    );
+    const fresh = new Map<number, string | null>(missing.map((id) => [id, null]));
+    for (const row of rows) {
+      fresh.set(row.clusterId, formatYearRangeLabel(row.minDate, row.maxDate) || null);
+    }
+    if (generation === this.derivedGeneration) {
+      for (const [id, label] of fresh) this.yearRangeLabelCache.set(id, label);
+    }
+
+    const labels = new Map<number, string>();
+    for (const id of uniqueClusterIds) {
+      const label = fresh.has(id) ? fresh.get(id) : this.yearRangeLabelCache.get(id);
+      if (label) labels.set(id, label);
+    }
+    return labels;
   }
 
   private async listFaceClusterPCASeeds(minCount: number): Promise<FaceClusterPCASeed[]> {
