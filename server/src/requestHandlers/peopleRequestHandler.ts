@@ -296,14 +296,9 @@ export const peopleRequestHandler = async (
   // POST /api/people/assign-face — move one face to another person, existing
   // (`personId`) or new (`name`). The viewer's "change who this is" (feedback #160).
   if (url.pathname === "/api/people/assign-face" && req.method === "POST") {
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch {
-      writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
-    const b = (body ?? {}) as Record<string, unknown>;
+    const body = await readJsonRequest<unknown>(req, res);
+    if (!body) return;
+    const b = body as Record<string, unknown>;
     if (typeof b.faceId !== "number" || !Number.isFinite(b.faceId)) {
       writeJson(res, 400, { error: "Missing faceId" });
       return;
