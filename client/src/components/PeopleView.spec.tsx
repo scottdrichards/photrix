@@ -46,6 +46,9 @@ vi.mock("./selection/SelectionContext", () => ({
 
 type MockObserver = {
   trigger: (isIntersecting: boolean) => void;
+  /** The elements this observer watches. */
+  targets: Element[];
+  isLive: () => boolean;
 };
 
 const faceGridObservers: MockObserver[] = [];
@@ -54,6 +57,8 @@ beforeAll(() => {
   class FakeIntersectionObserver {
     private callback: IntersectionObserverCallback;
     private live = true;
+
+    private targets: Element[] = [];
 
     constructor(callback: IntersectionObserverCallback) {
       this.callback = callback;
@@ -65,10 +70,14 @@ beforeAll(() => {
             this as unknown as IntersectionObserver,
           );
         },
+        targets: this.targets,
+        isLive: () => this.live,
       });
     }
 
-    observe = vi.fn();
+    observe = vi.fn((target: Element) => {
+      this.targets.push(target);
+    });
     disconnect = vi.fn(() => {
       this.live = false;
     });
@@ -1256,9 +1265,20 @@ describe("PeopleView", () => {
       manyFaces.length,
     );
 
-    // Scrolling the sentinel into view reveals more.
-    expect(faceGridObservers.length).toBeGreaterThan(0);
-    faceGridObservers[faceGridObservers.length - 1].trigger(true);
+    // Scrolling the sentinel into view reveals more. Face crops lazy-load
+    // through their own observers (FaceCropImage), so pick the live observer
+    // watching the grid's sentinel rather than whichever was created last.
+    // The grid can re-render after the detail loads, which replaces the
+    // sentinel's observer, so wait for a live one.
+    const liveSentinelObserver = () =>
+      faceGridObservers
+        .filter((observer) => observer.isLive())
+        .filter((observer) => observer.targets.some((target) => target.tagName !== "IMG"))
+        .at(-1);
+    await waitFor(() => {
+      expect(liveSentinelObserver()).toBeDefined();
+    });
+    liveSentinelObserver()!.trigger(true);
 
     // Mounting 150 face cards takes ~4 s in jsdom on its own, so both this
     // waitFor (1 s default) and the test (5 s default) need more room
