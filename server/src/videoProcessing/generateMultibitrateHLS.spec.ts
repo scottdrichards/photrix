@@ -188,6 +188,9 @@ describe("generateVariantHLS", () => {
     // Output keeps whole-file timestamps and segment numbers.
     expect(encodeArgs[encodeArgs.indexOf("-output_ts_offset") + 1]).toBe("420");
     expect(encodeArgs[encodeArgs.indexOf("-start_number") + 1]).toBe("420");
+    // Not -copyts: that keeps the source's timestamp base, which doesn't match
+    // an encode from 0, and spliced segments stutter.
+    expect(encodeArgs).not.toContain("-copyts");
   });
 
   it("uses NVDEC+NVENC (CPU auto-rotate) for rotated/portrait videos on NVIDIA", async () => {

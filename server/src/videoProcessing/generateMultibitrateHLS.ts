@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { mkdir, readdir, rm, stat, writeFile, access } from "fs/promises";
+import { mkdir, stat, writeFile, access } from "fs/promises";
 import { join } from "path";
 import { getMirroredHLSDirectory } from "../common/cacheUtils.ts";
 import { pipeChildProcessLogs, appendWithLimit } from "./videoUtils.ts";
@@ -10,7 +10,7 @@ import { hlsOutputFrameRate } from "./hlsOutputFrameRate.ts";
 import { getLogger } from "../observability/logger.ts";
 import { pathToken } from "../observability/privacy.ts";
 import {
-  getVideoSourceProfile,
+  getCachedVideoSourceProfile,
   isHighBitDepthPixelFormat,
   type VideoSourceProfile,
 } from "./getVideoMetadata.ts";
@@ -209,30 +209,6 @@ export const prepareMultibitrateHLSStructure = async (
   if (!masterExists) {
     await createMasterPlaylist(hlsDir);
   }
-};
-
-/**
- * Empties a variant's output (stale segments + playlist) so a restarted encode is
- * the sole author of that variant's cache, *without* removing the directory
- * itself.
- *
- * Deleting the directory is what crashed the server: a live recursive fs.watch on
- * the `abr` tree re-scans a directory on every event, so removing `abr/1080p`
- * out from under it made that re-scan throw ENOENT, which Node surfaces as an
- * "error" event — fatal on a watcher with no error listener. Keeping the
- * directory in place removes the race at the source; the watcher hardening in
- * hlsSegmentWatcher is the backstop.
- */
-export const clearVariantOutput = async (
-  hlsDir: string,
-  height: number,
-): Promise<void> => {
-  const variantDir = join(hlsDir, `${height}p`);
-  await mkdir(variantDir, { recursive: true });
-  const entries = await readdir(variantDir).catch(() => [] as string[]);
-  await Promise.all(
-    entries.map((name) => rm(join(variantDir, name), { recursive: true, force: true })),
-  );
 };
 
 /**
@@ -516,6 +492,11 @@ const scrubEncodePaths = (text: string, filePath: string, hlsDir: string): strin
  * from 0 (measured: same frame count and cut points, first PTS within ~20 ms).
  * Forced keyframes count from the seek point, and the seek lands on a segment
  * boundary, so segment cuts stay on whole seconds.
+ *
+ * Not `-copyts`: it keeps the source's own timestamp base, which differs from
+ * an encode from 0 whenever the source's start time isn't 0 (phones and cameras
+ * commonly aren't). An earlier seek-start used it, and the mismatch at every
+ * splice between the two encodes' segments was a visible stutter.
  */
 export const seekStartArgs = (
   startSegment: number,
@@ -774,7 +755,7 @@ export const generateVariantHLS = async (
 
   const [gpu, source] = await Promise.all([
     getGpuAcceleration(),
-    getVideoSourceProfile(filePath),
+    getCachedVideoSourceProfile(filePath),
   ]);
   await encodeVariant(
     filePath,
