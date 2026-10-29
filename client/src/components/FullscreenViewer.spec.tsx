@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import type { PhotoItem } from "../api";
 import { FullscreenViewer } from "./FullscreenViewer";
+import { FilterProvider, useFilter } from "./filter/FilterContext";
 import css from "./FullscreenViewer.module.css";
 import swipeCss from "./SwipePhotoViewer.module.css";
 
@@ -357,6 +358,50 @@ describe("FullscreenViewer", () => {
     expect(
       await screen.findByText("Two girls hug in a red armchair beside a door."),
     ).toBeInTheDocument();
+  });
+
+  it("opens a folder from the file info path, dropping the search (feedback #164)", () => {
+    let selected: PhotoItem | null = createPhoto({ path: "/trips/2024/beach.jpg", name: "beach.jpg" });
+    const setSelected = vi.fn((next: PhotoItem | null) => {
+      selected = next;
+    });
+    useSelectionContextMock.mockImplementation(() => ({
+      selected,
+      selectionMode: false,
+      setSelected,
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    }));
+    let current: ReturnType<typeof useFilter>["filter"] = {};
+    const FilterProbe = () => {
+      current = useFilter().filter;
+      return null;
+    };
+    window.history.replaceState(null, "", "/?q=sunset&camera=X-T5");
+
+    const tree = () => (
+      <FilterProvider>
+        <FullscreenViewer />
+        <FilterProbe />
+      </FilterProvider>
+    );
+    const { rerender } = render(tree());
+    expect(current.semanticQuery).toBe("sunset");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show file info" }));
+    const dd = screen.getByText("Path").nextElementSibling;
+    expect(dd).toHaveTextContent("/trips/2024/beach.jpg");
+    expect(screen.getAllByRole("button", { name: /^(trips|2024)$/ })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "2024" }));
+    expect(setSelected).toHaveBeenCalledWith(null);
+    // The folder applies once the viewer has closed.
+    expect(current.path).toBe("");
+    rerender(tree());
+
+    expect(current.path).toBe("trips/2024/");
+    expect(current.semanticQuery).toBeUndefined();
+    expect(current.cameraModelFilter).toBeUndefined();
+    window.history.replaceState(null, "", "/");
   });
 
   it("shows file info and keeps the info panel open across close/open", () => {
