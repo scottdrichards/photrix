@@ -162,10 +162,32 @@ describe("generateVariantHLS", () => {
     expect(encodeArgs).toContain("scale_cuda=-2:720:format=yuv420p");
     // Frame rate forced with -r (no CPU fps filter on CUDA frames).
     expect(encodeArgs).toContain("-r");
-    // Always encodes from segment 0: no input seek, segments numbered from 0.
+    // A default encode starts at segment 0: no input seek, segments numbered from 0.
     expect(encodeArgs).not.toContain("-ss");
     expect(encodeArgs).not.toContain("-copyts");
     expect(encodeArgs[encodeArgs.indexOf("-start_number") + 1]).toBe("0");
+  });
+
+  it("starts a seek's encode at the requested segment on the file's own timeline (feedback #167)", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-seek-"));
+    process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
+    const source = path.join(root, "long.mp4");
+    writeFileSync(source, "video");
+
+    const spawnMock = makeNvidiaSpawnMock(JSON.stringify({ streams: [] }));
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+    const { generateVariantHLS } = await import("./generateMultibitrateHLS.ts");
+
+    await generateVariantHLS(source, 720, { startSegment: 420 });
+
+    const encodeArgs = lastEncodeArgs(spawnMock);
+    // Input seek: -ss before -i.
+    expect(encodeArgs[encodeArgs.indexOf("-ss") + 1]).toBe("420");
+    expect(encodeArgs.indexOf("-ss")).toBeLessThan(encodeArgs.indexOf("-i"));
+    // Output keeps whole-file timestamps and segment numbers.
+    expect(encodeArgs[encodeArgs.indexOf("-output_ts_offset") + 1]).toBe("420");
+    expect(encodeArgs[encodeArgs.indexOf("-start_number") + 1]).toBe("420");
   });
 
   it("uses NVDEC+NVENC (CPU auto-rotate) for rotated/portrait videos on NVIDIA", async () => {
@@ -198,7 +220,7 @@ describe("generateVariantHLS", () => {
     const vfArg = encodeArgs[encodeArgs.indexOf("-vf") + 1];
     expect(vfArg).toContain("fps=");
     expect(encodeArgs).not.toContain("-r");
-    // No seek: always from start.
+    // No seek for a default encode.
     expect(encodeArgs).not.toContain("-ss");
   });
 

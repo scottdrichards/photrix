@@ -40,6 +40,7 @@ import { waitForHlsFile } from "../../videoProcessing/hlsSegmentWatcher.ts";
 import { buildVodVariantPlaylist } from "../../videoProcessing/buildHlsPlaylist.ts";
 import {
   claimVariantEncode,
+  keepVariantAlive,
   registerHlsProcess,
   touchHlsSession,
   touchVariant,
@@ -373,24 +374,35 @@ const tryHLSStream = async (
       await prepareMultibitrateHLSStructure(normalizedPath);
     }
 
-    // Ensure a live encode is running for `variantHeight`. Encodes always start from
-    // segment 0 — no offset encodes. When a dead encode is restarted, we first clear
-    // the variant's cached segments so the new encode starts with a clean slate (no
-    // stale segments from a previous encode session causing inconsistent playback).
+    // Ensure a live encode will produce `segment` of `variantHeight` soon. A request
+    // far past the encode head (a seek) starts a new encode at that segment rather
+    // than waiting for one from 0:00 (feedback #167). An encode from segment 0 first
+    // clears the variant's cached segments so it is their sole author; a seek-started
+    // one keeps them, because its segments line up with theirs (see seekStartArgs)
+    // and seeking back to an already-encoded part should stay instant.
     // Queued as a user-blocking task. The output is ephemeral — served while the
     // player fetches, then reaped once that variant goes idle (an ABR switch away) or
     // the whole tree goes idle, so we persist no DB marker.
-    const ensureEncoding = (variantHeight: number): void => {
-      const needsStart = claimVariantEncode(hlsDir, variantHeight);
-      if (!needsStart) return;
+    const ensureEncoding = (variantHeight: number, segment = 0): void => {
+      const startSegment = claimVariantEncode(hlsDir, variantHeight, segment, (index) =>
+        existsSync(
+          getVariantSegmentPath(
+            hlsDir,
+            variantHeight,
+            `segment_${String(index).padStart(3, "0")}.ts`,
+          ),
+        ),
+      );
+      if (startSegment === null) return;
       recordServerDiagnosticEvent({
         level: "warn",
         event: "video.hls.encode.queued",
-        message: `Queued ${variantHeight}p encode (from start)`,
+        message: `Queued ${variantHeight}p encode from segment ${startSegment}`,
         data: {
           path: subPath,
           hlsDir,
           variantHeight,
+          startSegment,
           queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
         },
       });
@@ -405,9 +417,10 @@ const tryHLSStream = async (
               // Empties the directory rather than deleting it: removing a variant
               // directory that the live recursive fs.watch on this tree is watching
               // made its internal re-scan throw ENOENT, which killed the process.
-              await clearVariantOutput(hlsDir, variantHeight);
+              if (startSegment === 0) await clearVariantOutput(hlsDir, variantHeight);
               await generateVariantHLS(normalizedPath, variantHeight, {
                 onSpawn: (child) => registerHlsProcess(hlsDir, variantHeight, child),
+                startSegment,
               });
             })().then(
               () => {},
@@ -440,7 +453,7 @@ const tryHLSStream = async (
 
       // If the segment isn't on disk yet, make sure an encode is running.
       if (!existsSync(segmentPath) && segmentIndex !== null) {
-        ensureEncoding(variantHeight);
+        ensureEncoding(variantHeight, segmentIndex);
       }
 
       recordServerDiagnosticEvent({
@@ -457,7 +470,11 @@ const tryHLSStream = async (
         },
       });
 
-      const available = await waitForHlsFile(hlsDir, segmentPath);
+      // Hold the encode open for as long as this request waits on it, and let go
+      // as soon as the player abandons the request (a seek elsewhere, ABR switch).
+      const stopKeepAlive = keepVariantAlive(hlsDir, variantHeight);
+      res.once("close", stopKeepAlive);
+      const available = await waitForHlsFile(hlsDir, segmentPath).finally(stopKeepAlive);
       if (!available) {
         recordServerDiagnosticEvent({
           level: "error",
