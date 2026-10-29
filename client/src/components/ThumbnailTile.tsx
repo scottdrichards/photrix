@@ -16,7 +16,8 @@ import { buildMomentClusterPreviewUrl, type PhotoItem, type SearchSource } from 
 import { useNearViewport } from "../hooks/useNearViewport";
 import { isHoverSuppressedByScroll } from "./ThumbnailTile.hoverIntent";
 import { useSelectionContext } from "./selection/SelectionContext";
-import { type EditAdj, computeStyle, isDirty, EditSvgDefs } from "./PhotoEditor";
+import { type EditAdj, computeStyle, isDirty } from "./photoEdit/editAdj";
+import { EditSvgDefs } from "./photoEdit/EditSvgDefs";
 import { formatDuration } from "./tileMedia/formatDuration";
 import { requestLiveOpen } from "./tileMedia/liveOpenIntent";
 import { useGatedThumbnailUrl } from "./tileMedia/useGatedThumbnailUrl";

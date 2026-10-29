@@ -21,7 +21,7 @@
     "test:coverage": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
     "test:python": "cd python && ${PHOTRIX_PYTHON:-python3} -m unittest discover -p '*_test.py'",
     "test:scripts": "node --test scripts/",
-    "lint": "eslint \"src/**/*.{ts,tsx}\"",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" --max-warnings 0",
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
     "format": "prettier --write \"{src,tests}/**/*.{ts,tsx,js,jsx,json,md}\"",
     "format:check": "prettier --check \"{src,tests}/**/*.{ts,tsx,js,jsx,json,md}\"",

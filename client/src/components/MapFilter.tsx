@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cx } from "../cx";
 import { Spinner } from "../Spinner";
 import css from "./MapFilter.module.css";
@@ -84,6 +84,10 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
   const { filter, setFilter } = useFilter();
   const { locationBounds } = filter;
   const normalizedLocationBounds = locationBounds ?? undefined;
+  // The map is built once per element and fits to the bounds current at that
+  // moment; later bound changes move it through the effects above, not a rebuild.
+  const latestBoundsRef = useRef(normalizedLocationBounds);
+  latestBoundsRef.current = normalizedLocationBounds;
 
   const [mapElement, setMapElement] = useState<HTMLDivElement | null>(null);
   const [mapInstance, setMapInstance] = useState<Map | null>(null);
@@ -197,14 +201,10 @@ export const MapFilter: React.FC<MapFilterProps> = ({ compact = false }) => {
 
     requestAnimationFrame(() => {
       map.updateSize();
-      if (normalizedLocationBounds) {
+      const bounds = latestBoundsRef.current;
+      if (bounds) {
         const extent = transformExtent(
-          [
-            normalizedLocationBounds.west,
-            normalizedLocationBounds.south,
-            normalizedLocationBounds.east,
-            normalizedLocationBounds.north,
-          ],
+          [bounds.west, bounds.south, bounds.east, bounds.north],
           "EPSG:4326",
           "EPSG:3857",
         );

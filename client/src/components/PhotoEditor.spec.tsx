@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_ADJ,
-  applyPixelAdj,
-  computeStyle,
-  deriveAutoAdjFromSample,
-  type EditAdj,
-} from "./PhotoEditor";
+import { DEFAULT_ADJ, computeStyle, type EditAdj } from "./photoEdit/editAdj";
+import { applyPixelAdj } from "./photoEdit/applyPixelAdj";
+import { deriveAutoAdjFromSample } from "./photoEdit/deriveAutoAdj";
 
 function makeSolidImageData(width: number, height: number, r: number, g: number, b: number): Uint8ClampedArray {
   const data = new Uint8ClampedArray(width * height * 4);

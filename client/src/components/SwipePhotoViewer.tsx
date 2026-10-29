@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PhotoItem } from "../api";
 import { formatProgressLabel, useProgressiveImageFetch } from "../hooks/useProgressiveImageFetch";
 import { Spinner } from "../Spinner";
-import type { EditStyle } from "./PhotoEditor";
+import type { EditStyle } from "./photoEdit/editAdj";
 import css from "./SwipePhotoViewer.module.css";
 
 const MAX_SCALE = 5;

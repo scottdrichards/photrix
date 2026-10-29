@@ -312,8 +312,6 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
           }
         : IDLE_SEARCH_ACTIVITY,
     );
-    // handleRetrySearch only calls state setters, so a stale copy is fine.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [semanticActive, searchingFirstPage, searchOutcome, enabledSources]);
   useEffect(() => () => publishSearchActivity(IDLE_SEARCH_ACTIVITY), []);
   const emptyMessage = filter.semanticQuery

@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
-    "lint": "eslint \"src/**/*.{ts,tsx}\"",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" --max-warnings 0",
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,json,css,scss,md,mjs,cjs}\" \"*.{json,md}\" \"vite.config.ts\" \"eslint.config.mjs\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,jsx,json,css,scss,md,mjs,cjs}\" \"*.{json,md}\" \"vite.config.ts\" \"eslint.config.mjs\""
