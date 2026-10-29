@@ -18,6 +18,14 @@ const IDLE_MS = Number(process.env.PHOTRIX_HLS_IDLE_MS) || 90_000;
 // instead of leaving every level's encode running.
 const VARIANT_IDLE_MS = Number(process.env.PHOTRIX_HLS_VARIANT_IDLE_MS) || 8_000;
 
+// How far past the encode head a request may be before waiting for the running
+// encode costs more than starting a new one at the request (feedback #167). The
+// encode runs ~2-3x realtime and a restart costs a spawn plus a seek, so ~10
+// one-second segments is a few seconds either way. Normal playback asks for the
+// segment right after the head; only a seek lands further out.
+export const SEEK_RESTART_GAP_SEGMENTS =
+  Number(process.env.PHOTRIX_HLS_SEEK_RESTART_GAP) || 10;
+
 type VariantEncode = {
   // Running encoder process for this variant. Null while the encode is still queued
   // (claimed but not yet spawned) or after it has ended.
@@ -28,6 +36,11 @@ type VariantEncode = {
   // child is also null — is NOT mistaken for "needs another encode", which would spawn
   // a duplicate writer into the same directory.
   dead: boolean;
+  // First segment this encode writes: 0, or where a seek started it.
+  startSegment: number;
+  // Highest segment index known to be on disk for this encode (a scan cursor,
+  // so finding the head doesn't re-check every segment on each request).
+  headHint: number;
   // Idle reaper that kills this variant's encode after VARIANT_IDLE_MS of no fetches.
   idleTimer: ReturnType<typeof setTimeout>;
 };
@@ -152,9 +165,12 @@ const newVariantEntry = (
   hlsDir: string,
   height: number,
   dead: boolean,
+  startSegment = 0,
 ): VariantEncode => ({
   child: null,
   dead,
+  startSegment,
+  headHint: startSegment - 1,
   idleTimer: armVariantIdle(hlsDir, height),
 });
 
@@ -174,30 +190,71 @@ export const touchVariant = (hlsDir: string, height: number): void => {
   entry.idleTimer = armVariantIdle(hlsDir, height);
 };
 
+/** Walks forward from the encode's last known head while segments exist on disk. */
+const advanceHead = (
+  entry: VariantEncode,
+  segmentExists: (index: number) => boolean,
+  upTo: number,
+): number => {
+  let head = Math.max(entry.headHint, entry.startSegment - 1);
+  while (head < upTo && segmentExists(head + 1)) head += 1;
+  entry.headHint = head;
+  return head;
+};
+
 /**
- * Decides — atomically — whether a fresh encode is needed for variant `height`, and
- * if so claims the slot. Returns true if the caller should start encoding, or false
- * if a live/pending encode is already running (caller does nothing and lets the
- * long-poll wait for the segment to be produced).
+ * Decides — atomically — whether a fresh encode is needed for variant `height` to
+ * produce `segment`, and if so claims the slot. Returns the segment the new encode
+ * must start at, or null when the live/pending encode will reach `segment` soon
+ * (the caller then just long-polls for it).
  *
- * Encodes always start from segment 0. The only restart condition is that the encode
- * slot is dead (process ended or was idle-reaped). Runs synchronously with no `await`
- * so two near-simultaneous requests can't double-spawn.
+ * A new encode starts when the slot is dead (process ended or idle-reaped), or when
+ * the request is one the running encode won't reach soon: before its start, or more
+ * than SEEK_RESTART_GAP_SEGMENTS past its head (feedback #167: a seek to 7:00 used to
+ * wait for an encode from 0:00, time out, and restart from 0:00 again). It starts at
+ * the requested segment rather than 0. Runs synchronously with no `await` so two
+ * near-simultaneous requests can't double-spawn.
  */
-export const claimVariantEncode = (hlsDir: string, height: number): boolean => {
+export const claimVariantEncode = (
+  hlsDir: string,
+  height: number,
+  segment = 0,
+  segmentExists: (index: number) => boolean = () => false,
+): number | null => {
   const session = ensureSession(hlsDir);
   const entry = session.variants.get(height);
   if (!entry) {
-    session.variants.set(height, newVariantEntry(hlsDir, height, false));
-    return true;
+    session.variants.set(height, newVariantEntry(hlsDir, height, false, segment));
+    return segment;
   }
 
-  if (!entry.dead) return false; // live/pending encode covers all future segments
+  if (!entry.dead) {
+    const behindStart = segment < entry.startSegment;
+    const head = behindStart ? -1 : advanceHead(entry, segmentExists, segment);
+    if (!behindStart && segment - head <= SEEK_RESTART_GAP_SEGMENTS) return null;
+  }
 
   entry.child?.kill("SIGKILL");
   entry.child = null;
   entry.dead = false;
-  return true;
+  entry.startSegment = segment;
+  entry.headHint = segment - 1;
+  return segment;
+};
+
+/**
+ * Keeps a variant's encode alive while a request is waiting on one of its
+ * segments. touchVariant alone re-arms the idle reaper only when a request
+ * *arrives*, so a request long-polling past the reaper window lost the very
+ * encode it was waiting for. Returns a stop function.
+ */
+export const keepVariantAlive = (hlsDir: string, height: number): (() => void) => {
+  const timer = setInterval(() => {
+    touchHlsSession(hlsDir);
+    touchVariant(hlsDir, height);
+  }, Math.max(250, VARIANT_IDLE_MS / 2));
+  timer.unref?.();
+  return () => clearInterval(timer);
 };
 
 /**

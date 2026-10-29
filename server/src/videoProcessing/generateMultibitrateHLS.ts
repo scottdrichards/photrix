@@ -509,9 +509,32 @@ const scrubEncodePaths = (text: string, filePath: string, hlsDir: string): strin
   text.split(filePath).join(pathToken(filePath)).split(hlsDir).join(pathToken(hlsDir));
 
 /**
- * Runs a single-variant HLS encode for one height, always from segment 0.
- * Writes segments + playlist into `{height}p/`. Falls back down the tiers if
- * hardware encoding fails.
+ * ffmpeg arguments that start an encode at `startSegment` instead of 0. Input
+ * `-ss` seeks; `-output_ts_offset` puts the output back on the whole file's
+ * timeline and `-start_number` keeps the file names, so a segment written by a
+ * seek-started encode is interchangeable with the same segment from an encode
+ * from 0 (measured: same frame count and cut points, first PTS within ~20 ms).
+ * Forced keyframes count from the seek point, and the seek lands on a segment
+ * boundary, so segment cuts stay on whole seconds.
+ */
+export const seekStartArgs = (
+  startSegment: number,
+): { input: string[]; output: string[] } => {
+  if (startSegment <= 0) return { input: [], output: ["-start_number", "0"] };
+  const seconds = String(startSegment * HLS_SEGMENT_SECONDS);
+  return {
+    input: ["-ss", seconds],
+    output: ["-output_ts_offset", seconds, "-start_number", String(startSegment)],
+  };
+};
+
+const segmentFileName = (index: number): string =>
+  `segment_${String(index).padStart(3, "0")}.ts`;
+
+/**
+ * Runs a single-variant HLS encode for one height, from `startSegment` (0, or
+ * where a seek landed). Writes segments + playlist into `{height}p/`. Falls back
+ * down the tiers if hardware encoding fails.
  */
 const encodeVariant = (
   filePath: string,
@@ -521,6 +544,7 @@ const encodeVariant = (
   source: VideoSourceProfile,
   onSpawn?: (child: ReturnType<typeof spawn>) => void,
   tier: EncodeTier = "gpu-frames",
+  startSegment = 0,
 ): Promise<void> => {
   const rotation = source.rotation;
   const fps = hlsOutputFrameRate(source.frameRate);
@@ -540,10 +564,12 @@ const encodeVariant = (
     } = pipeline;
 
     const variantDir = join(hlsDir, `${variant.height}p`);
+    const seek = seekStartArgs(startSegment);
 
     const args: string[] = [
       "-y",
       ...hwaccelArgs,
+      ...seek.input,
       "-i",
       filePath,
       "-vf",
@@ -581,8 +607,7 @@ const encodeVariant = (
       String(HLS_SEGMENT_SECONDS),
       "-hls_list_size",
       "0",
-      "-start_number",
-      "0",
+      ...seek.output,
       "-hls_segment_type",
       "mpegts",
       "-hls_flags",
@@ -615,12 +640,13 @@ const encodeVariant = (
           variant: `${variant.height}p`,
           encoder: encoderLabel,
           rotation,
+          startSegment,
         },
         "HLS encode spawned",
       );
 
       // Time-to-first-segment: the user-perceived startup latency.
-      const firstSegment = join(variantDir, "segment_000.ts");
+      const firstSegment = join(variantDir, segmentFileName(startSegment));
       const firstSegmentPoll = setInterval(() => {
         if (!existsSync(firstSegment)) return;
         clearInterval(firstSegmentPoll);
@@ -699,6 +725,7 @@ const encodeVariant = (
             source,
             onSpawn,
             nextTier,
+            startSegment,
           )
             .then(resolve)
             .catch(reject);
@@ -726,7 +753,7 @@ const encodeVariant = (
 
 /**
  * Generates a single HLS variant (one of SUPPORTED_HLS_HEIGHTS) on the fly,
- * always encoding from the beginning of the file. Segments not yet written are
+ * from `startSegment` (default 0, the beginning of the file). Segments not yet written are
  * long-polled by the segment handler (see waitForHlsFile) until ffmpeg produces them.
  * The output is ephemeral and is reaped once playback goes idle.
  */
@@ -735,6 +762,7 @@ export const generateVariantHLS = async (
   height: number,
   opts?: {
     onSpawn?: (child: ReturnType<typeof spawn>) => void;
+    startSegment?: number;
   },
 ): Promise<void> => {
   await stat(filePath);
@@ -748,5 +776,14 @@ export const generateVariantHLS = async (
     getGpuAcceleration(),
     getVideoSourceProfile(filePath),
   ]);
-  await encodeVariant(filePath, hlsDir, variant, gpu, source, opts?.onSpawn);
+  await encodeVariant(
+    filePath,
+    hlsDir,
+    variant,
+    gpu,
+    source,
+    opts?.onSpawn,
+    "gpu-frames",
+    opts?.startSegment ?? 0,
+  );
 };
