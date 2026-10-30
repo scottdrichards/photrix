@@ -263,24 +263,3 @@ export type DateHistogramResult = {
   maxDate: number | null;
   grouping: DateHistogramGrouping;
 };
-
-export type GetFiles = <TQueryOptions extends QueryOptions>(
-  query: TQueryOptions,
-) => Promise<QueryResult<TQueryOptions["metadata"]>>;
-
-export type UpsertFileData = (fileData: FileRecord) => Promise<void>;
-
-export type ImageVariantTask = {
-  type: "imageVariants";
-  relativePath: string;
-  mimeType: string;
-};
-
-export type HLSTask = {
-  type: "hls";
-  relativePath: string;
-  mimeType: string;
-  duration?: number;
-};
-
-export type BackgroundTask = ImageVariantTask | HLSTask;

@@ -109,9 +109,6 @@ export type FaceAttributeFilter = {
   includeUnknown?: boolean;
 };
 
-/** The attribute set behind the combined "photo ready" toggle. */
-export const PHOTO_READY_ATTRIBUTES: readonly FaceAttributeKey[] = FACE_ATTRIBUTE_KEYS;
-
 type FilterConstraintForValue<TField extends string, TValue> =
   | null
   | (TField extends "relativePath"
@@ -139,11 +136,6 @@ export type RecordFilterCondition<
     K extends keyof TRecord ? TRecord[K] : never
   >;
 };
-
-export type RecordFilterElement<
-  TRecord extends Record<string, unknown>,
-  TExtraFields extends string = "relativePath",
-> = FilterElement<RecordFilterCondition<TRecord, TExtraFields>>;
 
 export type MediaTypeFilter = "all" | "photo" | "video" | "other";
 

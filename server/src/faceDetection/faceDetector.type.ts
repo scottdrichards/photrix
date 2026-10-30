@@ -27,6 +27,3 @@ export type DetectedFace = {
   embedding: Float64Array;
   attributes?: FaceAttributes;
 };
-
-/** Returns [] when none found. */
-export type DetectFaces = (imagePath: string) => Promise<DetectedFace[]>;

@@ -242,9 +242,6 @@ export const chooseLevel = (page: Page, level: number) =>
     (window as any).__lab.hls.nextLevel = level;
   }, level);
 
-export const playbackTime = (page: Page) =>
-  page.evaluate(() => (window as any).__lab.video.currentTime as number);
-
 /** Waits until the player has reached `seconds` of media time, or `timeoutMs` passes. */
 export const playUntil = async (page: Page, seconds: number, timeoutMs: number) => {
   const deadline = Date.now() + timeoutMs;
