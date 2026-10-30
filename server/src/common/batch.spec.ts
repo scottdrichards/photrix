@@ -1,4 +1,4 @@
-import { batch } from "./utils.ts";
+import { batch } from "./batch.ts";
 
 describe("batch", () => {
   it("groups array items into fixed-size chunks", () => {

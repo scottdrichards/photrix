@@ -12,7 +12,7 @@ import { HLS_SEGMENT_SECONDS } from "../../videoProcessing/buildHlsPlaylist.ts";
 import { existsSync } from "fs";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
-import { writeJson } from "../../utils.ts";
+import { writeJson } from "../../common/writeJson.ts";
 import path from "path";
 import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
 import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";

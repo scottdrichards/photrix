@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { walkFiles } from "../fileHandling/fileUtils.ts";
-import { batch } from "../utils.ts";
+import { batch } from "../common/batch.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { canonicalRelativePath } from "./utils/pathUtils.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";

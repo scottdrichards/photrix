@@ -20,7 +20,7 @@ import {
 } from "../audioProcessing/clapWorker.ts";
 import type { ModelLoadProgress } from "../common/modelLoadTimer.ts";
 import { getLogger } from "../observability/logger.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 
 const log = getLogger("searchRequestHandler");
 

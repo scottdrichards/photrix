@@ -33,7 +33,7 @@ import { LoginThrottledError, throttleLogin } from "../auth/loginThrottle.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { FilterCompileError, filterToSQL } from "../indexDatabase/filterToSQL.ts";
 import { generateShareDescription } from "../shareDescription/generateShareDescription.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
 export const authLoginHandler = async (

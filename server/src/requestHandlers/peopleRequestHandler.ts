@@ -1,6 +1,6 @@
 import type * as http from "http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 import { invalidateNamedCentroidCache } from "./faceIdentifyRequestHandler.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
