@@ -1,5 +1,14 @@
-import { Dismiss12Regular, Sparkle16Filled, TextT16Regular } from "@fluentui/react-icons";
-import type { InterpretedFilterChip } from "../../../shared/filter-contract/src";
+import {
+  Dismiss12Regular,
+  PersonSwap16Regular,
+  Sparkle16Filled,
+  TextT16Regular,
+} from "@fluentui/react-icons";
+import { useState } from "react";
+import type {
+  InterpretedFilterChip,
+  InterpretedPersonAlternative,
+} from "../../../shared/filter-contract/src";
 import css from "./SearchInterpretationChips.module.css";
 
 type Props = {
@@ -13,9 +22,13 @@ type Props = {
   canSearchAsText?: (chip: InterpretedFilterChip) => boolean;
   /** Replace the chip's filter with the words the user typed for it. */
   onSearchChipAsText?: (chip: InterpretedFilterChip) => void;
+  /** Swap a person chip for one of the other people its typed name matched. */
+  onSwapPerson?: (chip: InterpretedFilterChip, to: InterpretedPersonAlternative) => void;
   /** Restore the plain search: original query text, no derived filters. */
   onUndo: () => void;
 };
+
+const chipKey = (chip: InterpretedFilterChip) => `${chip.field}:${chip.value ?? chip.label}`;
 
 /**
  * The visible, undoable form of an AI-interpreted query.
@@ -32,9 +45,14 @@ export const SearchInterpretationChips = ({
   onRemoveChip,
   canSearchAsText,
   onSearchChipAsText,
+  onSwapPerson,
   onUndo,
 }: Props) => {
+  const [pickingFor, setPickingFor] = useState<string | null>(null);
   if (chips.length === 0) return null;
+  const picking = chips.find(
+    (chip) => chipKey(chip) === pickingFor && (chip.alternatives?.length ?? 0) > 0,
+  );
 
   return (
     <div className={css.bar} role="group" aria-label="AI-interpreted search filters">
@@ -45,8 +63,22 @@ export const SearchInterpretationChips = ({
 
       <div className={css.chips}>
         {chips.map((chip) => (
-          <span key={`${chip.field}:${chip.value ?? chip.label}`} className={css.chip}>
+          <span key={chipKey(chip)} className={css.chip}>
             {chip.label}
+            {onSwapPerson && (chip.alternatives?.length ?? 0) > 0 && (
+              <button
+                type="button"
+                className={css.chipRemove}
+                onClick={() =>
+                  setPickingFor((current) => (current === chipKey(chip) ? null : chipKey(chip)))
+                }
+                aria-label={`Pick a different person than ${chip.label}`}
+                aria-expanded={pickingFor === chipKey(chip)}
+                title="Pick a different person"
+              >
+                <PersonSwap16Regular />
+              </button>
+            )}
             {onSearchChipAsText && canSearchAsText?.(chip) && (
               <button
                 type="button"
@@ -69,6 +101,29 @@ export const SearchInterpretationChips = ({
           </span>
         ))}
       </div>
+
+      {picking && onSwapPerson && (
+        <div
+          className={css.alternatives}
+          role="group"
+          aria-label={`People to search instead of ${picking.label}`}
+        >
+          <span className={css.alternativesLabel}>Instead of {picking.label}:</span>
+          {picking.alternatives?.map((alternative) => (
+            <button
+              key={`${alternative.field}:${alternative.value}`}
+              type="button"
+              className={css.alternative}
+              onClick={() => {
+                setPickingFor(null);
+                onSwapPerson(picking, alternative);
+              }}
+            >
+              {alternative.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {ignored.length > 0 && (
         <span

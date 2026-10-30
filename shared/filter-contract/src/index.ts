@@ -297,6 +297,18 @@ export type InterpretedFilterChip = {
   field: InterpretedFilterField;
   label: string;
   value?: string;
+  /**
+   * Person chips only: other people in the library the same typed words also
+   * name ("rachel" → every Rachel), so the user can swap to the one they meant.
+   */
+  alternatives?: InterpretedPersonAlternative[];
+};
+
+/** A person a person chip can be swapped to. */
+export type InterpretedPersonAlternative = {
+  field: "faceClusterFilter" | "peopleInImageFilter";
+  label: string;
+  value: string;
 };
 
 /**
