@@ -298,7 +298,7 @@ export const getSessionUsername = (token: string): string | null =>
 
 // --- API tokens ("MCP keys") ---
 
-export type ApiTokenInfo = {
+type ApiTokenInfo = {
   token: string;
   name: string;
   createdAt: number;
@@ -348,7 +348,7 @@ export const revokeApiToken = async (username: string, token: string): Promise<b
 
 // --- Share-link tracking ---
 
-export type ShareLinkInfo = {
+type ShareLinkInfo = {
   token: string;
   label: string;
   createdAt: number;
@@ -425,7 +425,7 @@ export const revokeAllShareLinksForUser = async (username: string): Promise<numb
 
 // --- Sessions ---
 
-export type SessionInfo = {
+type SessionInfo = {
   token: string;
   createdAt: number;
   ip: string | null;

@@ -31,7 +31,7 @@ type PendingEntry = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-export type FileSystemMonitorOptions = {
+type FileSystemMonitorOptions = {
   /**
    * Called after the index gains new work (a new file appears, or a changed
    * file is queued for re-sync), so drained background processors can be

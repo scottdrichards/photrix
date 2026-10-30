@@ -465,7 +465,7 @@ type Match = {
   frame: number;
 };
 
-export type FaceIdentifyDeps = {
+type FaceIdentifyDeps = {
   database: IndexDatabase;
   analyzeImage: typeof AnalyzeImageFn;
 };

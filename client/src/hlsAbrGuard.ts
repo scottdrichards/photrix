@@ -35,7 +35,7 @@ export const UPSWITCH_DWELL_MS = 15_000;
  * Each additional oscillation (a downswitch soon after an allowed upswitch)
  * multiplies the dwell by this factor, up to MAX_UPSWITCH_DWELL_MS.
  */
-export const OSCILLATION_DWELL_MULTIPLIER = 2;
+const OSCILLATION_DWELL_MULTIPLIER = 2;
 
 /** Ceiling on the escalating dwell so a link that eventually stabilizes can still recover quality. */
 export const MAX_UPSWITCH_DWELL_MS = 120_000;
@@ -73,9 +73,9 @@ export const UPSWITCH_SUSTAIN_SAMPLES = 3;
 export const UPSWITCH_MIN_BUFFER_S = 10;
 
 /** How often the guard re-samples hls.js's bandwidth estimate to evaluate an upswitch. */
-export const ABR_GUARD_POLL_INTERVAL_MS = 1000;
+const ABR_GUARD_POLL_INTERVAL_MS = 1000;
 
-export type AbrGuardState = {
+type AbrGuardState = {
   /** Auto-mode ceiling level index currently enforced, or -1 when uncapped. */
   capIndex: number;
   lastDownswitchAt: number | null;

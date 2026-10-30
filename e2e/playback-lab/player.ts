@@ -60,7 +60,7 @@ const appAbrGuardScript = (): string =>
     ? "window.__labAttachAbrGuard = () => () => {};"
     : pageScript(APP_ABR_GUARD, "window.__labAttachAbrGuard = attachHlsAbrUpswitchGuard;");
 
-export type FragSample = {
+type FragSample = {
   level: number;
   sn: number;
   /** ms from player start to the request. */
@@ -71,7 +71,7 @@ export type FragSample = {
   bytes: number;
 };
 
-export type LabMetrics = {
+type LabMetrics = {
   firstFrameMs: number | null;
   stalls: { at: number; ms: number }[];
   /** A stall still open when metrics were read. */
@@ -256,7 +256,7 @@ export const playUntil = async (page: Page, seconds: number, timeoutMs: number) 
 // Network shaping (Chrome DevTools Protocol)
 // ---------------------------------------------------------------------------
 
-export type NetworkProfile = { downMbps: number; latencyMs: number };
+type NetworkProfile = { downMbps: number; latencyMs: number };
 
 export const shapeNetwork = async (page: Page, profile: NetworkProfile | null): Promise<CDPSession> => {
   const cdp = await page.context().newCDPSession(page);
@@ -265,7 +265,7 @@ export const shapeNetwork = async (page: Page, profile: NetworkProfile | null): 
   return cdp;
 };
 
-export const applyProfile = (cdp: CDPSession, profile: NetworkProfile | null) =>
+const applyProfile = (cdp: CDPSession, profile: NetworkProfile | null) =>
   cdp.send("Network.emulateNetworkConditions", {
     offline: false,
     latency: profile?.latencyMs ?? 0,

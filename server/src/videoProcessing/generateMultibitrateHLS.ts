@@ -86,9 +86,6 @@ const HLS_VARIANTS: readonly Variant[] = [
 
 const VARIANT_BY_HEIGHT = new Map(HLS_VARIANTS.map((v) => [v.height, v]));
 
-/** Heights the on-the-fly encoder can produce, ascending. */
-export const SUPPORTED_HLS_HEIGHTS = HLS_VARIANTS.map((v) => v.height);
-
 /** Fallback height for a request that names an unsupported one. */
 const DEFAULT_HLS_HEIGHT = 720;
 
@@ -318,7 +315,7 @@ export type EncodeTier = "gpu-frames" | "system-frames" | "software";
  * tier. Shared by HLS playback and the MP4 share export so both get the same
  * GPU paths and the same fallbacks; only the muxer arguments differ.
  */
-export type EncodePipeline = {
+type EncodePipeline = {
   hwaccelArgs: string[];
   vf: string;
   videoCodec: string;
@@ -733,7 +730,7 @@ const encodeVariant = (
 };
 
 /**
- * Generates a single HLS variant (one of SUPPORTED_HLS_HEIGHTS) on the fly,
+ * Generates a single HLS variant (one of the HLS_VARIANTS heights) on the fly,
  * from `startSegment` (default 0, the beginning of the file). Segments not yet written are
  * long-polled by the segment handler (see waitForHlsFile) until ffmpeg produces them.
  * The output is ephemeral and is reaped once playback goes idle.

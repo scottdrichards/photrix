@@ -45,7 +45,7 @@ const RETRY_SYSTEM_PROMPT =
   "Describe the photo accurately in plain, everyday English. Do not read filenames, dates, or numbers from the image.";
 const RETRY_PROMPT = "What is happening in this image?";
 
-export type PhotoCaptionFacts = {
+type PhotoCaptionFacts = {
   peopleNames: string[];
   dateTaken?: Date | null;
   folder: string;

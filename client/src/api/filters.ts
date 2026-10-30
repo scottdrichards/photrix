@@ -78,7 +78,7 @@ const dateRangeToFilter = (dateRange?: DateRangeFilter | null) => {
   };
 };
 
-export type BuildFiltersInput = {
+type BuildFiltersInput = {
   ratingFilter?: RatingFilter | null;
   mediaTypeFilter?: MediaTypeFilter;
   locationBounds?: GeoBounds | null;
@@ -103,7 +103,7 @@ const toStringIncludesFilter = (value: string) => {
 
 // People-tab cluster ids arrive as `person-<n>`; the server filters on the raw
 // numeric clusterId, so parse the digits out and drop anything malformed.
-export const toClusterIdFilter = (
+const toClusterIdFilter = (
   value: string[] | string | null | undefined,
 ): number[] | null => {
   const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];

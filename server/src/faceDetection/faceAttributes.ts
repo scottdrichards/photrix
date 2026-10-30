@@ -27,7 +27,7 @@ export const FACE_ATTRIBUTE_VERSION = 1;
  * this library and checking the calls by eye; see face_attributes.py for the
  * measured distributions behind each number.
  */
-export const FACE_ATTRIBUTE_PREDICATES: Record<
+const FACE_ATTRIBUTE_PREDICATES: Record<
   FaceAttributeKey,
   { column: string; minimum: number }
 > = {

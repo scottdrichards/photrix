@@ -36,7 +36,7 @@ const keepAlive = process.env.PHOTRIX_OLLAMA_KEEP_ALIVE ?? "30m";
  * interpretation) need more tokens, a tighter deadline, and JSON-constrained
  * decoding.
  */
-export type OllamaGenerateOptions = {
+type OllamaGenerateOptions = {
   /** Token budget for the answer. Default 40 (a share title). */
   numPredict?: number;
   /** Request deadline. Defaults to PHOTRIX_OLLAMA_TIMEOUT_MS (15s). */

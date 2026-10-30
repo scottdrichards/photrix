@@ -140,7 +140,7 @@ export type AnomalyInput = {
 
 export type AnomalyFlag = "low-similarity" | "date" | "location" | "folder";
 
-export type AnomalyResult = {
+type AnomalyResult = {
   faceId: number;
   /** 0..1; the strongest single signal, not a sum — see `scoreAnomalies`. */
   score: number;
@@ -476,12 +476,12 @@ export const planOptimization = async (
   return [...dedupedMerges, ...tightens].slice(0, maxProposals);
 };
 
-export type SplitLobe = {
+type SplitLobe = {
   faceIds: number[];
   centroid: Float32Array;
 };
 
-export type SplitPlan = {
+type SplitPlan = {
   lobes: [SplitLobe, SplitLobe];
   /** Cosine similarity between the two lobe centroids — lower means a cleaner split. */
   crossSimilarity: number;

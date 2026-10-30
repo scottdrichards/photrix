@@ -1,5 +1,5 @@
 import { readdir, stat, unlink, utimes } from "fs/promises";
-import { basename, join, resolve } from "path";
+import { join, resolve } from "path";
 import { MEDIA_CACHE_DIR } from "./cacheUtils.ts";
 import { getLogger } from "../observability/logger.ts";
 import { isNotFound } from "./result.ts";
@@ -46,9 +46,6 @@ const GRID_THUMBNAIL_FILE_NAMES = new Set([
   "320.webp",
   "320.jpg",
 ]);
-
-export const isGridThumbnail = (filePath: string): boolean =>
-  GRID_THUMBNAIL_FILE_NAMES.has(basename(filePath));
 
 type CacheFile = {
   path: string;
@@ -124,7 +121,7 @@ let evictionInProgress = false;
 /**
  * Enforces the media cache size limit by deleting least-recently-used files
  * until the total drops below the configured maximum. Grid thumbnails are
- * neither counted nor evicted ({@link isGridThumbnail}). LRU is approximated by
+ * neither counted nor evicted ({@link GRID_THUMBNAIL_FILE_NAMES}). LRU is approximated by
  * the newest of each file's access/modification time (see {@link markCacheAccess}).
  *
  * Safe to call concurrently — overlapping calls are coalesced into one run.

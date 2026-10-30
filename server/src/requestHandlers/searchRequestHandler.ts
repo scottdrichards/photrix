@@ -54,7 +54,7 @@ const CLAP_MIN_SIMILARITY = Number(
  * SQL, so it is always ready. Cheap to call: it reads in-process flags only and
  * never spawns or wakes a worker.
  */
-export const getSearchSourceStates = (): Record<SearchSource, SearchModelState> => ({
+const getSearchSourceStates = (): Record<SearchSource, SearchModelState> => ({
   image: getImageSearchModelState(),
   audio: getAudioSearchModelState(),
   transcript: "ready",
@@ -76,7 +76,7 @@ export type SearchSourceOutcome =
  * run and how long the last one took, so the UI can show progress rather
  * than a bare "still loading".
  */
-export const getSearchSourceLoads = (): Partial<Record<SearchSource, ModelLoadProgress>> => ({
+const getSearchSourceLoads = (): Partial<Record<SearchSource, ModelLoadProgress>> => ({
   image: getImageSearchModelLoad(),
   audio: getAudioSearchModelLoad(),
 });

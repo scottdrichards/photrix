@@ -207,7 +207,7 @@ export const generateVideoThumbnail = async (
 export const VIDEO_SCRUB_FRAME_COUNT: number = 5;
 
 /** Resolution for scrub frames — matches the feedback's own "160p" suggestion. */
-export const VIDEO_SCRUB_HEIGHT = 160;
+const VIDEO_SCRUB_HEIGHT = 160;
 
 /**
  * Generates (or returns already-cached) the scrub-preview frame at `index`
@@ -330,7 +330,7 @@ export const generateVideoScrubFrame = async (
 };
 
 /** Normalized top-left box (0..1) of the upright frame — same shape as the image `CropBox`. */
-export type VideoFrameCrop = { x: number; y: number; width: number; height: number };
+type VideoFrameCrop = { x: number; y: number; width: number; height: number };
 
 const cropFilter = ({ x, y, width, height }: VideoFrameCrop): string => {
   // Keep the box inside the frame; ffmpeg rejects a crop that overruns it.

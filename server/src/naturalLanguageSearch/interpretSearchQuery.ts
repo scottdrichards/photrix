@@ -139,7 +139,7 @@ const asStringList = (value: unknown): string[] => {
 
 const dedupe = (values: string[]) => [...new Set(values)];
 
-export type InterpretOptions = {
+type InterpretOptions = {
   query: string;
   vocabulary: SearchVocabulary;
   /** Request time — relative dates resolve against this, never a build constant. */

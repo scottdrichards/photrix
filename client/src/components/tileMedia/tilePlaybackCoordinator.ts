@@ -20,7 +20,7 @@
  * rotation additionally respects prefers-reduced-motion and Save-Data.
  */
 
-export type PlaybackPool = "video" | "ambient";
+type PlaybackPool = "video" | "ambient";
 
 const POOL_CAPACITY: Record<PlaybackPool, number> = {
   video: 1,

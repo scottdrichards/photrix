@@ -41,7 +41,7 @@ export const ON_THE_FLY_HLS_CONFIG = {
 } satisfies Partial<HlsConfig>;
 
 /** Where a player's round-trip floor is tracked; one per player. */
-export type ServerWaitTracker = { minTtfbMs: number };
+type ServerWaitTracker = { minTtfbMs: number };
 
 export const createServerWaitTracker = (): ServerWaitTracker => ({ minTtfbMs: Infinity });
 
@@ -69,7 +69,7 @@ export const hasFirstByte = (stats: LoaderStats | undefined): boolean =>
   Boolean(stats && stats.loading.first > 0);
 
 /** A loader class (extending `Base`) that discounts server wait in every sample. */
-export const createEncoderAwareLoader = (
+const createEncoderAwareLoader = (
   HlsCtor: HlsClass,
   tracker: ServerWaitTracker = createServerWaitTracker(),
 ) => {

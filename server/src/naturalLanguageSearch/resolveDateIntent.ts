@@ -12,10 +12,10 @@
  * the app formats capture dates.
  */
 
-export const SEASONS = ["spring", "summer", "fall", "winter"] as const;
+const SEASONS = ["spring", "summer", "fall", "winter"] as const;
 export type Season = (typeof SEASONS)[number];
 
-export const HOLIDAYS = [
+const HOLIDAYS = [
   "christmas",
   "newyear",
   "thanksgiving",
@@ -24,8 +24,8 @@ export const HOLIDAYS = [
 ] as const;
 export type Holiday = (typeof HOLIDAYS)[number];
 
-export const RECENT_UNITS = ["day", "week", "month", "year"] as const;
-export type RecentUnit = (typeof RECENT_UNITS)[number];
+const RECENT_UNITS = ["day", "week", "month", "year"] as const;
+type RecentUnit = (typeof RECENT_UNITS)[number];
 
 export type DateIntent =
   | { kind: "year"; year: number }
@@ -35,7 +35,7 @@ export type DateIntent =
   | { kind: "holiday"; holiday: Holiday; yearsAgo?: number }
   | { kind: "recent"; unit: RecentUnit; n: number };
 
-export type ResolvedDateRange = {
+type ResolvedDateRange = {
   start: number;
   end: number;
   /** Human label for the filter chip, e.g. "Summer 2025". */

@@ -21,7 +21,7 @@ type BeforeInstallPromptEvent = Event & {
  * - `ios`         — iOS/iPadOS: no prompt API, installs via Share → Add to Home Screen
  * - `manual`      — nothing to prompt with; the browser's own menu may still offer it
  */
-export type InstallState = "installed" | "available" | "ios" | "manual";
+type InstallState = "installed" | "available" | "ios" | "manual";
 
 let deferredPrompt: BeforeInstallPromptEvent | null = null;
 let justInstalled = false;
@@ -32,7 +32,7 @@ const notify = () => {
   for (const listener of listeners) listener();
 };
 
-export const isStandalone = (): boolean => {
+const isStandalone = (): boolean => {
   if (typeof window === "undefined") return false;
   const displayModeStandalone =
     typeof window.matchMedia === "function" &&

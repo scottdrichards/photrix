@@ -4,7 +4,7 @@ import { logFailure } from "../../logFailure";
 import { attempt } from "../../result";
 import { useSelectionContext, type PhotoMetadataOverride } from "./SelectionContext";
 
-export type MetadataChange = {
+type MetadataChange = {
   path: string;
   patch: PhotoMetadataPatch;
   /** What the grid and viewer show at once, before the server answers. */

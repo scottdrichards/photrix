@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export type ProgressiveImageFetch = {
+type ProgressiveImageFetch = {
   /**
    * Object URL for a fully-downloaded image, or `undefined` until the
    * download finishes. Left unset (rather than pointed at the still-loading
