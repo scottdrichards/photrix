@@ -270,7 +270,7 @@ const buildConversionError = (
     : `Image conversion failed for ${inputPath}: ${normalizedError}`;
 
   const message = isMissingDependency
-    ? `${baseMessage}\n\nPython dependencies may be missing. Try: pip install -r server/src/imageProcessing/requirements.txt`
+    ? `${baseMessage}\n\nPython dependencies may be missing. Try: bun run --filter server python:install`
     : baseMessage;
 
   log.error(
