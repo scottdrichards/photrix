@@ -3,7 +3,7 @@ import { getLogger } from "../observability/logger.ts";
 const log = getLogger("ollamaGenerate");
 
 /**
- * Base URL of a locally hosted Ollama instance (e.g. `http://192.168.1.160:11434`).
+ * Base URL of a locally hosted Ollama instance (e.g. `http://localhost:11434`).
  * Unset means "no local model available" — callers fall back to their own
  * deterministic text rather than failing the request.
  */

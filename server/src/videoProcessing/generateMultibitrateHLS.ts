@@ -244,8 +244,8 @@ const scaleFilter = (height: number, rotation: number): string =>
 /**
  * Builds the Intel filter chain for a driver that can scale on the GPU: the
  * frames never leave the device at all — decode, fps drop, scale and rotate all
- * happen there and `h264_vaapi` encodes the surface in place. Measured on LXC
- * 124 at 720p: 3.1x realtime from a 4K60 8-bit source and 2.0x from 4K 10-bit,
+ * happen there and `h264_vaapi` encodes the surface in place. Measured on an
+ * i7-10610U iGPU at 720p: 3.1x realtime from a 4K60 8-bit source and 2.0x from 4K 10-bit,
  * against 1.8x / 0.7x for the same sources when the frames have to come back to
  * system memory to be scaled.
  *
@@ -354,7 +354,7 @@ export const selectEncodePipeline = (
   //    re-uploads and encodes on GPU. ~4-6× realtime vs ~0.3× for pure CPU on
   //    4K HEVC — critical for phone portrait videos to avoid buffer starvation.
   //
-  // 3. Intel Quick Sync, GPU frames (VAAPI, server2's iGPU-only box): VAAPI
+  // 3. Intel Quick Sync, GPU frames (VAAPI, an iGPU-only host): VAAPI
   //    decode with frames left on the device and `fps` dropped there. If the
   //    driver has VPP, scale and rotation run on the GPU too and nothing ever
   //    reaches system memory (buildIntelVppFilters); if it doesn't, the frames

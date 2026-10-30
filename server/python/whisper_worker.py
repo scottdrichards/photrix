@@ -89,7 +89,7 @@ def _is_unsupported_compute_type_error(exc: Exception) -> bool:
     # Raised by CTranslate2 when the requested compute type needs hardware the
     # device doesn't have — e.g. int8_float16's fp16 accumulation needs Tensor
     # Cores (Turing+, compute capability >= 7.0), so it fails this way on an
-    # older CUDA generation (Pascal, e.g. this box's Quadro P520 at 6.1) even
+    # older CUDA generation (Pascal, e.g. a Quadro P520 at 6.1) even
     # though CUDA itself and plain int8 both work fine there. Not a "no GPU"
     # failure, so it should retry the SAME device with a cheaper compute type
     # rather than falling all the way back to CPU.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import { deriveFrigateFrames, type FrigateEventRecord } from "./frigateEventFrames.ts";
 
-const HOST = "192.168.1.225:5000";
+const HOST = "frigate.local:5000";
 const BOX = [0.6, 0.15, 0.35, 0.83];
 
 /** `[[cx, cy], ts]` points, the shape Frigate records a track in. */
@@ -17,7 +17,7 @@ describe("deriveFrigateFrames", () => {
     const frames = deriveFrigateFrames(event, { host: HOST });
     expect(frames).toHaveLength(4);
     expect(frames[0].url).toBe(
-      "http://192.168.1.225:5000/api/doorbell/recordings/1000/snapshot.jpg",
+      "http://frigate.local:5000/api/doorbell/recordings/1000/snapshot.jpg",
     );
   });
 

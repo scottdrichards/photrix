@@ -8,9 +8,9 @@ const log = getLogger("generatePhotoCaption");
 // interpretation — captioning needs to actually look at pixels.
 //
 // 2026-08-12: switched from qwen2.5vl:3b to moondream:latest after the
-// Ollama host (192.168.1.160) was fixed — moondream is ~4-5s warm / ~16s
+// Ollama host was fixed — moondream is ~4-5s warm / ~16s
 // cold there, vs. qwen2.5vl's ~170-240s (this deployment had been
-// CPU-bound; whatever the ai-lxc side fix was, it changed the economics
+// CPU-bound; whatever the Ollama-side fix was, it changed the economics
 // enough that a much shorter timeout below is now safe). Do NOT set
 // `num_gpu` on calls to this model — forcing it caused CUDA OOM crashes on
 // this box when VRAM is tight (Frigate and other GPU consumers can leave as

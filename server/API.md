@@ -187,7 +187,7 @@ Each `imageUrls` entry is either a URL string or an object:
 
 ```json
 {
-  "url": "http://192.168.1.225:5000/api/doorbell/recordings/1785160322/snapshot.jpg",
+  "url": "http://frigate.local:5000/api/doorbell/recordings/1785160322/snapshot.jpg",
   "box": [0.53, 0.48, 0.12, 0.45],
   "pad": 0.4
 }

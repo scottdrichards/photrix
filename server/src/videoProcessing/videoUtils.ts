@@ -197,9 +197,8 @@ export const generateVideoThumbnail = async (
 /**
  * How many still frames make up the hover/scrub preview strip (feedback
  * #76). The original ask was true 15fps scrubbing, which would mean
- * decoding the whole video on every hover — not worth it on this host's
- * weak CPU (see AGENTS.md's HLS-transcode notes on LXC 124's iGPU-only
- * headroom). This ships the scoped-down version the feedback itself
+ * decoding the whole video on every hover — not worth it on a weak CPU
+ * with only an iGPU to spare. This ships the scoped-down version the feedback itself
  * flagged as acceptable: a handful of low-res frames extracted and cached
  * once at generation time (same pattern as generateVideoThumbnail's single
  * frame), then cycled client-side as the pointer moves across the tile —
