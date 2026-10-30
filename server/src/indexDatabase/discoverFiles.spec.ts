@@ -26,12 +26,13 @@ describe("discoverFiles", () => {
     const dbDir = await mkTempDir("photrix-discover-db-");
     process.env.INDEX_DB_LOCATION = dbDir;
 
+    let db: IndexDatabase | undefined;
     try {
       await fs.mkdir(path.join(rootDir, "nested"), { recursive: true });
       await fs.writeFile(path.join(rootDir, "a.jpg"), "a");
       await fs.writeFile(path.join(rootDir, "nested", "b.mp4"), "b");
 
-      const db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir);
       await db.init();
       await fileSystemScanFolder(db).onComplete();
 
@@ -42,6 +43,7 @@ describe("discoverFiles", () => {
       expect(b?.mimeType).toBe("video/mp4");
       expect(await db.countAllEntries()).toBe(2);
     } finally {
+      await db?.close();
       await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
@@ -51,12 +53,13 @@ describe("discoverFiles", () => {
     const dbDir = await mkTempDir("photrix-prune-db-");
     process.env.INDEX_DB_LOCATION = dbDir;
 
+    let db: IndexDatabase | undefined;
     try {
       await fs.mkdir(path.join(rootDir, "nested"), { recursive: true });
       await fs.writeFile(path.join(rootDir, "keep.jpg"), "k");
       await fs.writeFile(path.join(rootDir, "nested", "gone.jpg"), "g");
 
-      const db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir);
       await db.init();
       await fileSystemScanFolder(db).onComplete();
       expect(await db.countAllEntries()).toBe(2);
@@ -69,6 +72,7 @@ describe("discoverFiles", () => {
       expect(await db.getFileRecord("nested/gone.jpg")).toBeUndefined();
       expect(await db.countAllEntries()).toBe(1);
     } finally {
+      await db?.close();
       await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
@@ -78,11 +82,12 @@ describe("discoverFiles", () => {
     const dbDir = await mkTempDir("photrix-zero-byte-db-");
     process.env.INDEX_DB_LOCATION = dbDir;
 
+    let db: IndexDatabase | undefined;
     try {
       await fs.writeFile(path.join(rootDir, "ready.jpg"), "x");
       await fs.writeFile(path.join(rootDir, "copying.jpg"), Buffer.alloc(0));
 
-      const db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir);
       await db.init();
       await fileSystemScanFolder(db).onComplete();
 
@@ -90,6 +95,7 @@ describe("discoverFiles", () => {
       expect(await db.getFileRecord("copying.jpg")).toBeUndefined();
       expect(await db.countAllEntries()).toBe(1);
     } finally {
+      await db?.close();
       await fs.rm(rootDir, { recursive: true, force: true });
     }
   });

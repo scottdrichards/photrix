@@ -10,12 +10,14 @@ const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
   const mediaRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-media-root-"));
   const dbRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-db-root-"));
   process.env.INDEX_DB_LOCATION = dbRoot;
+  let db: IndexDatabase | undefined;
   try {
-    const db = new IndexDatabase(mediaRoot);
+    db = new IndexDatabase(mediaRoot);
     await db.init();
     await db.startupMaintenance;
     await testFn(db);
   } finally {
+    await db?.close();
     rmSync(mediaRoot, { recursive: true, force: true });
     rmSync(dbRoot, { recursive: true, force: true });
   }

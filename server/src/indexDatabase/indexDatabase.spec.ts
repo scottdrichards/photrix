@@ -11,8 +11,9 @@ const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
   const dbRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-db-root-"));
   process.env.INDEX_DB_LOCATION = dbRoot;
 
+  let db: IndexDatabase | undefined;
   try {
-    const db = new IndexDatabase(mediaRoot);
+    db = new IndexDatabase(mediaRoot);
     await db.init();
     // init() resolves before the off-critical-path startup maintenance (one-time
     // migrations, including the EXIF-description backfill that clears
@@ -22,6 +23,7 @@ const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
     await db.startupMaintenance;
     await testFn(db);
   } finally {
+    await db?.close();
     rmSync(mediaRoot, { recursive: true, force: true });
   }
 };
