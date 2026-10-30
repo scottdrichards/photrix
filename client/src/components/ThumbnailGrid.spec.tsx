@@ -25,6 +25,11 @@ vi.mock("../api", async () => {
     fetchMomentClusterDetail: (...args: [string]) => fetchMomentClusterDetailMock(...args),
     fetchSemanticSearch: (...args: unknown[]) => fetchSemanticSearchMock(...args),
     fetchSearchStatus: (...args: unknown[]) => fetchSearchStatusMock(...args),
+    // The empty grid's load progress (feedback #162) reads the same states.
+    fetchSearchStatusDetail: async (...args: unknown[]) => ({
+      sources: await fetchSearchStatusMock(...args),
+      loads: {},
+    }),
   };
 });
 
@@ -630,7 +635,11 @@ describe("ThumbnailGrid", () => {
 
     renderGridWithStatus();
 
-    expect(await screen.findByText(/Search isn.t ready yet/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Search is waiting for the photo search model and audio search model to load.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText("No results found for your search.")).not.toBeInTheDocument();
 
     fireEvent.click(await screen.findByRole("button", { name: "Search status: 2 sources left out" }));

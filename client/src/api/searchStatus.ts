@@ -32,6 +32,26 @@ export class SearchUnavailableError extends Error {
   }
 }
 
+/** How long a model's current load has run, and how long the last one took. */
+export type SearchModelLoad = { loadingForMs?: number; lastLoadMs?: number };
+
+export type SearchStatusDetail = {
+  sources: Record<SearchSource, SearchModelState>;
+  /** Absent from servers that predate feedback #162. */
+  loads: Partial<Record<SearchSource, SearchModelLoad>>;
+};
+
+/** Readiness plus load timing, for showing a load's progress (feedback #162). */
+export const fetchSearchStatusDetail = async (
+  signal?: AbortSignal,
+): Promise<SearchStatusDetail> => {
+  const payload = await fetchJsonOrThrow<{
+    sources: Record<SearchSource, SearchModelState>;
+    loads?: Partial<Record<SearchSource, SearchModelLoad>>;
+  }>("/api/search/status", "fetch search status", { signal });
+  return { sources: payload.sources, loads: payload.loads ?? {} };
+};
+
 /** Current readiness of each search source's model. Cheap; safe to poll. */
 export const fetchSearchStatus = async (
   signal?: AbortSignal,

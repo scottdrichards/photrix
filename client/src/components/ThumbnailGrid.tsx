@@ -16,6 +16,7 @@ import { IDLE_SEARCH_ACTIVITY, publishSearchActivity } from "./searchActivity";
 import { SelectionActionBar } from "./SelectionActionBar";
 import { SortControl } from "./SortControl";
 import { SortDockPortal } from "./SortDockPortal";
+import { SearchModelLoading } from "./SearchModelLoading";
 import { TopRailPortal } from "./TopRailPortal";
 import { ViewToggle } from "./ViewToggle";
 import { photoViewTransitionName, runWithViewTransition } from "./viewTransition";
@@ -471,13 +472,8 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
       {!loading && data && data.items.length === 0 && !searchFailedSomewhere && (
         <h3>{emptyMessage}</h3>
       )}
-      {!loading && data && data.items.length === 0 && searchFailedSomewhere && (
-        <div className={css.searchUnavailable} role="status">
-          <h3>Search isn&apos;t ready yet: a search model is still loading.</h3>
-          <button type="button" onClick={handleRetrySearch}>
-            Retry
-          </button>
-        </div>
+      {!loading && data && data.items.length === 0 && searchFailedSomewhere && searchOutcome && (
+        <SearchModelLoading outcome={searchOutcome} onRetry={handleRetrySearch} />
       )}
       <SelectionActionBar />
       <PhotoStackModal

@@ -52,10 +52,12 @@ const loadHandler = async (mocks: {
   jest.unstable_mockModule("../imageAnalysis/imageAnalysisWorker.ts", () => ({
     embedText: mocks.embedText ?? (async () => new Float32Array([1])),
     getImageSearchModelState: () => mocks.imageState ?? "ready",
+    getImageSearchModelLoad: () => ({}),
   }));
   jest.unstable_mockModule("../audioProcessing/clapWorker.ts", () => ({
     embedTextWithClap: mocks.embedTextWithClap ?? (async () => new Float32Array([1])),
     getAudioSearchModelState: () => mocks.audioState ?? "ready",
+    getAudioSearchModelLoad: () => ({}),
   }));
   const { searchRequestHandler } = await import("./searchRequestHandler.ts");
   return searchRequestHandler;
@@ -695,10 +697,12 @@ describe("searchStatusRequestHandler", () => {
     jest.unstable_mockModule("../imageAnalysis/imageAnalysisWorker.ts", () => ({
       embedText: async () => new Float32Array([1]),
       getImageSearchModelState: () => "loading",
+      getImageSearchModelLoad: () => ({ loadingForMs: 12_000, lastLoadMs: 38_000 }),
     }));
     jest.unstable_mockModule("../audioProcessing/clapWorker.ts", () => ({
       embedTextWithClap: async () => new Float32Array([1]),
       getAudioSearchModelState: () => "unavailable",
+      getAudioSearchModelLoad: () => ({}),
     }));
     const { searchStatusRequestHandler } = await import("./searchRequestHandler.ts");
     const { res, getStatus, getJson } = createJsonResponse();
@@ -707,6 +711,8 @@ describe("searchStatusRequestHandler", () => {
     expect(getStatus()).toBe(200);
     expect(getJson()).toEqual({
       sources: { image: "loading", audio: "unavailable", transcript: "ready" },
+      // Feedback #162: how far along a load is, against the last one.
+      loads: { image: { loadingForMs: 12_000, lastLoadMs: 38_000 }, audio: {} },
     });
   });
 });
