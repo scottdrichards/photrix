@@ -1,32 +1,8 @@
 import { describe, it, expect } from "@jest/globals";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { FileRecord } from "./fileRecord.type.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { splitPath } from "./utils/pathUtils.ts";
-
-const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
-  const mediaRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-media-root-"));
-  const dbRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-db-root-"));
-  process.env.INDEX_DB_LOCATION = dbRoot;
-
-  let db: IndexDatabase | undefined;
-  try {
-    db = new IndexDatabase(mediaRoot);
-    await db.init();
-    // init() resolves before the off-critical-path startup maintenance (one-time
-    // migrations, including the EXIF-description backfill that clears
-    // exifProcessedAt). Let it settle on the empty DB first so its user_version
-    // gates trip here; otherwise it races the test body and can wipe fields the
-    // test just set (e.g. exifProcessedAt), flaking under a loaded full suite.
-    await db.startupMaintenance;
-    await testFn(db);
-  } finally {
-    await db?.close();
-    rmSync(mediaRoot, { recursive: true, force: true });
-  }
-};
+import { withTempDb } from "./withTempDb.fixture.ts";
 
 const createRecord = (
   relativePath: string,
@@ -203,7 +179,7 @@ describe("IndexDatabase", () => {
       expect(record?.facesProcessedAt ?? null).toBeNull();
       expect(record?.embeddingProcessedAt ?? null).toBeNull();
       // Value columns are left in place until reprocessing overwrites them.
-      expect(record?.dateTaken).toBeDefined();
+      expect(record?.dateTaken).toEqual(new Date("2026-07-01T00:00:00Z"));
       // Old face detections are dropped.
       const faces = await db.faces.getFacesForFile("edited.jpg");
       expect(faces).toHaveLength(0);

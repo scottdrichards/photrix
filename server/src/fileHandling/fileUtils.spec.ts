@@ -1,10 +1,9 @@
 import { describe, it, expect, jest } from "@jest/globals";
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import sharp from "sharp";
 
 import {
   getExifMetadataFromFile,
@@ -19,19 +18,6 @@ const EXAMPLE_ROOT = path.resolve(
 const resolveExamplePath = (...segments: string[]): string =>
   path.join(EXAMPLE_ROOT, ...segments);
 const tmpDir = () => mkdtempSync(path.join(os.tmpdir(), "fileutils-test-"));
-
-const getNormalizedDimensionsFromDecodedMetadata = (metadata: {
-  width?: number;
-  height?: number;
-  orientation?: number;
-}) => {
-  const orientationNeedsSwap =
-    metadata.orientation !== undefined && [5, 6, 7, 8].includes(metadata.orientation);
-  return {
-    width: orientationNeedsSwap ? metadata.height : metadata.width,
-    height: orientationNeedsSwap ? metadata.width : metadata.height,
-  };
-};
 
 describe("getExifMetadataFromFile", () => {
   it("returns empty object when mime type is unknown", async () => {
@@ -199,18 +185,11 @@ describe("getExifMetadataFromFile", () => {
     ]);
   });
 
-  it("matches decoded dimensions for _MG_0475 regression fixture when present", async () => {
-    const fixturePath = resolveExamplePath("_MG_0475.cr2.jpg");
-    if (!existsSync(fixturePath)) {
-      return;
-    }
+  it("reads a JPEG named like a RAW file (_MG_0475.cr2.jpg) at its decoded 213x320", async () => {
+    const result = await getExifMetadataFromFile(resolveExamplePath("_MG_0475.cr2.jpg"));
 
-    const decodedMetadata = await sharp(fixturePath).metadata();
-    const expected = getNormalizedDimensionsFromDecodedMetadata(decodedMetadata);
-    const result = await getExifMetadataFromFile(fixturePath);
-
-    expect(result.dimensionWidth).toBe(expected.width);
-    expect(result.dimensionHeight).toBe(expected.height);
+    expect(result.dimensionWidth).toBe(213);
+    expect(result.dimensionHeight).toBe(320);
   });
 
   it("handles unknown file format by reading only header bytes (no full-file load)", async () => {

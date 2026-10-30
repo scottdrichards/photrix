@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import path from "node:path";
 import os from "node:os";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
+import { createDeferred } from "../common/createDeferred.fixture.ts";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -9,14 +10,6 @@ afterEach(() => {
   jest.resetModules();
   jest.restoreAllMocks();
 });
-
-const createDeferred = () => {
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-};
 
 const createDb = (
   rows: Array<{ relativePath: string; durationSeconds?: number }>,

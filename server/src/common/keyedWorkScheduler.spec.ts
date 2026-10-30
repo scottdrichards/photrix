@@ -1,23 +1,14 @@
 import { describe, expect, it } from "@jest/globals";
 import { createKeyedWorkScheduler } from "./keyedWorkScheduler.ts";
-
-const deferred = <T>() => {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-};
+import { createDeferred } from "./createDeferred.fixture.ts";
 
 describe("createKeyedWorkScheduler", () => {
   it("runs queued work in LIFO order", async () => {
     const scheduler = createKeyedWorkScheduler(1);
     const started: string[] = [];
-    const a = deferred<string>();
-    const b = deferred<string>();
-    const c = deferred<string>();
+    const a = createDeferred<string>();
+    const b = createDeferred<string>();
+    const c = createDeferred<string>();
 
     const taskA = scheduler.schedule("a", async () => {
       started.push("a");
@@ -48,7 +39,7 @@ describe("createKeyedWorkScheduler", () => {
 
   it("caps concurrent work and coalesces duplicate keys", async () => {
     const scheduler = createKeyedWorkScheduler(2);
-    const releases = [deferred<string>(), deferred<string>(), deferred<string>()];
+    const releases = [createDeferred<string>(), createDeferred<string>(), createDeferred<string>()];
     const started: string[] = [];
     let active = 0;
     let peakActive = 0;
@@ -91,7 +82,7 @@ describe("createKeyedWorkScheduler", () => {
 
   it("drops queued work when its only waiter aborts before start", async () => {
     const scheduler = createKeyedWorkScheduler(1);
-    const running = deferred<string>();
+    const running = createDeferred<string>();
     const started: string[] = [];
 
     const first = scheduler.schedule("first", async () => {
@@ -121,7 +112,7 @@ describe("createKeyedWorkScheduler", () => {
     const scheduler = createKeyedWorkScheduler(1);
     const firstAbort = new AbortController();
     const secondAbort = new AbortController();
-    const workFinished = deferred<void>();
+    const workFinished = createDeferred<void>();
     let workerSignal: AbortSignal | null = null;
 
     const first = scheduler.schedule(

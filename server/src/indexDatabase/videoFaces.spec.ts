@@ -1,27 +1,8 @@
 import { describe, it, expect, jest } from "@jest/globals";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { splitPath } from "./utils/pathUtils.ts";
 import { AnalysisStore } from "./analysisStore.ts";
-
-const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
-  const mediaRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-media-root-"));
-  const dbRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-db-root-"));
-  process.env.INDEX_DB_LOCATION = dbRoot;
-  let db: IndexDatabase | undefined;
-  try {
-    db = new IndexDatabase(mediaRoot);
-    await db.init();
-    await db.startupMaintenance;
-    await testFn(db);
-  } finally {
-    await db?.close();
-    rmSync(mediaRoot, { recursive: true, force: true });
-    rmSync(dbRoot, { recursive: true, force: true });
-  }
-};
+import { withTempDb } from "./withTempDb.fixture.ts";
 
 const addVideo = async (
   db: IndexDatabase,
