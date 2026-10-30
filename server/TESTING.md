@@ -1,125 +1,34 @@
-# Server Testing Framework
+# Server tests
 
-## Quick Start
-
-Run tests at any time during development:
+The repo-wide philosophy is in [/TESTING.md](../TESTING.md). This page is how
+the server's jest suite works.
 
 ```bash
-bun run test                # Run unit tests (fast)
-bun run test:watch         # Run unit tests in watch mode
-bun run test:all           # Run all tests (unit + integration)
-bun run test:integration   # Run integration tests only
-bun run test:coverage      # Generate coverage report
+bun run test --forceExit                         # every src/**/*.spec.ts
+bun run test src/createServer.spec.ts --forceExit  # one file
+bun run test --forceExit -t "share link"         # by test name
 ```
 
-## Architecture
+- **Use the `test` script, not bare `jest`.** The server is ESM, and jest only
+  loads it with `NODE_OPTIONS=--experimental-vm-modules`, which the script sets.
+- **Pass `--forceExit`.** A worker or timer left open keeps jest alive after
+  the run finishes.
+- **A spec that opens an `IndexDatabase` closes it** (`await db.close()` in
+  `finally` or `afterEach`); otherwise its SQLite workers outlive the test.
+- **Spec files are not type-checked.** `tsconfig.json` excludes them and
+  ts-jest runs with `isolatedModules`, so a spec can drift from the code it
+  tests without a compile error. Run it.
+- **Mock a module with `jest.unstable_mockModule` before importing it**, then
+  `await import(...)` the code under test. `jest.spyOn` cannot patch an ES
+  module export. A mocked module must provide every member the code under test
+  uses: the mock outlives `jest.resetModules()`.
+- **Use `exampleFolder`** for anything that needs real media. It is a small
+  synthetic library; its fixtures carry fabricated EXIF only.
 
-The test framework is split into two projects for fast feedback during development:
+## Where to start reading
 
-### Unit Tests (`bun run test`)
-- **Location:** `src/**/*.spec.ts` (excluding `main.spec.ts`)
-- **Speed:** Fast (< 1s typically)
-- **Purpose:** Test individual modules in isolation
-- **Parallelization:** Tests run in parallel for speed
-
-**Examples:**
-- [src/common/standardHeights.spec.ts](src/common/standardHeights.spec.ts)
-- [src/imageProcessing/convertImage.spec.ts](src/imageProcessing/convertImage.spec.ts)
-
-### Integration Tests (`bun run test:integration`)
-- **Location:** `src/main.spec.ts`
-- **Speed:** Slower (requires server startup)
-- **Purpose:** Test full HTTP server behavior and cross-module interactions
-- **Parallelization:** Tests run serially (`--runInBand`) to avoid port conflicts
-
-## Configuration Files
-
-### jest.config.ts
-Configures Jest with TypeScript support (ts-jest preset). Projects are defined here:
-- **unit:** Fast, parallel unit tests
-- **integration:** Serial integration tests with port isolation
-
-### jest.setup.ts
-Initializes test environment cache directories before any tests run:
-- `ThumbnailCacheDirectory` → temp directory
-- `INDEX_DB_LOCATION` → temp directory
-
-This ensures tests don't pollute the actual storage paths.
-
-## Writing Tests
-
-### Unit Test Template
-```typescript
-import { describe, it, expect } from "@jest/globals";
-import { myFunction } from "./myModule.ts";
-
-describe("myFunction", () => {
-  it("should handle valid input", () => {
-    const result = myFunction({ foo: "bar" });
-    expect(result).toBe(expectedValue);
-  });
-});
-```
-
-### Integration Test Template
-See [src/main.spec.ts](src/main.spec.ts) for a full example:
-- Server startup/teardown in `beforeEach` / `afterEach`
-- HTTP request helpers
-- Database initialization and cleanup
-
-## Known Issues & Fixes
-
-### Missing/Incorrect Exports
-Several test files reference exports that don't exist or have moved:
-
-- `fileUtils.spec.ts`: Looking for `toRelative` export (should be in main.spec.ts context)
-- `fileScanner.spec.ts`: Looking for `FileScanner` export (class may have been removed or renamed)
-- `main.spec.ts`: Importing `toRelative` which doesn't export from `fileHandling/fileUtils.ts`
-
-**Status:** To be fixed by aligning test imports with actual module exports.
-
-### Unused/Broken Tests
-- `indexDatabase.spec.ts`: Tests call `db.load()` which doesn't exist (API mismatch)
-- `fileUtils.spec.ts`: Tests assume metadata extraction behavior that may not be implemented
-
-**Status:** To be fixed by either implementing missing APIs or removing tests for unimplemented features.
-
-## Best Practices
-
-Following the project's testing philosophy:
-
-1. **High-level tests:** Focus on behavior and user experience, not implementation details
-2. **Minimal mocking:** Mock only external dependencies (file system, database, etc.)
-3. **Test specs, not code:** Tests should read like specifications of expected behavior
-4. **Fast feedback:** Unit tests should run in seconds; integration tests in < 30s total
-
-## CI/CD Integration
-
-To run all tests in CI/CD pipelines:
-```bash
-bun run test:coverage
-```
-
-This generates a coverage report and ensures all tests pass before deployment.
-
-## Debugging Tests
-
-### Run a specific test file:
-```bash
-bun run test -- src/common/standardHeights.spec.ts
-```
-
-### Run a specific test suite/case:
-```bash
-bun run test -- --testNamePattern="myFunction"
-```
-
-### Debug with verbose output:
-```bash
-bun run test -- --verbose
-```
-
-### Watch mode with focused file:
-```bash
-bun run test:watch -- src/imageProcessing/convertImage.spec.ts
-```
+- [`src/createServer.spec.ts`](src/createServer.spec.ts) runs the real HTTP
+  server over a three-file library: routing, the auth gate, and what a share
+  link may reach.
+- [`src/createRoutes.spec.ts`](src/createRoutes.spec.ts) checks that every
+  route in the table is reachable.

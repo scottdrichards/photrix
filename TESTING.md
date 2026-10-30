@@ -9,7 +9,7 @@ and the implementation details benefit from testing to manage their complexity.
 
 ## Layers
 - **Client unit** (`vitest`): `bun run --filter photrix-client test`
-- **Server unit** (`jest`): `bun run test` (from repo root; integration: `bun run --filter server test:integration`)
+- **Server unit** (`jest`): `bun run test` (from repo root). See `server/TESTING.md`.
 - **End-to-end** (`Playwright`): `bun run test:e2e` — drives the real app in a
   browser against an isolated server+client (throwaway DB, `exampleFolder` library,
   auth disabled), so a UI/behavior change can be validated without a human. First

@@ -28,7 +28,11 @@ describe("createServer", () => {
 
   const request = (
     requestPath: string,
-    { method = "GET", body, token }: { method?: string; body?: unknown; token?: string } = {},
+    {
+      method = "GET",
+      body,
+      token,
+    }: { method?: string; body?: unknown; token?: string } = {},
   ): Promise<Response> =>
     new Promise((resolve, reject) => {
       const { port } = server.address() as AddressInfo;
@@ -40,7 +44,9 @@ describe("createServer", () => {
         (res) => {
           let text = "";
           res.on("data", (chunk) => (text += chunk));
-          res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text }));
+          res.on("end", () =>
+            resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text }),
+          );
         },
       );
       req.on("error", reject);
@@ -78,7 +84,8 @@ describe("createServer", () => {
       taskOrchestrator: createTaskOrchestrator(database),
       featureFlags: await FeatureFlagStore.load(database.asyncSqlite, {}),
     });
-    if (!server.listening) await new Promise((resolve) => server.once("listening", resolve));
+    if (!server.listening)
+      await new Promise((resolve) => server.once("listening", resolve));
   });
 
   afterEach(async () => {
@@ -93,7 +100,10 @@ describe("createServer", () => {
     it("answers /api/health with ok while the library is mounted", async () => {
       const response = await request("/api/health");
       expect(response.status).toBe(200);
-      expect(JSON.parse(response.body)).toEqual({ status: "ok", message: "Server is running" });
+      expect(JSON.parse(response.body)).toEqual({
+        status: "ok",
+        message: "Server is running",
+      });
     });
 
     it("tags every response with an X-Request-Id", async () => {
@@ -104,7 +114,9 @@ describe("createServer", () => {
     it("answers a CORS preflight with 204 and the allowed methods", async () => {
       const response = await request("/api/health", { method: "OPTIONS" });
       expect(response.status).toBe(204);
-      expect(response.headers["access-control-allow-methods"]).toBe("GET, POST, PATCH, OPTIONS");
+      expect(response.headers["access-control-allow-methods"]).toBe(
+        "GET, POST, PATCH, OPTIONS",
+      );
     });
 
     it("answers an unknown route with a JSON 404", async () => {
@@ -118,7 +130,9 @@ describe("createServer", () => {
     it("serves an uncacheable payload of the requested size for bandwidth probing", async () => {
       const response = await request("/api/network-probe?bytes=65536");
       expect(response.status).toBe(200);
-      expect(response.headers["cache-control"]).toBe("no-store, no-cache, must-revalidate");
+      expect(response.headers["cache-control"]).toBe(
+        "no-store, no-cache, must-revalidate",
+      );
       expect(response.headers["content-type"]).toBe("application/octet-stream");
       expect(response.body).toHaveLength(64 * 1024);
     });
@@ -135,14 +149,20 @@ describe("createServer", () => {
         { name: "subFolder", count: 1 },
       ]);
       expect(JSON.parse(nested.body).folders).toEqual([]);
-      expect(JSON.parse(fiveStars.body).folders).toEqual([{ name: "subFolder", count: 1 }]);
+      expect(JSON.parse(fiveStars.body).folders).toEqual([
+        { name: "subFolder", count: 1 },
+      ]);
     });
 
     it("queries a folder's own files, or its whole subtree with includeSubfolders", async () => {
       const root = JSON.parse((await request("/api/files/")).body);
-      const subtree = JSON.parse((await request("/api/files/?includeSubfolders=true")).body);
+      const subtree = JSON.parse(
+        (await request("/api/files/?includeSubfolders=true")).body,
+      );
 
-      expect(root.items.map((item: { fileName: string }) => item.fileName)).toEqual(["root.jpg"]);
+      expect(root.items.map((item: { fileName: string }) => item.fileName)).toEqual([
+        "root.jpg",
+      ]);
       expect(subtree.total).toBe(3);
     });
 
@@ -230,7 +250,10 @@ describe("createServer", () => {
       ["GET", "/api/settings/default-exclusion"],
       ["POST", "/api/moment-clusters/dissolve"],
     ])("forbids a share link from %s %s", async (method, route) => {
-      const response = await request(route, { method, token: issueShareToken(shareScope) });
+      const response = await request(route, {
+        method,
+        token: issueShareToken(shareScope),
+      });
       expect(response.status).toBe(403);
     });
   });

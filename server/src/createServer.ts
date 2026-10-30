@@ -1,32 +1,5 @@
 import http from "node:http";
-import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
-import { filesEndpointRequestHandler } from "./requestHandlers/files/filesRequestHandler.ts";
-import { updateFileMetadataHandler } from "./requestHandlers/files/updateMetadataHandler.ts";
-import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
-import { statusRequestHandler } from "./requestHandlers/statusRequestHandler.ts";
-import { statusBackgroundTasksRequestHandler } from "./requestHandlers/statusBackgroundTasksRequestHandler.ts";
-import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
-import { networkProbeRequestHandler } from "./requestHandlers/networkProbeRequestHandler.ts";
-import { dayPhotoRequestHandler } from "./requestHandlers/dayPhotoRequestHandler.ts";
-import { diagnosticsEventsRequestHandler } from "./requestHandlers/diagnosticsRequestHandler.ts";
-import { buildDiagnosticsReport } from "./observability/buildDiagnosticsReport.ts";
-import { diagnosticsReportRequestHandler } from "./requestHandlers/diagnosticsReportRequestHandler.ts";
-import { videoNegotiationRequestHandler } from "./requestHandlers/video/videoNegotiation.ts";
-import {
-  searchRequestHandler,
-  searchStatusRequestHandler,
-} from "./requestHandlers/searchRequestHandler.ts";
-import { searchInterpretHandler } from "./requestHandlers/searchInterpretHandler.ts";
-import {
-  authLoginHandler,
-  authLogoutHandler,
-  authShareTokenHandler,
-  passkeyAuthenticationOptionsHandler,
-  passkeyAuthenticationVerifyHandler,
-  passkeyRegistrationOptionsHandler,
-  passkeyRegistrationVerifyHandler,
-} from "./requestHandlers/authRequestHandler.ts";
-import { accountRequestHandler } from "./requestHandlers/accountRequestHandler.ts";
+import type { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import {
   bindCurrentRequestTrace,
   finishRequestTrace,
@@ -46,23 +19,9 @@ import {
 import { resolveShareFilter, ShareScopeError } from "./auth/shareScope.ts";
 import { FilterCompileError } from "./indexDatabase/filterToSQL.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
-import { peopleRequestHandler } from "./requestHandlers/peopleRequestHandler.ts";
-import { settingsRequestHandler } from "./requestHandlers/settingsRequestHandler.ts";
-import { momentClustersRequestHandler } from "./requestHandlers/momentClustersRequestHandler.ts";
 import { sharePreviewHandler } from "./requestHandlers/sharePreviewHandler.ts";
-import { decodeRequestPath } from "./common/decodeRequestPath.ts";
-import { extractShareFolderRoots } from "./auth/shareFolderScope.ts";
-import type { FilterElement } from "./indexDatabase/indexDatabase.type.ts";
-import { pageTitleHandler } from "./requestHandlers/pageTitleHandler.ts";
-import { feedbackHandler } from "./requestHandlers/feedbackHandler.ts";
-import { faceIdentifyRequestHandler } from "./requestHandlers/faceIdentifyRequestHandler.ts";
-import { photoCaptionRequestHandler } from "./requestHandlers/photoCaptionRequestHandler.ts";
-import { suggestRotationRequestHandler } from "./requestHandlers/suggestRotationRequestHandler.ts";
-import { analyzeImage } from "./imageAnalysis/imageAnalysisWorker.ts";
-import { killAllSessions } from "./videoProcessing/hlsSession.ts";
 import type { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
-import { featureFlagsRequestHandler } from "./requestHandlers/featureFlagsRequestHandler.ts";
-import { createCoverageReporter } from "./requestHandlers/analysisCoverage.ts";
+import { createRoutes, matchesRoute, type ApiRequest } from "./createRoutes.ts";
 
 const log = getLogger("httpServer");
 
@@ -80,31 +39,147 @@ type ServerOptions = {
   featureFlags: FeatureFlagStore;
 };
 
+/** A request header's value, or its first value when repeated. */
+const firstHeader = (req: http.IncomingMessage, name: string): string | undefined => {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+};
+
+/**
+ * How a request holds off background work while it runs.
+ *
+ * - `"lease"`: heavy, interactive data requests (search, folder and file
+ *   queries, suggestions, mutations). Background stays stopped for the whole
+ *   request: a cold search can run many seconds on a busy box, and a one-shot
+ *   cooldown would let workers resume mid-request and starve it again.
+ * - `"cooldown"`: asset serving (thumbnails, image and video bytes, HLS) and
+ *   the slow-but-bounded photo endpoints. These are frequent and often
+ *   long-lived — a playing video fetches a segment every few seconds — so a
+ *   lease per request would freeze background ingestion for as long as anyone
+ *   watches or scrolls. The cooldown still yields briefly and then expires.
+ *   Photo captions (~90 s of a vision model) and rotation suggestions (~1-4 s)
+ *   are here for the same reason: a lease would stop every background task on
+ *   every photo open.
+ * - `"none"`: polling and health checks, including the long-lived status
+ *   stream and the search UI's status poll, which only read in-process state.
+ */
+const userActivityFor = (method: string | undefined, pathname: string) => {
+  if (
+    pathname.startsWith("/api/status") ||
+    pathname === "/api/search/status" ||
+    pathname.startsWith("/api/health") ||
+    pathname.startsWith("/api/network-probe")
+  ) {
+    return "none";
+  }
+  // A file query ends in a slash; serving one file's bytes does not.
+  const isAssetServe =
+    method === "GET" && pathname.startsWith("/api/files/") && !pathname.endsWith("/");
+  const isSlowPhotoEndpoint =
+    method === "GET" &&
+    (pathname.startsWith("/api/photos/caption") ||
+      pathname.startsWith("/api/photos/suggest-rotation"));
+  return isAssetServe || isSlowPhotoEndpoint ? "cooldown" : "lease";
+};
+
 export const createServer = (
   database: IndexDatabase,
   storagePath: string,
   options: ServerOptions,
 ) => {
-  const { taskOrchestrator, featureFlags } = options;
-  const getCoverage = createCoverageReporter(database.analysis);
+  const { taskOrchestrator } = options;
+  const routes = createRoutes({
+    database,
+    storageRoot: storagePath,
+    taskOrchestrator,
+    featureFlags: options.featureFlags,
+  });
+
+  const handleRequest = async (req: ApiRequest, res: http.ServerResponse) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Client-Session-Id, X-Client-Operation-Id, X-Client-Request-Id, X-Request-Id",
+    );
+    res.setHeader("Vary", "Origin");
+
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    const pathname = req.url.split("?", 1)[0];
+
+    // The link-preview page for a shared link. It validates the share token
+    // itself, so it runs before the auth gate.
+    if (req.method === "GET" && pathname === "/share") {
+      await sharePreviewHandler(req, res, database);
+      return;
+    }
+
+    // Auth gate. Health and sign-in are public; everything else needs a session,
+    // an API token or a share token. A share token carries its scope.
+    let token: string | null = null;
+    if (
+      isAuthEnabled() &&
+      pathname !== "/api/health" &&
+      !pathname.startsWith("/api/auth/")
+    ) {
+      token = extractToken(
+        req.headers["authorization"],
+        new URL(req.url, "http://localhost").searchParams.get("token"),
+      );
+      if (!token || !validateToken(token)) {
+        writeJson(res, 401, { error: "Unauthorized" });
+        return;
+      }
+    }
+    const shareScope = token ? getShareScope(token) : null;
+
+    const activity = userActivityFor(req.method, pathname);
+    if (activity === "cooldown") {
+      taskOrchestrator.noteUserActivity();
+    } else if (activity === "lease") {
+      const lease = taskOrchestrator.beginUserRequest(
+        `${req.method} ${redactRequestPath(pathname)}`,
+      );
+      res.once("finish", lease.release);
+      res.once("close", lease.release);
+    }
+
+    const route = routes.find((candidate) =>
+      matchesRoute(candidate, req.method, pathname),
+    );
+    if (!route) {
+      writeJson(res, 404, { error: "Not found" });
+      return;
+    }
+
+    let shareFilter: unknown = null;
+    if (shareScope && route.shareLink === "forbidden") {
+      writeJson(res, 403, { error: "Forbidden" });
+      return;
+    }
+    if (shareScope && route.shareLink === "scoped") {
+      try {
+        shareFilter = await resolveShareFilter(shareScope, token ?? undefined);
+      } catch (error) {
+        if (!(error instanceof ShareScopeError)) throw error;
+        writeJson(res, error.statusCode, { error: error.message });
+        return;
+      }
+    }
+
+    await route.handle({ req, res, pathname, shareScope, shareFilter });
+  };
 
   const server = http.createServer((req, res) => {
-    const requestIdHeader = req.headers["x-request-id"];
-    const requestId = Array.isArray(requestIdHeader)
-      ? requestIdHeader[0]
-      : requestIdHeader;
-    const clientSessionIdHeader = req.headers["x-client-session-id"];
-    const clientOperationIdHeader = req.headers["x-client-operation-id"];
-    const clientRequestIdHeader = req.headers["x-client-request-id"];
-    const clientSessionId = Array.isArray(clientSessionIdHeader)
-      ? clientSessionIdHeader[0]
-      : clientSessionIdHeader;
-    const clientOperationId = Array.isArray(clientOperationIdHeader)
-      ? clientOperationIdHeader[0]
-      : clientOperationIdHeader;
-    const clientRequestId = Array.isArray(clientRequestIdHeader)
-      ? clientRequestIdHeader[0]
-      : clientRequestIdHeader;
+    const requestId = firstHeader(req, "x-request-id");
+    const clientSessionId = firstHeader(req, "x-client-session-id");
+    const clientOperationId = firstHeader(req, "x-client-operation-id");
+    const clientRequestId = firstHeader(req, "x-client-request-id");
 
     void runWithRequestTrace(
       {
@@ -143,579 +218,13 @@ export const createServer = (
         });
         bindRequestAbortSignal(requestAbort.signal);
 
+        if (!req.url) {
+          writeJson(res, 400, { error: "Bad request" });
+          return;
+        }
+
         try {
-          res.setHeader("Access-Control-Allow-Origin", "*");
-          res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
-          res.setHeader(
-            "Access-Control-Allow-Headers",
-            "Content-Type, Authorization, X-Client-Session-Id, X-Client-Operation-Id, X-Client-Request-Id, X-Request-Id",
-          );
-          res.setHeader("Vary", "Origin");
-
-          if (req.method === "OPTIONS") {
-            res.writeHead(204);
-            res.end();
-            return;
-          }
-
-          if (!req.url) {
-            writeJson(res, 400, { error: "Bad request" });
-            return;
-          }
-
-          // Share preview page — serves OG meta tags for rich link previews.
-          // Handles its own token validation; must be checked before the auth gate.
-          if (req.method === "GET" && req.url.split("?")[0] === "/share") {
-            await sharePreviewHandler(req, res, database);
-            return;
-          }
-
-          // Auth gate — bypass for health check and auth endpoints themselves
-          let shareFilter: unknown = null;
-          let shareScope: ReturnType<typeof getShareScope> = null;
-          let shareFilterResolved = false;
-          let shareToken: string | null = null;
-          if (
-            isAuthEnabled() &&
-            req.url !== "/api/health" &&
-            !req.url.startsWith("/api/auth/")
-          ) {
-            const parsedUrl = new URL(req.url, "http://localhost");
-            const token = extractToken(
-              req.headers["authorization"],
-              parsedUrl.searchParams.get("token"),
-            );
-            if (!token || !validateToken(token)) {
-              writeJson(res, 401, { error: "Unauthorized" });
-              return;
-            }
-            shareToken = token;
-            shareScope = getShareScope(token);
-          }
-
-          const getResolvedShareFilter = async (): Promise<unknown> => {
-            if (!shareScope) {
-              return null;
-            }
-            if (shareFilterResolved) {
-              return shareFilter;
-            }
-            try {
-              shareFilter = await resolveShareFilter(shareScope, shareToken ?? undefined);
-              shareFilterResolved = true;
-              return shareFilter;
-            } catch (error) {
-              if (error instanceof ShareScopeError) {
-                writeJson(res, error.statusCode, { error: error.message });
-                return null;
-              }
-              throw error;
-            }
-          };
-
-          // Background work backs off for user activity, but *how* depends on the
-          // request. Two tiers:
-          //
-          //  - Heavy/interactive data requests (search, folder/file queries,
-          //    suggestions, mutations) get the full bracket: background stays
-          //    stopped for the request's *entire* duration. A cold search can run
-          //    many seconds on a busy box, and a one-shot cooldown lets background
-          //    workers resume mid-request and re-starve it.
-          //
-          //  - Asset serving (thumbnails, image/video bytes, HLS playlists and
-          //    segments) gets only the bounded activity cooldown. These are
-          //    high-frequency and often long-lived (a playing video fetches a
-          //    segment every few seconds for its whole runtime); bracketing each
-          //    one would pin the whole box in a full stop for as long as the user
-          //    watches/scrolls, so background ingestion never progresses while the
-          //    app is merely in use. The cooldown still yields briefly to an
-          //    in-flight heavy request, but self-expires so a single long stream
-          //    can't freeze the backlog for its entire duration.
-          //
-          // Exclude polling and health endpoints (especially the long-lived status
-          // stream) entirely so routine checks don't keep the backlog paused.
-          const pathname = req.url.split("?", 1)[0];
-          // /api/search/status is polled by the search UI while a query runs;
-          // it only reads in-process flags, so it must not count as activity.
-          const tracksActivity =
-            !req.url.startsWith("/api/status") &&
-            pathname !== "/api/search/status" &&
-            !req.url.startsWith("/api/health") &&
-            !req.url.startsWith("/api/network-probe");
-          // Asset serving is a GET under /api/files/ whose path has no trailing
-          // slash — query mode requires the trailing slash (see filesRequestHandler).
-          const isAssetServe =
-            req.method === "GET" &&
-            pathname.startsWith("/api/files/") &&
-            !pathname.endsWith("/");
-          // Photo captions call out to Ollama and take ~90-100s on the current
-          // host — a real "heavy request" by cost, but bracketing it with
-          // a beginUserRequest lease would pin every background task
-          // (including moment clustering) stopped for that whole span on every
-          // single photo open. Treat it like asset serving instead: it still
-          // counts as activity (so background yields briefly), just not a full
-          // stop-the-world bracket for the entire call.
-          const isPhotoCaption =
-            req.method === "GET" && pathname.startsWith("/api/photos/caption");
-          // Same reasoning as isPhotoCaption above: a real cost (~1-4s of
-          // Canny+Hough), but short enough that a full stop-the-world
-          // request bracket isn't warranted.
-          const isSuggestRotation =
-            req.method === "GET" && pathname.startsWith("/api/photos/suggest-rotation");
-          if (tracksActivity && (isAssetServe || isPhotoCaption || isSuggestRotation)) {
-            taskOrchestrator.noteUserActivity();
-          } else if (tracksActivity) {
-            const lease = taskOrchestrator.beginUserRequest(
-              `${req.method} ${redactRequestPath(pathname)}`,
-            );
-            res.once("finish", lease.release);
-            res.once("close", lease.release);
-          }
-
-          if (req.url === "/api/auth/login" && req.method === "POST") {
-            await authLoginHandler(req, res);
-            return;
-          }
-
-          if (req.url === "/api/auth/logout" && req.method === "POST") {
-            await authLogoutHandler(req, res);
-            return;
-          }
-
-          // Matched on pathname, not the raw url: this route takes a `?dryRun=1`
-          // query param, which an exact-equality match would silently 404.
-          if (pathname === "/api/auth/share-token" && req.method === "POST") {
-            await authShareTokenHandler(req, res, database);
-            return;
-          }
-
-          if (
-            req.url === "/api/auth/passkey/registration-options" &&
-            req.method === "POST"
-          ) {
-            await passkeyRegistrationOptionsHandler(req, res);
-            return;
-          }
-
-          if (
-            req.url === "/api/auth/passkey/registration-verify" &&
-            req.method === "POST"
-          ) {
-            await passkeyRegistrationVerifyHandler(req, res);
-            return;
-          }
-
-          if (
-            req.url === "/api/auth/passkey/authentication-options" &&
-            req.method === "POST"
-          ) {
-            await passkeyAuthenticationOptionsHandler(req, res);
-            return;
-          }
-
-          if (
-            req.url === "/api/auth/passkey/authentication-verify" &&
-            req.method === "POST"
-          ) {
-            await passkeyAuthenticationVerifyHandler(req, res);
-            return;
-          }
-
-          if (req.url.startsWith("/api/account")) {
-            await accountRequestHandler(req, res);
-            return;
-          }
-
-          if (req.url === "/api/health" && req.method === "GET") {
-            if (database.asyncSqlite?.failed) {
-              writeJson(res, 503, {
-                status: "error",
-                message: "Database worker died; the server is restarting",
-              });
-              return;
-            }
-            const payload = database.mediaRootUnavailable
-              ? {
-                  status: "unloaded",
-                  message:
-                    "Media root unavailable — index left untouched, not serving live library state",
-                }
-              : {
-                  status: "ok",
-                  message: "Server is running",
-                };
-
-            writeJson(res, database.mediaRootUnavailable ? 503 : 200, payload);
-            return;
-          }
-
-          if (req.url?.startsWith("/api/diagnostics/events")) {
-            // A share-link viewer's client still reports its own diagnostics
-            // (POST), but may not read back the event buffer, which holds
-            // every other client's sessions and requests.
-            if (shareScope && req.method !== "POST") {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await diagnosticsEventsRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-            );
-            return;
-          }
-
-          if (
-            (pathname === "/api/diagnostics/perf" || pathname === "/api/diagnostics/report") &&
-            req.method === "GET"
-          ) {
-            if (shareScope) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await diagnosticsReportRequestHandler(
-              req as http.IncomingMessage & { url: string },
-              res,
-              taskOrchestrator,
-            );
-            return;
-          }
-
-          if (req.url?.startsWith("/api/status/stream") && req.method === "GET") {
-            if (shareScope) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await statusRequestHandler(req, res, {
-              stream: true,
-              taskOrchestrator,
-              getCoverage,
-            });
-            return;
-          }
-
-          if (req.url === "/api/status/background-tasks" && req.method === "POST") {
-            if (shareScope) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await statusBackgroundTasksRequestHandler(req, res, { taskOrchestrator });
-            return;
-          }
-
-          if (req.url === "/api/status/clear-hls" && req.method === "POST") {
-            if (shareScope) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            killAllSessions();
-            writeJson(res, 200, { ok: true });
-            return;
-          }
-
-          if (req.url?.startsWith("/api/status") && req.method === "GET") {
-            if (shareScope) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await statusRequestHandler(req, res, {
-              stream: false,
-              taskOrchestrator,
-              getCoverage,
-            });
-            return;
-          }
-
-          // Any caller may read the flags (the client needs them to render);
-          // only a signed-in session, not a share link, may change one.
-          if (req.url?.startsWith("/api/feature-flags")) {
-            await featureFlagsRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              { store: featureFlags, canChange: !shareScope },
-            );
-            return;
-          }
-
-          if (req.url?.startsWith("/api/network-probe") && req.method === "GET") {
-            networkProbeRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-            );
-            return;
-          }
-
-          // Picks a photo from the whole library for any date, so it is
-          // outside every share's scope.
-          if (req.url?.startsWith("/api/day-photo/") && req.method === "GET") {
-            if (shareScope) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await dayPhotoRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-            );
-            return;
-          }
-
-          // Get folders endpoint - list subfolders at a given path
-          if (req.url?.startsWith("/api/folders/") && req.method === "GET") {
-            // A share link browses its own subtree: the listing is ANDed with the
-            // share filter (so only folders holding shared items exist at all) and
-            // the requested path is clamped to the shared root. Both checks live
-            // in the handler; an ordinary session passes neither and sees the
-            // whole library as before.
-            const resolvedShareFilter = await getResolvedShareFilter();
-            if (res.writableEnded) return;
-            await foldersRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              {
-                database,
-                shareFilter: resolvedShareFilter,
-                shareFolderRoots: shareScope
-                  ? extractShareFolderRoots(shareScope.filter as FilterElement)
-                  : null,
-              },
-            );
-            return;
-          }
-
-          // Share views call this too, so scope it rather than forbid it: the
-          // title is computed over the caller's filter ANDed with the share's.
-          if (req.url === "/api/page-title" && req.method === "POST") {
-            const resolvedShareFilter = await getResolvedShareFilter();
-            if (res.writableEnded) return;
-            await pageTitleHandler(req, res, database, resolvedShareFilter);
-            return;
-          }
-
-          // Fullscreen-viewer AI caption (<=6 words, vision model via Ollama).
-          // Read-only and best-effort, but calls out to a local model and
-          // reveals which people/dates are in the library, so — like
-          // /api/faces/ — a scoped share link may not call it.
-          if (req.url?.startsWith("/api/photos/caption") && req.method === "GET") {
-            if (shareScope) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await photoCaptionRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              { database, storageRoot: storagePath },
-            );
-            return;
-          }
-
-          // Feedback #66's bounded auto-straighten suggestion. Same
-          // share-scope treatment as the caption endpoint above — read-only,
-          // but not something a scoped share link needs.
-          if (req.url?.startsWith("/api/photos/suggest-rotation") && req.method === "GET") {
-            if (shareScope) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await suggestRotationRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              { database, storageRoot: storagePath },
-            );
-            return;
-          }
-
-          if (req.url?.startsWith("/api/feedback")) {
-            // A share-link viewer may submit new feedback — the global
-            // "Comments" button (feedback #99) has to work from a shared
-            // link, which is exactly the case shareScope identifies — but
-            // may not list or manage (claim/complete) the internal triage
-            // queue, which is everything else this handler does.
-            const feedbackUrl = new URL(req.url, "http://localhost");
-            const isPublicSubmission =
-              req.method === "POST" && feedbackUrl.pathname === "/api/feedback";
-            if (shareScope && !isPublicSubmission) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await feedbackHandler(
-              req as http.IncomingMessage & { url: string },
-              res,
-              database,
-              {
-                markExternal: Boolean(shareScope),
-                buildDiagnosticsReport: (clientSessionId) =>
-                  buildDiagnosticsReport(clientSessionId, taskOrchestrator),
-              },
-            );
-            return;
-          }
-
-          if (req.url?.startsWith("/api/suggestions") && req.method === "GET") {
-            const resolvedShareFilter = await getResolvedShareFilter();
-            if (res.writableEnded) return;
-            await suggestionsRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              { database, shareFilter: resolvedShareFilter },
-            );
-            return;
-          }
-
-          if (req.url?.startsWith("/api/video/negotiate") && req.method === "GET") {
-            const resolvedShareFilter = await getResolvedShareFilter();
-            if (res.writableEnded) return;
-            await videoNegotiationRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              {
-                database,
-                storageRoot: storagePath,
-                taskOrchestrator,
-                shareFilter: resolvedShareFilter,
-              },
-            );
-            return;
-          }
-
-          // Natural-language query -> structured filters. Read-only, but it
-          // enumerates the library's people and folders to ground the model, so
-          // a scoped share link may not call it.
-          if (req.url === "/api/search/interpret" && req.method === "POST") {
-            if (shareScope) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await searchInterpretHandler(req, res, { database });
-            return;
-          }
-
-          if (pathname === "/api/search/status" && req.method === "GET") {
-            searchStatusRequestHandler(res);
-            return;
-          }
-
-          if (req.url?.startsWith("/api/search") && req.method === "GET") {
-            const resolvedShareFilter = await getResolvedShareFilter();
-            if (res.writableEnded) return;
-            await searchRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              { database, shareFilter: resolvedShareFilter, shareScope },
-            );
-            return;
-          }
-
-          // Classify faces in a caller-supplied image against the named people
-          // in the library. Read-only and never indexed, but it runs the shared
-          // analysis worker and enumerates every named person, so a scoped
-          // share link may not call it.
-          if (req.url?.startsWith("/api/faces/")) {
-            if (shareScope) {
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await faceIdentifyRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              { database, analyzeImage },
-            );
-            return;
-          }
-
-          // Matched by pathname prefix alone — peopleRequestHandler owns its
-          // own per-route method checks and 404s anything it doesn't
-          // recognize. An earlier version gated this on `req.method ===
-          // "POST" || req.url === "/api/people/tags"`, which matches the
-          // full URL *string* rather than the path: any query string (e.g.
-          // `?clusterId=`, needed by `/api/people/cluster-preview`) 404'd
-          // before ever reaching the handler — the same class of bug fixed
-          // for `/api/auth/share-token?dryRun=1` (see docs/security-audit.md).
-          if (req.url?.startsWith("/api/people/")) {
-            if (shareScope) {
-              // People management (rename/merge/separate/tags) mutates or
-              // reads owner-only face-cluster state; a read-only share view
-              // may never see or persist it.
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await peopleRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              database,
-            );
-            return;
-          }
-
-          if (req.url?.startsWith("/api/settings/")) {
-            if (shareScope) {
-              // Default-exclusion is the owner's personal preference; a
-              // share-link viewer never sees or changes it directly (it's
-              // still applied to what they see, via queryHandler.ts).
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await settingsRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              database,
-            );
-            return;
-          }
-
-          if (req.url?.startsWith("/api/moment-clusters/") && req.method === "POST") {
-            if (shareScope) {
-              // Overriding a representative or dissolving a stack mutates the
-              // index; a read-only share view may never persist changes.
-              writeJson(res, 403, { error: "Forbidden" });
-              return;
-            }
-            await momentClustersRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              database,
-            );
-            return;
-          }
-
-          // Files endpoint - serves individual files or queries for multiple files
-          // Query mode REQUIRES trailing slash: /api/files/ or /api/files/subfolder/
-          // File serving has NO trailing slash: /api/files/image.jpg
-          // Tag a single file (star rating / labels). Path has no trailing slash,
-          // same shape as file serving: PATCH /api/files/subfolder/image.jpg
-          if (req.url?.startsWith("/api/files/") && req.method === "PATCH") {
-            const resolvedShareFilter = await getResolvedShareFilter();
-            if (res.writableEnded) return;
-            const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
-            const pathMatch = parsedUrl.pathname.match(/^\/api\/files\/(.*)/);
-            const subPath = pathMatch ? decodeRequestPath(pathMatch[1]) : "";
-            await updateFileMetadataHandler(
-              req,
-              subPath,
-              res,
-              database,
-              resolvedShareFilter,
-            );
-            return;
-          }
-
-          if (req.url?.startsWith("/api/files/") && req.method === "GET") {
-            const resolvedShareFilter = await getResolvedShareFilter();
-            if (res.writableEnded) return;
-            await filesEndpointRequestHandler(
-              req as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,
-              res,
-              {
-                database,
-                storageRoot: storagePath,
-                taskOrchestrator,
-                shareFilter: resolvedShareFilter,
-              },
-            );
-            return;
-          }
-
-          // Default 404
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Not found" }));
+          await handleRequest(req as ApiRequest, res);
         } catch (error) {
           if (isAbortError(error)) {
             // The client already disconnected; there is no one to answer and
