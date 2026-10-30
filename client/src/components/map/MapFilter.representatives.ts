@@ -20,7 +20,7 @@ export type PixelCandidate = {
   weight: number;
 };
 
-export type SelectRepresentativesOptions = {
+type SelectRepresentativesOptions = {
   /** Map viewport size in CSS pixels. */
   width: number;
   height: number;
@@ -35,7 +35,7 @@ export type SelectRepresentativesOptions = {
   edgeInsetPx?: number;
 };
 
-export const DEFAULT_REPRESENTATIVE_CAP = 12;
+const DEFAULT_REPRESENTATIVE_CAP = 12;
 export const DEFAULT_MIN_SEPARATION_PX = 108;
 const DEFAULT_EDGE_INSET_PX = 44;
 

@@ -59,7 +59,7 @@ export type FrameFaces = {
 /** A stretch of video, in ms from the start, that a person is on screen for. */
 export type FaceAppearance = { startMs: number; endMs: number };
 
-export type VideoFace = DetectedFace & {
+type VideoFace = DetectedFace & {
   frameTimeMs: number;
   /** When this person is on screen, earliest first. Never empty. */
   appearances: FaceAppearance[];

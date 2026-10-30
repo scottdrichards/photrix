@@ -3,7 +3,7 @@ import {
   recordClientDiagnosticEvent,
   listDiagnosticsEvents,
 } from "../observability/diagnosticsStore.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
 type ClientDiagnosticsPayload = {

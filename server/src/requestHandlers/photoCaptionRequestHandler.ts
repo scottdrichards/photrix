@@ -11,7 +11,7 @@ import {
 } from "../photoCaption/generatePhotoCaption.ts";
 import { convertImage } from "../imageProcessing/convertImage.ts";
 import { getLogger } from "../observability/logger.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 import { attempt } from "../common/result.ts";
 
 // Downscale before sending to the vision model. A full-resolution source

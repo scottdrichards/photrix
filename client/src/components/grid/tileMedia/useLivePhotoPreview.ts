@@ -30,7 +30,7 @@ type Options = {
   hovered: boolean;
 };
 
-export type LivePhotoPreview = {
+type LivePhotoPreview = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   /** Render the clip element (kept mounted through its fade-out). */
   isMounted: boolean;

@@ -1,9 +1,7 @@
 import { describe, it, expect } from "@jest/globals";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { splitPath } from "./utils/pathUtils.ts";
+import { withTempDb } from "./withTempDb.fixture.ts";
 
 /**
  * End-to-end cover for the review/repair path: real embeddings, real greedy
@@ -15,26 +13,6 @@ import { splitPath } from "./utils/pathUtils.ts";
  */
 
 const DIMENSION = 128;
-
-const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
-  const mediaRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-media-root-"));
-  const dbRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-db-root-"));
-  process.env.INDEX_DB_LOCATION = dbRoot;
-  let db: IndexDatabase | undefined;
-  try {
-    db = new IndexDatabase(mediaRoot);
-    await db.init();
-    await db.startupMaintenance;
-    // The vector index loads in the background too; let it finish before the
-    // test (and its cleanup, which deletes the database directory) runs.
-    await db.vectorIndexLoaded;
-    await testFn(db);
-  } finally {
-    await db?.close();
-    rmSync(mediaRoot, { recursive: true, force: true });
-    rmSync(dbRoot, { recursive: true, force: true });
-  }
-};
 
 /**
  * A vector `angle` radians away from the reference direction, so its cosine

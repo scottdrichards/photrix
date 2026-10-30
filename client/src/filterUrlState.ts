@@ -105,7 +105,7 @@ const normalizeSearchSources = (
   return orderedSources.length === SEARCH_SOURCES.length ? undefined : orderedSources;
 };
 
-export const parseSearchSources = (
+const parseSearchSources = (
   searchSourcesParam: string | null | undefined,
 ): SearchSource[] | undefined =>
   normalizeSearchSources(
@@ -265,7 +265,7 @@ const parseMediaType = (raw: string | null): MediaTypeFilter =>
 // Deserialize
 // ---------------------------------------------------------------------------
 
-export const readViewModeFromSearch = (search: string): ViewMode =>
+const readViewModeFromSearch = (search: string): ViewMode =>
   new URLSearchParams(search).get("view") === "people" ? "people" : "library";
 
 /**
@@ -273,10 +273,10 @@ export const readViewModeFromSearch = (search: string): ViewMode =>
  * meaningful inside a person — so both are gated on their parent.
  */
 /** Which photo the fullscreen viewer has open, if any. */
-export const readPreviewFromSearch = (search: string): string | null =>
+const readPreviewFromSearch = (search: string): string | null =>
   new URLSearchParams(search).get("preview") || null;
 
-export const readPeopleSelectionFromSearch = (search: string): PeopleSelection => {
+const readPeopleSelectionFromSearch = (search: string): PeopleSelection => {
   const params = new URLSearchParams(search);
   if (params.get("view") !== "people") return NO_PEOPLE_SELECTION;
   const personId = params.get("cluster") || null;
@@ -334,7 +334,7 @@ export const parseAppUrlState = (location: {
  * @param currentSearch the live query string, read only to carry a share
  * `token` forward — it is never authored by the app itself.
  */
-export const buildAppSearchParams = (
+const buildAppSearchParams = (
   state: AppUrlState,
   currentSearch = "",
 ): URLSearchParams => {

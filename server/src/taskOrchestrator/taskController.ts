@@ -1,6 +1,6 @@
-export type TaskState = "running" | "paused" | "cancelled" | "complete";
+type TaskState = "running" | "paused" | "cancelled" | "complete";
 
-export type TaskController = {
+type TaskController = {
   readonly state: TaskState;
   checkCancelled: () => void;
   markComplete: () => void;

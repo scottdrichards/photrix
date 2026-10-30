@@ -51,7 +51,7 @@ export const LOW_CONFIDENCE_CLUSTER_ID = -1;
  * (`clusterId > 0` / `clusterId IS NULL`). See `excludeFace` for how a face
  * gets here.
  */
-export const MANUALLY_EXCLUDED_CLUSTER_ID = -2;
+const MANUALLY_EXCLUDED_CLUSTER_ID = -2;
 
 /**
  * Confirmed faces needed before a cluster gets an anchor centroid.
@@ -80,8 +80,8 @@ export type FaceVerdict = "confirmed" | "rejected";
  * fraction of the weight at its last refresh (so big clusters refresh on
  * proportional churn, not on every handful of new faces).
  */
-export const SIMILARITY_REFRESH_MIN_DELTA = 8;
-export const SIMILARITY_REFRESH_GROWTH_FRACTION = 0.25;
+const SIMILARITY_REFRESH_MIN_DELTA = 8;
+const SIMILARITY_REFRESH_GROWTH_FRACTION = 0.25;
 
 /** Clusters rescored per refresh pass, and read/write chunk sizes within one. */
 const MAX_CLUSTERS_PER_REFRESH_PASS = 8;

@@ -86,9 +86,6 @@ const HLS_VARIANTS: readonly Variant[] = [
 
 const VARIANT_BY_HEIGHT = new Map(HLS_VARIANTS.map((v) => [v.height, v]));
 
-/** Heights the on-the-fly encoder can produce, ascending. */
-export const SUPPORTED_HLS_HEIGHTS = HLS_VARIANTS.map((v) => v.height);
-
 /** Fallback height for a request that names an unsupported one. */
 const DEFAULT_HLS_HEIGHT = 720;
 
@@ -244,8 +241,8 @@ const scaleFilter = (height: number, rotation: number): string =>
 /**
  * Builds the Intel filter chain for a driver that can scale on the GPU: the
  * frames never leave the device at all — decode, fps drop, scale and rotate all
- * happen there and `h264_vaapi` encodes the surface in place. Measured on LXC
- * 124 at 720p: 3.1x realtime from a 4K60 8-bit source and 2.0x from 4K 10-bit,
+ * happen there and `h264_vaapi` encodes the surface in place. Measured on an
+ * i7-10610U iGPU at 720p: 3.1x realtime from a 4K60 8-bit source and 2.0x from 4K 10-bit,
  * against 1.8x / 0.7x for the same sources when the frames have to come back to
  * system memory to be scaled.
  *
@@ -318,7 +315,7 @@ export type EncodeTier = "gpu-frames" | "system-frames" | "software";
  * tier. Shared by HLS playback and the MP4 share export so both get the same
  * GPU paths and the same fallbacks; only the muxer arguments differ.
  */
-export type EncodePipeline = {
+type EncodePipeline = {
   hwaccelArgs: string[];
   vf: string;
   videoCodec: string;
@@ -354,7 +351,7 @@ export const selectEncodePipeline = (
   //    re-uploads and encodes on GPU. ~4-6× realtime vs ~0.3× for pure CPU on
   //    4K HEVC — critical for phone portrait videos to avoid buffer starvation.
   //
-  // 3. Intel Quick Sync, GPU frames (VAAPI, server2's iGPU-only box): VAAPI
+  // 3. Intel Quick Sync, GPU frames (VAAPI, an iGPU-only host): VAAPI
   //    decode with frames left on the device and `fps` dropped there. If the
   //    driver has VPP, scale and rotation run on the GPU too and nothing ever
   //    reaches system memory (buildIntelVppFilters); if it doesn't, the frames
@@ -733,7 +730,7 @@ const encodeVariant = (
 };
 
 /**
- * Generates a single HLS variant (one of SUPPORTED_HLS_HEIGHTS) on the fly,
+ * Generates a single HLS variant (one of the HLS_VARIANTS heights) on the fly,
  * from `startSegment` (default 0, the beginning of the file). Segments not yet written are
  * long-polled by the segment handler (see waitForHlsFile) until ffmpeg produces them.
  * The output is ephemeral and is reaped once playback goes idle.

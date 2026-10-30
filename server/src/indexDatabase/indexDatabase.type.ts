@@ -15,7 +15,7 @@ export type {
   StringSearch,
 } from "../../../shared/filter-contract/src/index.ts";
 
-export type RuntimeSemanticSimilarityFilter = {
+type RuntimeSemanticSimilarityFilter = {
   queryVector: number[];
   minSimilarity: number;
 };
@@ -97,7 +97,7 @@ export type MomentClusterDetail = {
   members: MomentClusterMember[];
 };
 
-export type QueryResultItem<
+type QueryResultItem<
   TRequestedMetadata extends Array<keyof FileRecord> | undefined,
 > = Pick<FileRecord, "folder" | "fileName"> & // Always include folder and fileName
   // Include requested metadata fields if specified
@@ -113,7 +113,7 @@ export type QueryResult<TRequestedMetadata extends Array<keyof FileRecord> | und
     pageSize: number;
   };
 
-export type GeoCluster = {
+type GeoCluster = {
   latitude: number;
   longitude: number;
   count: number;
@@ -129,7 +129,7 @@ export type GeoClusterResult = {
   total: number;
 };
 
-export type FaceClusterBox = {
+type FaceClusterBox = {
   x: number;
   y: number;
   width: number;
@@ -169,7 +169,7 @@ export type FaceClusterSummary = {
   tags: string[];
 };
 
-export type FaceCluster = FaceClusterSummary & {
+type FaceCluster = FaceClusterSummary & {
   faces: FaceClusterFace[];
   centroids: FaceClusterCentroid[];
   mergeSuggestions: FaceClusterSummary[];
@@ -263,24 +263,3 @@ export type DateHistogramResult = {
   maxDate: number | null;
   grouping: DateHistogramGrouping;
 };
-
-export type GetFiles = <TQueryOptions extends QueryOptions>(
-  query: TQueryOptions,
-) => Promise<QueryResult<TQueryOptions["metadata"]>>;
-
-export type UpsertFileData = (fileData: FileRecord) => Promise<void>;
-
-export type ImageVariantTask = {
-  type: "imageVariants";
-  relativePath: string;
-  mimeType: string;
-};
-
-export type HLSTask = {
-  type: "hls";
-  relativePath: string;
-  mimeType: string;
-  duration?: number;
-};
-
-export type BackgroundTask = ImageVariantTask | HLSTask;

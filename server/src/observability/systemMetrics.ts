@@ -63,7 +63,7 @@ export type SystemMetrics = {
     // registered ML workers. Absent when nvidia-smi is unavailable.
     processes?: GpuProcess[];
     // VRAM in use on the card but not attributable to any pid nvidia-smi can
-    // resolve here. Inside a container that shares the GPU (LXC passthrough),
+    // resolve here. Inside a container that shares the GPU (device passthrough),
     // processes on the host or in sibling containers hold VRAM invisibly; this
     // makes that external usage observable instead of silently shrinking the
     // budget until transcodes lose NVENC. A small residue (~100–300 MB of

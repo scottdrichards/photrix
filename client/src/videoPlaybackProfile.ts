@@ -18,7 +18,7 @@ const getHEVCMimeTypes = (): readonly string[] => {
 
 const HEVC_MIME_TYPES = getHEVCMimeTypes();
 
-export type VideoPlaybackProfile = {
+type VideoPlaybackProfile = {
   bandwidthMbps: number | null;
   hevcSupported: boolean;
 };

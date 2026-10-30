@@ -50,7 +50,7 @@ export const MOMENT_VISUAL_SIMILARITY_THRESHOLD = 0.93;
  * additive on top of it, not a replacement — a photo with no scored faces
  * (photoQualityScore null) is ranked on sharpness alone.
  */
-export const REPRESENTATIVE_QUALITY_BONUS_WEIGHT = 0.5;
+const REPRESENTATIVE_QUALITY_BONUS_WEIGHT = 0.5;
 
 /** Unit vector dot product == cosine similarity (embeddingCodec's decode
  * re-normalizes to unit length, so no extra magnitude division is needed). */
@@ -102,7 +102,7 @@ export const foldIntoCentroid = (
   return out;
 };
 
-export type MomentMember = {
+type MomentMember = {
   folder: string;
   fileName: string;
   sharpnessScore: number | null;

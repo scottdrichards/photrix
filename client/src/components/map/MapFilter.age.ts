@@ -23,7 +23,7 @@ export const AGE_RAMP = [
 /** Pins with no usable date fall back to the ramp's middle step. */
 export const UNDATED_PIN_COLOR = AGE_RAMP[2];
 
-export type AgeScale = {
+type AgeScale = {
   /** Epoch ms of the oldest dated pin. */
   minDate: number;
   /** Epoch ms of the newest dated pin. */
@@ -32,7 +32,7 @@ export type AgeScale = {
   stepCount: number;
 };
 
-export type AgeLegendStep = {
+type AgeLegendStep = {
   color: string;
   /** Inclusive start of the step, epoch ms. */
   start: number;
@@ -74,7 +74,7 @@ export const buildAgeScale = (points: readonly GeoPoint[]): AgeScale | null => {
 };
 
 /** Ramp index for an instant; 0 is oldest. */
-export const ageStepIndex = (scale: AgeScale | null, date: number | undefined): number => {
+const ageStepIndex = (scale: AgeScale | null, date: number | undefined): number => {
   if (!scale || date === undefined || scale.stepCount === 1) {
     return AGE_RAMP.length - 1;
   }

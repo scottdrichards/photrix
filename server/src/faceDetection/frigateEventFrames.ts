@@ -23,9 +23,9 @@
  */
 
 /** Normalized [x, y, width, height]. */
-export type NormalizedBox = [number, number, number, number];
+type NormalizedBox = [number, number, number, number];
 
-export type FrigateFrame = {
+type FrigateFrame = {
   url: string;
   box: NormalizedBox;
   pad: number;
@@ -41,7 +41,7 @@ export type FrigateEventRecord = {
   data?: { box?: unknown; path_data?: unknown } | null;
 };
 
-export type DeriveOptions = {
+type DeriveOptions = {
   /** `host:port` of the Frigate instance, used to build the frame URLs. */
   host: string;
   /** Maximum frames to derive. */

@@ -72,7 +72,7 @@ export const LONG_VIDEO_SECONDS = 180;
 /** At most this many frames per video reach the face detector. */
 export const MAX_ANALYSIS_FRAMES = 24;
 /** Two frames this close together are near-certain to show the same faces. */
-export const MIN_FRAME_SPACING_SECONDS = 1;
+const MIN_FRAME_SPACING_SECONDS = 1;
 /**
  * Long edge of each extracted frame. The detector works at 640px, and the
  * Python worker caps any decode at 2048, so more pixels would only cost
@@ -85,13 +85,13 @@ const SEEK_TIMEOUT_MS = 2 * 60_000;
  * Seeks in flight at once. Each mostly waits on the media share, and three at
  * once halved a long video's time (2026-10-27).
  */
-export const SEEK_CONCURRENCY = 3;
+const SEEK_CONCURRENCY = 3;
 /**
  * A video longer than this that gives at most one keyframe through its index
  * is read again, every frame: its index may mark fewer keyframes than the
  * stream holds. A shorter one is believable as a single still scene.
  */
-export const RECHECK_INDEX_SECONDS = 10;
+const RECHECK_INDEX_SECONDS = 10;
 /** ffprobe reads only the header and index. */
 const PROBE_TIMEOUT_MS = 30_000;
 
@@ -110,7 +110,7 @@ export type AnalysisFrame = {
   endMs: number;
 };
 
-export type FramePlan =
+type FramePlan =
   { mode: "keyframes"; maxSeconds?: number } | { mode: "seek"; timesSeconds: number[] };
 
 /**
@@ -154,7 +154,7 @@ export const selectEvenly = <T>(items: readonly T[], max: number): T[] => {
 const SHOWINFO_TIME = /^\[Parsed_showinfo[^\]]*\][^\n]*?\bpts_time:\s*(-?[\d.]+)/;
 
 /** The `pts_time` on one stderr line, or null when it isn't a showinfo frame line. */
-export const showinfoTime = (line: string): number | null => {
+const showinfoTime = (line: string): number | null => {
   const match = SHOWINFO_TIME.exec(line);
   return match ? Number(match[1]) : null;
 };
@@ -175,7 +175,7 @@ const SCALE_FILTER =
  * because it is cheaper than `mpdecimate`'s block comparison. `showinfo` comes
  * last, so it reports exactly the frames that are written out.
  */
-export const KEYFRAME_FILTER = [
+const KEYFRAME_FILTER = [
   `select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,${MIN_FRAME_SPACING_SECONDS})'`,
   SCALE_FILTER,
   "mpdecimate",

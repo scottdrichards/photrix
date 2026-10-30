@@ -56,12 +56,6 @@ export const getHash = (filePath: string, modifiedTimeMs: number): string => {
   return createHash("md5").update(hashInput).digest("hex");
 };
 
-export const getCachedFilePath = (
-  hash: string,
-  suffix: string | number,
-  extension: string,
-) => join(MEDIA_CACHE_DIR, `${hash}.${suffix}.${extension}`);
-
 const getRootKey = (rootPath: string): string => {
   const normalized = rootPath
     .replace(/[\\/:]+/g, "_")

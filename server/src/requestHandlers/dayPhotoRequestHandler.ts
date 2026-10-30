@@ -7,8 +7,8 @@ import { getLogger } from "../observability/logger.ts";
 
 const log = getLogger("dayPhotoRequestHandler");
 
-// Backs the HA Calendar dashboard's per-day background image (see
-// ha_calendar_day_photos memory / server/scripts/dayPhoto). Home Assistant
+// Backs a Home Assistant calendar dashboard's per-day background image (see
+// server/scripts/dayPhoto). Home Assistant
 // pulls this endpoint nightly per date; photrix has no knowledge of HA
 // beyond serving "the representative photo for this date" as a JPEG.
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;

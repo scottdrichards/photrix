@@ -21,7 +21,7 @@ import {
   listPasskeys,
 } from "../auth/passkeyService.ts";
 import { classifyIp, compareSessionsForList } from "../auth/ipLocation.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
 // A stable, non-secret handle for a token so the browser can reference a session

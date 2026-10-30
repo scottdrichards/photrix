@@ -27,7 +27,7 @@ const DUTY_OFF_MS = Number(process.env.PHOTRIX_BG_DUTY_OFF_MS) || 2_000;
 // playback) refresh their lease while in use.
 const USER_LEASE_MAX_MS = Number(process.env.PHOTRIX_USER_LEASE_MAX_MS) || 10 * 60_000;
 
-export type QueueType = "blocking" | "implied" | "background";
+type QueueType = "blocking" | "implied" | "background";
 // cpu/gpu/disk/network are notional fractions (0–1) tracked as reservations.
 // memoryMB is checked against actual OS available memory (MemAvailable on Linux)
 // minus already-reserved MB, so the system never over-commits RAM.
@@ -89,7 +89,7 @@ export type TaskRunner = {
 // "high" priority background tasks (e.g. the filesystem scan) keep running
 // under system load and only yield to in-flight user requests, never to the
 // load-based backoff. Defaults to "normal".
-export type TaskPriority = "high" | "normal";
+type TaskPriority = "high" | "normal";
 
 export type Task = {
   name: string;
@@ -102,7 +102,7 @@ export type Task = {
 // One holder of user activity (an in-flight request, a playback session, the
 // startup warmup). release() is idempotent; refresh() pushes out the expiry for
 // holders that legitimately outlive USER_LEASE_MAX_MS.
-export type UserActivityLease = {
+type UserActivityLease = {
   release: () => void;
   refresh: () => void;
 };
@@ -211,7 +211,7 @@ const STATUS_TIMEOUT_MS = 2_000;
 // last known status rather than blocking or showing an error.
 const STATUS_NOT_READY = Symbol("status-not-ready");
 
-export type TaskOrchestratorOptions = {
+type TaskOrchestratorOptions = {
   // Injectable for tests/determinism. Default to real wall-clock and load.
   isOverloaded?: () => boolean;
   availableMemoryMB?: () => number;

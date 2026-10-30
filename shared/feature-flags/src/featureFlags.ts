@@ -12,7 +12,7 @@ export const featureFlags = {
 
 export type FeatureFlagName = keyof typeof featureFlags;
 
-export type FeatureFlagSource = "default" | "override" | "environment";
+type FeatureFlagSource = "default" | "override" | "environment";
 
 export type FeatureFlagState = {
   name: FeatureFlagName;

@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import { mkdir, readFile, writeFile } from "fs/promises";
-import { dirname, join } from "path";
+import { dirname } from "path";
+import { fileURLToPath } from "url";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { resolvePythonCommand, buildPythonProcessEnv } from "../python/pythonRuntime.ts";
 import { getLogger } from "../observability/logger.ts";
@@ -9,7 +10,7 @@ import { logFailure } from "../common/logFailure.ts";
 
 const log = getLogger("suggestRotation");
 
-export type RotationSuggestion = {
+type RotationSuggestion = {
   /** Degrees to rotate the photo to level it; null when no confident suggestion exists. */
   angle: number | null;
   confidence?: number;
@@ -20,7 +21,7 @@ type CachedSuggestion = RotationSuggestion & { generatedAt: number };
 const cachePathFor = (absoluteFilePath: string): string =>
   getMirroredCachedFilePath(absoluteFilePath, "horizon", "json");
 
-const scriptPath = join(import.meta.dirname, "detect_horizon.py");
+const scriptPath = fileURLToPath(new URL("detect_horizon.py", import.meta.url));
 
 /**
  * Feedback #66's auto-straighten suggestion — see detect_horizon.py's module

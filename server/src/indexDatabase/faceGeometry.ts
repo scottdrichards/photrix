@@ -202,14 +202,14 @@ export const collateralOf = <T extends { vector: Float32Array }>(
     return similarity >= cap.minSimilarity && similarity < minSimilarity;
   });
 
-export type RefitMember = { faceId: number; vector: Float32Array };
+type RefitMember = { faceId: number; vector: Float32Array };
 
-export type FittedCap = {
+type FittedCap = {
   cap: Cap;
   faceIds: number[];
 };
 
-export type RefitResult = {
+type RefitResult = {
   /** One or more caps covering as many `keep` members as possible. */
   caps: FittedCap[];
   /**

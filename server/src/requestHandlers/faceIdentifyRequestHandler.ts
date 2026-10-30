@@ -25,7 +25,7 @@ import {
 } from "../faceDetection/frigateEventFrames.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 import { logFailure } from "../common/logFailure.ts";
 
 const log = getLogger("faceIdentify");
@@ -465,7 +465,7 @@ type Match = {
   frame: number;
 };
 
-export type FaceIdentifyDeps = {
+type FaceIdentifyDeps = {
   database: IndexDatabase;
   analyzeImage: typeof AnalyzeImageFn;
 };

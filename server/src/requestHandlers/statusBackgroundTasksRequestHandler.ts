@@ -1,6 +1,6 @@
 import type http from "node:http";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
 type TogglePayload = {

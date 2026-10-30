@@ -12,7 +12,7 @@ import { playVideo } from "../../playVideo";
  * preview: that source is a real ongoing encode, so it plays normally (no
  * looping) for as long as the tile keeps the playback slot.
  */
-export type TilePlaybackSource = {
+type TilePlaybackSource = {
   mode: "hls" | "direct";
   url: string;
   previewMaxSeconds?: number;

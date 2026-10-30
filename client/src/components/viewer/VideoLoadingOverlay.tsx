@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Spinner } from "../../Spinner";
 import css from "./VideoLoadingOverlay.module.css";
 
-export type PlaybackPhase =
+type PlaybackPhase =
   | "idle"
   | "measuring"
   | "negotiating"

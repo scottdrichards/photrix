@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-export const LAB_API_PORT = Number(process.env.PHOTRIX_LAB_PORT) || 3398;
-export const LAB_MEDIA_ROOT = resolve(
+const LAB_API_PORT = Number(process.env.PHOTRIX_LAB_PORT) || 3398;
+const LAB_MEDIA_ROOT = resolve(
   process.env.PHOTRIX_LAB_MEDIA ?? resolve(here, ".media"),
 );
 const LAB_CACHE = resolve(here, ".cache");

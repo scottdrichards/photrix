@@ -193,7 +193,7 @@ export const verifyPasskeyRegistration = async (
 
 // --- Management ---
 
-export type PasskeyInfo = {
+type PasskeyInfo = {
   credentialId: string;
   name: string | null;
   transports: string | null;

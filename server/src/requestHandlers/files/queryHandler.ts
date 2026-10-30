@@ -5,7 +5,7 @@ import type { QueryOptions } from "../../indexDatabase/indexDatabase.type.ts";
 import { parseSort } from "../../../../shared/filter-contract/src/index.ts";
 import { getFastMediaDimensions } from "../../fileHandling/fileUtils.ts";
 import { stripLeadingSlash } from "../../common/stripLeadingSlash.ts";
-import { writeJson } from "../../utils.ts";
+import { writeJson } from "../../common/writeJson.ts";
 
 export const queryHandler = async (
   url: URL,

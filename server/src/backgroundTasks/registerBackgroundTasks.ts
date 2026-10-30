@@ -18,7 +18,7 @@ type BackgroundTaskPlan = {
   thumbnailBackfill: Task;
 };
 
-export type BackgroundTaskHandle = {
+type BackgroundTaskHandle = {
   /**
    * Re-run the processing pipeline to pick up files that were added or changed
    * after the initial backlog was cleared (e.g. by the live filesystem watcher).

@@ -4,17 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
+import { createDeferred } from "../common/createDeferred.fixture.ts";
 
 const mkTempDir = async (prefix: string): Promise<string> =>
   fs.mkdtemp(path.join(os.tmpdir(), prefix));
-
-const createDeferred = () => {
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-};
 
 describe("discoverFiles", () => {
   beforeEach(() => {

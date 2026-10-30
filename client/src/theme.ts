@@ -30,7 +30,7 @@ export const getInitialTheme = (): Theme => {
 // bar blends into the page. index.html carries a light and a dark
 // `theme-color` (by prefers-color-scheme) for first paint; once the app knows
 // its theme, which may be a user override of the system one, both get it.
-export const THEME_COLORS: Record<Theme, string> = { light: "#f7f7f7", dark: "#11161d" };
+const THEME_COLORS: Record<Theme, string> = { light: "#f7f7f7", dark: "#11161d" };
 
 // An installed app's system bars take the manifest's background_color, read
 // once at install; no manifest field can follow dark mode. So the page points

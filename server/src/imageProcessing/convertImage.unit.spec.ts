@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "../common/createDeferred.fixture.ts";
 
 const makeSpawnProcess = () => {
   const proc = new EventEmitter() as EventEmitter & {
@@ -38,16 +39,6 @@ const makeHealthyWorkerProcess = () => {
     proc.stdout.emit("data", Buffer.from(JSON.stringify({ type: "ready" }) + "\n"));
   });
   return proc;
-};
-
-const deferred = <T>() => {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 };
 
 afterEach(() => {
@@ -241,7 +232,7 @@ describe("convertImage unit", () => {
     const source = path.join(cacheRoot, "source.jpg");
     writeFileSync(source, "img");
 
-    const conversionStarted = deferred<void>();
+    const conversionStarted = createDeferred<void>();
     let conversionProc: ReturnType<typeof makeSpawnProcess> | null = null;
     const spawnMock = jest.fn((command: string, args: string[]) => {
       const proc = makeSpawnProcess();

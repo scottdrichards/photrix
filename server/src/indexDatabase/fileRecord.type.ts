@@ -1,6 +1,5 @@
-import { AssertNever, UnionXOR } from "../utils.ts";
 
-export type BaseFileRecord = {
+type BaseFileRecord = {
   /** Uses '/' as separator, starts and ends with slash */
   folder: string;
   /** Includes extension */
@@ -62,7 +61,7 @@ export type ExifMetadata = {
   embeddedVideoLength?: number;
 };
 
-export type AIMetadata = {
+type AIMetadata = {
   aiDescription?: string;
   aiTags?: string[];
   /** Derived whole-photo quality aggregate, 0..1; see photoQuality.ts. Absent
@@ -87,7 +86,7 @@ export type AIMetadata = {
   momentClusterPreviewPaths?: string[];
 };
 
-export type AllMetaData = FileInfo & ExifMetadata & AIMetadata;
+type AllMetaData = FileInfo & ExifMetadata & AIMetadata;
 
 /**
  * Indicates how to acquire metadata for a file
@@ -151,9 +150,12 @@ export type FileRecord = BaseFileRecord &
 // Validation
 
 /**
- * This will verify that all metadata keys are assigned a group
+ * Fails to compile if a metadata key is missing from MetadataGroups, or a group
+ * names a key that doesn't exist: the symmetric difference must be empty.
  */
-type AllMetadataKeysInGroups = UnionXOR<
+type SymmetricDifference<A, B> = Exclude<A, B> | Exclude<B, A>;
+type AssertNever<T extends never> = T;
+type AllMetadataKeysInGroups = SymmetricDifference<
   {
     [K in keyof typeof MetadataGroups]: (typeof MetadataGroups)[K][number];
   }[keyof typeof MetadataGroups],

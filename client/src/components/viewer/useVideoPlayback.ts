@@ -35,7 +35,7 @@ const clearVideoSource = (video: HTMLVideoElement) => {
   video.load();
 };
 
-export type VideoStatus = "hls" | "direct" | null;
+type VideoStatus = "hls" | "direct" | null;
 
 // How long a direct stream may stay stalled before we give up on it and switch to
 // adaptive HLS. Long enough to ride out a brief buffering blip, short enough that a

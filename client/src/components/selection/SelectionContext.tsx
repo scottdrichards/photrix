@@ -15,7 +15,7 @@ export type PhotoMetadataOverride = {
   description?: string | null;
 };
 
-export type SelectionContextValue = {
+type SelectionContextValue = {
   items: PhotoItem[];
   selected: PhotoItem | null;
   setSelected: (photo: PhotoItem | null) => void;

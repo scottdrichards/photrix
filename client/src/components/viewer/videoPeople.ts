@@ -1,6 +1,6 @@
 import type { FaceAppearance, PhotoPersonFace } from "../../api/types";
 
-export type VideoPerson = {
+type VideoPerson = {
   personId: string;
   name: string | null;
   /** Earliest first, overlapping stretches merged. */

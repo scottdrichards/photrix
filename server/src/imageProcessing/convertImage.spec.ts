@@ -1,53 +1,29 @@
-import { describe, expect, it, beforeAll } from "@jest/globals";
-import * as fs from "fs";
-import * as path from "path";
-import { fileURLToPath } from "url";
-import { createHash } from "crypto";
+import { afterAll, describe, expect, it } from "@jest/globals";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 
-let convertImage: typeof import("./convertImage.ts").convertImage;
+// A fresh cache, so the conversion really runs instead of returning an earlier result.
+const cacheDir = mkdtempSync(path.join(os.tmpdir(), "photrix-convert-spec-"));
+process.env.CACHE_DIR = cacheDir;
+const { convertImage } = await import("./convertImage.ts");
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+/** Stored 1400x933 (landscape) with EXIF Orientation 8: it displays as a 933x1400 portrait. */
+const rotatedJpeg = fileURLToPath(
+  new URL("../../exampleFolder/subFolder/grandchildFolder/1V7A4755.JPG", import.meta.url),
+);
 
 describe("convertImage", () => {
-  const testImagePath = path.resolve(
-    __dirname,
-    "../../exampleFolder/subFolder/grandchildFolder/1V7A4755.JPG",
-  );
-  const cacheDir = path.resolve(__dirname, "../../.cache");
+  afterAll(() => rmSync(cacheDir, { recursive: true, force: true }));
 
-  const getHash = (filePath: string): string => {
-    const modifiedTimeMs = fs.statSync(filePath).mtimeMs;
-    return createHash("md5").update(`${filePath}:${modifiedTimeMs}`).digest("hex");
-  };
+  it("writes a WebP of the requested height, upright per the EXIF orientation", async () => {
+    const outputPath = await convertImage(rotatedJpeg, 320);
+    const { format, width, height } = await sharp(outputPath).metadata();
 
-  beforeAll(async () => {
-    process.env.ThumbnailCacheDirectory ??= path.join(cacheDir, "thumbs");
-    ({ convertImage } = await import("./convertImage.ts"));
-  });
-
-  it("should convert and rotate the image correctly", async () => {
-    if (!fs.existsSync(testImagePath)) {
-      return;
-    }
-
-    // Clean up cache for this file
-    const hash = getHash(testImagePath);
-    const cachedFile = path.join(cacheDir, "thumbs", `${hash}.320.webp`);
-
-    if (fs.existsSync(cachedFile)) {
-      fs.unlinkSync(cachedFile);
-    }
-
-    // Request a thumbnail
-    const outputPath = await convertImage(testImagePath, 320);
-
-    expect(fs.existsSync(outputPath)).toBe(true);
-
-    const metadata = await sharp(outputPath).metadata();
-
-    expect(metadata.format).toBe("webp");
-    // Verify max dimension is close to 320 (resizing might have slight rounding, but usually exact for max dim)
-    expect(Math.max(metadata.width!, metadata.height!)).toBe(320);
-  }, 30000); // Increase timeout for image processing
+    expect(format).toBe("webp");
+    expect(height).toBe(320);
+    expect(width).toBe(Math.round((320 * 933) / 1400));
+  }, 30_000);
 });

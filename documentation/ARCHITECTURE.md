@@ -7,9 +7,11 @@ diagnostics event, add a row here.
 ## Request path (server)
 
 `server/src/main.ts` boots everything → `createServer.ts` runs every request
-through `runWithRequestTrace` (request id, spans, perf stats), the auth gate,
-the user-activity bracket for the task orchestrator, then a flat list of
-`if (route) await handler(...)` blocks.
+through `runWithRequestTrace` (request id, spans, perf stats), the auth gate
+and the user-activity bracket for the task orchestrator, then dispatches to the
+first matching route in `createRoutes.ts`. Each route there declares what a
+share link may do with it (`forbidden`, `allowed`, or `scoped` to the share's
+filter), so that file is also the share-link access policy.
 
 | Route                                    | Handler (`server/src/requestHandlers/`)             | Does the work in                                                                                         |
 | ---------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |

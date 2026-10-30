@@ -14,7 +14,7 @@ export const photrixBaseUrl = BASE_URL;
 // Photrix serves files at /api/files/<relativePath>. Folder paths start with a
 // leading "/", which the route does not want, and each segment must be
 // percent-encoded so spaces/unicode in file names survive the fetch.
-export const encodeRelativePath = (relativePath: string): string =>
+const encodeRelativePath = (relativePath: string): string =>
   relativePath.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
 
 // A human-openable URL for a result (auth may still be required in the browser).
@@ -23,16 +23,16 @@ export const viewUrl = (relativePath: string, height = 1024): string =>
 
 // ---- Response shapes (subset of what the endpoints return) ----
 
-export type SearchItem = {
+type SearchItem = {
   folder: string;
   fileName: string;
   mimeType: string | null;
   similarity: number;
   sources: string[];
 };
-export type SearchResponse = { items: SearchItem[]; total: number; query: string };
+type SearchResponse = { items: SearchItem[]; total: number; query: string };
 
-export type FaceRep = { path: string; fileName: string };
+type FaceRep = { path: string; fileName: string };
 export type PersonCluster = {
   id: string;
   count: number;
@@ -40,14 +40,14 @@ export type PersonCluster = {
   yearRangeLabel?: string | null;
   representative: FaceRep;
 };
-export type PeopleResponse = {
+type PeopleResponse = {
   clusters: PersonCluster[];
   totalFaces: number;
   totalClusters: number;
   pendingFaces?: number;
 };
 
-export type ClusterDetailResponse = {
+type ClusterDetailResponse = {
   cluster: {
     id: string;
     count: number;
@@ -70,17 +70,17 @@ export type FileItem = {
   dimensionHeight?: number | null;
   [key: string]: unknown;
 };
-export type QueryResponse = {
+type QueryResponse = {
   items: FileItem[];
   total: number;
   page: number;
   pageSize: number;
 };
-export type DateRangeResponse = { minDate: number | null; maxDate: number | null };
-export type CountResponse = { count: number };
+type DateRangeResponse = { minDate: number | null; maxDate: number | null };
+type CountResponse = { count: number };
 
 export type FilterElement = unknown;
-export type FetchedImage = { base64: string; mimeType: string };
+type FetchedImage = { base64: string; mimeType: string };
 
 // ---- API calls ----
 

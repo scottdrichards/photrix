@@ -3,7 +3,7 @@ import { getLogger } from "../observability/logger.ts";
 const log = getLogger("ollamaGenerate");
 
 /**
- * Base URL of a locally hosted Ollama instance (e.g. `http://192.168.1.160:11434`).
+ * Base URL of a locally hosted Ollama instance (e.g. `http://localhost:11434`).
  * Unset means "no local model available" — callers fall back to their own
  * deterministic text rather than failing the request.
  */
@@ -36,7 +36,7 @@ const keepAlive = process.env.PHOTRIX_OLLAMA_KEEP_ALIVE ?? "30m";
  * interpretation) need more tokens, a tighter deadline, and JSON-constrained
  * decoding.
  */
-export type OllamaGenerateOptions = {
+type OllamaGenerateOptions = {
   /** Token budget for the answer. Default 40 (a share title). */
   numPredict?: number;
   /** Request deadline. Defaults to PHOTRIX_OLLAMA_TIMEOUT_MS (15s). */

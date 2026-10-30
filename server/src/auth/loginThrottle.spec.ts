@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, it } from "@jest/globals";
 import { LoginThrottledError, resetLoginThrottle, throttleLogin } from "./loginThrottle.ts";
-
-const deferred = () => {
-  let resolve: (value: string | null) => void = () => {};
-  const promise = new Promise<string | null>((r) => (resolve = r));
-  return { promise, resolve };
-};
+import { createDeferred } from "../common/createDeferred.fixture.ts";
 
 describe("throttleLogin", () => {
   beforeEach(() => resetLoginThrottle());
@@ -15,7 +10,7 @@ describe("throttleLogin", () => {
   });
 
   it("runs at most two checks at once and queues the rest", async () => {
-    const checks = Array.from({ length: 4 }, deferred);
+    const checks = Array.from({ length: 4 }, () => createDeferred<string | null>());
     let started = 0;
     const logins = checks.map((check) =>
       throttleLogin("1.2.3.4", () => {
@@ -37,7 +32,7 @@ describe("throttleLogin", () => {
   });
 
   it("refuses a login once the queue is full", async () => {
-    const check = deferred();
+    const check = createDeferred<string | null>();
     const logins = Array.from({ length: 18 }, () =>
       throttleLogin(null, () => check.promise),
     );

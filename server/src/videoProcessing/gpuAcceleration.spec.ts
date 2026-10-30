@@ -145,7 +145,7 @@ describe("gpuAcceleration", () => {
   });
 
   it("skips a CUDA-capable card that has no NVENC, falling through to Intel", async () => {
-    // server2's Quadro P520 (GP108): CUDA initialises fine, but the silicon has
+    // A Quadro P520 (GP108): CUDA initialises fine, but the silicon has
     // no encoder, so h264_nvenc fails with "No capable devices found".
     // Selecting NVIDIA here would send every encode into the software fallback.
     const spawnMock = jest.fn((_cmd: string, args: string[]) => {

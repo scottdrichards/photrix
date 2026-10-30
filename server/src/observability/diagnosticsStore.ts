@@ -3,7 +3,7 @@ import { getCurrentRequestLogFields } from "./requestTrace.ts";
 
 const MAX_EVENTS = 2_000;
 
-export type DiagnosticsEvent = {
+type DiagnosticsEvent = {
   id: string;
   timestamp: string;
   source: "server" | "client";

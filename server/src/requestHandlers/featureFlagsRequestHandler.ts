@@ -3,7 +3,7 @@ import { isFeatureFlagName } from "../../../shared/feature-flags/src/featureFlag
 import { readJsonRequest } from "../common/readBody.ts";
 import { attempt } from "../common/result.ts";
 import { FeatureFlagPinnedError, type FeatureFlagStore } from "../featureFlags/featureFlagStore.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 
 const PREFIX = "/api/feature-flags";
 

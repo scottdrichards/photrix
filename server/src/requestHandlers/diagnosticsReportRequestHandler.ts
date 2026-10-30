@@ -2,7 +2,7 @@ import type http from "node:http";
 import { buildDiagnosticsReport } from "../observability/buildDiagnosticsReport.ts";
 import { getPerfSnapshot } from "../observability/perfMonitor.ts";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 
 /**
  * `GET /api/diagnostics/perf` — live server performance (see perfMonitor.ts).

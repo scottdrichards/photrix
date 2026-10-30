@@ -46,7 +46,7 @@ const UNCONSTRAINED = Symbol("unconstrained");
 
 export class FilterCompileError extends Error {}
 
-export type FilterToSQLOptions = {
+type FilterToSQLOptions = {
   /**
    * Throw on a clause that can't be compiled instead of dropping it. A dropped
    * clause widens the result, which a search can live with and a share cannot.

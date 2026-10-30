@@ -315,7 +315,7 @@ describe("StatusModal", () => {
           system: {
             cpu: { usage: 1, cores: 8 },
             memory: { used: 4_000_000_000, total: 16_000_000_000, usage: 25 },
-            // VRAM is used but no compute process is visible inside the LXC, so
+            // VRAM is used but no compute process is visible inside the container, so
             // it all lands in unaccountedMB. The section must not disappear.
             gpu: {
               usage: 1,

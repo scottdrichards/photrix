@@ -5,7 +5,7 @@ import { interpretSearchQuery } from "../naturalLanguageSearch/interpretSearchQu
 import { loadSearchVocabulary } from "../naturalLanguageSearch/searchVocabulary.ts";
 import { getOllamaUrl } from "../shareDescription/ollamaGenerate.ts";
 import { getLogger } from "../observability/logger.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
 const log = getLogger("searchInterpretHandler");
