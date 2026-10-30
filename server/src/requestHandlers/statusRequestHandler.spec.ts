@@ -84,6 +84,37 @@ const alwaysEnabledOrchestrator: TaskOrchestrator = {
 };
 
 describe("statusRequestHandler", () => {
+  it("reports analysis coverage when it has a source (feedback #158)", async () => {
+    const { res, getBody } = createMockResponse();
+    const coverage = [
+      { name: "Video faces", unit: "videos", done: 9, waiting: 0, retrying: 1, unreadable: 0 },
+    ];
+
+    await statusRequestHandler({} as http.IncomingMessage, res, {
+      stream: false,
+      taskOrchestrator: alwaysEnabledOrchestrator,
+      getCoverage: async () => coverage,
+    });
+
+    expect(JSON.parse(getBody()).coverage).toEqual(coverage);
+  });
+
+  it("still answers, without coverage, when the coverage count fails", async () => {
+    const { res, getBody } = createMockResponse();
+
+    await statusRequestHandler({} as http.IncomingMessage, res, {
+      stream: false,
+      taskOrchestrator: alwaysEnabledOrchestrator,
+      getCoverage: async () => {
+        throw new Error("database busy");
+      },
+    });
+
+    const payload = JSON.parse(getBody());
+    expect(payload).not.toHaveProperty("coverage");
+    expect(payload.maintenance.backgroundTasksEnabled).toBe(true);
+  });
+
   it("returns JSON status payload for non-stream mode", async () => {
     const { res, getBody } = createMockResponse();
 

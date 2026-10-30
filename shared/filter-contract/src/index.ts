@@ -495,8 +495,31 @@ export type ArbitrationState = {
   runningTasks: { name: string; queue: string; priority: string }[];
 };
 
+/**
+ * How far a library-wide analysis has got, reported whether or not its task is
+ * running, so a finished or resting pass doesn't just vanish from the status.
+ * The library's denominator is `done + waiting + retrying + unreadable`.
+ */
+export type AnalysisCoverage = {
+  /** Matches the background task's `name`. */
+  name: string;
+  /** What one item is, plural ("videos"). */
+  unit: string;
+  done: number;
+  /** Not done yet, and nothing stops the task taking them. */
+  waiting: number;
+  /** Failed, and held back for a cool-down before an automatic retry. */
+  retrying: number;
+  /** When the first held-back item becomes due again (epoch ms). */
+  nextRetryAt?: number;
+  /** Can't be decoded; never retried. */
+  unreadable: number;
+};
+
 export type ServerStatus = {
   backgroundTasks: BackgroundTaskStatus[];
+  /** Absent from servers that predate it. */
+  coverage?: AnalysisCoverage[];
   maintenance: {
     backgroundTasksEnabled: boolean;
   };
