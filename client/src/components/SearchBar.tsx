@@ -7,6 +7,7 @@ import {
 } from "@fluentui/react-icons";
 import {
   type InterpretedFilterChip,
+  type InterpretedPersonAlternative,
   type InterpretedSearchFilter,
 } from "../../../shared/filter-contract/src";
 import { interpretSearchQuery } from "../api/naturalLanguageSearch";
@@ -251,6 +252,52 @@ export const SearchBar = () => {
     handleRemoveChip(chip, typedTermForChip(interpretation.query, chip));
   };
 
+  /**
+   * Feedback #170: the typed name matched several people and the model picked
+   * one. Swap the filter to the one the user meant; the chip they swapped away
+   * from becomes an alternative, so the choice can be undone the same way.
+   */
+  const handleSwapPerson = (chip: InterpretedFilterChip, to: InterpretedPersonAlternative) => {
+    const active = interpretation;
+    if (!active || !isPersonChip(chip) || chip.value === undefined) return;
+    const from = chip.value;
+    const fromKey = chip.field as InterpretedPersonAlternative["field"];
+
+    setFilter((prev) => {
+      const next: FilterState = { ...prev };
+      const without = (prev[fromKey] ?? []).filter((entry) => entry !== from);
+      // Applying the interpretation replaced the field outright, so a field
+      // only the swap target uses starts empty, not from the pre-search value.
+      const target =
+        to.field === fromKey
+          ? without
+          : active.chips.some((other) => other.field === to.field)
+            ? (prev[to.field] ?? [])
+            : [];
+      if (to.field !== fromKey) {
+        next[fromKey] = without.length > 0 ? without : active.previous[fromKey];
+      }
+      next[to.field] = target.includes(to.value) ? target : [...target, to.value];
+      return next;
+    });
+
+    const swapped: InterpretedFilterChip = {
+      ...to,
+      alternatives: [
+        { field: fromKey, label: chip.label, value: from },
+        ...(chip.alternatives ?? []).filter(
+          (other) => other.field !== to.field || other.value !== to.value,
+        ),
+      ],
+    };
+    setInterpretation({
+      ...active,
+      chips: active.chips.map((other) =>
+        other.field === chip.field && other.value === from ? swapped : other,
+      ),
+    });
+  };
+
   const handleUndoInterpretation = () => {
     if (!interpretation) return;
     if (inputRef.current) inputRef.current.value = interpretation.query;
@@ -345,6 +392,7 @@ export const SearchBar = () => {
           onRemoveChip={(chip) => handleRemoveChip(chip)}
           canSearchAsText={isPersonChip}
           onSearchChipAsText={handleSearchChipAsText}
+          onSwapPerson={handleSwapPerson}
           onUndo={handleUndoInterpretation}
         />
       )}

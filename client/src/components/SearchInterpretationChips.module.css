@@ -92,3 +92,31 @@
   font-size: 0.75rem;
   text-decoration: underline;
 }
+
+/* Feedback #170: its own full-width row, so a chip's overflow can't clip it. */
+.alternatives {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-xxs, 4px);
+}
+
+.alternativesLabel {
+  color: var(--text3, #666);
+}
+
+.alternative {
+  padding: 2px 8px;
+  border: 1px dashed var(--stroke2, #ddd);
+  border-radius: 999px;
+  background: none;
+  color: var(--text1, #111);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.alternative:hover {
+  border-style: solid;
+  background: var(--fill2, #f4f4f4);
+}

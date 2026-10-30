@@ -371,3 +371,74 @@ describe("SearchBar person chips stay in step with the filter (feedback #166)", 
     expect(screen.queryByLabelText("Search Summer 2025 as text instead")).not.toBeInTheDocument();
   });
 });
+
+describe("SearchBar picks a different person for a typed name (feedback #170)", () => {
+  const rachels: SearchInterpretation = {
+    interpreted: true,
+    query: "rachel at the park",
+    filter: { faceClusterFilter: ["person-7"], semanticQuery: "at the park" },
+    chips: [
+      {
+        field: "faceClusterFilter",
+        label: "Rachel Johnson Shepherd",
+        value: "person-7",
+        alternatives: [
+          { field: "faceClusterFilter", label: "Rachel Jones", value: "person-8" },
+          { field: "peopleInImageFilter", label: "Rachel", value: "Rachel" },
+        ],
+      },
+      { field: "semanticQuery", label: "“at the park”" },
+    ],
+    ignored: [],
+  };
+
+  beforeEach(() => {
+    interpretSearchQuery.mockReset();
+    interpretSearchQuery.mockResolvedValue(rachels);
+    window.localStorage.clear();
+  });
+
+  const pickInstead = (current: string, next: string) => {
+    fireEvent.click(screen.getByLabelText(`Pick a different person than ${current}`));
+    fireEvent.click(screen.getByRole("button", { name: next }));
+  };
+
+  it("swaps the person filter and keeps the rest of the search", async () => {
+    renderSearchBar();
+    submit("rachel at the park");
+    await screen.findByText("AI search");
+
+    pickInstead("Rachel Johnson Shepherd", "Rachel Jones");
+
+    const filter = currentFilter();
+    expect(filter.faceClusterFilter).toEqual(["person-8"]);
+    expect(filter.semanticQuery).toBe("at the park");
+    expect(screen.getByLabelText("Remove filter Rachel Jones")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Remove filter Rachel Johnson Shepherd")).not.toBeInTheDocument();
+  });
+
+  it("offers the swapped-away person back, and can swap across to a tag", async () => {
+    renderSearchBar();
+    submit("rachel at the park");
+    await screen.findByText("AI search");
+
+    pickInstead("Rachel Johnson Shepherd", "Rachel Jones");
+    fireEvent.click(screen.getByLabelText("Pick a different person than Rachel Jones"));
+    expect(screen.getByRole("button", { name: "Rachel Johnson Shepherd" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Rachel" }));
+
+    const filter = currentFilter();
+    expect(filter.faceClusterFilter).toBeUndefined();
+    expect(filter.peopleInImageFilter).toEqual(["Rachel"]);
+    expect(screen.getByLabelText("Remove filter Rachel")).toBeInTheDocument();
+  });
+
+  it("shows no picker on a chip with nobody else to pick", async () => {
+    interpretSearchQuery.mockResolvedValue(interpretation);
+    renderSearchBar();
+    submit("photos of Sarah at the beach last summer");
+    await screen.findByText("AI search");
+
+    expect(screen.queryByLabelText("Pick a different person than Sarah")).not.toBeInTheDocument();
+  });
+});

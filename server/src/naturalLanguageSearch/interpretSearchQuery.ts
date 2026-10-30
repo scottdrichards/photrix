@@ -1,5 +1,6 @@
 import type {
   InterpretedFilterChip,
+  InterpretedPersonAlternative,
   InterpretedSearchFilter,
   SearchInterpretation,
 } from "../../../shared/filter-contract/src/index.ts";
@@ -14,7 +15,7 @@ import {
   yearsInQuery,
 } from "./queryEvidence.ts";
 import { resolveDateIntent } from "./resolveDateIntent.ts";
-import type { SearchVocabulary } from "./searchVocabulary.ts";
+import type { SearchVocabulary, VocabularyPerson } from "./searchVocabulary.ts";
 
 const log = getLogger("interpretSearchQuery");
 
@@ -34,6 +35,9 @@ const NUM_PREDICT = 120;
 
 /** Longest query worth sending — beyond this it is a paste, not a search. */
 const MAX_QUERY_LENGTH = 200;
+
+/** How many other people a person chip offers to swap to. */
+const MAX_PERSON_ALTERNATIVES = 8;
 
 /** Cap on the leftover free-text handed to CLIP. */
 const MAX_VISUAL_LENGTH = 120;
@@ -216,6 +220,31 @@ export const interpretSearchQuery = async ({
     person,
     words: new Set(person.name.split(/\s+/).map(normalizeForMatch).filter(Boolean)),
   }));
+  const asAlternative = (person: VocabularyPerson): InterpretedPersonAlternative =>
+    person.clusterId
+      ? { field: "faceClusterFilter", label: person.name, value: person.clusterId }
+      : { field: "peopleInImageFilter", label: person.name, value: person.name };
+  // Feedback #170: "rachel" names every Rachel in the library, and the model
+  // picks one. Offer the others: everyone whose name has every word of the
+  // match that the query actually typed. A query that spells out the full name
+  // types every word, so it gets no alternatives.
+  const alternativesFor = (match: VocabularyPerson): InterpretedPersonAlternative[] => {
+    const typedWords = match.name
+      .split(/\s+/)
+      .filter((word) => normalizeForMatch(word) && queryMentions(trimmedQuery, word))
+      .map(normalizeForMatch);
+    if (typedWords.length === 0) return [];
+    const seen = new Set([normalizeForMatch(match.name)]);
+    const alternatives: InterpretedPersonAlternative[] = [];
+    for (const { person, words } of peopleWithWords) {
+      const key = normalizeForMatch(person.name);
+      if (seen.has(key) || !typedWords.every((word) => words.has(word))) continue;
+      seen.add(key);
+      alternatives.push(asAlternative(person));
+      if (alternatives.length >= MAX_PERSON_ALTERNATIVES) break;
+    }
+    return alternatives;
+  };
   const clusterIds: string[] = [];
   const taggedNames: string[] = [];
   for (const requested of dedupe(asStringList(raw.people))) {
@@ -245,23 +274,20 @@ export const interpretSearchQuery = async ({
     // A real person the user never asked for is the worst case: the filter looks
     // legitimate and quietly empties the grid. Require the name in the query.
     if (!queryMentions(trimmedQuery, match.name, { matchAnyWord: true })) continue;
-    if (match.clusterId) {
-      if (!clusterIds.includes(match.clusterId)) {
-        clusterIds.push(match.clusterId);
-        chips.push({
-          field: "faceClusterFilter",
-          label: match.name,
-          value: match.clusterId,
-        });
-      }
-    } else if (!taggedNames.includes(match.name)) {
-      taggedNames.push(match.name);
-      chips.push({
-        field: "peopleInImageFilter",
-        label: match.name,
-        value: match.name,
-      });
-    }
+    const chip = asAlternative(match);
+    const chosen = chip.field === "faceClusterFilter" ? clusterIds : taggedNames;
+    if (chosen.includes(chip.value)) continue;
+    chosen.push(chip.value);
+    const alternatives = alternativesFor(match);
+    chips.push(alternatives.length > 0 ? { ...chip, alternatives } : chip);
+  }
+  // Someone already filtered on is not an alternative to anyone else.
+  for (const chip of chips) {
+    if (!chip.alternatives) continue;
+    chip.alternatives = chip.alternatives.filter(
+      (alternative) => !clusterIds.includes(alternative.value) && !taggedNames.includes(alternative.value),
+    );
+    if (chip.alternatives.length === 0) delete chip.alternatives;
   }
   if (clusterIds.length > 0) filter.faceClusterFilter = clusterIds;
   if (taggedNames.length > 0) filter.peopleInImageFilter = taggedNames;

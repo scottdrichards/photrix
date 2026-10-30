@@ -241,6 +241,63 @@ describe("interpretSearchQuery", () => {
     expect(result).toEqual({ interpreted: false, reason: "no-filters" });
   });
 
+  describe("alternatives to a chosen person (feedback #170)", () => {
+    const rachels: SearchVocabulary = {
+      people: [
+        { name: "Rachel Smith", clusterId: "person-1" },
+        { name: "Rachel Jones", clusterId: "person-2" },
+        { name: "Rachel" },
+        { name: "Tom Smith", clusterId: "person-3" },
+      ],
+      folders: [],
+    };
+    const interpretRachels = (query: string, people: unknown) =>
+      interpretSearchQuery({
+        query,
+        vocabulary: rachels,
+        now: NOW,
+        generate: respondWith({ people }),
+      });
+
+    it("offers every other person the typed name also names", async () => {
+      const result = await interpretRachels("rachel at the park", ["Rachel Smith"]);
+
+      expect(result.interpreted && result.chips).toEqual([
+        {
+          field: "faceClusterFilter",
+          label: "Rachel Smith",
+          value: "person-1",
+          alternatives: [
+            { field: "faceClusterFilter", label: "Rachel Jones", value: "person-2" },
+            { field: "peopleInImageFilter", label: "Rachel", value: "Rachel" },
+          ],
+        },
+      ]);
+    });
+
+    it("offers none when the query spells out the full name", async () => {
+      const result = await interpretRachels("rachel smith at the park", ["Rachel Smith"]);
+
+      expect(result.interpreted && result.chips[0]).toEqual({
+        field: "faceClusterFilter",
+        label: "Rachel Smith",
+        value: "person-1",
+      });
+    });
+
+    it("never offers someone the search already filters on", async () => {
+      const result = await interpretRachels("rachel and rachel jones", [
+        "Rachel Smith",
+        "Rachel Jones",
+      ]);
+
+      expect(result.interpreted && result.chips.map((chip) => chip.alternatives)).toEqual([
+        [{ field: "peopleInImageFilter", label: "Rachel", value: "Rachel" }],
+        undefined,
+      ]);
+    });
+  });
+
   it("does not guess a single word shared by two multi-word vocabulary names", async () => {
     const sharedWordVocabulary: SearchVocabulary = {
       people: [
