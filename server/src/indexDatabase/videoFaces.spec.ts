@@ -88,7 +88,14 @@ describe("video face queue", () => {
       const queued = (await db.analysis.getVideosNeedingFaceAnalysis()).map((v) => v.relativePath);
       expect(queued).toEqual(["/lp/solo.mp4"]);
       const progress = await db.analysis.getVideoFaceAnalysisProgress();
-      expect(progress).toEqual({ total: 2, remaining: 1, coolingDown: 0, unreadable: 0 });
+      expect(progress).toEqual({
+        total: 2,
+        done: 0,
+        remaining: 1,
+        coolingDown: 0,
+        nextRetryAt: null,
+        unreadable: 0,
+      });
     });
   });
 
@@ -106,11 +113,14 @@ describe("video face queue", () => {
         { relativePath: "/v/bad.mp4", failedBefore: true },
       ]);
       later.mockRestore();
-      // Still owed, so progress doesn't claim it is done, and says why.
-      expect(await db.analysis.getVideoFaceAnalysisProgress()).toMatchObject({
-        remaining: 1,
-        coolingDown: 1,
-      });
+      // Still owed, so progress doesn't claim it is done, and says why and
+      // when it comes back (feedback #158).
+      const progress = await db.analysis.getVideoFaceAnalysisProgress();
+      expect(progress).toMatchObject({ done: 0, remaining: 1, coolingDown: 1 });
+      expect(progress.nextRetryAt).toBeGreaterThan(Date.now());
+      expect(progress.nextRetryAt).toBeLessThanOrEqual(
+        Date.now() + AnalysisStore.VIDEO_FACE_RETRY_COOLDOWN_MS,
+      );
       // Not this run's work, so the ETA doesn't price it.
       expect(await db.analysis.getVideoFaceQueueCostInputs()).toEqual([]);
     });

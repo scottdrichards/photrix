@@ -1,5 +1,8 @@
 import http from "node:http";
-import type { BackgroundTaskStatus } from "../../../shared/filter-contract/src/index.ts";
+import type {
+  AnalysisCoverage,
+  BackgroundTaskStatus,
+} from "../../../shared/filter-contract/src/index.ts";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 import { getSystemMetrics } from "../observability/systemMetrics.ts";
 import { isGpuReclaimed } from "../taskOrchestrator/computeWorkers.ts";
@@ -42,19 +45,39 @@ const withQueuedVideoStages = (
 type StatusRequestHandlerProps = {
   stream: boolean;
   taskOrchestrator: TaskOrchestrator;
+  /** How far each library-wide pass has got; see analysisCoverage.ts. */
+  getCoverage?: () => Promise<AnalysisCoverage[]>;
 };
 
-const computeStatusPayload = async (taskOrchestrator: TaskOrchestrator) => {
+/** Coverage is extra: a failed count leaves it out rather than failing the status. */
+const readCoverage = async (
+  getCoverage: StatusRequestHandlerProps["getCoverage"],
+): Promise<AnalysisCoverage[] | undefined> => {
+  if (!getCoverage) return undefined;
+  try {
+    return await getCoverage();
+  } catch (error) {
+    log.warn({ err: error }, "analysis coverage unavailable");
+    return undefined;
+  }
+};
+
+const computeStatusPayload = async (
+  taskOrchestrator: TaskOrchestrator,
+  getCoverage?: StatusRequestHandlerProps["getCoverage"],
+) => {
   const backgroundTasksEnabled = taskOrchestrator.getPerformBackgroundTasks();
-  const [backgroundTasks, systemMetrics] = await Promise.all([
+  const [backgroundTasks, systemMetrics, coverage] = await Promise.all([
     taskOrchestrator.getBackgroundTaskStatus(),
     getSystemMetrics(),
+    readCoverage(getCoverage),
   ]);
 
   const snapshot = taskOrchestrator.getDiagnosticsSnapshot();
 
   return {
     backgroundTasks: withQueuedVideoStages(backgroundTasks),
+    ...(coverage ? { coverage } : {}),
     maintenance: {
       backgroundTasksEnabled,
     },
@@ -78,10 +101,13 @@ const computeStatusPayload = async (taskOrchestrator: TaskOrchestrator) => {
 // production, but a stale shared payload would otherwise mask per-request state.)
 let payloadInflight: ReturnType<typeof computeStatusPayload> | undefined;
 
-const getStatusPayload = (taskOrchestrator: TaskOrchestrator) => {
+const getStatusPayload = (
+  taskOrchestrator: TaskOrchestrator,
+  getCoverage?: StatusRequestHandlerProps["getCoverage"],
+) => {
   if (payloadInflight) return payloadInflight;
 
-  payloadInflight = computeStatusPayload(taskOrchestrator).finally(() => {
+  payloadInflight = computeStatusPayload(taskOrchestrator, getCoverage).finally(() => {
     payloadInflight = undefined;
   });
 
@@ -97,10 +123,10 @@ export const statusRequestHandler = async (
   res: http.ServerResponse,
   props: StatusRequestHandlerProps,
 ) => {
-  const { stream, taskOrchestrator } = props;
+  const { stream, taskOrchestrator, getCoverage } = props;
 
   if (!stream) {
-    const payload = await getStatusPayload(taskOrchestrator);
+    const payload = await getStatusPayload(taskOrchestrator, getCoverage);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(payload));
     return;
@@ -124,7 +150,7 @@ export const statusRequestHandler = async (
     if (updating || closed) return;
     updating = true;
     try {
-      const payload = await getStatusPayload(taskOrchestrator);
+      const payload = await getStatusPayload(taskOrchestrator, getCoverage);
       // The client may have disconnected while the payload was being computed;
       // writing after end throws, so bail out instead.
       if (closed || res.writableEnded) return;

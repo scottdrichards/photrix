@@ -62,6 +62,7 @@ import { analyzeImage } from "./imageAnalysis/imageAnalysisWorker.ts";
 import { killAllSessions } from "./videoProcessing/hlsSession.ts";
 import type { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
 import { featureFlagsRequestHandler } from "./requestHandlers/featureFlagsRequestHandler.ts";
+import { createCoverageReporter } from "./requestHandlers/analysisCoverage.ts";
 
 const log = getLogger("httpServer");
 
@@ -85,6 +86,7 @@ export const createServer = (
   options: ServerOptions,
 ) => {
   const { taskOrchestrator, featureFlags } = options;
+  const getCoverage = createCoverageReporter(database.analysis);
 
   const server = http.createServer((req, res) => {
     const requestIdHeader = req.headers["x-request-id"];
@@ -386,6 +388,7 @@ export const createServer = (
             await statusRequestHandler(req, res, {
               stream: true,
               taskOrchestrator,
+              getCoverage,
             });
             return;
           }
@@ -417,6 +420,7 @@ export const createServer = (
             await statusRequestHandler(req, res, {
               stream: false,
               taskOrchestrator,
+              getCoverage,
             });
             return;
           }

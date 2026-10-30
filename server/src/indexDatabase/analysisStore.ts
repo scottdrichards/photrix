@@ -272,29 +272,47 @@ export class AnalysisStore {
    */
   async getVideoFaceAnalysisProgress(): Promise<{
     total: number;
+    /** Videos the face pass has finished. */
+    done: number;
     remaining: number;
     coolingDown: number;
+    /** When the first cooling-down video becomes due again; null if none is. */
+    nextRetryAt: number | null;
     unreadable: number;
   }> {
+    const cooldownStart = Date.now() - AnalysisStore.VIDEO_FACE_RETRY_COOLDOWN_MS;
     const row = await this.db.get<{
       total: number;
+      done: number;
       remaining: number;
       coolingDown: number;
+      firstErrorAt: number | null;
       unreadable: number;
     }>(
       `SELECT
          (SELECT COUNT(*) FROM files WHERE mimeType LIKE 'video/%') AS total,
+         (SELECT COUNT(*) FROM files WHERE mimeType LIKE 'video/%'
+            AND facesProcessedAt IS NOT NULL) AS done,
          (SELECT COUNT(*) FROM files WHERE ${AnalysisStore.VIDEOS_NEEDING_FACES_WHERE}) AS remaining,
          (SELECT COUNT(*) FROM files WHERE ${AnalysisStore.VIDEOS_NEEDING_FACES_WHERE}
             AND facesLastErrorAt >= ?) AS coolingDown,
+         (SELECT MIN(facesLastErrorAt) FROM files WHERE ${AnalysisStore.VIDEOS_NEEDING_FACES_WHERE}
+            AND facesLastErrorAt >= ?) AS firstErrorAt,
          (SELECT COUNT(*) FROM files WHERE mimeType LIKE 'video/%'
             AND facesProcessedAt IS NULL AND analysisDecodeErrorAt IS NOT NULL) AS unreadable`,
-      Date.now() - AnalysisStore.VIDEO_FACE_RETRY_COOLDOWN_MS,
+      cooldownStart,
+      cooldownStart,
     );
+    const firstErrorAt = row?.firstErrorAt ?? null;
     return {
       total: row?.total ?? 0,
+      done: row?.done ?? 0,
       remaining: row?.remaining ?? 0,
       coolingDown: row?.coolingDown ?? 0,
+      nextRetryAt:
+        firstErrorAt === null
+          ? null
+          : Number(firstErrorAt) + AnalysisStore.VIDEO_FACE_RETRY_COOLDOWN_MS,
       unreadable: row?.unreadable ?? 0,
     };
   }

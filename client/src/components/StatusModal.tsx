@@ -11,6 +11,7 @@ import {
 import { ProgressItem } from "./ProgressItem";
 import { describeHoldup } from "./taskHoldup";
 import css from "./StatusModal.module.css";
+import { StatusCoverage } from "./StatusCoverage";
 import { syncDialogOpenState } from "./syncDialogOpenState";
 import { FeatureFlagsPanel } from "./FeatureFlagsPanel";
 import { logFailure } from "../logFailure";
@@ -627,6 +628,8 @@ export const StatusModal = ({ isOpen, onDismiss }: StatusModalProps) => {
                 })
               )}
             </div>
+
+            <StatusCoverage coverage={status.coverage} tasks={status.backgroundTasks} />
           </div>
         )}
         <div className={css.dialogActions}>
