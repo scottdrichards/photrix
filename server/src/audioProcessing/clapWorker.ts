@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { CACHE_DIR } from "../common/cacheUtils.js";
 import { getLogger } from "../observability/logger.ts";
+import { createModelLoadTimer, type ModelLoadProgress } from "../common/modelLoadTimer.ts";
 import { buildPythonProcessEnv, resolvePythonCommand } from "../python/pythonRuntime.ts";
 import {
   COMPUTE_WORKER_IDS,
@@ -42,6 +43,8 @@ let readyPromise: Promise<void> | null = null;
 // CLAP loads its weights before reporting "ready" (unlike the image worker),
 // so a ready process is a warm model.
 let workerReady = false;
+// Feedback #162: CLAP loads before "ready", so spawn-to-ready is the load.
+const clapLoad = createModelLoadTimer();
 const pending = new Map<number, PendingRequest>();
 
 // Allow the orchestrator to freeze the worker during user requests. embedText
@@ -109,6 +112,7 @@ const onWorkerLine = (
 const ensureWorkerReady = async (): Promise<void> => {
   if (readyPromise) return readyPromise;
 
+  clapLoad.start();
   readyPromise = (async () => {
     // Emergency kill switch: see main.ts. Checked at spawn time (not just in
     // the background-task registration) so a search's foreground CLAP call
@@ -161,6 +165,7 @@ const ensureWorkerReady = async (): Promise<void> => {
         clearTimeout(readyTimer);
         settled = true;
         workerReady = true;
+        clapLoad.finish();
         log.info("CLAP worker ready");
         resolve();
       };
@@ -213,6 +218,7 @@ const ensureWorkerReady = async (): Promise<void> => {
         worker = null;
         readyPromise = null;
         workerReady = false;
+        clapLoad.abandon();
         // A kill we issued ourselves (GPU reclaim for playback, shutdown) is
         // not a failure of the in-flight files: tag the rejection so the task
         // runner leaves them pending for retry instead of marking them errored.
@@ -252,6 +258,7 @@ const ensureWorkerReady = async (): Promise<void> => {
   } catch (error) {
     readyPromise = null;
     worker = null;
+    clapLoad.abandon();
     throw error;
   }
 };
@@ -310,3 +317,6 @@ export const getAudioSearchModelState = (): SearchModelState => {
   if (readyPromise) return "loading";
   return "cold";
 };
+
+/** Feedback #162: how long the audio search model's current load has run. */
+export const getAudioSearchModelLoad = (): ModelLoadProgress => clapLoad.progress();

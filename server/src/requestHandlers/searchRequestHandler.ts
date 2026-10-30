@@ -9,10 +9,16 @@ import {
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import {
   embedText,
+  getImageSearchModelLoad,
   getImageSearchModelState,
   type SearchModelState,
 } from "../imageAnalysis/imageAnalysisWorker.ts";
-import { embedTextWithClap, getAudioSearchModelState } from "../audioProcessing/clapWorker.ts";
+import {
+  embedTextWithClap,
+  getAudioSearchModelLoad,
+  getAudioSearchModelState,
+} from "../audioProcessing/clapWorker.ts";
+import type { ModelLoadProgress } from "../common/modelLoadTimer.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../utils.ts";
 
@@ -65,9 +71,19 @@ export type SearchSourceOutcome =
   | { status: "skipped" }
   | { status: "failed"; reason: "loading" | "timeout" | "error"; ms?: number };
 
+/**
+ * Feedback #162: for each model-backed source, how long its current load has
+ * run and how long the last one took, so the UI can show progress rather
+ * than a bare "still loading".
+ */
+export const getSearchSourceLoads = (): Partial<Record<SearchSource, ModelLoadProgress>> => ({
+  image: getImageSearchModelLoad(),
+  audio: getAudioSearchModelLoad(),
+});
+
 /** GET /api/search/status — per-source model readiness for the search UI. */
 export const searchStatusRequestHandler = (res: http.ServerResponse): void =>
-  writeJson(res, 200, { sources: getSearchSourceStates() });
+  writeJson(res, 200, { sources: getSearchSourceStates(), loads: getSearchSourceLoads() });
 
 type Options = {
   database: IndexDatabase;

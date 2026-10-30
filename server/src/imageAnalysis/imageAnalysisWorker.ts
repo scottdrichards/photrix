@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { CACHE_DIR } from "../common/cacheUtils.js";
 import { getLogger } from "../observability/logger.ts";
+import { createModelLoadTimer, type ModelLoadProgress } from "../common/modelLoadTimer.ts";
 import { buildPythonProcessEnv, resolvePythonCommand } from "../python/pythonRuntime.ts";
 import {
   COMPUTE_WORKER_IDS,
@@ -153,6 +154,7 @@ type WorkerHandle = {
   send: (payload: Record<string, unknown>) => Promise<WorkerSuccess>;
   getProcess: () => ChildProcessWithoutNullStreams | null;
   getClipState: () => SearchModelState;
+  getClipLoad: () => ModelLoadProgress;
 };
 
 const createWorkerHandle = (label: string): WorkerHandle => {
@@ -167,6 +169,8 @@ const createWorkerHandle = (label: string): WorkerHandle => {
   let processReady = false;
   let clipWarm = false;
   let clipRequestsInFlight = 0;
+  // Times a load from the searcher's side: process start plus CLIP's lazy load.
+  const clipLoad = createModelLoadTimer();
 
   const rejectAllPending = (error: Error) => {
     for (const { reject, timeout } of pending.values()) {
@@ -211,6 +215,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
   const ensureReady = async (): Promise<void> => {
     if (readyPromise) return readyPromise;
 
+    clipLoad.start();
     readyPromise = (async () => {
       if (!(await canAccess(WORKER_SCRIPT))) {
         throw new Error(`Image analysis worker script missing at ${WORKER_SCRIPT}`);
@@ -256,6 +261,9 @@ const createWorkerHandle = (label: string): WorkerHandle => {
           clearTimeout(readyTimer);
           settled = true;
           processReady = true;
+          // CLIP loads lazily on its first embed; a process started for other
+          // work hasn't begun loading it, so stop timing until something asks.
+          if (clipRequestsInFlight === 0) clipLoad.abandon();
           log.info({ label }, "Image analysis worker ready");
           resolve();
         };
@@ -304,6 +312,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
           readyPromise = null;
           processReady = false;
           clipWarm = false;
+          clipLoad.abandon();
           // A kill we issued ourselves (GPU reclaim for playback, shutdown) is
           // not a failure of the in-flight files: tag the rejection so the task
           // runner leaves them pending for retry instead of marking them errored.
@@ -343,10 +352,14 @@ const createWorkerHandle = (label: string): WorkerHandle => {
       (payload.operation === "analyzeImage" && Boolean(payload.embed));
     if (!loadsClip) return sendRaw(payload);
     clipRequestsInFlight++;
+    if (!clipWarm) clipLoad.start();
     return sendRaw(payload).then(
       (result) => {
         clipRequestsInFlight--;
-        if (result.embedding) clipWarm = true;
+        if (result.embedding && !clipWarm) {
+          clipWarm = true;
+          clipLoad.finish();
+        }
         return result;
       },
       (error: unknown) => {
@@ -400,7 +413,13 @@ const createWorkerHandle = (label: string): WorkerHandle => {
     });
   };
 
-  return { ensureReady, send, getProcess: () => proc, getClipState };
+  return {
+    ensureReady,
+    send,
+    getProcess: () => proc,
+    getClipState,
+    getClipLoad: clipLoad.progress,
+  };
 };
 
 const analysisWorker = createWorkerHandle("analysis");
@@ -511,6 +530,10 @@ export const analyzeFaceAttributes = async (
 /** Whether a text search against CLIP will be fast right now. */
 export const getImageSearchModelState = (): SearchModelState =>
   analysisWorker.getClipState();
+
+/** Feedback #162: how long the image search model's current load has run. */
+export const getImageSearchModelLoad = (): ModelLoadProgress =>
+  analysisWorker.getClipLoad();
 
 export const embedText = (text: string): Promise<Float32Array> =>
   // Pin the worker awake for the duration: this is the foreground search path,

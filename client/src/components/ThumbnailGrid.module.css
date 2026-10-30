@@ -149,9 +149,3 @@
 }
 
 /* Every search source failed (feedback #143): say so, with Retry. */
-.searchUnavailable {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-s);
-}
