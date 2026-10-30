@@ -316,7 +316,7 @@ export const keepVariantAlive = (
   };
 };
 
-export type EncodeClaim = {
+type EncodeClaim = {
   /** Segment index the new encode must start at. */
   startSegment: number;
   /** Pass to registerHlsProcess so the spawn attaches to this encode. */

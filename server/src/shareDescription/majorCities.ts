@@ -11,7 +11,7 @@
  * personal photo library, and false silence (no match, so no place name in
  * the description) is the safe failure mode, not a wrong guess.
  */
-export type MajorCity = {
+type MajorCity = {
   name: string;
   /** State/province/country qualifier, e.g. "IL" or "Japan". */
   region: string;
@@ -19,7 +19,7 @@ export type MajorCity = {
   longitude: number;
 };
 
-export const MAJOR_CITIES: MajorCity[] = [
+const MAJOR_CITIES: MajorCity[] = [
   { name: "New York", region: "NY", latitude: 40.7128, longitude: -74.006 },
   { name: "Los Angeles", region: "CA", latitude: 34.0522, longitude: -118.2437 },
   { name: "Chicago", region: "IL", latitude: 41.8781, longitude: -87.6298 },

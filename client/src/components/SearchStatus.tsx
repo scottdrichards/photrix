@@ -41,7 +41,7 @@ const MAX_RECOVERY_POLL_MS = 120_000;
  * poll is logged and the next one retries: this is a hint, never a reason to
  * break search.
  */
-export const useSearchModelStates = (
+const useSearchModelStates = (
   active: boolean,
 ): Partial<Record<SearchSource, SearchModelState>> | null => {
   const [states, setStates] =

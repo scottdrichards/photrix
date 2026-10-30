@@ -13,7 +13,7 @@ import { findNearbyCity } from "./majorCities.ts";
  * summary, but handing them to a model invites it to fill the void — an
  * unnamed map area plus a 2024 date reliably became "European City Break".
  */
-export type ShareFilterFact = {
+type ShareFilterFact = {
   text: string;
   nameable: boolean;
   /**

@@ -1,5 +1,5 @@
 
-export type BaseFileRecord = {
+type BaseFileRecord = {
   /** Uses '/' as separator, starts and ends with slash */
   folder: string;
   /** Includes extension */
@@ -61,7 +61,7 @@ export type ExifMetadata = {
   embeddedVideoLength?: number;
 };
 
-export type AIMetadata = {
+type AIMetadata = {
   aiDescription?: string;
   aiTags?: string[];
   /** Derived whole-photo quality aggregate, 0..1; see photoQuality.ts. Absent
@@ -86,7 +86,7 @@ export type AIMetadata = {
   momentClusterPreviewPaths?: string[];
 };
 
-export type AllMetaData = FileInfo & ExifMetadata & AIMetadata;
+type AllMetaData = FileInfo & ExifMetadata & AIMetadata;
 
 /**
  * Indicates how to acquire metadata for a file

@@ -110,7 +110,7 @@ export type PreparedCentroid = {
 export type Candidate = { name: string; similarity: number; clusterId: number };
 
 /** Why a face that was scored did not get a name. */
-export type Rejection = "threshold" | "margin" | "tooSmall" | null;
+type Rejection = "threshold" | "margin" | "tooSmall" | null;
 
 export type IdentifiedFace = {
   /** Normalized 0..1 against the source image, same convention as DetectedFace. */
@@ -130,7 +130,7 @@ export type IdentifiedFace = {
   candidates: Candidate[];
 };
 
-export type IdentifyOptions = {
+type IdentifyOptions = {
   threshold?: number;
   strongThreshold?: number;
   minMargin?: number;

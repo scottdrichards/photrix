@@ -96,7 +96,7 @@ export const bandwidthCoversRawFile = (
  * metered WAN link. Combined with PREVIEW_MAX_SECONDS this bounds a preview to
  * roughly 9 MB of transfer.
  */
-export const PREVIEW_MAX_RAW_MBPS = 12;
+const PREVIEW_MAX_RAW_MBPS = 12;
 
 /**
  * Hard cap on how long a grid preview may run. Also the ceiling on how many
@@ -107,7 +107,7 @@ export const PREVIEW_MAX_RAW_MBPS = 12;
 export const PREVIEW_MAX_SECONDS = 6;
 
 /** Lowest advertised HLS variant — the only one a preview is ever allowed to use. */
-export const PREVIEW_VARIANT_HEIGHT = 360;
+const PREVIEW_VARIANT_HEIGHT = 360;
 
 /**
  * Whether a playback decision should evict the background ML workers to free

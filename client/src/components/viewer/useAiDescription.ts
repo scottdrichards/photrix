@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { streamPhotoDescription, type PhotoItem } from "../../api";
 import { logFailure } from "../../logFailure";
 
-export type AiDescription = { path: string; text: string; status: "writing" | "done" | "error" };
+type AiDescription = { path: string; text: string; status: "writing" | "done" | "error" };
 
 /**
  * The long AI description of a photo (feedback #148). It is written on demand —

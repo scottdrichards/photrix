@@ -32,7 +32,7 @@ export type FolderFilter = {
 /**
  * Generic per-field filter constraint used by API filter JSON.
  */
-export type FilterConstraint =
+type FilterConstraint =
   | null
   | string
   | number
@@ -109,9 +109,6 @@ export type FaceAttributeFilter = {
   includeUnknown?: boolean;
 };
 
-/** The attribute set behind the combined "photo ready" toggle. */
-export const PHOTO_READY_ATTRIBUTES: readonly FaceAttributeKey[] = FACE_ATTRIBUTE_KEYS;
-
 type FilterConstraintForValue<TField extends string, TValue> =
   | null
   | (TField extends "relativePath"
@@ -139,11 +136,6 @@ export type RecordFilterCondition<
     K extends keyof TRecord ? TRecord[K] : never
   >;
 };
-
-export type RecordFilterElement<
-  TRecord extends Record<string, unknown>,
-  TExtraFields extends string = "relativePath",
-> = FilterElement<RecordFilterCondition<TRecord, TExtraFields>>;
 
 export type MediaTypeFilter = "all" | "photo" | "video" | "other";
 
@@ -178,7 +170,7 @@ export type ShareScope<TFilter = unknown> = {
  *   query is active, and ignored (treated as `date`) for plain library browsing
  */
 export type SortField = "date" | "rating" | "quality" | "relevance";
-export type SortDirection = "asc" | "desc";
+type SortDirection = "asc" | "desc";
 export type SortOption = { field: SortField; direction: SortDirection };
 
 export const SORT_FIELDS: readonly SortField[] = [
@@ -286,7 +278,7 @@ export type InterpretedSearchFilter = Pick<
   | "semanticQuery"
 >;
 
-export type InterpretedFilterField = keyof InterpretedSearchFilter;
+type InterpretedFilterField = keyof InterpretedSearchFilter;
 
 /**
  * One removable piece of an interpretation, rendered as a filter chip.
@@ -411,7 +403,7 @@ export const filterFieldCapabilities = Object.fromEntries(
  * - `faces-on-cpu`: running, but the face model fell back to the CPU because
  *   the GPU is full, so it is several times slower.
  */
-export type TaskHoldupReason =
+type TaskHoldupReason =
   | "background-off"
   | "user-active"
   | "gpu-lent"
@@ -499,7 +491,7 @@ export type SystemMetrics = {
 // aren't) holding VRAM right now: a user request in flight fully stops
 // background work, and a user GPU request additionally reclaims (kills) the
 // background workers' VRAM until the user goes idle.
-export type ArbitrationState = {
+type ArbitrationState = {
   userActive: boolean;
   workersSuspended: boolean;
   gpuReclaimed: boolean;

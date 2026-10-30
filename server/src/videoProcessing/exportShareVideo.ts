@@ -21,8 +21,7 @@ const log = getLogger("ShareVideo");
  * size" caps at 1080p, "smaller size" at 720p. The short side, not the height,
  * so a portrait phone clip comes out 1080x1920 rather than 608x1080.
  */
-export const SHARE_VIDEO_SHORT_SIDES = [720, 1080] as const;
-export type ShareVideoShortSide = (typeof SHARE_VIDEO_SHORT_SIDES)[number];
+type ShareVideoShortSide = 720 | 1080;
 
 export const parseShareVideoShortSide = (value: string | null): ShareVideoShortSide =>
   value === "720" ? 720 : 1080;
@@ -59,7 +58,7 @@ export const shareOutputHeight = (
   return evenFloor((displayHeight * target) / sourceShort);
 };
 
-export const getShareVideoPath = (
+const getShareVideoPath = (
   filePath: string,
   shortSide: ShareVideoShortSide,
 ): string => getMirroredCachedFilePath(filePath, `share.${shortSide}`, "mp4");

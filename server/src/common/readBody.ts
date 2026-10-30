@@ -3,7 +3,7 @@ import { writeJson } from "./writeJson.ts";
 import { attempt, attemptSync } from "./result.ts";
 
 /** Generous for any JSON this API accepts; endpoints with tiny payloads pass less. */
-export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
 export class BodyTooLargeError extends Error {
   constructor(maxBytes: number) {
@@ -41,7 +41,7 @@ export const readTextBody = (
   });
 
 /** A request whose body isn't the JSON the endpoint needs: answer 400. */
-export class InvalidBodyError extends Error {
+class InvalidBodyError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "InvalidBodyError";

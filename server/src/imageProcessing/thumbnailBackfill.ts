@@ -66,13 +66,13 @@ const MAX_REST_MS = 10_000;
  */
 const CANDIDATE_REFRESH_MS = 10 * 60_000;
 
-export type ThumbnailBackfillLimits = {
+type ThumbnailBackfillLimits = {
   bytesPerSecond: number;
   /** Normalized 1-minute load (1.0 = every CPU busy) the pass waits beneath. */
   maxLoad: number;
 };
 
-export type ThumbnailBackfillConfig = ThumbnailBackfillLimits & {
+type ThumbnailBackfillConfig = ThumbnailBackfillLimits & {
   /** Read before every file, so switching the feature flag takes effect at once. */
   isEnabled: () => boolean;
 };
@@ -183,7 +183,7 @@ export const planThumbnailWork = async (
 // costs one read, not a retry loop: each is attempted at most once per process.
 const failedPaths = new Set<string>();
 
-export type ThumbnailBackfillDeps = {
+type ThumbnailBackfillDeps = {
   getLoad: () => number;
   sleep: (ms: number) => Promise<void>;
   now: () => number;

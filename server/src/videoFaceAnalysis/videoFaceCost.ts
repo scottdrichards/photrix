@@ -69,7 +69,7 @@ const DEFAULT_MEGAPIXELS = 2;
 /** Bitrate assumed when it can't be worked out. The library averages ~50. */
 const DEFAULT_MBIT_PER_SECOND = 50;
 
-export type VideoFaceCost = { extractMs: number; frames: number };
+type VideoFaceCost = { extractMs: number; frames: number };
 
 /** A video waiting for the face pass, with what ordering it needs. */
 export type QueuedVideoFaces = { relativePath: string } & VideoFaceCostInputs & {
@@ -133,7 +133,7 @@ const MAX_RATIO_PER_VIDEO = 10;
 const MIN_WALL_FOR_DUTY_MS = 10 * 60_000;
 const MIN_DUTY = 0.05;
 
-export type VideoFaceEta = {
+type VideoFaceEta = {
   /**
    * Folds one finished video into the corrections. Returns what the model
    * predicted for it before learning from it, for the log.

@@ -164,7 +164,7 @@ const INTEL: GpuAcceleration = {
   vbrArgs: (q) => ["-rc_mode", "CQP", "-qp", String(q)],
   vfExtra: ",format=nv12,hwupload",
   // Keeping decoded frames on the device is the single biggest transcode win on
-  // this box. Measured on LXC 124 decoding a 4K60 H.264 source: 0.74x realtime
+  // an iGPU host. Measured on an i7-10610U decoding a 4K60 H.264 source: 0.74x realtime
   // with CPU decode, 1.04x with VAAPI decode + copy-back, 5.31x with VAAPI
   // decode and frames left on the GPU. The copy — not the decode — is the cost,
   // because it runs at full source resolution on every source frame, before the
@@ -248,7 +248,7 @@ const probeNvidia = (): Promise<NvidiaProbeResult> =>
 /**
  * Whether the card can actually *encode*. A CUDA context is not evidence of an
  * encoder: several NVIDIA GPUs ship with NVDEC but no NVENC silicon at all
- * (GP108 — the Quadro P520 in server2, and the GT 1030 — is one), and on those
+ * (GP108 — the Quadro P520 and the GT 1030 — is one), and on those
  * `-init_hw_device cuda` succeeds while every h264_nvenc session fails with
  * "OpenEncodeSessionEx failed: unsupported device / No capable devices found".
  * Selecting NVIDIA on such a card sends every HLS encode down the software

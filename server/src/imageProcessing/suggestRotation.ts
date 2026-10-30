@@ -10,7 +10,7 @@ import { logFailure } from "../common/logFailure.ts";
 
 const log = getLogger("suggestRotation");
 
-export type RotationSuggestion = {
+type RotationSuggestion = {
   /** Degrees to rotate the photo to level it; null when no confident suggestion exists. */
   angle: number | null;
   confidence?: number;

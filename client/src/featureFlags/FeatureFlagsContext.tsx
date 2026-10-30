@@ -1,6 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  featureFlags,
   type FeatureFlagName,
   type FeatureFlagState,
 } from "../../../shared/feature-flags/src/featureFlags";
@@ -43,9 +42,4 @@ export const useFeatureFlags = (): FeatureFlagsContextValue => {
   const context = useContext(FeatureFlagsContext);
   if (!context) throw new Error("useFeatureFlags must be used inside <FeatureFlagsProvider>");
   return context;
-};
-
-export const useFeatureFlag = (name: FeatureFlagName): boolean => {
-  const { flags } = useFeatureFlags();
-  return flags?.find((flag) => flag.name === name)?.enabled ?? featureFlags[name].default;
 };

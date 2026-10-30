@@ -16,7 +16,7 @@ import type http from "node:http";
  * somewhere else. Precise region/country geolocation is deferred to a future
  * bundled GeoIP dataset if that's ever worth the size/maintenance cost.
  */
-export type IpLocation = { ip: string | null; label: string };
+type IpLocation = { ip: string | null; label: string };
 
 const isIPv4PrivateOrReserved = (octets: number[]): boolean => {
   const [a, b] = octets;

@@ -8,7 +8,7 @@ import { join } from "node:path";
 // 4K, HEVC, 10-bit, rotated — because that is what makes the on-the-fly
 // encoder work hardest.
 
-export type LabClip = {
+type LabClip = {
   /** File name under the lab media root (also the API path). */
   name: string;
   durationS: number;
