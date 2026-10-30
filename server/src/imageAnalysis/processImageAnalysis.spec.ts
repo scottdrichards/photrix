@@ -5,16 +5,9 @@ import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { processImageAnalysis, type AnalyzeImage } from "./processImageAnalysis.ts";
 import { PermanentImageError } from "./imageAnalysisWorker.ts";
 import type { ImageAnalysisResult } from "./imageAnalysisWorker.ts";
+import { createDeferred } from "../common/createDeferred.fixture.ts";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const createDeferred = () => {
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-};
 
 const makeFace = (confidence = 0.9) => ({
   box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },

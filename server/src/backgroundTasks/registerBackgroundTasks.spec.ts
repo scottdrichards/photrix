@@ -5,14 +5,7 @@ import type {
   TaskRunner,
 } from "../taskOrchestrator/taskOrchestrator.ts";
 import { registerBackgroundTasks } from "./registerBackgroundTasks.ts";
-
-const createDeferred = () => {
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-};
+import { createDeferred } from "../common/createDeferred.fixture.ts";
 
 const createRunner = (promise: Promise<void>): TaskRunner => ({
   onComplete: () => promise,
