@@ -1,4 +1,3 @@
-import { AssertNever, UnionXOR } from "../utils.ts";
 
 export type BaseFileRecord = {
   /** Uses '/' as separator, starts and ends with slash */
@@ -151,9 +150,12 @@ export type FileRecord = BaseFileRecord &
 // Validation
 
 /**
- * This will verify that all metadata keys are assigned a group
+ * Fails to compile if a metadata key is missing from MetadataGroups, or a group
+ * names a key that doesn't exist: the symmetric difference must be empty.
  */
-type AllMetadataKeysInGroups = UnionXOR<
+type SymmetricDifference<A, B> = Exclude<A, B> | Exclude<B, A>;
+type AssertNever<T extends never> = T;
+type AllMetadataKeysInGroups = SymmetricDifference<
   {
     [K in keyof typeof MetadataGroups]: (typeof MetadataGroups)[K][number];
   }[keyof typeof MetadataGroups],

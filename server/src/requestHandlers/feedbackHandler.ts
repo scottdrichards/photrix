@@ -1,6 +1,6 @@
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
 // Claims expire after 1 hour so a crashed agent doesn't lock a suggestion forever.

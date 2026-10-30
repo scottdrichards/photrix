@@ -1,5 +1,5 @@
 import type http from "node:http";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "./writeJson.ts";
 import { attempt, attemptSync } from "./result.ts";
 
 /** Generous for any JSON this API accepts; endpoints with tiny payloads pass less. */

@@ -7,7 +7,7 @@ import {
   runWithRequestTrace,
 } from "./observability/requestTrace.ts";
 import type { TaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
-import { writeJson } from "./utils.ts";
+import { writeJson } from "./common/writeJson.ts";
 import { getLogger } from "./observability/logger.ts";
 import { redactRequestPath } from "./observability/privacy.ts";
 import {

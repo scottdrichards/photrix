@@ -1,7 +1,7 @@
 import type * as http from "http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { QueryOptions } from "../indexDatabase/indexDatabase.type.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
 /**

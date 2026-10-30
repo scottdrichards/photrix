@@ -4,7 +4,7 @@ import type { TaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import type { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
 import type { ShareScope } from "../../shared/filter-contract/src/index.ts";
 import type { FilterElement } from "./indexDatabase/indexDatabase.type.ts";
-import { writeJson } from "./utils.ts";
+import { writeJson } from "./common/writeJson.ts";
 import { decodeRequestPath } from "./common/decodeRequestPath.ts";
 import { extractShareFolderRoots } from "./auth/shareFolderScope.ts";
 import { buildDiagnosticsReport } from "./observability/buildDiagnosticsReport.ts";

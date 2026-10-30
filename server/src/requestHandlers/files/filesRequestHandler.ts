@@ -55,7 +55,7 @@ import {
 import { StandardHeight, parseToStandardHeight } from "../../common/standardHeights.ts";
 import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";
 import { queryHandler } from "./queryHandler.ts";
-import { writeJson } from "../../utils.ts";
+import { writeJson } from "../../common/writeJson.ts";
 import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
 import { decodeRequestPath } from "../../common/decodeRequestPath.ts";
 import { attempt } from "../../common/result.ts";

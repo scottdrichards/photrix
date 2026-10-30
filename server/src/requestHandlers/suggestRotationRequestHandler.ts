@@ -3,7 +3,7 @@ import path from "node:path";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { decodeRequestPath } from "../common/decodeRequestPath.ts";
 import { suggestRotation } from "../imageProcessing/suggestRotation.ts";
-import { writeJson } from "../utils.ts";
+import { writeJson } from "../common/writeJson.ts";
 
 type Options = {
   database: IndexDatabase;
