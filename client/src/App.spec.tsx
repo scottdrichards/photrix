@@ -16,7 +16,7 @@ const probeVideoPlaybackProfileMock = vi.fn().mockResolvedValue({
   hevcSupported: true,
 });
 
-vi.mock("./components/SearchBar", () => ({
+vi.mock("./components/search/SearchBar", () => ({
   SearchBar: () => <div data-testid="search-bar">search</div>,
 }));
 
@@ -70,7 +70,7 @@ vi.mock("./components/ViewToggle", () => ({
   ),
 }));
 
-vi.mock("./components/ThumbnailGrid", () => ({
+vi.mock("./components/grid/ThumbnailGrid", () => ({
   ThumbnailGrid: ({
     view,
     onViewChange,
@@ -102,7 +102,7 @@ vi.mock("./components/ThumbnailGrid", () => ({
   ),
 }));
 
-vi.mock("./components/PeopleView", () => ({
+vi.mock("./components/people/PeopleView", () => ({
   PeopleView: ({
     view,
     onViewChange,
@@ -134,17 +134,17 @@ vi.mock("./components/PeopleView", () => ({
   ),
 }));
 
-vi.mock("./components/FullscreenViewer", () => ({
+vi.mock("./components/viewer/FullscreenViewer", () => ({
   FullscreenViewer: () => <div data-testid="fullscreen-viewer">viewer</div>,
 }));
 
-vi.mock("./components/StatusModal", () => ({
+vi.mock("./components/status/StatusModal", () => ({
   StatusModal: ({ isOpen }: { isOpen: boolean }) => (
     <div data-testid="status-modal">{isOpen ? "open" : "closed"}</div>
   ),
 }));
 
-vi.mock("./components/SuggestionModal", () => ({
+vi.mock("./components/feedback/SuggestionModal", () => ({
   SuggestionModal: ({ onClose }: { onClose: () => void }) => (
     <div data-testid="suggestion-modal">
       <button type="button" onClick={onClose}>

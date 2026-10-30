@@ -21,7 +21,7 @@ vi.mock("./auth", () => ({
   onUnauthorized: vi.fn(),
 }));
 
-vi.mock("./components/SearchBar", () => ({
+vi.mock("./components/search/SearchBar", () => ({
   SearchBar: () => <div data-testid="search-bar">search</div>,
 }));
 
@@ -50,23 +50,23 @@ vi.mock("./components/ViewToggle", () => ({
   ViewToggle: () => <div role="tablist" aria-label="Current view" />,
 }));
 
-vi.mock("./components/ThumbnailGrid", () => ({
+vi.mock("./components/grid/ThumbnailGrid", () => ({
   ThumbnailGrid: () => <div data-testid="thumbnail-grid">grid</div>,
 }));
 
-vi.mock("./components/PeopleView", () => ({
+vi.mock("./components/people/PeopleView", () => ({
   PeopleView: () => <div data-testid="people-view">people</div>,
 }));
 
-vi.mock("./components/FullscreenViewer", () => ({
+vi.mock("./components/viewer/FullscreenViewer", () => ({
   FullscreenViewer: () => <div data-testid="fullscreen-viewer">viewer</div>,
 }));
 
-vi.mock("./components/StatusModal", () => ({
+vi.mock("./components/status/StatusModal", () => ({
   StatusModal: () => <div data-testid="status-modal">status</div>,
 }));
 
-vi.mock("./components/SuggestionModal", () => ({
+vi.mock("./components/feedback/SuggestionModal", () => ({
   SuggestionModal: ({ onClose }: { onClose: () => void }) => (
     <div data-testid="suggestion-modal">
       <button type="button" onClick={onClose}>

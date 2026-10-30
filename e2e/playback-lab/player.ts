@@ -8,8 +8,8 @@ import ts from "typescript";
 const here = dirname(fileURLToPath(import.meta.url));
 const CLIENT = resolve(here, "..", "..", "client");
 const HLS_JS = resolve(CLIENT, "node_modules", "hls.js", "dist", "hls.min.js");
-const APP_HLS_CONFIG = resolve(CLIENT, "src", "encoderAwareHls.ts");
-const APP_ABR_GUARD = resolve(CLIENT, "src", "hlsAbrGuard.ts");
+const APP_HLS_CONFIG = resolve(CLIENT, "src", "components", "viewer", "encoderAwareHls.ts");
+const APP_ABR_GUARD = resolve(CLIENT, "src", "components", "viewer", "hlsAbrGuard.ts");
 
 /**
  * A client module as a page script: types stripped, imports dropped (hls.js is
@@ -27,7 +27,7 @@ const pageScript = (file: string, expose: string): string => {
 const RESULTS_DIR = resolve(here, "..", "test-results", "playback-lab", "results");
 
 /**
- * The viewer's own hls.js configuration (client/src/encoderAwareHls.ts),
+ * The viewer's own hls.js configuration (client/src/components/viewer/encoderAwareHls.ts),
  * transpiled for the page, so the lab measures exactly what the app ships
  * rather than a copy that drifts. It imports hls.js types only, so stripping
  * the types is all it takes. `PHOTRIX_LAB_STOCK_ABR=1` swaps in the same
@@ -54,7 +54,7 @@ const appHlsConfigScript = (): string => {
   );
 };
 
-/** The viewer's upswitch guard (client/src/hlsAbrGuard.ts), attached as the viewer does. */
+/** The viewer's upswitch guard (client/src/components/viewer/hlsAbrGuard.ts), attached as the viewer does. */
 const appAbrGuardScript = (): string =>
   process.env.PHOTRIX_LAB_STOCK_ABR === "1" || !existsSync(APP_ABR_GUARD)
     ? "window.__labAttachAbrGuard = () => () => {};"

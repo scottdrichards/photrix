@@ -1,0 +1,496 @@
+import { memo, useEffect, useRef, useState } from "react";
+import { QuestionCircle20Filled, QuestionCircle20Regular } from "@fluentui/react-icons";
+import type { MomentClusterMember, PhotoItem, SearchSource, SearchSourceStatus } from "../../api";
+import {
+  fetchMomentClusterDetail,
+  fetchPhotos,
+  fetchSemanticSearch,
+  SearchUnavailableError,
+} from "../../api";
+import { Spinner } from "../../Spinner";
+import { useFilter } from "../filter/FilterContext";
+import { useSelectionContext } from "../selection/SelectionContext";
+import { ThumbnailTile } from "./ThumbnailTile";
+import { PhotoStackModal } from "./PhotoStackModal";
+import { IDLE_SEARCH_ACTIVITY, publishSearchActivity } from "../search/searchActivity";
+import { SelectionActionBar } from "./SelectionActionBar";
+import { SortControl } from "./SortControl";
+import { SortDockPortal } from "./SortDockPortal";
+import { SearchModelLoading } from "../search/SearchModelLoading";
+import { TopRailPortal } from "../TopRailPortal";
+import { ViewToggle } from "../ViewToggle";
+import { photoViewTransitionName, runWithViewTransition } from "../viewTransition";
+import css from "./ThumbnailGrid.module.css";
+
+const PAGE_SIZE = 200;
+/**
+ * Feedback #141: search used to hard-cap at one screenful (the server's
+ * default `limit`) with no way to see more. Paginating it the same way the
+ * plain library grid does needs a page size in actual request terms (limit +
+ * offset), unlike PAGE_SIZE above which only applies to the library grid's
+ * own page/pageSize API shape.
+ */
+const SEARCH_PAGE_SIZE = 50;
+/**
+ * How far below the last loaded tile the next page is requested. The sentinel
+ * sits at the very end of the grid, so this is the entire warning the fetch
+ * gets: at 200px the user reached the bottom of the content and *then* waited
+ * for a round trip plus a 200-tile mount. Two thousand pixels is roughly a
+ * screenful and a half of runway on a desktop, which is enough to have the next
+ * page merged before the scroll arrives.
+ */
+const LOAD_MORE_MARGIN_PX = 2000;
+const numberFormatter = new Intl.NumberFormat();
+const ALL_SEARCH_SOURCES: readonly SearchSource[] = ["image", "audio", "transcript"];
+
+type ThumbnailGridProps = {
+  view: "library" | "people";
+  onViewChange: (view: "library" | "people") => void;
+  /** Reports the current result total (null while nothing has loaded yet) so
+   * the header subtitle can show it without duplicating this fetch. */
+  onTotalChange?: (total: number | null) => void;
+};
+
+const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: ThumbnailGridProps) => {
+  const { filter } = useFilter();
+  const { setItems } = useSelectionContext();
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState<{
+    items: PhotoItem[];
+    total: number;
+    filterUsed: typeof filter;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  // Per-source outcome of the current search (which modalities answered, which
+  // timed out and why), shown by the search bar's status icon. Null outside
+  // search.
+  const [searchOutcome, setSearchOutcome] = useState<SearchSourceStatus | null>(null);
+  // Bumped by the status icon's Retry to re-run the same search.
+  const [retryNonce, setRetryNonce] = useState(0);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  // Feedback #112: per-tile "why did this match" icons (image/audio/
+  // transcript source badges) are debug clutter for ordinary search
+  // browsing — off by default, toggled on via the button next to the
+  // result count. Local/session-only, not a filter field: it doesn't
+  // change what's returned, only whether the reason is displayed.
+  const [showMatchReasons, setShowMatchReasons] = useState(false);
+
+  // The moment cluster whose "more options" modal (permanently unstack / pick
+  // a different representative) is currently open, or null. This is now a
+  // secondary path reached via the tile's kebab — the primary click (the
+  // stack/restack badge) toggles inline unstacking directly, below.
+  const [expandedStackClusterId, setExpandedStackClusterId] = useState<string | null>(
+    null,
+  );
+  // Clusters currently shown inline-unstacked (every member as its own tile,
+  // in place of the single collapsed representative) — client-only, never
+  // persisted, toggled by clicking the stack/restack badge. Cleared on
+  // navigation away (new filter/search) since it's explicitly a "this view"
+  // affordance, not a saved preference.
+  const [openStackClusterIds, setOpenStackClusterIds] = useState<Set<string>>(new Set());
+  // Fetched member lists, keyed by clusterId, kept around independently of
+  // openStackClusterIds so toggling a stack closed and back open again reuses
+  // the fetch instead of re-requesting it every time.
+  const [clusterMembersCache, setClusterMembersCache] = useState<
+    Map<string, MomentClusterMember[]>
+  >(new Map());
+  // Clusters permanently dissolved via the modal. The gallery query result
+  // still has the (now-stale) representative row with its old
+  // momentClusterId/momentClusterSize until the next fetch; tracking this
+  // client-side makes the badge disappear immediately instead of waiting on a
+  // refetch.
+  const [dissolvedClusterIds, setDissolvedClusterIds] = useState<Set<string>>(new Set());
+
+  // Toggles a cluster between collapsed and inline-unstacked. Shared by both
+  // the stack badge (collapsed -> unstacked, fetching+caching members on
+  // first use) and the restack badge on an unstacked member (unstacked ->
+  // collapsed, no fetch needed) — which one happens falls out of whether
+  // `clusterId` is already open, so both badges can wire up the exact same
+  // callback.
+  //
+  // Animates via the View Transitions API (runWithViewTransition) whenever
+  // the DOM shape change is *synchronous* — closing (collapsing back down)
+  // and re-opening from the cache both qualify, since nothing has to wait on
+  // a network round trip. The very first expand of a given cluster
+  // deliberately does NOT animate: the API supports an async callback (it'll
+  // wait for a returned promise before capturing the "after" state), but
+  // that would mean the browser holds a static screenshot of the page for
+  // however long the fetch takes — a worse trade than just skipping the
+  // animation on this one (first-time-only, forever-after-cached) path.
+  const handleToggleStack = (clusterId: string) => {
+    const isCurrentlyOpen = openStackClusterIds.has(clusterId);
+
+    if (isCurrentlyOpen) {
+      runWithViewTransition(() => {
+        setOpenStackClusterIds((prev) => {
+          const next = new Set(prev);
+          next.delete(clusterId);
+          return next;
+        });
+      });
+      return;
+    }
+
+    if (clusterMembersCache.has(clusterId)) {
+      runWithViewTransition(() => {
+        setOpenStackClusterIds((prev) => new Set(prev).add(clusterId));
+      });
+      return;
+    }
+
+    setOpenStackClusterIds((prev) => new Set(prev).add(clusterId));
+    fetchMomentClusterDetail(clusterId)
+      .then((detail) => {
+        setClusterMembersCache((prev) => new Map(prev).set(clusterId, detail?.members ?? []));
+      })
+      .catch(() => {
+        // Revert the optimistic open on failure — otherwise the tile looks
+        // toggled but silently shows nothing, with no way to tell why.
+        setOpenStackClusterIds((prev) => {
+          const next = new Set(prev);
+          next.delete(clusterId);
+          return next;
+        });
+      });
+  };
+
+  // Reset paging during render rather than in an effect. As an effect, the fetch
+  // effect below still ran once with the *previous* page against the new filter
+  // — so changing a filter while on page 5 fired a full page-5 query, aborted
+  // it, and only then fetched page 1. Adjusting here means the re-render happens
+  // before any effect runs and that wasted query never leaves the browser.
+  // Stale data stays visible while the new query is in flight; the grid dims via
+  // isStale until it resolves.
+  const lastFilterRef = useRef(filter);
+  if (lastFilterRef.current !== filter) {
+    lastFilterRef.current = filter;
+    if (page !== 1) setPage(1);
+    if (openStackClusterIds.size > 0) setOpenStackClusterIds(new Set());
+    if (clusterMembersCache.size > 0) setClusterMembersCache(new Map());
+  }
+
+  useEffect(() => {
+    const abortOnDisposed = "disposed";
+    const abortController = new AbortController();
+    const { semanticQuery, ...filterOptions } = filter;
+
+    setLoading(true);
+    // A new query starts clean: an error from an earlier search must not stay
+    // on screen over this one's results.
+    setError(null);
+
+    const fetchPromise = semanticQuery
+      ? fetchSemanticSearch({
+          q: semanticQuery,
+          limit: SEARCH_PAGE_SIZE,
+          offset: (page - 1) * SEARCH_PAGE_SIZE,
+          signal: abortController.signal,
+          ...filterOptions,
+        })
+      : fetchPhotos({
+          page,
+          pageSize: PAGE_SIZE,
+          signal: abortController.signal,
+          ...filterOptions,
+        });
+
+    fetchPromise
+      .then((result) => {
+        if (page === 1) {
+          setSearchOutcome(
+            semanticQuery && "sourceStatus" in result ? (result.sourceStatus ?? null) : null,
+          );
+        }
+        setData((previousData) => {
+          if (page === 1 || !previousData) {
+            return { ...result, filterUsed: filter };
+          }
+
+          const existingPaths = new Set(previousData.items.map((item) => item.path));
+          const nextItems = [
+            ...previousData.items,
+            ...result.items.filter((item) => !existingPaths.has(item.path)),
+          ];
+
+          return {
+            ...result,
+            items: nextItems,
+            filterUsed: filter,
+          };
+        });
+      })
+      .catch((err) => {
+        if (err === "disposed") return;
+        if (err.name === "AbortError") return;
+        if (err instanceof SearchUnavailableError) {
+          // Nothing to show yet because the models are loading. Clear the old
+          // results (they belong to a different query); the grid and the
+          // status icon explain which source is missing and offer a retry.
+          setSearchOutcome(err.sourceStatus);
+          setData({ items: [], total: 0, filterUsed: filter });
+          return;
+        }
+        setError(
+          semanticQuery
+            ? "Search models are still loading. Try again in a few seconds."
+            : "Failed to fetch photos",
+        );
+      })
+      .finally(() => {
+        // An aborted fetch settles *after* its replacement has started, so
+        // clearing `loading` here would mark the newer, still-running query as
+        // finished — editing a search mid-flight made the grid look idle.
+        if (!abortController.signal.aborted) setLoading(false);
+      });
+
+    return () => {
+      abortController.abort(abortOnDisposed);
+    };
+  }, [filter, page, retryNonce]);
+
+  useEffect(() => {
+    setItems(data?.items ?? []);
+  }, [data, setItems]);
+
+  useEffect(() => {
+    onTotalChange?.(data?.total ?? null);
+  }, [data?.total, onTotalChange]);
+
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel || loading) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          // Disconnect before advancing: a second callback in the same batch
+          // would bump the page twice and silently skip 200 items, which the
+          // path-based dedupe on merge would then hide rather than repair.
+          observer.disconnect();
+          setPage((prev) => prev + 1);
+        }
+      },
+      {
+        rootMargin: `${LOAD_MORE_MARGIN_PX}px 0px`,
+      },
+    );
+    observer.observe(sentinel);
+    return () => {
+      observer.disconnect();
+    };
+  }, [loading, data?.items.length, data?.total]);
+
+  const isStale = loading && !!data && page === 1;
+  const searchFailedSomewhere = Object.values(searchOutcome ?? {}).some(
+    (outcome) => outcome?.status === "failed",
+  );
+  const handleRetrySearch = () => {
+    setPage(1);
+    setRetryNonce((n) => n + 1);
+  };
+
+  // Feedback #143: the search bar shows this search's status as an icon. It
+  // lives in another branch of the tree, so publish rather than render it.
+  const semanticActive = !!filter.semanticQuery;
+  // Searching until a first page *for this query* has arrived (or failed).
+  // `loading` alone lags: it turns on in an effect, so the render that makes a
+  // query active would otherwise publish "finished, no outcome" for a moment
+  // and flash a check before the progress ring.
+  const searchingFirstPage =
+    page === 1 && !error && (loading || data?.filterUsed !== filter);
+  const enabledSources = filter.searchSources ?? ALL_SEARCH_SOURCES;
+  useEffect(() => {
+    publishSearchActivity(
+      semanticActive
+        ? {
+            active: true,
+            searching: searchingFirstPage,
+            outcome: searchingFirstPage ? null : searchOutcome,
+            enabledSources,
+            retry: handleRetrySearch,
+          }
+        : IDLE_SEARCH_ACTIVITY,
+    );
+  }, [semanticActive, searchingFirstPage, searchOutcome, enabledSources]);
+  useEffect(() => () => publishSearchActivity(IDLE_SEARCH_ACTIVITY), []);
+  const emptyMessage = filter.semanticQuery
+    ? "No results found for your search."
+    : "No photos yet. Upload some to get started.";
+  // Feedback #113/#141: a semantic search's `total` (see searchRequestHandler)
+  // can exceed the items rendered so far -- scrolling to the sentinel below
+  // now loads the next page (#141; it used to be capped with no way to see
+  // more) — say "Showing 50 of 312" so it's clear there's more to scroll to.
+  // The plain "{N} results" case was dropped: the header subtitle already
+  // shows the live total (in its own accent color), so repeating it here was
+  // redundant.
+  const resultCountLabel =
+    data && filter.semanticQuery && data.items.length < data.total
+      ? `Showing ${numberFormatter.format(data.items.length)} of ${numberFormatter.format(data.total)} results`
+      : null;
+  const showInitialLoading = loading && !data;
+
+  return (
+    <>
+      <TopRailPortal>
+        <ViewToggle view={view} onViewChange={onViewChange} />
+      </TopRailPortal>
+      {/* Feedback #122/#123: used to live in-flow in .statusRow above the
+          grid, pushing every tile down whenever it was visible. A user
+          comment then found that sharing the view-toggle pill's floating
+          dock made the two stack (rather than sit in a row) and broke
+          SortControl's clicks outright, so it now gets its own dock,
+          pinned to the bottom-right — see SortDockPortal. */}
+      <SortDockPortal>{data && <SortControl />}</SortDockPortal>
+      {error ? <h3>{error}</h3> : null}
+      {data ? (
+        <div className={css.statusRow} aria-live="polite">
+          {resultCountLabel && <span>{resultCountLabel}</span>}
+          {isStale && <Spinner size="extra-tiny" />}
+          {/* Feedback #112: match-reason icons are debug info, not
+              something to show by default — this is the opt-in. Only
+              meaningful during a semantic search, since that's the only
+              time a tile can carry `searchSources` at all. */}
+          {filter.semanticQuery && (
+            <button
+              type="button"
+              className={css.matchReasonsToggle}
+              onClick={() => setShowMatchReasons((prev) => !prev)}
+              aria-pressed={showMatchReasons}
+              title={
+                showMatchReasons
+                  ? "Hide why each result matched"
+                  : "Show why each result matched"
+              }
+            >
+              {showMatchReasons ? (
+                <QuestionCircle20Filled />
+              ) : (
+                <QuestionCircle20Regular />
+              )}
+            </button>
+          )}
+        </div>
+      ) : null}
+      <div
+        data-testid="thumbnail-grid"
+        className={css.grid}
+        style={isStale ? { opacity: 0.5, pointerEvents: "none" } : undefined}
+      >
+        {showInitialLoading ? (
+          <div className={css.initialLoading} data-testid="thumbnail-grid-loading">
+            <Spinner size="extra-tiny" />
+          </div>
+        ) : null}
+        {data?.items.map((item) => {
+          const clusterId = item.metadata?.momentClusterId;
+          const clusterIdKey = clusterId != null ? String(clusterId) : null;
+
+          // Toggled inline-unstacked: render every member as its own tile, in
+          // place of the single collapsed representative, each carrying a
+          // restack badge that folds the group back down (calls the same
+          // handleToggleStack — it already knows this cluster is open).
+          const unstackedMembers =
+            clusterIdKey && openStackClusterIds.has(clusterIdKey)
+              ? clusterMembersCache.get(clusterIdKey)
+              : undefined;
+          if (unstackedMembers) {
+            // No wrapper element — each member stays an ordinary flex
+            // sibling directly in .grid, with its own individual
+            // --ratio-driven flex-grow/sizing exactly like a non-clustered
+            // tile (a wrapper was tried and reverted specifically because it
+            // changed how leftover row space distributes — see
+            // ThumbnailGrid.module.css's comment on .clusterMember). The
+            // "one continuous framed block" look comes entirely from
+            // borders: every member gets one (.clusterMember), non-first
+            // members get pulled left to make adjacent borders overlap into
+            // a single shared line instead of doubling up
+            // (.clusterMemberTight), and only the run's outer corners round
+            // (.clusterMemberRoundStart / .clusterMemberRoundEnd).
+            return unstackedMembers.map((member, index) => {
+              const isFirst = index === 0;
+              const isLast = index === unstackedMembers.length - 1;
+              const memberClassName = [
+                css.clusterMember,
+                !isFirst && css.clusterMemberTight,
+                isFirst && css.clusterMemberRoundStart,
+                isLast && css.clusterMemberRoundEnd,
+              ]
+                .filter(Boolean)
+                .join(" ");
+              return (
+                <ThumbnailTile
+                  key={member.photo.path}
+                  photo={member.photo}
+                  restackCount={unstackedMembers.length}
+                  onToggleStack={() => handleToggleStack(clusterIdKey!)}
+                  onOpenStackActions={() => setExpandedStackClusterId(clusterIdKey!)}
+                  className={memberClassName}
+                  viewTransitionName={photoViewTransitionName(member.photo.path)}
+                  showMatchReasons={showMatchReasons}
+                />
+              );
+            });
+          }
+
+          const stackCount =
+            clusterIdKey && !dissolvedClusterIds.has(clusterIdKey)
+              ? (item.metadata?.momentClusterSize as number | undefined)
+              : undefined;
+
+          return (
+            <ThumbnailTile
+              key={item.path}
+              photo={item}
+              stackCount={stackCount}
+              onToggleStack={
+                clusterIdKey ? () => handleToggleStack(clusterIdKey) : undefined
+              }
+              onOpenStackActions={
+                clusterIdKey ? () => setExpandedStackClusterId(clusterIdKey) : undefined
+              }
+              // Named unconditionally (not just for cluster tiles): the
+              // fullscreen viewer opens with this same name on its main
+              // media element (see FullscreenViewer), so any tile — not
+              // only ones involved in a stack toggle — can morph into the
+              // fullscreen view instead of a hard cut.
+              viewTransitionName={photoViewTransitionName(item.path)}
+              showMatchReasons={showMatchReasons}
+            />
+          );
+        })}
+        {data && data.items.length < data.total && (
+          <div ref={loadMoreSentinelRef} className={css.sentinel}>
+            {loading && <Spinner size="extra-tiny" />}
+          </div>
+        )}
+      </div>
+      {/* When a source failed, "no results found" would claim a certainty the
+          search doesn't have. Say what happened; the status icon in the search
+          bar has the per-source detail and lights up once a model is ready. */}
+      {!loading && data && data.items.length === 0 && !searchFailedSomewhere && (
+        <h3>{emptyMessage}</h3>
+      )}
+      {!loading && data && data.items.length === 0 && searchFailedSomewhere && searchOutcome && (
+        <SearchModelLoading outcome={searchOutcome} onRetry={handleRetrySearch} />
+      )}
+      <SelectionActionBar />
+      <PhotoStackModal
+        clusterId={expandedStackClusterId}
+        onDismiss={() => setExpandedStackClusterId(null)}
+        onPermanentlyDissolved={(clusterId) => {
+          setDissolvedClusterIds((prev) => new Set(prev).add(clusterId));
+          setOpenStackClusterIds((prev) => {
+            if (!prev.has(clusterId)) return prev;
+            const next = new Set(prev);
+            next.delete(clusterId);
+            return next;
+          });
+        }}
+      />
+    </>
+  );
+};
+
+export const ThumbnailGrid = memo(ThumbnailGridComponent);

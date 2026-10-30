@@ -56,7 +56,7 @@ request answers it.
 
 ## Video playback, end to end
 
-1. Client opens a video → `client/src/components/FullscreenViewer.tsx` (the
+1. Client opens a video → `client/src/components/viewer/FullscreenViewer.tsx` (the
    "HLS setup effect"). Bandwidth comes from `client/src/videoPlaybackProfile.ts`
    (probed once at app start).
 2. `GET /api/video/negotiate` → `videoNegotiation.ts` picks **direct** (link
@@ -69,7 +69,7 @@ request answers it.
    task orchestrator, killed after 8s unused and deleted after 90s
    (`hlsSession.ts`). Segment requests wait for the encoder
    (`hlsSegmentWatcher.ts`).
-4. Client ABR: hls.js, with upswitches held back by `client/src/hlsAbrGuard.ts`.
+4. Client ABR: hls.js, with upswitches held back by `client/src/components/viewer/hlsAbrGuard.ts`.
    A stalled direct stream falls back to HLS after 3s.
 5. While loading, `VideoLoadingOverlay.tsx` shows the phase, elapsed time and
    when data last arrived. On close, a `video.playback.summary` event records
@@ -101,11 +101,12 @@ and `fileSystemRescanRecent.ts` re-queue the entry stages.
 | Concern                         | File(s) in `client/src/`                                          |
 | ------------------------------- | ----------------------------------------------------------------- |
 | App shell, views, routing state | `App.tsx`, `filterUrlState.ts`, `hooks/useSyncUrlWithFilter.ts`   |
-| Grid, tiles, hover previews     | `components/ThumbnailGrid.tsx`, `ThumbnailTile.tsx`, `tileMedia/` |
-| Photo/video viewer              | `components/FullscreenViewer.tsx`, `SwipePhotoViewer.tsx`         |
-| Filters / search                | `components/filter/`, `components/SearchBar.tsx`                  |
-| People                          | `components/PeopleView.tsx`, `PersonReviewPanel.tsx`              |
-| Map                             | `components/MapFilter.tsx`                                        |
+| Grid, tiles, hover previews     | `components/grid/` (`ThumbnailGrid.tsx`, `ThumbnailTile.tsx`, `tileMedia/`) |
+| Photo/video viewer, editor      | `components/viewer/` (`FullscreenViewer.tsx`, `photoEdit/`)       |
+| Filters / search                | `components/filter/`, `components/search/`                        |
+| People                          | `components/people/`                                              |
+| Map                             | `components/map/`                                                 |
+| Status, share, account          | `components/status/`, `components/share/`, `components/account/`  |
 | API calls                       | `api/*.ts` (all through `api/http.ts` `fetchWithDiagnostics`)     |
 | Diagnostics / perf telemetry    | `diagnostics.ts`, `clientPerf.ts`                                 |
 

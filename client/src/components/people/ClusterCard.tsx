@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import type { PersonCluster } from "../../api";
 import { isSharedView } from "../../hooks/useShareFilter";
-import css from "../PeopleView.module.css";
+import css from "./PeopleView.module.css";
 import { FaceImage } from "./FaceThumb";
 import { InlineNameEditor } from "./InlineNameEditor";
 

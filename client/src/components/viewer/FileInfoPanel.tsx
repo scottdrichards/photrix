@@ -1,9 +1,9 @@
 import type { PhotoItem } from "../../api";
 import { cx } from "../../cx";
 import { isSharedView } from "../../hooks/useShareFilter";
-import { DescriptionEditor } from "../DescriptionEditor";
-import css from "../FullscreenViewer.module.css";
-import { MiniMap } from "../MiniMap";
+import { DescriptionEditor } from "./DescriptionEditor";
+import css from "./FullscreenViewer.module.css";
+import { MiniMap } from "../map/MiniMap";
 import {
   formatAperture,
   formatDuration,

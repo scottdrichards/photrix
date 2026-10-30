@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { isSharedView } from "../../hooks/useShareFilter";
-import css from "../PeopleView.module.css";
+import css from "./PeopleView.module.css";
 
 const READ_ONLY = isSharedView();
 

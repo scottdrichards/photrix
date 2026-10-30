@@ -69,6 +69,6 @@ The clips are generated from ffmpeg's test pattern (`media.ts`): nothing in
 them is a real recording.
 
 The player is the viewer's own code, not a copy: `player.ts` transpiles
-`client/src/encoderAwareHls.ts` (hls.js config and ABR) and
-`client/src/hlsAbrGuard.ts` (the upswitch guard) into the page next to hls.js,
+`client/src/components/viewer/encoderAwareHls.ts` (hls.js config and ABR) and
+`client/src/components/viewer/hlsAbrGuard.ts` (the upswitch guard) into the page next to hls.js,
 and mirrors the viewer's error-recovery policy.

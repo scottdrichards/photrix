@@ -3,10 +3,10 @@ import type { ClusterFace, PersonCluster, PersonCentroid, PersonClusterWithFaces
 import { excludeFaceFromCluster } from "../../api";
 import { Spinner } from "../../Spinner";
 import { useSelectionContext } from "../selection/SelectionContext";
-import { PersonReviewPanel } from "../PersonReviewPanel";
+import { PersonReviewPanel } from "./PersonReviewPanel";
 import { isSharedView } from "../../hooks/useShareFilter";
-import css from "../PeopleView.module.css";
-import { FACE_SORT_LABELS, sortFaces, type FaceSort } from "../faceSort";
+import css from "./PeopleView.module.css";
+import { FACE_SORT_LABELS, sortFaces, type FaceSort } from "./faceSort";
 import { FaceImage, FaceThumb } from "./FaceThumb";
 import { InlineNameEditor } from "./InlineNameEditor";
 import { PersonTagEditor } from "./PersonTagEditor";
