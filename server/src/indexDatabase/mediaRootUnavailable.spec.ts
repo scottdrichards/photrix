@@ -18,10 +18,11 @@ describe("fileSystemScanFolder: media root unavailable", () => {
     const dbDir = await mkTempDir("photrix-missing-db-");
     process.env.INDEX_DB_LOCATION = dbDir;
 
+    let db: IndexDatabase | undefined;
     try {
       await fs.writeFile(path.join(rootDir, "keep.jpg"), "k");
 
-      const db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir);
       await db.init();
       await fileSystemScanFolder(db).onComplete();
       expect(await db.countAllEntries()).toBe(1);
@@ -37,6 +38,7 @@ describe("fileSystemScanFolder: media root unavailable", () => {
       expect(await db.countAllEntries()).toBe(1);
       expect(await db.getFileRecord("keep.jpg")).toBeDefined();
     } finally {
+      await db?.close();
       await fs.rm(rootDir, { recursive: true, force: true }).catch(() => {});
     }
   });
@@ -46,10 +48,11 @@ describe("fileSystemScanFolder: media root unavailable", () => {
     const dbDir = await mkTempDir("photrix-empty-mount-db-");
     process.env.INDEX_DB_LOCATION = dbDir;
 
+    let db: IndexDatabase | undefined;
     try {
       await fs.writeFile(path.join(rootDir, "keep.jpg"), "k");
 
-      const db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir);
       await db.init();
       await fileSystemScanFolder(db).onComplete();
       expect(await db.countAllEntries()).toBe(1);
@@ -64,6 +67,7 @@ describe("fileSystemScanFolder: media root unavailable", () => {
       expect(await db.countAllEntries()).toBe(1);
       expect(await db.getFileRecord("keep.jpg")).toBeDefined();
     } finally {
+      await db?.close();
       await fs.rm(rootDir, { recursive: true, force: true }).catch(() => {});
     }
   });
@@ -73,11 +77,12 @@ describe("fileSystemScanFolder: media root unavailable", () => {
     const dbDir = await mkTempDir("photrix-recovers-db-");
     process.env.INDEX_DB_LOCATION = dbDir;
 
+    let db: IndexDatabase | undefined;
     try {
       await fs.writeFile(path.join(rootDir, "keep.jpg"), "k");
       await fs.writeFile(path.join(rootDir, "gone.jpg"), "g");
 
-      const db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir);
       await db.init();
       await fileSystemScanFolder(db).onComplete();
       expect(await db.countAllEntries()).toBe(2);
@@ -98,6 +103,7 @@ describe("fileSystemScanFolder: media root unavailable", () => {
       expect(await db.getFileRecord("keep.jpg")).toBeDefined();
       expect(await db.getFileRecord("gone.jpg")).toBeUndefined();
     } finally {
+      await db?.close();
       await fs.rm(rootDir, { recursive: true, force: true }).catch(() => {});
     }
   });

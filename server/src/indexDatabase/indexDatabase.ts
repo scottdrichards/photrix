@@ -349,6 +349,23 @@ export class IndexDatabase {
   }
 
   /**
+   * Stop the WAL timer and the worker threads. The server never calls this (it
+   * exits instead), but anything else that opens a database must: the SQLite
+   * workers are not unref'd, so an unclosed database keeps the process alive
+   * after the work is done. A single jest file runs in-process and hangs that way.
+   */
+  async close(): Promise<void> {
+    if (this.walCheckpointTimer) clearInterval(this.walCheckpointTimer);
+    this.walCheckpointTimer = undefined;
+    // Maintenance still running would fail mid-query once the workers are gone.
+    // It never rejects: it logs its own failure.
+    await this.startupMaintenance;
+    // Fields are unset if init() failed part-way; close whatever got opened.
+    await (this.vectorIndex as VectorIndex | undefined)?.close();
+    await (this.db as AsyncSqlite | undefined)?.close();
+  }
+
+  /**
    * Write back reclaimable WAL frames and physically truncate the WAL file.
    *
    * TRUNCATE mode checkpoints all frames AND resets the WAL write position to

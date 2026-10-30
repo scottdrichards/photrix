@@ -21,11 +21,12 @@ describe("fileSystemScanFolder", () => {
   it("keeps a listed file it can't stat, and prunes one that is really gone", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "photrix-scan-root-"));
     process.env.INDEX_DB_LOCATION = await fs.mkdtemp(path.join(os.tmpdir(), "photrix-scan-db-"));
+    let db: InstanceType<typeof IndexDatabase> | undefined;
     try {
       for (const name of ["keep.jpg", "flaky.jpg", "deleted.jpg"]) {
         await fs.writeFile(path.join(rootDir, name), "x");
       }
-      const db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir);
       await db.init();
       await fileSystemScanFolder(db).onComplete();
       expect(await db.countAllEntries()).toBe(3);
@@ -38,6 +39,7 @@ describe("fileSystemScanFolder", () => {
       expect(await db.getFileRecord("deleted.jpg")).toBeUndefined();
       expect(await db.countAllEntries()).toBe(2);
     } finally {
+      await db?.close();
       unreadable.clear();
       await fs.rm(rootDir, { recursive: true, force: true });
     }
