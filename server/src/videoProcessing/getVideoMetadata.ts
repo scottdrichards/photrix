@@ -143,6 +143,45 @@ export const getVideoSourceProfile = (filePath: string): Promise<VideoSourceProf
     proc.on("error", reject);
   });
 
+// Playback asks the same questions about a file many times: every HLS encode
+// spawn needs the source profile (the first variant, every seek restart, every
+// quality switch), and every HLS request of a file the index hasn't reached yet
+// needs its duration. Over a network share an ffprobe costs seconds, not
+// milliseconds, so each answer is probed once per file and reused. Short-lived
+// and small: it only has to span a playback. A failed probe is not kept.
+const PROBE_CACHE_TTL_MS = 10 * 60_000;
+const PROBE_CACHE_MAX = 64;
+
+const memoizePerFile = <T>(probe: (filePath: string) => Promise<T>) => {
+  const cache = new Map<string, { at: number; value: Promise<T> }>();
+  return (filePath: string): Promise<T> => {
+    const now = Date.now();
+    const hit = cache.get(filePath);
+    if (hit && now - hit.at < PROBE_CACHE_TTL_MS) return hit.value;
+    const value = probe(filePath);
+    cache.delete(filePath);
+    cache.set(filePath, { at: now, value });
+    while (cache.size > PROBE_CACHE_MAX) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+    value.catch(() => {
+      if (cache.get(filePath)?.value === value) cache.delete(filePath);
+    });
+    return value;
+  };
+};
+
+/**
+ * getVideoSourceProfile, memoized per file for a few minutes. Call it early
+ * (e.g. on the master playlist request) to have the answer ready by the time
+ * the first encode spawns.
+ */
+export const getCachedVideoSourceProfile = memoizePerFile((filePath: string) =>
+  getVideoSourceProfile(filePath),
+);
+
 export const getVideoMetadata = async (
   filePath: string,
 ): Promise<Partial<ExifMetadata>> => {
@@ -248,3 +287,13 @@ export const getVideoMetadata = async (
     });
   });
 };
+
+/**
+ * A video's duration in seconds from ffprobe, memoized per file for a few
+ * minutes, or null when the container doesn't say. For the HLS path's
+ * fallback when the index hasn't recorded the duration yet.
+ */
+export const getCachedVideoDuration = memoizePerFile(async (filePath: string) => {
+  const { duration } = await getVideoMetadata(filePath);
+  return typeof duration === "number" && Number.isFinite(duration) ? duration : null;
+});

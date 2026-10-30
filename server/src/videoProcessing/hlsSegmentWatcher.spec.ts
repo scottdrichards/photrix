@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import * as realFs from "node:fs";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -141,34 +141,5 @@ describe("closeHlsWatchersUnder", () => {
     rmSync(hlsRoot, { recursive: true, force: true });
 
     await expect(pending).resolves.toBe(false);
-  });
-});
-
-describe("encode restart", () => {
-  it("clears a variant's output without deleting the watched directory", async () => {
-    const hlsDir = makeTempHlsDir();
-    const variantDir = path.join(hlsDir, "1080p");
-    writeFileSync(path.join(variantDir, "segment_000.ts"), "stale");
-    writeFileSync(path.join(variantDir, "playlist.m3u8"), "#EXTM3U");
-
-    const { clearVariantOutput } = await import("./generateMultibitrateHLS.ts");
-    await clearVariantOutput(hlsDir, 1080);
-
-    // Directory survives (nothing is pulled out from under the recursive watcher)
-    // but its stale contents are gone.
-    expect(existsSync(variantDir)).toBe(true);
-    expect(existsSync(path.join(variantDir, "segment_000.ts"))).toBe(false);
-    expect(existsSync(path.join(variantDir, "playlist.m3u8"))).toBe(false);
-  });
-
-  it("recreates the variant directory if it is missing", async () => {
-    const hlsDir = makeTempHlsDir();
-    const variantDir = path.join(hlsDir, "720p");
-    rmSync(variantDir, { recursive: true, force: true });
-
-    const { clearVariantOutput } = await import("./generateMultibitrateHLS.ts");
-    await clearVariantOutput(hlsDir, 720);
-
-    expect(existsSync(variantDir)).toBe(true);
   });
 });

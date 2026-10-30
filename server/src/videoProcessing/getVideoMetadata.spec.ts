@@ -110,3 +110,43 @@ describe("getVideoMetadata", () => {
     await expect(getVideoMetadata("bad-json.mp4")).rejects.toThrow();
   });
 });
+
+describe("probes reused across a playback", () => {
+  // One ffprobe per file, not per request: an unindexed video's every HLS
+  // segment request asks for its duration, and over a network share each
+  // probe costs seconds.
+  const answering = (payload: object, exitCode = 0) =>
+    jest.fn(() => {
+      const proc = createFakeSpawnProcess();
+      queueMicrotask(() => {
+        proc.stdout.emit("data", Buffer.from(JSON.stringify(payload)));
+        proc.emit("close", exitCode);
+      });
+      return proc;
+    });
+
+  it("probes a file's duration once for many requests", async () => {
+    const spawnMock = answering({ format: { duration: "600.0" }, streams: [] });
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+    const { getCachedVideoDuration } = await import("./getVideoMetadata.ts");
+
+    const durations = await Promise.all(
+      Array.from({ length: 20 }, () => getCachedVideoDuration("long.mp4")),
+    );
+    expect(durations).toEqual(Array(20).fill(600));
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    await getCachedVideoDuration("other.mp4");
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not keep a failed probe", async () => {
+    const spawnMock = answering({}, 1);
+    jest.unstable_mockModule("child_process", () => ({ spawn: spawnMock }));
+    const { getCachedVideoSourceProfile } = await import("./getVideoMetadata.ts");
+
+    await expect(getCachedVideoSourceProfile("flaky.mp4")).rejects.toThrow();
+    await expect(getCachedVideoSourceProfile("flaky.mp4")).rejects.toThrow();
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+});

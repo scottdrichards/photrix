@@ -5,6 +5,7 @@ import {
   invalidateVideoPlaybackProfile,
 } from "../../videoPlaybackProfile";
 import { attachHlsAbrUpswitchGuard } from "../../hlsAbrGuard";
+import { onTheFlyHlsConfig } from "../../encoderAwareHls";
 import { negotiateVideoPlayback } from "../../api";
 import { getToken } from "../../auth";
 import { createClientOperationId, logClientEvent } from "../../diagnostics";
@@ -271,7 +272,11 @@ export const useVideoPlayback = ({
         // Custom loader to capture duration header
         let serverDuration: number | undefined;
 
-        class DurationCapturingLoader extends Hls.DefaultConfig.loader {
+        // Buffer settings plus ABR that tells encoder wait from network
+        // slowness (see encoderAwareHls.ts).
+        const onTheFly = onTheFlyHlsConfig(Hls, playbackProfile.bandwidthMbps ?? null);
+
+        class DurationCapturingLoader extends onTheFly.loader {
           load(...args: DefaultLoadArgs) {
             const [context, config, callbacks] = args;
             const originalOnSuccess = callbacks.onSuccess;
@@ -308,8 +313,7 @@ export const useVideoPlayback = ({
         if (hlsJsSupported) {
           const authToken = getToken();
           const hls = new Hls({
-            enableWorker: true,
-            lowLatencyMode: false,
+            ...onTheFly,
             loader: DurationCapturingLoader,
             // Inject auth token into every XHR hls.js makes (manifest, playlists, segments)
             ...(authToken
@@ -317,30 +321,6 @@ export const useVideoPlayback = ({
                   xhrSetup: (xhr: XMLHttpRequest) => {
                     xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
                   },
-                }
-              : {}),
-            maxBufferLength: 30,
-            maxMaxBufferLength: 60,
-            maxBufferSize: 60 * 1000 * 1000,
-            maxBufferHole: 0.5,
-            liveSyncDurationCount: 3,
-            liveMaxLatencyDurationCount: Infinity,
-            levelLoadingTimeOut: 20000,
-            manifestLoadingTimeOut: 20000,
-            levelLoadingRetryDelay: 1000,
-            // Seed hls.js's own EWMA bandwidth estimator from the measurement we
-            // already took for the direct-vs-HLS negotiation (playbackProfile),
-            // instead of hls.js's hardcoded 500kbps default — reuses the existing
-            // probe rather than starting ABR blind on a link we've already sampled.
-            // With that measurement, also start at the rung it supports instead of
-            // test-loading the lowest one first: every rung is a separate on-demand
-            // GPU encode on the server, so climbing 360p→720p→1080p on open costs
-            // two extra encodes and two visible quality jumps. Without one, hls.js
-            // falls back to test-loading the lowest rung.
-            ...(playbackProfile.bandwidthMbps
-              ? {
-                  abrEwmaDefaultEstimate: playbackProfile.bandwidthMbps * 1_000_000,
-                  testBandwidth: false,
                 }
               : {}),
           });
@@ -427,8 +407,18 @@ export const useVideoPlayback = ({
           // to the raw source — the raw file is the original multi-tens-of-Mbps stream
           // and would buffer far worse over a constrained link. Only fall back to it
           // when HLS is genuinely unrecoverable.
+          // The budget is per run of trouble, not per playback: a segment arriving
+          // means the stream recovered, so the next hiccup gets the full budget.
+          // Without this, the third timeout of a long session ended playback,
+          // however far apart the three were.
           let mediaRecoveries = 0;
           let networkRecoveries = 0;
+          hls.on(Hls.Events.FRAG_LOADED, () => {
+            networkRecoveries = 0;
+          });
+          hls.on(Hls.Events.FRAG_BUFFERED, () => {
+            mediaRecoveries = 0;
+          });
           hls.on(Hls.Events.ERROR, (_event, data) => {
             logClientEvent({
               level: data.fatal ? "error" : "warn",

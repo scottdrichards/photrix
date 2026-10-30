@@ -88,6 +88,8 @@ vi.mock("hls.js", () => ({
       LEVEL_LOADED: "levelLoaded",
       BUFFER_APPENDED: "bufferAppended",
       LEVEL_SWITCHED: "levelSwitched",
+      FRAG_LOADED: "fragLoaded",
+      FRAG_BUFFERED: "fragBuffered",
       ERROR: "error",
     };
     static ErrorTypes = {
@@ -1226,6 +1228,47 @@ describe("FullscreenViewer", () => {
       expect(video?.getAttribute("src")).toBeNull();
       expect(screen.getByRole("alert")).toHaveTextContent("Can't play this video");
     });
+  });
+
+  it("keeps recovering a long stream whose timeouts are separated by successful loads", async () => {
+    hlsIsSupportedMock.mockReturnValue(true);
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "hls",
+      url: "http://localhost/a/long.m3u8",
+      reason: "Hardware-accelerated HLS encoding available",
+    });
+    useSelectionContextMock.mockReturnValue({
+      selected: createPhoto({
+        path: "a/long.mp4",
+        name: "long.mp4",
+        mediaType: "video",
+        fullUrl: "http://localhost/a/long.mp4",
+        originalUrl: "http://localhost/a/long.mp4",
+        metadata: { sizeInBytes: 200_000_000, duration: 600, videoCodec: "hevc" },
+      }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+
+    render(<FullscreenViewer />);
+    await waitFor(() => {
+      expect(hlsLoadSourceMock).toHaveBeenCalledWith("http://localhost/a/long.m3u8");
+    });
+    const errorHandler = hlsEventHandlers.get("error");
+    const fragLoaded = hlsEventHandlers.get("fragLoaded");
+    expect(fragLoaded).toBeDefined();
+
+    // Three timeouts minutes apart (a seek, a flaky moment, another seek), with
+    // the stream playing normally in between: each is its own recoverable blip.
+    for (let i = 0; i < 3; i++) {
+      errorHandler?.("error", { fatal: true, type: "networkError", details: "fragLoadTimeOut" });
+      fragLoaded?.("fragLoaded", {});
+    }
+
+    expect(hlsStartLoadMock).toHaveBeenCalledTimes(3);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("marks playback unavailable — never raw — when server negotiates error mode", async () => {

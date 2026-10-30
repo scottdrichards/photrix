@@ -21,6 +21,7 @@
     "dev:server": "bun run --filter server dev",
     "test": "bun run --filter server test",
     "test:e2e": "bun run --filter photrix-e2e test",
+    "test:playback-lab": "bun run --filter photrix-e2e test:playback-lab",
     "test:e2e:install": "bun run --filter photrix-e2e install:browsers",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "bun run --filter '*' lint",

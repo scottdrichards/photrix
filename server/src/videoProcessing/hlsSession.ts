@@ -11,38 +11,68 @@ const log = getLogger("HlsSession");
 // accumulates. Replays after this idle window re-encode from scratch.
 const IDLE_MS = Number(process.env.PHOTRIX_HLS_IDLE_MS) || 90_000;
 
-// Per-variant idle window. A variant's encode is killed once the player stops
-// fetching that specific variant's segments for this long — which happens as soon
-// as ABR switches to a different quality. This caps concurrency to the variant
-// actually being played (plus, briefly, a newly-selected one during a switch)
-// instead of leaving every level's encode running.
+// Per-encode idle window. An encode is killed once no request has touched the
+// part of the video it is producing for this long — which happens as soon as
+// ABR switches to a different quality or the player seeks elsewhere. Requests
+// still waiting on it count as touching it (see keepVariantAlive).
 const VARIANT_IDLE_MS = Number(process.env.PHOTRIX_HLS_VARIANT_IDLE_MS) || 8_000;
 
-// How far past the encode head a request may be before waiting for the running
-// encode costs more than starting a new one at the request (feedback #167). The
-// encode runs ~2-3x realtime and a restart costs a spawn plus a seek, so ~10
-// one-second segments is a few seconds either way. Normal playback asks for the
-// segment right after the head; only a seek lands further out.
+// How far past an encode's head a request may be before waiting for it costs more
+// than starting a new encode at the request (feedback #167). The encode runs
+// ~2-3x realtime and a new one costs a spawn plus a seek, so ~10 one-second
+// segments is a few seconds either way. Normal playback asks for the segment
+// right after the head; only a seek, or an ABR switch onto a variant whose
+// encode is elsewhere, lands further out.
 export const SEEK_RESTART_GAP_SEGMENTS =
   Number(process.env.PHOTRIX_HLS_SEEK_RESTART_GAP) || 10;
 
-type VariantEncode = {
-  // Running encoder process for this variant. Null while the encode is still queued
-  // (claimed but not yet spawned) or after it has ended.
+// How many encodes one variant of one video may run at once: one per place it
+// is being watched from (two viewers far apart, or one viewer's seek while the
+// encode it left behind idles out). Past this, the least recently used goes.
+const MAX_RUNS_PER_VARIANT = Number(process.env.PHOTRIX_HLS_MAX_RUNS_PER_VARIANT) || 3;
+
+// Pacing. An encode runs well above realtime, so left alone it races to the end
+// of the file whether or not anyone will watch that far — and on a shared iGPU
+// that throughput is exactly what a second viewer, or this viewer's next seek,
+// needs. Once an encode is this many segments past the furthest one requested
+// from it, it is frozen (SIGSTOP) until the player catches up to within
+// PACE_RESUME_SEGMENTS. hls.js buffers ~30 s ahead, so the encode stays a full
+// buffer ahead of what is asked for and the player never waits on a frozen one.
+const PACE_AHEAD_SEGMENTS = Number(process.env.PHOTRIX_HLS_PACE_AHEAD_SEGMENTS) || 30;
+const PACE_RESUME_SEGMENTS = Math.max(1, PACE_AHEAD_SEGMENTS - 10);
+const PACE_CHECK_MS = 500;
+
+/** One ffmpeg encode of one variant, writing segments forward from `startSegment`. */
+type EncodeRun = {
+  id: number;
+  // The encoder process. Null while the encode is still queued (claimed but not
+  // yet spawned).
   child: ChildProcess | null;
-  // True once the encode has ended or been killed (process exit, idle reap, or being
-  // replaced). A dead slot covers nothing, so the next request restarts it. Kept
-  // distinct from `child === null` so the still-queued (not-yet-spawned) window — when
-  // child is also null — is NOT mistaken for "needs another encode", which would spawn
-  // a duplicate writer into the same directory.
+  // True once the encode has ended or been killed. A dead run covers nothing.
   dead: boolean;
-  // First segment this encode writes: 0, or where a seek started it.
+  // True once *we* killed it (idle, replaced, session reaped). A run whose
+  // process merely exited can be revived by a retry spawn (see registerHlsProcess).
+  killed: boolean;
   startSegment: number;
-  // Highest segment index known to be on disk for this encode (a scan cursor,
-  // so finding the head doesn't re-check every segment on each request).
-  headHint: number;
-  // Idle reaper that kills this variant's encode after VARIANT_IDLE_MS of no fetches.
-  idleTimer: ReturnType<typeof setTimeout>;
+  // Highest segment this encode is known to have written (startSegment - 1
+  // before the first). Advanced lazily from the variant's isProduced.
+  head: number;
+  // Furthest segment any request has asked this run for.
+  maxRequested: number;
+  // Requests currently long-polling a segment this run will produce. While any
+  // are waiting, the idle reaper must not kill it.
+  waiters: number;
+  lastTouched: number;
+  // True while frozen by pacing.
+  frozen: boolean;
+  pacer?: ReturnType<typeof setInterval>;
+  idleTimer?: ReturnType<typeof setTimeout>;
+};
+
+type VariantState = {
+  runs: EncodeRun[];
+  // Reports whether a segment of this variant is on disk (from the latest claim).
+  isProduced: (segment: number) => boolean;
 };
 
 type Session = {
@@ -50,12 +80,16 @@ type Session = {
   treeTimer: ReturnType<typeof setTimeout>;
   // User-activity lease held for the session's lifetime (see playbackHooks).
   activity?: PlaybackActivity;
-  // Per variant height: its current encode state.
-  variants: Map<number, VariantEncode>;
+  // Per variant height: its encodes.
+  variants: Map<number, VariantState>;
 };
 
 // Keyed by the HLS base directory (the whole tree is reaped together).
 const sessions = new Map<string, Session>();
+let nextRunId = 1;
+// Runs whose process exited on its own, by id, so a retry spawn can find them
+// after they have left their variant's list. Weak: nothing else holds them.
+const exitedRuns = new Map<number, WeakRef<EncodeRun>>();
 
 // Lifecycle hook bracketing each session from creation to reap. Wired (in
 // main.ts) to the task orchestrator's beginUserRequest lease so an
@@ -78,11 +112,38 @@ export const setPlaybackLifecycleHooks = (hooks: PlaybackLifecycleHooks): void =
   playbackHooks = hooks;
 };
 
-const killVariant = (encode: VariantEncode): void => {
-  clearTimeout(encode.idleTimer);
-  encode.child?.kill("SIGKILL");
-  encode.child = null;
-  encode.dead = true;
+const stopPacing = (run: EncodeRun): void => {
+  if (run.pacer) clearInterval(run.pacer);
+  run.pacer = undefined;
+  run.frozen = false;
+};
+
+const advanceHead = (variant: VariantState, run: EncodeRun): void => {
+  while (variant.isProduced(run.head + 1)) run.head += 1;
+};
+
+/** Freezes or thaws an encode according to how far ahead of its player it is. */
+const pace = (variant: VariantState, run: EncodeRun): void => {
+  const child = run.child;
+  if (!child || run.dead) return;
+  advanceHead(variant, run);
+  const lead = run.head - run.maxRequested;
+  if (!run.frozen && lead >= PACE_AHEAD_SEGMENTS) {
+    run.frozen = child.kill("SIGSTOP");
+  } else if (run.frozen && lead < PACE_RESUME_SEGMENTS) {
+    child.kill("SIGCONT");
+    run.frozen = false;
+  }
+};
+
+const killRun = (variant: VariantState, run: EncodeRun): void => {
+  clearTimeout(run.idleTimer);
+  stopPacing(run);
+  run.child?.kill("SIGKILL");
+  run.child = null;
+  run.dead = true;
+  run.killed = true;
+  variant.runs = variant.runs.filter((r) => r !== run);
 };
 
 const reap = async (hlsDir: string): Promise<void> => {
@@ -93,7 +154,9 @@ const reap = async (hlsDir: string): Promise<void> => {
   session.activity?.release();
 
   // Stop every encoder first so nothing is writing into a directory we're removing.
-  for (const encode of session.variants.values()) killVariant(encode);
+  for (const variant of session.variants.values()) {
+    for (const run of [...variant.runs]) killRun(variant, run);
+  }
   closeHlsWatcher(hlsDir);
 
   try {
@@ -127,6 +190,15 @@ const ensureSession = (hlsDir: string): Session => {
   return session;
 };
 
+const ensureVariant = (session: Session, height: number): VariantState => {
+  let variant = session.variants.get(height);
+  if (!variant) {
+    variant = { runs: [], isProduced: () => false };
+    session.variants.set(height, variant);
+  }
+  return variant;
+};
+
 /**
  * Marks an HLS tree as actively in use. Call on every HLS request (master playlist,
  * variant playlist, segment). Resets the whole-tree idle countdown so the output
@@ -143,118 +215,180 @@ export const touchHlsSession = (hlsDir: string): void => {
   ensureSession(hlsDir);
 };
 
-const armVariantIdle = (
-  hlsDir: string,
-  height: number,
-): ReturnType<typeof setTimeout> => {
-  const timer = setTimeout(() => {
-    const encode = sessions.get(hlsDir)?.variants.get(height);
-    if (!encode) return;
-    // Idle: the player has switched away from this variant. Kill its encode and mark
-    // the slot dead so already-written segments stay served, but a later re-selection
-    // restarts the encode (at whatever position is then requested) rather than waiting
-    // on a process that is no longer running. The tree is still reaped on its own timer.
-    killVariant(encode);
-    log.debug({ hlsDir: pathToken(hlsDir), height }, "Reaped idle HLS variant encode");
+const armRunIdle = (hlsDir: string, height: number, variant: VariantState, run: EncodeRun) => {
+  clearTimeout(run.idleTimer);
+  run.idleTimer = setTimeout(() => {
+    if (run.dead) return;
+    // A request is still waiting on this encode: the player hasn't moved on, it
+    // is waiting for the segment past the encode head. Killing the encode now
+    // would strand that request until it times out.
+    if (run.waiters > 0) {
+      armRunIdle(hlsDir, height, variant, run);
+      return;
+    }
+    // Idle: the player switched quality or seeked away. Already-written segments
+    // stay served; a later request for unwritten ones starts a new encode.
+    killRun(variant, run);
+    log.debug(
+      { hlsDir: pathToken(hlsDir), height, startSegment: run.startSegment },
+      "Reaped idle HLS encode",
+    );
   }, VARIANT_IDLE_MS);
-  timer.unref?.();
-  return timer;
+  run.idleTimer.unref?.();
 };
 
-const newVariantEntry = (
+const touchRun = (
   hlsDir: string,
   height: number,
-  dead: boolean,
-  startSegment = 0,
-): VariantEncode => ({
-  child: null,
-  dead,
-  startSegment,
-  headHint: startSegment - 1,
-  idleTimer: armVariantIdle(hlsDir, height),
-});
+  variant: VariantState,
+  run: EncodeRun,
+  segmentIndex?: number,
+): void => {
+  run.lastTouched = Date.now();
+  armRunIdle(hlsDir, height, variant, run);
+  if (segmentIndex !== undefined && segmentIndex > run.maxRequested) {
+    run.maxRequested = segmentIndex;
+    // Thaw at once rather than on the next pacing tick: the player is catching up.
+    pace(variant, run);
+  }
+};
 
 /**
- * Marks a single variant as actively in use, re-arming its idle reaper. Call on
- * every request that touches a specific variant (its playlist or a segment).
+ * The live encode that produces (or soon will produce) `segmentIndex`: started
+ * at or before it, and with its head no more than `gap` segments short of it.
+ * The latest-starting one wins, being the closest.
  */
-export const touchVariant = (hlsDir: string, height: number): void => {
-  const session = ensureSession(hlsDir);
-  let entry = session.variants.get(height);
-  if (!entry) {
-    entry = newVariantEntry(hlsDir, height, true);
-    session.variants.set(height, entry);
+const coveringRun = (
+  variant: VariantState,
+  segmentIndex: number,
+  gap: number,
+): EncodeRun | undefined => {
+  let best: EncodeRun | undefined;
+  for (const run of variant.runs) {
+    if (run.dead || run.startSegment > segmentIndex) continue;
+    advanceHead(variant, run);
+    if (segmentIndex > run.head + gap) continue;
+    if (!best || run.startSegment > best.startSegment) best = run;
+  }
+  return best;
+};
+
+/**
+ * Marks a variant as actively in use. Call on every request that touches a
+ * specific variant: a playlist request (no index) keeps all of its encodes
+ * alive; a segment request keeps alive, and paces, the encode producing it.
+ */
+export const touchVariant = (hlsDir: string, height: number, segmentIndex?: number): void => {
+  const variant = ensureVariant(ensureSession(hlsDir), height);
+  if (segmentIndex === undefined) {
+    for (const run of variant.runs) touchRun(hlsDir, height, variant, run);
     return;
   }
-  clearTimeout(entry.idleTimer);
-  entry.idleTimer = armVariantIdle(hlsDir, height);
-};
-
-/** Walks forward from the encode's last known head while segments exist on disk. */
-const advanceHead = (
-  entry: VariantEncode,
-  segmentExists: (index: number) => boolean,
-  upTo: number,
-): number => {
-  let head = Math.max(entry.headHint, entry.startSegment - 1);
-  while (head < upTo && segmentExists(head + 1)) head += 1;
-  entry.headHint = head;
-  return head;
+  const run = coveringRun(variant, segmentIndex, SEEK_RESTART_GAP_SEGMENTS);
+  if (run) touchRun(hlsDir, height, variant, run, segmentIndex);
 };
 
 /**
- * Decides — atomically — whether a fresh encode is needed for variant `height` to
- * produce `segment`, and if so claims the slot. Returns the segment the new encode
- * must start at, or null when the live/pending encode will reach `segment` soon
- * (the caller then just long-polls for it).
+ * Marks a request as waiting for segment `segmentIndex` of variant `height`.
+ * Returns the function to call once it stops waiting. While any request waits
+ * on an encode, the idle reaper leaves that encode running.
+ */
+export const keepVariantAlive = (
+  hlsDir: string,
+  height: number,
+  segmentIndex?: number,
+): (() => void) => {
+  const variant = ensureVariant(ensureSession(hlsDir), height);
+  const run =
+    segmentIndex === undefined
+      ? variant.runs.at(-1)
+      : coveringRun(variant, segmentIndex, SEEK_RESTART_GAP_SEGMENTS);
+  if (!run) return () => {};
+  touchRun(hlsDir, height, variant, run, segmentIndex);
+  run.waiters += 1;
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    run.waiters = Math.max(0, run.waiters - 1);
+    // The wait itself was activity: give the player a full idle window from here.
+    if (!run.dead) touchRun(hlsDir, height, variant, run);
+  };
+};
+
+export type EncodeClaim = {
+  /** Segment index the new encode must start at. */
+  startSegment: number;
+  /** Pass to registerHlsProcess so the spawn attaches to this encode. */
+  runId: number;
+};
+
+/**
+ * Decides — atomically — whether variant `height` needs a new encode so that
+ * segment `segmentIndex` gets produced, and if so claims one. Returns where the
+ * new encode starts, or null if a running (or still queued) encode will reach
+ * the segment soon enough and the request should just wait for it.
  *
- * A new encode starts when the slot is dead (process ended or idle-reaped), or when
- * the request is one the running encode won't reach soon: before its start, or more
- * than SEEK_RESTART_GAP_SEGMENTS past its head (feedback #167: a seek to 7:00 used to
- * wait for an encode from 0:00, time out, and restart from 0:00 again). It starts at
- * the requested segment rather than 0. Runs synchronously with no `await` so two
+ * A new encode starts at the requested segment rather than at 0, so a seek or a
+ * quality switch late in a long video doesn't wait for minutes of re-encoding.
+ * Other encodes of the variant keep running: a second viewer elsewhere in the
+ * same video has its own, rather than the two dragging one encode back and
+ * forth. Each idles out on its own once nobody asks for its part of the video,
+ * and past MAX_RUNS_PER_VARIANT the least recently used is dropped.
+ *
+ * With no `segmentIndex` (a caller that only needs *an* encode, such as the
+ * EVENT-playlist path) any live encode counts, and a new one starts at 0.
+ *
+ * `isProduced(i)` reports whether segment i is on disk; it lets the claim track
+ * each encode's head. Runs synchronously with no `await`, so two
  * near-simultaneous requests can't double-spawn.
  */
 export const claimVariantEncode = (
   hlsDir: string,
   height: number,
-  segment = 0,
-  segmentExists: (index: number) => boolean = () => false,
-): number | null => {
-  const session = ensureSession(hlsDir);
-  const entry = session.variants.get(height);
-  if (!entry) {
-    session.variants.set(height, newVariantEntry(hlsDir, height, false, segment));
-    return segment;
+  requestedSegment?: number,
+  isProduced: (segment: number) => boolean = () => false,
+): EncodeClaim | null => {
+  const variant = ensureVariant(ensureSession(hlsDir), height);
+  variant.isProduced = isProduced;
+  variant.runs = variant.runs.filter((run) => !run.dead);
+
+  if (requestedSegment === undefined) {
+    if (variant.runs.length > 0) return null;
+  } else {
+    const covering = coveringRun(variant, requestedSegment, SEEK_RESTART_GAP_SEGMENTS);
+    if (covering) {
+      // Make sure pacing knows the player wants this, or a frozen encode would
+      // never reach it.
+      touchRun(hlsDir, height, variant, covering, requestedSegment);
+      return null;
+    }
   }
 
-  if (!entry.dead) {
-    const behindStart = segment < entry.startSegment;
-    const head = behindStart ? -1 : advanceHead(entry, segmentExists, segment);
-    if (!behindStart && segment - head <= SEEK_RESTART_GAP_SEGMENTS) return null;
+  const startSegment = requestedSegment ?? 0;
+  while (variant.runs.length >= MAX_RUNS_PER_VARIANT) {
+    const leastRecent = variant.runs.reduce((a, b) => (a.lastTouched <= b.lastTouched ? a : b));
+    killRun(variant, leastRecent);
   }
-
-  entry.child?.kill("SIGKILL");
-  entry.child = null;
-  entry.dead = false;
-  entry.startSegment = segment;
-  entry.headHint = segment - 1;
-  return segment;
-};
-
-/**
- * Keeps a variant's encode alive while a request is waiting on one of its
- * segments. touchVariant alone re-arms the idle reaper only when a request
- * *arrives*, so a request long-polling past the reaper window lost the very
- * encode it was waiting for. Returns a stop function.
- */
-export const keepVariantAlive = (hlsDir: string, height: number): (() => void) => {
-  const timer = setInterval(() => {
-    touchHlsSession(hlsDir);
-    touchVariant(hlsDir, height);
-  }, Math.max(250, VARIANT_IDLE_MS / 2));
-  timer.unref?.();
-  return () => clearInterval(timer);
+  const run: EncodeRun = {
+    id: nextRunId++,
+    child: null,
+    dead: false,
+    killed: false,
+    startSegment,
+    head: startSegment - 1,
+    maxRequested: startSegment,
+    waiters: 0,
+    lastTouched: Date.now(),
+    frozen: false,
+  };
+  variant.runs.push(run);
+  armRunIdle(hlsDir, height, variant, run);
+  log.debug(
+    { hlsDir: pathToken(hlsDir), height, startSegment, running: variant.runs.length },
+    "HLS encode claimed",
+  );
+  return { startSegment, runId: run.id };
 };
 
 /**
@@ -272,26 +406,51 @@ export const killAllSessions = (): void => {
 };
 
 /**
- * Associates a spawned ffmpeg process with a variant so the reaper can terminate it.
- * Marks the slot dead automatically when the process exits, so a request for a
- * not-yet-produced segment after the encode ends restarts it instead of hanging.
+ * Associates a spawned ffmpeg process with the encode it was claimed for, so the
+ * reaper and pacing can act on it. Marks the encode dead when the process exits,
+ * so a request for a segment it never wrote starts a new one instead of hanging.
+ * A spawn for an encode that has since been dropped is killed on arrival.
+ * Without a `runId`, attaches to the variant's newest encode that has no process.
+ *
+ * An encode whose process failed and is retried on a lower tier (see
+ * encodeVariant) spawns again under the same `runId` after the first process
+ * has exited; that spawn revives the run rather than being taken for an orphan.
  */
 export const registerHlsProcess = (
   hlsDir: string,
   height: number,
   child: ChildProcess,
+  runId?: number,
 ): void => {
-  const encode = ensureSession(hlsDir).variants.get(height);
-  if (!encode) {
-    // No slot was claimed (shouldn't happen); kill to avoid an orphan writer.
+  const variant = sessions.get(hlsDir)?.variants.get(height);
+  const run =
+    runId === undefined
+      ? variant?.runs.findLast((r) => !r.dead && !r.child)
+      : (variant?.runs.find((r) => r.id === runId) ?? exitedRuns.get(runId)?.deref());
+  if (runId !== undefined) exitedRuns.delete(runId);
+  if (!variant || !run || run.killed) {
+    // No such encode any more (reaped, replaced, session gone): an orphan writer.
     child.kill("SIGKILL");
     return;
   }
-  encode.child = child;
+  if (run.dead) {
+    run.dead = false;
+    if (!variant.runs.includes(run)) variant.runs.push(run);
+    armRunIdle(hlsDir, height, variant, run);
+  }
+  run.child = child;
+  stopPacing(run);
+  run.pacer = setInterval(() => pace(variant, run), PACE_CHECK_MS);
+  run.pacer.unref?.();
   child.once("exit", () => {
-    if (encode.child === child) {
-      encode.child = null;
-      encode.dead = true;
-    }
+    if (run.child !== child) return;
+    stopPacing(run);
+    clearTimeout(run.idleTimer);
+    run.child = null;
+    run.dead = true;
+    variant.runs = variant.runs.filter((r) => r !== run);
+    exitedRuns.set(run.id, new WeakRef(run));
+    // A retry spawns within moments of the exit, or never.
+    setTimeout(() => exitedRuns.delete(run.id), 30_000).unref?.();
   });
 };

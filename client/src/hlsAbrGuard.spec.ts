@@ -4,6 +4,7 @@ import {
   applyUpswitch,
   createInitialAbrGuardState,
   dwellForOscillationCount,
+  forwardBufferSeconds,
   MAX_UPSWITCH_DWELL_MS,
   OSCILLATION_RESET_IDLE_MS,
   OSCILLATION_WINDOW_MS,
@@ -11,6 +12,7 @@ import {
   shouldUpswitch,
   UPSWITCH_DWELL_MS,
   UPSWITCH_HEADROOM_FACTOR,
+  UPSWITCH_MIN_BUFFER_S,
   UPSWITCH_SUSTAIN_SAMPLES,
 } from "./hlsAbrGuard";
 
@@ -142,5 +144,38 @@ describe("dwellForOscillationCount / applyDownswitch escalation", () => {
     state = applyDownswitch(state, stableDownswitchAt, 0);
 
     expect(state.oscillationCount).toBe(0);
+  });
+});
+
+describe("climbing onto a rung that still has to be encoded", () => {
+  const ready = () => {
+    let state = createInitialAbrGuardState();
+    for (let i = 0; i < UPSWITCH_SUSTAIN_SAMPLES; i++) {
+      state = recordBandwidthSample(state, 100_000_000);
+    }
+    return state;
+  };
+
+  it("waits for a buffer deep enough to ride out the new rung's cold start", () => {
+    // Measured: a cold 1080p encode took 3.6 s to its first segment while the
+    // player held ~1 s of buffer, so hls.js's own climb stalled for 8 s.
+    expect(shouldUpswitch(ready(), 0, 5_000_000, 1)).toBe(false);
+    expect(shouldUpswitch(ready(), 0, 5_000_000, UPSWITCH_MIN_BUFFER_S - 0.1)).toBe(false);
+    expect(shouldUpswitch(ready(), 0, 5_000_000, UPSWITCH_MIN_BUFFER_S)).toBe(true);
+  });
+
+  it("measures the buffer ahead of the playhead, not behind it or across a gap", () => {
+    const ranges = (pairs: [number, number][]) => ({
+      length: pairs.length,
+      start: (i: number) => pairs[i][0],
+      end: (i: number) => pairs[i][1],
+    });
+    const media = (currentTime: number, pairs: [number, number][]) =>
+      ({ currentTime, buffered: ranges(pairs) }) as unknown as HTMLMediaElement;
+
+    expect(forwardBufferSeconds(null)).toBe(0);
+    expect(forwardBufferSeconds(media(5, [[0, 17]]))).toBe(12);
+    expect(forwardBufferSeconds(media(20, [[0, 17], [30, 60]]))).toBe(0);
+    expect(forwardBufferSeconds(media(30.2, [[0, 17], [30, 60]]))).toBeCloseTo(29.8);
   });
 });
