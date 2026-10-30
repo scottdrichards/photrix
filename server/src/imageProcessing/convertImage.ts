@@ -34,7 +34,8 @@ let pythonInvocationPromise: Promise<PythonInvocation> | null = null;
 const REQUIRED_PYTHON_MODULES = ["PIL", "pillow_heif"] as const;
 const PYTHON_PROBE_TIMEOUT_MS = 15_000;
 const DEPENDENCY_GUIDANCE =
-  "Ensure the interpreter has the image dependencies (pip install -r requirements.txt), " +
+  "Ensure the interpreter has the image dependencies (bun run --filter server python:install, " +
+  "which installs server/python/requirements.txt), " +
   "or set PHOTRIX_PYTHON to a Python that does (e.g. the project .venv).";
 
 const runProbe = async (
@@ -270,7 +271,7 @@ const buildConversionError = (
     : `Image conversion failed for ${inputPath}: ${normalizedError}`;
 
   const message = isMissingDependency
-    ? `${baseMessage}\n\nPython dependencies may be missing. Try: pip install -r server/src/imageProcessing/requirements.txt`
+    ? `${baseMessage}\n\nPython dependencies may be missing. Try: bun run --filter server python:install (installs server/python/requirements.txt)`
     : baseMessage;
 
   log.error(

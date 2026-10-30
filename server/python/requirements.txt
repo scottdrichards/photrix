@@ -22,6 +22,10 @@ opencv-python-headless>=4.9
 numpy==2.4.6
 Pillow==12.2.0
 pillow-heif==1.4.0
+# Camera RAW (.cr3, .nef, .dng...) decoding in the image pipeline.
+rawpy==0.27.1
+# Tiled iPhone HEIC decoding (FFmpeg), which avoids libheif's green-tile artifact.
+av==18.1.0
 # CLIP semantic search + CLAP audio embeddings.
 torch==2.9.1
 torchvision==0.24.1
