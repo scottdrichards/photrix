@@ -309,6 +309,92 @@ describe("ShareOptionsModal", () => {
     }
   });
 
+  it("splits a set the browser refuses into parts and shares them one tap each", async () => {
+    const onClose = vi.fn();
+    // Chrome's behaviour: more than 10 files in one share is NotAllowedError.
+    const shareMock = vi.fn(({ files }: { files: File[] }) =>
+      files.length > 10
+        ? Promise.reject(new DOMException("Permission denied", "NotAllowedError"))
+        : Promise.resolve(),
+    );
+    Object.defineProperty(navigator, "canShare", { configurable: true, writable: true, value: vi.fn(() => true) });
+    Object.defineProperty(navigator, "share", { configurable: true, writable: true, value: shareMock });
+
+    const photos = Array.from({ length: 12 }, (_, i) =>
+      createPhoto({ path: `a/${i}.heic`, name: `${i}.heic`, originalUrl: `http://localhost/api/files/a/${i}.heic` }),
+    );
+    render(<ShareOptionsModal photos={photos} onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Smaller size/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Share" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Share part 1 of 2" })).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/at most 10 files or 50 MB at a time/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Share part 1 of 2" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Share part 2 of 2" })).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Part 1 shared/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Share part 2 of 2" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    const sizes = shareMock.mock.calls.map(([data]) => data.files.length);
+    expect(sizes).toEqual([12, 10, 2]);
+  });
+
+  it("offers a file too big for any share as a download after sharing the rest", async () => {
+    const onClose = vi.fn();
+    const shareMock = vi.fn(({ files }: { files: File[] }) =>
+      files.some((file) => file.size > 50 * 1024 * 1024)
+        ? Promise.reject(new DOMException("Permission denied", "NotAllowedError"))
+        : Promise.resolve(),
+    );
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    globalThis.fetch = vi.fn((url: string) =>
+      Promise.resolve({
+        ok: true,
+        blob: async () =>
+          url.includes("clip")
+            ? new Blob([new Uint8Array(51 * 1024 * 1024)], { type: "video/mp4" })
+            : new Blob(["image"], { type: "image/jpeg" }),
+      } as Response),
+    ) as typeof fetch;
+    Object.defineProperty(navigator, "canShare", { configurable: true, writable: true, value: vi.fn(() => true) });
+    Object.defineProperty(navigator, "share", { configurable: true, writable: true, value: shareMock });
+
+    try {
+      const photos = [
+        createPhoto(),
+        createPhoto({ path: "a/clip.mp4", name: "clip.mp4", mediaType: "video", originalUrl: "http://localhost/api/files/a/clip.mp4" }),
+      ];
+      render(<ShareOptionsModal photos={photos} onClose={onClose} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /Smaller size/i }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Share" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Share part 1 of 1" })).toBeInTheDocument(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Share part 1 of 1" }));
+
+      await waitFor(() => expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument());
+      expect(screen.getByText(/1 file is over 50 MB/)).toBeInTheDocument();
+      expect(shareMock.mock.calls[1]?.[0].files.map((f: File) => f.name)).toEqual(["1.jpg"]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Download" }));
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      // Only the video is left to save, fetched from its converted URL.
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      clickSpy.mockRestore();
+    }
+  });
+
   it("hides the web-safe option for a photo that is already web-safe", () => {
     const photo = createPhoto({
       path: "a/1.jpg",
