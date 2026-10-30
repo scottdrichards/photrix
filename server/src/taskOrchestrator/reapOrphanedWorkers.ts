@@ -1,4 +1,5 @@
 import { readdir, readFile } from "fs/promises";
+import path from "path";
 import { getLogger } from "../observability/logger.ts";
 
 const log = getLogger("reapWorkers");
@@ -34,6 +35,40 @@ const readCmdline = async (pid: string): Promise<string | null> => {
 };
 
 /**
+ * Parent pid from the text of /proc/<pid>/stat. The second field is the
+ * command name in parentheses and may itself contain spaces or ")", so the
+ * fields are read after the last ")": state, then ppid.
+ */
+export const parseParentPid = (stat: string): number | null => {
+  const fields = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/);
+  const ppid = Number(fields[1]);
+  return Number.isInteger(ppid) && ppid > 0 ? ppid : null;
+};
+
+const readParentPid = async (pid: string): Promise<number | null> => {
+  try {
+    return parseParentPid(await readFile(`/proc/${pid}/stat`, "utf-8"));
+  } catch {
+    // Process exited between the readdir and this read.
+    return null;
+  }
+};
+
+/**
+ * True if a worker's parent (given by its argv) is a live Node process, which
+ * means the worker belongs to a running server: production, a test server, the
+ * e2e or playback-lab harness. Only a worker whose server has died is an
+ * orphan, and an orphan is re-parented to init or a subreaper, which is not
+ * Node. Without this check, starting any second server on the same box killed
+ * the running one's workers in the middle of their work.
+ */
+export const isOwnedByLiveServer = (parentCmdline: string | null): boolean => {
+  if (parentCmdline == null) return false;
+  const argv0 = parentCmdline.trim().split(" ")[0] ?? "";
+  return /^node(js)?(\.exe)?$/.test(path.basename(argv0));
+};
+
+/**
  * Kill Python ML worker processes left resident by a prior server instance.
  *
  * These workers keep their models — and the ~300–500 MB CUDA context each — in
@@ -63,6 +98,7 @@ export const reapOrphanedComputeWorkers = async (): Promise<void> => {
   const self = process.pid;
   const killed: number[] = [];
   const unkillable: number[] = [];
+  const owned: number[] = [];
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
     const pid = Number(entry);
@@ -70,6 +106,12 @@ export const reapOrphanedComputeWorkers = async (): Promise<void> => {
 
     const cmdline = await readCmdline(entry);
     if (cmdline == null || !isWorkerCmdline(cmdline)) continue;
+
+    const ppid = await readParentPid(entry);
+    if (ppid != null && ppid > 1 && isOwnedByLiveServer(await readCmdline(String(ppid)))) {
+      owned.push(pid);
+      continue;
+    }
 
     try {
       process.kill(pid, "SIGKILL");
@@ -93,6 +135,13 @@ export const reapOrphanedComputeWorkers = async (): Promise<void> => {
     log.info(
       { pids: killed },
       "reaped orphaned ML worker(s) from a prior instance to free VRAM",
+    );
+  }
+
+  if (owned.length > 0) {
+    log.info(
+      { pids: owned },
+      "left ML worker(s) alone: they belong to another server that is still running",
     );
   }
 
