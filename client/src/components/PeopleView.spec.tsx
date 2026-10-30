@@ -78,6 +78,10 @@ beforeAll(() => {
     observe = vi.fn((target: Element) => {
       this.targets.push(target);
     });
+    unobserve = vi.fn((target: Element) => {
+      const index = this.targets.indexOf(target);
+      if (index !== -1) this.targets.splice(index, 1);
+    });
     disconnect = vi.fn(() => {
       this.live = false;
     });
