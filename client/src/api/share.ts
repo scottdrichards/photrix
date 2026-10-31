@@ -1,4 +1,5 @@
 import { getAuthHeaders } from "../auth";
+import { buildShareUrl } from "../hooks/useShareFilter";
 import type { ShareScope } from "../../../shared/filter-contract/src/index";
 
 /**
@@ -32,3 +33,15 @@ export const fetchShareScopeCount = async (
 };
 
 export type { ShareScope };
+
+/** Mint a share link for `shareScope` and return its URL. */
+export const mintShareLink = async (shareScope: unknown): Promise<string> => {
+  const res = await fetch("/api/auth/share-token", {
+    method: "POST",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(shareScope),
+  });
+  if (!res.ok) throw new Error("Failed to issue share token");
+  const { token } = (await res.json()) as { token: string };
+  return buildShareUrl(token);
+};

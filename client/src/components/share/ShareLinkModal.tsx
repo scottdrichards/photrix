@@ -8,6 +8,8 @@ type Props = {
   url: string;
   copied: boolean;
   onClose: () => void;
+  /** Where to render; defaults to document.body. The fullscreen viewer passes its own. */
+  portalRoot?: Element | DocumentFragment | null;
 };
 
 /**
@@ -17,7 +19,7 @@ type Props = {
  */
 const canNativeShare = () => typeof navigator.share === "function";
 
-export const ShareLinkModal = ({ url, copied, onClose }: Props) => {
+export const ShareLinkModal = ({ url, copied, onClose, portalRoot }: Props) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isCopied, setIsCopied] = useState(copied);
 
@@ -107,6 +109,6 @@ export const ShareLinkModal = ({ url, copied, onClose }: Props) => {
         </button>
       </div>
     </div>,
-    document.body,
+    portalRoot ?? document.body,
   );
 };
