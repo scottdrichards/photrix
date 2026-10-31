@@ -1,6 +1,6 @@
 import type { ClusterFace } from "../../api";
-import { FaceCropImage } from "../FaceCropImage";
-import css from "../PeopleView.module.css";
+import { FaceCropImage } from "./FaceCropImage";
+import css from "./PeopleView.module.css";
 
 type FaceImageProps = {
   face: ClusterFace;

@@ -9,7 +9,7 @@ import { fetchPeopleClusters, fetchStatus } from "../../api";
 import { Spinner } from "../../Spinner";
 import { useFilter } from "./FilterContext";
 import css from "./FaceFilterPanel.module.css";
-import { FaceCropImage } from "../FaceCropImage";
+import { FaceCropImage } from "../people/FaceCropImage";
 
 type FaceFilterPanelProps = {
   isActive: boolean;

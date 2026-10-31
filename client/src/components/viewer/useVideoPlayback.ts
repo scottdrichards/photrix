@@ -4,12 +4,12 @@ import {
   probeVideoPlaybackProfile,
   invalidateVideoPlaybackProfile,
 } from "../../videoPlaybackProfile";
-import { attachHlsAbrUpswitchGuard } from "../../hlsAbrGuard";
-import { onTheFlyHlsConfig } from "../../encoderAwareHls";
+import { attachHlsAbrUpswitchGuard } from "./hlsAbrGuard";
+import { onTheFlyHlsConfig } from "./encoderAwareHls";
 import { negotiateVideoPlayback } from "../../api";
 import { getToken } from "../../auth";
 import { createClientOperationId, logClientEvent } from "../../diagnostics";
-import { type PlaybackState } from "../VideoLoadingOverlay";
+import { type PlaybackState } from "./VideoLoadingOverlay";
 import { readStorage, writeStorage } from "../../storage";
 import { playVideo } from "../playVideo";
 import { attemptSync } from "../../result";

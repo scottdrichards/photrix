@@ -18,11 +18,11 @@ vi.mock("../../api", async () => {
   };
 });
 
-vi.mock("../DateHistogram", () => ({
+vi.mock("./DateHistogram", () => ({
   DateHistogram: () => <div data-testid="date-histogram">date-histogram</div>,
 }));
 
-vi.mock("../MapFilter", () => ({
+vi.mock("../map/MapFilter", () => ({
   MapFilter: () => <div data-testid="map-filter">map-filter</div>,
 }));
 
