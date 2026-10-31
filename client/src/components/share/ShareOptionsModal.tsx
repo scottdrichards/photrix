@@ -2,16 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PhotoItem } from "../../api";
 import css from "./ShareOptionsModal.module.css";
-import { planShareParts, WEB_SHARE_MAX_FILES } from "./shareParts";
+import { logFailure } from "../../logFailure";
+import { attempt } from "../../result";
+import { mintShareLink } from "../../api/share";
+import { ShareLinkModal } from "./ShareLinkModal";
+import { fitsOneShare, WEB_SHARE_MAX_FILES } from "./webShareLimits";
 
 type ShareQuality = "original" | "websafe-full" | "websafe-small";
 type ShareAction = "share" | "download";
 type DownloadItem = { url: string; filename: string };
 type PreparedAction =
   | { kind: "share"; files: File[]; quality: ShareQuality }
-  // The browser refused the whole set at once (Chrome: 10 files / 50 MB per
-  // share), so it is shared one tap per part. `next` is the part to share next.
-  | { kind: "shareParts"; parts: File[][]; next: number; tooLarge: File[]; quality: ShareQuality }
+  // Too many files or bytes for one share sheet: offer a link or a download.
+  | { kind: "overLimit"; quality: ShareQuality }
   | { kind: "download"; imageFiles: File[]; videoDownloads: DownloadItem[] };
 
 const VIDEO_MIME_BY_EXT: Record<string, string> = {
@@ -128,11 +131,6 @@ const getVideoDownloads = (videos: PhotoItem[], quality: ShareQuality): Download
     filename: getVideoShareFilename(video, quality),
   }));
 
-const tooLargeMessage = (count: number): string =>
-  count === 1
-    ? "1 file is over 50 MB, too big for this browser's share sheet. Tap Download to save it."
-    : `${count} files are over 50 MB, too big for this browser's share sheet. Tap Download to save them.`;
-
 const triggerDownload = (url: string, filename: string) => {
   const a = document.createElement("a");
   a.href = url;
@@ -158,6 +156,7 @@ export const ShareOptionsModal: React.FC<Props> = ({
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preparedAction, setPreparedAction] = useState<PreparedAction | null>(null);
+  const [linkUrl, setLinkUrl] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const portalTarget = portalRoot ?? document.body;
 
@@ -203,6 +202,39 @@ export const ShareOptionsModal: React.FC<Props> = ({
     setProgress(null);
   };
 
+  // Download straight from each file's URL: nothing is fetched into memory.
+  const downloadFromUrls = (quality: ShareQuality, signal?: AbortSignal) => {
+    const itemsToDownload = [
+      ...images.map((photo) => ({
+        url: getImageShareUrl(photo, quality),
+        filename: getImageFilename(photo, quality),
+      })),
+      ...getVideoDownloads(videos, quality),
+    ];
+    for (const item of itemsToDownload) {
+      if (signal?.aborted) return;
+      triggerDownload(item.url, item.filename);
+    }
+  };
+
+  // A link to exactly these files, for a selection too big to share as files.
+  const shareAsLink = async () => {
+    setError(null);
+    setProgress("Creating link…");
+    const result = await attempt(
+      mintShareLink({ filter: { relativePath: photos.map((photo) => photo.path) } }),
+    );
+    setProgress(null);
+    if (!result.ok) {
+      logFailure("share.selectionLink.failed", "Could not create a link to the selection")(
+        result.error,
+      );
+      setError("Couldn't create a link. Try Download instead.");
+      return;
+    }
+    setLinkUrl(result.value);
+  };
+
   const handlePreparedAction = async () => {
     if (!preparedAction) return;
 
@@ -223,36 +255,15 @@ export const ShareOptionsModal: React.FC<Props> = ({
       return;
     }
 
+    if (preparedAction.kind === "overLimit") {
+      downloadFromUrls(preparedAction.quality);
+      onClose();
+      return;
+    }
+
     if (typeof navigator.share !== "function") return;
 
     setProgress("Opening share sheet…");
-
-    if (preparedAction.kind === "shareParts") {
-      const { parts, next, tooLarge, quality } = preparedAction;
-      try {
-        await navigator.share({ files: parts[next] });
-      } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") {
-          setProgress(null);
-          return;
-        }
-        downloadInstead(
-          [...parts.slice(next).flat(), ...tooLarge],
-          quality,
-          "Sharing failed on this browser. The rest are ready to download instead.",
-        );
-        return;
-      }
-      if (next + 1 < parts.length) {
-        setPreparedAction({ ...preparedAction, next: next + 1 });
-        setProgress(null);
-      } else if (tooLarge.length > 0) {
-        downloadInstead(tooLarge, quality, tooLargeMessage(tooLarge.length));
-      } else {
-        onClose();
-      }
-      return;
-    }
 
     try {
       await navigator.share({ files: preparedAction.files });
@@ -262,23 +273,9 @@ export const ShareOptionsModal: React.FC<Props> = ({
         setProgress(null);
         return;
       }
-      // Chrome refuses more than 10 files or 50 MB in one share, and canShare()
-      // doesn't check either, so a failure is the first sign. Split the set
-      // into parts that fit, one tap each, before giving up on sharing.
-      const { quality } = preparedAction;
-      const plan = planShareParts(preparedAction.files);
-      if (plan.parts.length > 1 || plan.tooLarge.length > 0) {
-        if (plan.parts.length === 0) {
-          downloadInstead(plan.tooLarge, quality, tooLargeMessage(plan.tooLarge.length));
-          return;
-        }
-        setPreparedAction({ kind: "shareParts", ...plan, next: 0, quality });
-        setProgress(null);
-        return;
-      }
       downloadInstead(
         preparedAction.files,
-        quality,
+        preparedAction.quality,
         "Sharing failed on this browser. The files are ready to download instead.",
       );
     }
@@ -292,28 +289,24 @@ export const ShareOptionsModal: React.FC<Props> = ({
 
     try {
       if (mode === "download") {
-        const itemsToDownload = [
-          ...images.map((photo) => ({
-            url: getImageShareUrl(photo, quality),
-            filename: getImageFilename(photo, quality),
-          })),
-          ...getVideoDownloads(videos, quality),
-        ];
-
-        if (itemsToDownload.length > 0) {
+        if (photos.length > 0) {
           setProgress(
-            itemsToDownload.length === 1
-              ? "Starting download…"
-              : `Starting ${itemsToDownload.length} downloads…`,
+            photos.length === 1 ? "Starting download…" : `Starting ${photos.length} downloads…`,
           );
         }
-
-        for (const item of itemsToDownload) {
-          if (abort.signal.aborted) return;
-          triggerDownload(item.url, item.filename);
-        }
-
+        downloadFromUrls(quality, abort.signal);
         onClose();
+        return;
+      }
+
+      // Over the browser's share limit before anything is fetched: by count, or
+      // for originals by their stored size. Offer a link or a download instead
+      // of fetching everything only for the share to be refused.
+      const knownSizes = photos.map((photo) =>
+        quality === "original" ? photo.metadata?.sizeInBytes : undefined,
+      );
+      if (!fitsOneShare(knownSizes)) {
+        setPreparedAction({ kind: "overLimit", quality });
         return;
       }
 
@@ -396,6 +389,12 @@ export const ShareOptionsModal: React.FC<Props> = ({
           // Native file share is gesture-sensitive, so after any async
           // prepare step we defer the real browser action to a second
           // explicit tap.
+          // Converted sizes are only known now.
+          if (!fitsOneShare(allFiles.map((file) => file.size))) {
+            setPreparedAction({ kind: "overLimit", quality });
+            setProgress(null);
+            return;
+          }
           setPreparedAction({ kind: "share", files: allFiles, quality });
           setProgress(null);
           return;
@@ -451,6 +450,10 @@ export const ShareOptionsModal: React.FC<Props> = ({
     return q.imageDesc;
   };
 
+  if (linkUrl) {
+    return <ShareLinkModal url={linkUrl} copied={false} onClose={onClose} portalRoot={portalRoot} />;
+  }
+
   return createPortal(
     <div
       className={css.backdrop}
@@ -488,8 +491,8 @@ export const ShareOptionsModal: React.FC<Props> = ({
             <p className={css.readyMessage}>
               {preparedAction.kind === "share"
                 ? "Files are ready. Tap Share to open the system share sheet."
-                : preparedAction.kind === "shareParts"
-                  ? `${preparedAction.next > 0 ? `Part ${preparedAction.next} shared. ` : ""}This browser shares at most ${WEB_SHARE_MAX_FILES} files or 50 MB at a time, so they're split into ${preparedAction.parts.length} parts.`
+                : preparedAction.kind === "overLimit"
+                  ? `Too much to share as files: the share sheet takes at most ${WEB_SHARE_MAX_FILES} files or 50 MB. Share a link to ${count === 1 ? "it" : `these ${count}`} instead, or download ${count === 1 ? "it" : "them"}.`
                   : "Files are ready. Tap Download to save them."}
             </p>
             <div className={css.readyActions}>
@@ -503,13 +506,20 @@ export const ShareOptionsModal: React.FC<Props> = ({
               >
                 Back
               </button>
-              <button type="button" className="btn" onClick={() => void handlePreparedAction()}>
-                {preparedAction.kind === "share"
-                  ? "Share"
-                  : preparedAction.kind === "shareParts"
-                    ? `Share part ${preparedAction.next + 1} of ${preparedAction.parts.length}`
-                    : "Download"}
-              </button>
+              {preparedAction.kind === "overLimit" ? (
+                <>
+                  <button type="button" className="btn btn-subtle" onClick={() => void handlePreparedAction()}>
+                    Download
+                  </button>
+                  <button type="button" className="btn" onClick={() => void shareAsLink()}>
+                    Share link
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="btn" onClick={() => void handlePreparedAction()}>
+                  {preparedAction.kind === "share" ? "Share" : "Download"}
+                </button>
+              )}
             </div>
           </div>
         ) : (
