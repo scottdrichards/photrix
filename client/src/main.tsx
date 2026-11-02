@@ -2,6 +2,7 @@ import * as React from "react";
 import * as ReactDOM from "react-dom/client";
 import "./styles.css";
 import App from "./App";
+import { AppUpdateNotice } from "./components/AppUpdateNotice";
 import { applyTheme, getInitialTheme } from "./theme";
 import { initInstall, registerServiceWorker } from "./install";
 import { startClientPerfMonitor } from "./clientPerf";
@@ -25,5 +26,6 @@ const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
     <App />
+    <AppUpdateNotice />
   </React.StrictMode>,
 );
