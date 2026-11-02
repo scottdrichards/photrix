@@ -1,20 +1,12 @@
 import type http from "node:http";
 
 /**
- * Coarse, fully offline IP classification for the account "sessions" list.
- *
- * This deliberately does NOT attempt city/country-level geolocation: there is
- * no GeoIP database bundled in this project (checking server/package.json —
- * nothing lightweight already pulled in), and reaching for an external
- * geolocation API would mean a self-hosted app phoning home per login, which
- * conflicts with the privacy/no-network-dependency stance taken elsewhere in
- * this codebase. Instead we classify an address as "local network" (private /
- * loopback / link-local ranges — someone on the LAN, or a reverse proxy that
- * forwards the internal hop) vs "public internet" (plus loopback, "This
- * server"), which is enough for a user
- * to sanity-check whether a listed session came from their own network or
- * somewhere else. Precise region/country geolocation is deferred to a future
- * bundled GeoIP dataset if that's ever worth the size/maintenance cost.
+ * Coarse, fully offline IP classification for the account "sessions" list:
+ * "Local network" (private, CGNAT, link-local), "Internet", or "This server"
+ * (loopback). It needs no network and always works. The rough place name shown
+ * next to an internet session is a separate, best-effort lookup in
+ * ipGeolocation.ts, which this classification gates: only "Internet" addresses
+ * are ever looked up.
  */
 type IpLocation = { ip: string | null; label: string };
 
