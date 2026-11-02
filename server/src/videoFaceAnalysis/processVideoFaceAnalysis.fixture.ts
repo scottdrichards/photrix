@@ -12,6 +12,10 @@ export type QueuedTestVideo = {
   relativePath: string;
   durationSeconds?: number;
   sizeBytes?: number;
+  /** Defaults to true. */
+  needsFaces?: boolean;
+  /** Defaults to false, so a spec about faces needn't fake CLIP too. */
+  needsEmbedding?: boolean;
 };
 
 type SavedFace = DetectedFace & {
@@ -23,6 +27,8 @@ type SavedFace = DetectedFace & {
 export const fakeDatabase = (videos: QueuedTestVideo[], storagePath = "/media") => {
   const queue = [...videos];
   const saved = new Map<string, SavedFace[]>();
+  /** Frame vectors saved per video (feedback #150). */
+  const embedded = new Map<string, Array<{ timeMs: number; embedding: Float32Array }>>();
   /** Stamped as failed: retried after the cooldown. */
   const errors: string[] = [];
   /** Stamped as unreadable: dropped for good. */
@@ -33,13 +39,21 @@ export const fakeDatabase = (videos: QueuedTestVideo[], storagePath = "/media") 
   };
   return {
     saved,
+    embedded,
     errors,
     decodeErrors,
     db: {
       storagePath,
       analysis: {
         getVideosNeedingFaceAnalysis: async () =>
-          queue.map((v) => ({ failedBefore: false, ...v })),
+          queue.map((v) => ({ failedBefore: false, needsFaces: true, needsEmbedding: false, ...v })),
+        saveVideoFrameEmbeddings: async (
+          relativePath: string,
+          frames: ReadonlyArray<{ timeMs: number; embedding: Float32Array }>,
+        ) => {
+          embedded.set(relativePath, [...frames]);
+          take(relativePath);
+        },
         saveVideoFaceAnalysisError: async (relativePath: string) => {
           errors.push(relativePath);
           take(relativePath);

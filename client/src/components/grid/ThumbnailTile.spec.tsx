@@ -878,6 +878,18 @@ describe("ThumbnailTile", () => {
     ).toBeInTheDocument();
   });
 
+  it("names the moment a video matched on image content (feedback #150)", () => {
+    const photo = createPhoto({
+      path: "a/clip.mp4",
+      name: "clip.mp4",
+      mediaType: "video",
+      searchSources: ["image"],
+      searchMatchMs: 62_000,
+    });
+    render(<ThumbnailTile photo={photo} showMatchReasons />);
+    expect(screen.getByLabelText("Matched by: Matched on image content at 1:02")).toBeInTheDocument();
+  });
+
   it("displays a file icon and filename for non-image files (feedback #129)", () => {
     const photo = createPhoto({
       path: "a/document.pdf",

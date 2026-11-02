@@ -10,6 +10,14 @@ import { VectorIndex } from "./vectorIndex/vectorIndex.ts";
 import type { EmbeddingKind } from "./vectorIndex/vectorIndexProtocol.ts";
 import { clamp01 } from "../common/clamp01.ts";
 import type { QueuedVideoFaces, VideoFaceCostInputs } from "../videoFaceAnalysis/videoFaceCost.ts";
+import { decodeVideoFrameEmbeddings, encodeVideoFrameEmbeddings } from "./videoFrameEmbeddingCodec.ts";
+
+/** A queued video and which of the video pass's two results it still lacks. */
+export type QueuedVideoAnalysis = QueuedVideoFaces & {
+  needsFaces: boolean;
+  /** CLIP vectors for its frames, for search (feedback #150). */
+  needsEmbedding: boolean;
+};
 
 const normalizeTranscriptSearchText = (value: string): string =>
   value
@@ -192,13 +200,15 @@ export class AnalysisStore {
   static readonly VIDEO_FACE_RETRY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1_000;
 
   /**
-   * Videos that still need face detection, newest first. Leaves out the movie
-   * half of a Live Photo pair: its still already carries those faces, so
-   * scanning it too would show every face twice.
+   * Videos the video pass still has work on: faces, or CLIP vectors for their
+   * frames (feedback #150; `embeddingProcessedAt`, which marks a photo's CLIP
+   * vector, marks a video's frame vectors). Leaves out the movie half of a
+   * Live Photo pair: its still already carries those faces and that search
+   * match, so scanning it too would show everything twice.
    */
   private static readonly VIDEOS_NEEDING_FACES_WHERE = `
          mimeType LIKE 'video/%'
-         AND facesProcessedAt IS NULL
+         AND (facesProcessedAt IS NULL OR embeddingProcessedAt IS NULL)
          AND analysisDecodeErrorAt IS NULL
          AND exifProcessedAt IS NOT NULL
          AND NOT EXISTS (
@@ -213,11 +223,13 @@ export class AnalysisStore {
    * picks the order (videoFaceCost.ts `orderVideoFaceQueue`), so the cost
    * model lives in one place rather than a second copy in SQL.
    */
-  async getVideosNeedingFaceAnalysis(limit?: number): Promise<QueuedVideoFaces[]> {
+  async getVideosNeedingFaceAnalysis(limit?: number): Promise<QueuedVideoAnalysis[]> {
     const rows = await this.db.all<Record<string, unknown>>(
       `SELECT folder, fileName, ${AnalysisStore.VIDEO_FACE_COST_COLUMNS},
               COALESCE(dateTaken, created) AS takenAt,
-              facesLastErrorAt IS NOT NULL AS failedBefore
+              facesLastErrorAt IS NOT NULL AS failedBefore,
+              facesProcessedAt IS NULL AS needsFaces,
+              embeddingProcessedAt IS NULL AS needsEmbedding
        FROM files
        WHERE ${AnalysisStore.VIDEOS_NEEDING_FACES_WHERE}
          AND (facesLastErrorAt IS NULL OR facesLastErrorAt < ?)
@@ -232,7 +244,37 @@ export class AnalysisStore {
       ...toVideoFaceCostInputs(row),
       takenAt: finiteOrUndefined(row.takenAt),
       failedBefore: row.failedBefore === 1,
+      needsFaces: row.needsFaces === 1,
+      needsEmbedding: row.needsEmbedding === 1,
     }));
+  }
+
+  /**
+   * Stores the CLIP vectors of a video's sampled frames (feedback #150) and
+   * marks the video's frames as embedded. A video with no usable frame is
+   * marked too, so it isn't read again for nothing.
+   */
+  async saveVideoFrameEmbeddings(
+    relativePath: string,
+    frames: ReadonlyArray<{ timeMs: number; embedding: Float32Array }>,
+  ): Promise<void> {
+    const { folder, fileName } = splitPath(relativePath);
+    const encoded = encodeVideoFrameEmbeddings(frames);
+    await this.db.transaction([
+      {
+        sql: `INSERT INTO fileEmbeddings (folder, fileName, videoFrameEmbeddings)
+              VALUES (?, ?, ?)
+              ON CONFLICT(folder, fileName) DO UPDATE SET videoFrameEmbeddings = excluded.videoFrameEmbeddings`,
+        params: [folder, fileName, encoded],
+      },
+      {
+        sql: `UPDATE files
+              SET embeddingProcessedAt = ?, embeddingErrorAt = NULL
+              WHERE folder = ? AND fileName = ?`,
+        params: [Date.now(), folder, fileName],
+      },
+    ]);
+    await this.vectorIndex.upsertFrames({ folder, fileName }, decodeVideoFrameEmbeddings(encoded));
   }
 
   /** What the video-face ETA needs to know about a video. */
@@ -292,14 +334,15 @@ export class AnalysisStore {
       `SELECT
          (SELECT COUNT(*) FROM files WHERE mimeType LIKE 'video/%') AS total,
          (SELECT COUNT(*) FROM files WHERE mimeType LIKE 'video/%'
-            AND facesProcessedAt IS NOT NULL) AS done,
+            AND facesProcessedAt IS NOT NULL AND embeddingProcessedAt IS NOT NULL) AS done,
          (SELECT COUNT(*) FROM files WHERE ${AnalysisStore.VIDEOS_NEEDING_FACES_WHERE}) AS remaining,
          (SELECT COUNT(*) FROM files WHERE ${AnalysisStore.VIDEOS_NEEDING_FACES_WHERE}
             AND facesLastErrorAt >= ?) AS coolingDown,
          (SELECT MIN(facesLastErrorAt) FROM files WHERE ${AnalysisStore.VIDEOS_NEEDING_FACES_WHERE}
             AND facesLastErrorAt >= ?) AS firstErrorAt,
          (SELECT COUNT(*) FROM files WHERE mimeType LIKE 'video/%'
-            AND facesProcessedAt IS NULL AND analysisDecodeErrorAt IS NOT NULL) AS unreadable`,
+            AND (facesProcessedAt IS NULL OR embeddingProcessedAt IS NULL)
+            AND analysisDecodeErrorAt IS NOT NULL) AS unreadable`,
       cooldownStart,
       cooldownStart,
     );
@@ -580,12 +623,68 @@ export class AnalysisStore {
       .slice(0, limit);
   }
 
+  /**
+   * CLIP search over photos and, since feedback #150, over the sampled frames
+   * of videos. Both are scored in the same CLIP space, so they merge by
+   * similarity. A video hit carries `matchTimeMs`, the frame that matched, so
+   * the viewer can open the video at that moment.
+   */
   async semanticSearch(
     queryVector: Float32Array,
     filter: FilterElement,
     limit: number,
-  ): Promise<Array<FileRecord & { similarity: number }>> {
-    return this.vectorSearch("image", queryVector, "mimeType LIKE 'image/%'", filter, limit);
+  ): Promise<Array<FileRecord & { similarity: number; matchTimeMs?: number }>> {
+    const [photos, videos] = await Promise.all([
+      this.vectorSearch("image", queryVector, "mimeType LIKE 'image/%'", filter, limit),
+      this.videoFrameSearch(queryVector, filter, limit),
+    ]);
+    return [...photos, ...videos]
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
+  }
+
+  /**
+   * The videos whose best frame matches, best first, filtered through SQL the
+   * same way vectorSearch filters photos.
+   */
+  private async videoFrameSearch(
+    queryVector: Float32Array,
+    filter: FilterElement,
+    limit: number,
+  ): Promise<Array<FileRecord & { similarity: number; matchTimeMs: number }>> {
+    const query = encodeEmbedding(queryVector);
+    if (!query) return [];
+    const { where, params } = filterToSQL(filter);
+    const mediaCondition = "mimeType LIKE 'video/%'";
+    const condition = where ? `${mediaCondition} AND (${where})` : mediaCondition;
+
+    const withTimes = async (
+      ranked: Array<{ folder: string; fileName: string; similarity: number; timeMs: number }>,
+    ) => {
+      const timeOf = new Map(ranked.map((r) => [`${r.folder}\u0000${r.fileName}`, r.timeMs]));
+      const rows = await this.fetchRankedFiles(ranked, condition, params);
+      return rows.map((row) => ({
+        ...row,
+        matchTimeMs: timeOf.get(`${row.folder}\u0000${row.fileName}`) ?? 0,
+      }));
+    };
+
+    const candidateLimit = Math.max(limit * 4, 2_000);
+    const candidates = await this.vectorIndex.searchFrames(query, candidateLimit);
+    const passing = await withTimes(candidates);
+    if (passing.length >= limit || candidates.length < candidateLimit) {
+      return passing.slice(0, limit);
+    }
+    const allowed = await this.db.all<{ folder: string; fileName: string }>(
+      `SELECT folder, fileName FROM files WHERE ${condition}`,
+      ...params,
+    );
+    const ranked = await this.vectorIndex.searchFrames(
+      query,
+      limit,
+      allowed.map(({ folder, fileName }) => [folder, fileName]),
+    );
+    return withTimes(ranked);
   }
 
   /**

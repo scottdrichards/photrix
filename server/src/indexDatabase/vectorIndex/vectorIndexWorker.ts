@@ -1,6 +1,8 @@
 import { parentPort } from "node:worker_threads";
 import Database from "better-sqlite3";
 import { VectorSet, type ScoredFile } from "./vectorSet.ts";
+import { FrameVectorSet, type ScoredFrameFile } from "./frameVectorSet.ts";
+import { decodeVideoFrameEmbeddings } from "../videoFrameEmbeddingCodec.ts";
 import type { VectorIndexRequest } from "./vectorIndexProtocol.ts";
 
 // Holds the in-memory embedding matrices off the main thread: a full scan is
@@ -11,29 +13,40 @@ import type { VectorIndexRequest } from "./vectorIndexProtocol.ts";
 // is in the snapshot and anything after arrives as a later upsert/remove.
 
 const sets = { image: new VectorSet(), audio: new VectorSet() };
+const videoFrames = new FrameVectorSet();
 
-const load = (dbPath: string): { image: number; audio: number } => {
+type LoadCounts = { image: number; audio: number; videos: number };
+
+const load = (dbPath: string): LoadCounts => {
   const db = new Database(dbPath, { readonly: true, fileMustExist: true });
   try {
     const rows = db
-      .prepare("SELECT folder, fileName, imageEmbedding, audioEmbedding FROM fileEmbeddings")
+      .prepare(
+        "SELECT folder, fileName, imageEmbedding, audioEmbedding, videoFrameEmbeddings FROM fileEmbeddings",
+      )
       .iterate() as IterableIterator<{
       folder: string;
       fileName: string;
       imageEmbedding: Buffer | null;
       audioEmbedding: Buffer | null;
+      videoFrameEmbeddings: Buffer | null;
     }>;
     for (const row of rows) {
       if (row.imageEmbedding) sets.image.upsert(row.folder, row.fileName, row.imageEmbedding);
       if (row.audioEmbedding) sets.audio.upsert(row.folder, row.fileName, row.audioEmbedding);
+      if (row.videoFrameEmbeddings) {
+        videoFrames.upsert(row.folder, row.fileName, decodeVideoFrameEmbeddings(row.videoFrameEmbeddings));
+      }
     }
   } finally {
     db.close();
   }
-  return { image: sets.image.size, audio: sets.audio.size };
+  return { image: sets.image.size, audio: sets.audio.size, videos: videoFrames.size };
 };
 
-const handle = (request: VectorIndexRequest): ScoredFile[] | { image: number; audio: number } | null => {
+const handle = (
+  request: VectorIndexRequest,
+): ScoredFile[] | ScoredFrameFile[] | LoadCounts | null => {
   switch (request.op) {
     case "load":
       return load(request.dbPath);
@@ -41,18 +54,28 @@ const handle = (request: VectorIndexRequest): ScoredFile[] | { image: number; au
       sets[request.kind].upsert(request.folder, request.fileName, request.vector);
       return null;
     case "remove":
-      for (const kind of request.kinds) sets[kind].remove(request.folder, request.fileName);
+      for (const kind of request.kinds) {
+        if (kind === "videoFrames") videoFrames.remove(request.folder, request.fileName);
+        else sets[kind].remove(request.folder, request.fileName);
+      }
       return null;
     case "removeFolder":
       sets.image.removeFolder(request.folderPrefix);
       sets.audio.removeFolder(request.folderPrefix);
+      videoFrames.removeFolder(request.folderPrefix);
       return null;
     case "move":
       sets.image.move(request.from, request.to);
       sets.audio.move(request.from, request.to);
+      videoFrames.move(request.from, request.to);
+      return null;
+    case "upsertFrames":
+      videoFrames.upsert(request.folder, request.fileName, request.frames);
       return null;
     case "search":
       return sets[request.kind].search(request.query, request.limit, request.allowed);
+    case "searchFrames":
+      return videoFrames.search(request.query, request.limit, request.allowed);
   }
 };
 

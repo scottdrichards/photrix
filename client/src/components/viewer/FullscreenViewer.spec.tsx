@@ -900,6 +900,24 @@ describe("FullscreenViewer", () => {
       selectPrevious: vi.fn(),
     });
 
+  it("opens a video found by image search at the moment that matched (feedback #150)", async () => {
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "direct",
+      url: "http://localhost/a/clip.mp4",
+      reason: "Direct playback — connection can carry the original",
+    });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    selectVideo({ searchMatchMs: 42_000, metadata: { duration: 90 } });
+
+    const { container } = render(<FullscreenViewer />);
+    await waitFor(() => expect(negotiateVideoPlaybackMock).toHaveBeenCalled());
+    const video = container.querySelector("video")!;
+    await waitFor(() => {
+      fireEvent(video, new Event("loadedmetadata"));
+      expect(video.currentTime).toBe(42);
+    });
+  });
+
   it("says what the player is doing while a video loads, and gets out of the way once it plays", async () => {
     let finishProbe: (profile: unknown) => void = () => {};
     probeVideoPlaybackProfileMock.mockReturnValue(

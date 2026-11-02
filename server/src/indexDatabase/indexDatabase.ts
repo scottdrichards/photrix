@@ -975,7 +975,7 @@ export class IndexDatabase {
   }
 
   private async removeFromVectorIndex(folder: string, fileName: string): Promise<void> {
-    await this.vectorIndex.remove({ folder, fileName }, ["image", "audio"]);
+    await this.vectorIndex.remove({ folder, fileName }, ["image", "audio", "videoFrames"]);
   }
 
   async removeFolder(relativePath: string): Promise<void> {
