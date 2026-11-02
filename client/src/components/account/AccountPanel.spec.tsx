@@ -78,6 +78,25 @@ describe("AccountPanel", () => {
     expect(mocks.fetchMcpKeys).toHaveBeenCalled();
   });
 
+  it("shows the rough place of an internet session when the server knows it", async () => {
+    mocks.fetchSessions.mockResolvedValue([
+      {
+        id: "sess1",
+        createdAt: 1_700_000_000_000,
+        lastSeenAt: 1_700_000_000_000,
+        current: true,
+        ip: "203.0.113.5",
+        location: "Internet",
+        place: "Portland, Oregon, United States",
+      },
+    ]);
+    render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+
+    expect(
+      await screen.findByText(/203\.0\.113\.5 \(Internet\) · Portland, Oregon, United States/),
+    ).toBeInTheDocument();
+  });
+
   it("reveals a newly generated MCP key exactly once", async () => {
     render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
     await screen.findByText("Signed in as alice");

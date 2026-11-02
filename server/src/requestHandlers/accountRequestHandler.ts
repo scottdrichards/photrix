@@ -21,6 +21,7 @@ import {
   listPasskeys,
 } from "../auth/passkeyService.ts";
 import { classifyIp, compareSessionsForList } from "../auth/ipLocation.ts";
+import { roughPlacesFor } from "../auth/ipGeolocation.ts";
 import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
@@ -161,20 +162,23 @@ export const accountRequestHandler = async (
 
   // --- Sessions ---
   if (pathname === "/api/account/sessions" && method === "GET") {
-    const sessions = listSessions(username);
+    const sessions = listSessions(username).map((s) => ({ session: s, ...classifyIp(s.ip) }));
+    // Rough place names for internet sessions only (feedback #152). Best effort:
+    // waits a moment at most, and a failed lookup just leaves the place out.
+    const places = await roughPlacesFor(
+      sessions.flatMap(({ ip, label }) => (ip && label === "Internet" ? [ip] : [])),
+    );
     writeJson(res, 200, {
       sessions: sessions
-        .map((s) => {
-          const { ip, label } = classifyIp(s.ip);
-          return {
-            id: idOf(s.token),
-            createdAt: s.createdAt,
-            lastSeenAt: s.lastSeenAt,
-            current: s.token === token,
-            ip,
-            location: label,
-          };
-        })
+        .map(({ session: s, ip, label }) => ({
+          id: idOf(s.token),
+          createdAt: s.createdAt,
+          lastSeenAt: s.lastSeenAt,
+          current: s.token === token,
+          ip,
+          location: label,
+          place: (ip && places.get(ip)) ?? null,
+        }))
         .sort(compareSessionsForList),
     });
     return;
