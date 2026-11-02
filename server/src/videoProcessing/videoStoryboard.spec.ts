@@ -9,6 +9,10 @@ import {
   storyboardFrameTime,
 } from "../../../shared/video-storyboard/src/index.ts";
 import { fillFrameGaps, generateVideoStoryboard } from "./videoStoryboard.ts";
+import { hasFfmpeg } from "./brokenVideos.fixture.ts";
+
+// Building a real sprite needs ffmpeg, which CI does not install.
+const describeWithFfmpeg = hasFfmpeg ? describe : describe.skip;
 
 describe("planStoryboard", () => {
   it("has no plan without a length", () => {
@@ -76,7 +80,7 @@ describe("fillFrameGaps", () => {
   });
 });
 
-describe("generateVideoStoryboard", () => {
+describeWithFfmpeg("generateVideoStoryboard", () => {
   const video = path.resolve("exampleFolder/subFolder/big_buck_bunny_20s_h265.mp4");
 
   it("builds a sprite laid out as the shared plan says", async () => {
