@@ -26,7 +26,17 @@
   column-gap: var(--space-m);
   row-gap: var(--space-s);
   padding-block: var(--space-s) var(--space-m);
-  padding-inline: var(--space-m);
+  /* Neither row's content grows past a bounded width — the search field
+     (SearchBar's .searchWrapper) caps out at 640px, and nothing in the
+     title row grows at all — so on a wide window a plain edge-to-edge
+     padding-inline left both rows stranded on the left/right with a
+     widening dead gap down the middle. 1200px is that bound: ~640px search
+     field + ~420px of filter icons + gaps is the widest the search row
+     ever uses. Past it, this grows the inline padding symmetrically
+     instead, so the extra room reads as deliberate framing margin rather
+     than an accident; narrower than that it's a no-op and the row lays out
+     exactly as before. */
+  padding-inline: max(var(--space-m), calc((100% - 1200px) / 2));
   background-color: var(--surface-glass);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--stroke2);
