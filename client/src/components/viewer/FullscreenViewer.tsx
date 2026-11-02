@@ -776,7 +776,7 @@ export function FullscreenViewer() {
                       </option>
                       {[...hlsLevels].reverse().map((level) => (
                         <option key={level.index} value={level.index}>
-                          {`${level.height}p`}
+                          {level.height >= 2160 ? "4K" : `${level.height}p`}
                         </option>
                       ))}
                     </select>

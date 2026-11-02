@@ -300,7 +300,7 @@ describe("filesRequestHandler representation paths", () => {
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
-      clampToSupportedHeight: jest.fn((h: number) => h),
+      clampToSupportedHeight: jest.fn((h: number, _size: unknown) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: false,
         complete: false,
@@ -387,7 +387,7 @@ describe("filesRequestHandler representation paths", () => {
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
-      clampToSupportedHeight: jest.fn((h: number) => h),
+      clampToSupportedHeight: jest.fn((h: number, _size: unknown) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: false,
@@ -452,7 +452,7 @@ describe("filesRequestHandler representation paths", () => {
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
-      clampToSupportedHeight: jest.fn((h: number) => h),
+      clampToSupportedHeight: jest.fn((h: number, _size: unknown) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: true,
@@ -517,7 +517,7 @@ describe("filesRequestHandler representation paths", () => {
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
-      clampToSupportedHeight: jest.fn((h: number) => h),
+      clampToSupportedHeight: jest.fn((h: number, _size: unknown) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: false,
         complete: false,
@@ -565,7 +565,7 @@ describe("filesRequestHandler representation paths", () => {
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
-      clampToSupportedHeight: jest.fn((h: number) => h),
+      clampToSupportedHeight: jest.fn((h: number, _size: unknown) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: false,
@@ -620,7 +620,7 @@ describe("filesRequestHandler representation paths", () => {
 
     jest.unstable_mockModule("../../videoProcessing/generateMultibitrateHLS.ts", () => ({
       generateVariantHLS: jest.fn(),
-      clampToSupportedHeight: jest.fn((h: number) => h),
+      clampToSupportedHeight: jest.fn((h: number, _size: unknown) => h),
       getMultibitrateHLSInfo: jest.fn(async () => ({
         initialized: true,
         complete: true,

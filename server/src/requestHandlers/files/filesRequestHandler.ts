@@ -384,6 +384,11 @@ const tryHLSStream = async (
     // Get duration from database, falling back to ffprobe if not indexed yet
     const fileRecord = await database.getFileRecord(subPath);
     let knownDuration = fileRecord?.duration;
+    // Decides whether the 4K rung is offered (feedback #165).
+    const sourceSize = {
+      width: fileRecord?.dimensionWidth,
+      height: fileRecord?.dimensionHeight,
+    };
 
     if (typeof knownDuration !== "number" || !Number.isFinite(knownDuration)) {
       // Without a duration the player still works; it just can't size the scrubber up front.
@@ -418,7 +423,7 @@ const tryHLSStream = async (
 
       // Create dirs + write the multi-variant master.m3u8 synchronously so the
       // response is immediate.
-      await prepareMultibitrateHLSStructure(normalizedPath);
+      await prepareMultibitrateHLSStructure(normalizedPath, sourceSize);
     }
 
     const segmentProduced = (variantHeight: number) => (index: number) =>
@@ -487,7 +492,7 @@ const tryHLSStream = async (
 
     // Serve variant segment — wait for FFmpeg to write it if not ready yet
     if (segment && variant) {
-      const variantHeight = clampToSupportedHeight(parseInt(variant, 10));
+      const variantHeight = clampToSupportedHeight(parseInt(variant, 10), sourceSize);
       const segmentPath = getVariantSegmentPath(hlsDir, variantHeight, segment);
       const segmentIndex = parseSegmentIndex(segment);
       touchVariant(hlsDir, variantHeight, segmentIndex ?? undefined);
@@ -556,7 +561,7 @@ const tryHLSStream = async (
 
     // Serve variant playlist
     if (variant) {
-      const variantHeight = clampToSupportedHeight(parseInt(variant, 10));
+      const variantHeight = clampToSupportedHeight(parseInt(variant, 10), sourceSize);
       touchVariant(hlsDir, variantHeight);
       const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}${tokenSuffix}&segment=`;
 

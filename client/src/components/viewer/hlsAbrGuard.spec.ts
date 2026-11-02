@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import Hls from "hls.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyDownswitch,
+  attachHlsAbrUpswitchGuard,
+  autoLevelCeiling,
   applyUpswitch,
   createInitialAbrGuardState,
   dwellForOscillationCount,
@@ -177,5 +180,68 @@ describe("climbing onto a rung that still has to be encoded", () => {
     expect(forwardBufferSeconds(media(5, [[0, 17]]))).toBe(12);
     expect(forwardBufferSeconds(media(20, [[0, 17], [30, 60]]))).toBe(0);
     expect(forwardBufferSeconds(media(30.2, [[0, 17], [30, 60]]))).toBeCloseTo(29.8);
+  });
+});
+
+describe("Auto's 1080p ceiling (feedback #165)", () => {
+  const ladder = (...heights: number[]) =>
+    heights.map((height, i) => ({ height, maxBitrate: 1_000_000 * (i + 1) }));
+
+  it("caps Auto below a 4K rung, and not at all without one", () => {
+    expect(autoLevelCeiling(ladder(360, 720, 1080, 2160))).toBe(2);
+    expect(autoLevelCeiling(ladder(360, 720, 1080))).toBe(-1);
+    expect(autoLevelCeiling(ladder(360))).toBe(-1);
+  });
+
+  /** Just enough of an Hls instance for the guard. */
+  const fakeHls = (levels: { height: number; maxBitrate: number }[]) => {
+    const handlers = new Map<string, (event: unknown, data: { level: number }) => void>();
+    const media = {
+      currentTime: 0,
+      buffered: { length: 1, start: () => 0, end: () => 60 },
+    };
+    const hls = {
+      levels,
+      autoLevelEnabled: true,
+      autoLevelCapping: -1,
+      bandwidthEstimate: 1_000_000_000,
+      media,
+      on: (event: string, fn: (event: unknown, data: { level: number }) => void) =>
+        handlers.set(event, fn),
+      off: (event: string) => handlers.delete(event),
+    };
+    const emit = (event: string, data: { level: number } = { level: 0 }) =>
+      handlers.get(event)?.(event, data);
+    return { hls, emit };
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("never lifts Auto onto the 4K rung, however fast the link", () => {
+    vi.useFakeTimers();
+    const { hls, emit } = fakeHls(ladder(360, 720, 1080, 2160));
+    const detach = attachHlsAbrUpswitchGuard(hls as unknown as Hls);
+
+    emit(Hls.Events.MANIFEST_PARSED);
+    expect(hls.autoLevelCapping).toBe(2);
+
+    emit(Hls.Events.LEVEL_SWITCHED, { level: 0 });
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(hls.autoLevelCapping).toBe(2);
+    detach();
+  });
+
+  it("still lifts Auto to the top of a ladder without 4K", () => {
+    vi.useFakeTimers();
+    const { hls, emit } = fakeHls(ladder(360, 720, 1080));
+    const detach = attachHlsAbrUpswitchGuard(hls as unknown as Hls);
+
+    emit(Hls.Events.MANIFEST_PARSED);
+    emit(Hls.Events.LEVEL_SWITCHED, { level: 0 });
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(hls.autoLevelCapping).toBe(-1);
+    detach();
   });
 });
