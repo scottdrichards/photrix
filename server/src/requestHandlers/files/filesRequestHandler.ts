@@ -47,6 +47,7 @@ import {
 import { getLogger } from "../../observability/logger.ts";
 
 const hlsLog = getLogger("HLS");
+const storyboardLog = getLogger("storyboard");
 import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
 import {
   getCachedVideoDuration,
@@ -59,6 +60,7 @@ import { writeJson } from "../../common/writeJson.ts";
 import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
 import { decodeRequestPath } from "../../common/decodeRequestPath.ts";
 import { attempt } from "../../common/result.ts";
+import { generateVideoStoryboard } from "../../videoProcessing/videoStoryboard.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -961,6 +963,36 @@ const fileHandler = async (
         message: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  // Feedback #168: the storyboard sprite the viewer shows while a video is
+  // being dragged through. Built on first request and cached; the layout is
+  // shared with the client (shared/video-storyboard).
+  if (representation === "storyboard") {
+    if (!isVideo) {
+      return writeJson(res, 415, {
+        error: "Unsupported Media Type",
+        message: "Storyboards are only available for video files",
+      });
+    }
+    const duration = (await database.getFileRecord(subPath))?.duration;
+    if (!duration) {
+      return writeJson(res, 404, { error: "Video duration unknown" });
+    }
+    const built = await attempt(generateVideoStoryboard(normalizedPath, duration));
+    if (!built.ok) {
+      storyboardLog.warn({ err: built.error, path: subPath }, "Storyboard generation failed");
+      return writeJson(res, 500, {
+        error: "Failed to generate storyboard",
+        message: built.error.message,
+      });
+    }
+    if (!built.value) {
+      return writeJson(res, 404, { error: "Could not generate storyboard" });
+    }
+    const cachedStats = await stat(built.value);
+    streamCachedFile(res, built.value, { contentType: "image/jpeg", size: cachedStats.size });
+    return;
   }
 
   // A whole H.264/AAC MP4 for the share dialog's "web-safe" and "smaller"

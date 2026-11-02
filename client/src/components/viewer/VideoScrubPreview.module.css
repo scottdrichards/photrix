@@ -1,0 +1,43 @@
+/* Feedback #168: the frame shown while dragging through a video. It sits
+   above the browser's own control bar, roughly over the point being dragged
+   to, and never takes the pointer, so the drag carries on underneath. */
+.preview {
+  /* A fixed height and the video's own shape, so a portrait video gets a
+     narrow frame rather than one taller than the player. */
+  --scrub-h: min(135px, 22vh);
+  --scrub-w: calc(var(--scrub-h) * var(--scrub-ar, 1.7778));
+  position: absolute;
+  bottom: 64px;
+  left: clamp(
+    calc(var(--scrub-w) / 2 + 8px),
+    calc(var(--scrub-fraction, 0.5) * 100%),
+    calc(100% - var(--scrub-w) / 2 - 8px)
+  );
+  transform: translateX(-50%);
+  width: var(--scrub-w);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.frame {
+  width: 100%;
+  height: var(--scrub-h);
+  background-color: #000;
+  background-repeat: no-repeat;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  border-radius: var(--radius-sm, 6px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+.time {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.95);
+  background: rgba(0, 0, 0, 0.7);
+}
