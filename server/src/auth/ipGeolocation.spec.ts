@@ -27,7 +27,7 @@ describe("createIpGeolocation", () => {
     delete process.env.PHOTRIX_IP_LOCATION;
   });
 
-  it("names the place from the first provider, spelling out the country", async () => {
+  it("names the place from ipapi.co, spelling out the country", async () => {
     const fetchImpl = fakeFetch(() =>
       json({ ip: "203.0.113.9", city: "Portland", region: "Oregon", country: "US" }),
     );
@@ -35,28 +35,45 @@ describe("createIpGeolocation", () => {
     const places = await placesFor(["203.0.113.9"]);
     expect(places.get("203.0.113.9")).toBe("Portland, Oregon, United States");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl.mock.calls[0][0]).toContain("ipinfo.io/203.0.113.9");
+    expect(fetchImpl.mock.calls[0][0]).toContain("ipapi.co/203.0.113.9");
   });
 
-  it("falls back to the second provider when the first fails", async () => {
-    const fetchImpl = fakeFetch((url) => {
-      if (url.includes("ipinfo.io")) throw new Error("ECONNRESET");
-      return json({ city: "Lyon", region: "Auvergne-Rhone-Alpes", country_name: "France" });
-    });
+  it("prefers the full country name when the answer has one", async () => {
+    const fetchImpl = fakeFetch(() =>
+      json({ city: "Lyon", region: "Auvergne-Rhone-Alpes", country: "FR", country_name: "France" }),
+    );
     const { placesFor } = createIpGeolocation({ fetchImpl });
     expect((await placesFor(["198.51.100.4"])).get("198.51.100.4")).toBe(
       "Lyon, Auvergne-Rhone-Alpes, France",
     );
   });
 
-  it("treats an error body or a rate limit as no answer", async () => {
-    const fetchImpl = fakeFetch((url) =>
-      url.includes("ipinfo.io")
-        ? json({ error: { title: "Rate limit exceeded" } }, 429)
-        : json({ error: true, reason: "RateLimited" }),
-    );
-    const { placesFor } = createIpGeolocation({ fetchImpl });
-    expect((await placesFor(["198.51.100.4"])).size).toBe(0);
+  it("falls back to the next provider when one fails", async () => {
+    const fetchImpl = fakeFetch((url) => {
+      if (url.includes("first.test")) throw new Error("ECONNRESET");
+      return json({ city: "Lyon" });
+    });
+    const { placesFor } = createIpGeolocation({
+      fetchImpl,
+      providers: [
+        { name: "first", url: (ip) => `https://first.test/${ip}`, parse: () => "never" },
+        { name: "second", url: (ip) => `https://second.test/${ip}`, parse: () => "Lyon" },
+      ],
+    });
+    expect((await placesFor(["198.51.100.4"])).get("198.51.100.4")).toBe("Lyon");
+  });
+
+  it("treats an error body, a rate limit or a network error as no answer", async () => {
+    for (const handler of [
+      () => json({ error: true, reason: "RateLimited" }),
+      () => json({ error: true, reason: "RateLimited" }, 429),
+      () => {
+        throw new Error("ECONNRESET");
+      },
+    ]) {
+      const { placesFor } = createIpGeolocation({ fetchImpl: fakeFetch(handler) });
+      expect((await placesFor(["198.51.100.4"])).size).toBe(0);
+    }
   });
 
   it("caches answers, and failures for a shorter time", async () => {

@@ -3,11 +3,12 @@
  * sessions in the account list (feedback #152).
  *
  * There is no GeoIP database in this project, so this asks a public lookup
- * service. Those services change their terms, rate-limit and disappear, so
- * nothing here may depend on one:
+ * service (ipapi.co, keyless HTTPS). Such services change their terms,
+ * rate-limit and disappear, so nothing here may depend on it:
  *
- * - Two keyless HTTPS providers, tried in order. If both fail the session
- *   simply shows "Internet", as it did before.
+ * - If the lookup fails the session simply shows "Internet", as it did
+ *   before. `PROVIDERS` is a list, tried in order, so another service can be
+ *   added without touching the rest.
  * - Only public addresses are looked up. Private, loopback and link-local
  *   addresses never leave the server.
  * - Answers are cached (a week; a failure for an hour), so opening the account
@@ -70,18 +71,6 @@ const field = (body: unknown, key: string): unknown =>
   body && typeof body === "object" ? (body as Record<string, unknown>)[key] : undefined;
 
 export const PROVIDERS: readonly Provider[] = [
-  {
-    name: "ipinfo.io",
-    url: (ip) => `https://ipinfo.io/${encodeURIComponent(ip)}/json`,
-    parse: (body) =>
-      field(body, "bogon") || field(body, "error")
-        ? null
-        : formatPlace(
-            text(field(body, "city")),
-            text(field(body, "region")),
-            countryName(field(body, "country")),
-          ),
-  },
   {
     name: "ipapi.co",
     url: (ip) => `https://ipapi.co/${encodeURIComponent(ip)}/json/`,
