@@ -38,6 +38,11 @@
      #121/#122/#123) so it no longer competes with this stack at all. */
   position: relative;
   z-index: 2;
+  /* So the padding/gap changes below glide during a live window-resize drag
+     instead of snapping the instant a breakpoint is crossed. */
+  transition:
+    padding-block 200ms ease,
+    column-gap 200ms ease;
   .title {
     grid-area: title;
     min-width: 0;
@@ -50,6 +55,7 @@
       font-size: 2rem;
       line-height: 1.2;
       flex-shrink: 0;
+      transition: font-size 200ms ease;
     }
     /* One line, truncated, rather than wrapping under the wordmark. */
     small {
@@ -192,10 +198,14 @@
   }
 }
 
-/* ── Phones ──
-   Row 1: wordmark + compact icon buttons.  Row 2: a full-width search field
-   with the Filters toggle beside it; the filter icons open as a third row. */
-@media (max-width: 720px) {
+/* ── Narrow tablets ──
+   Row 1 (wordmark + icon buttons) compacts on its own, ahead of row 2's
+   phone layout below. Splitting this off from the 720px breakpoint means a
+   user dragging the window narrower sees one smaller change here, then a
+   second, separate one at 720px — instead of both rows reorganizing, and
+   the subtitle vanishing, on the very same pixel (reported as the header
+   "flowing weird" while resizing). */
+@media (max-width: 820px) {
   .header {
     column-gap: var(--space-s);
     padding-block: var(--space-xs) var(--space-s);
@@ -215,13 +225,22 @@
 
   .headerActions > :global(.btn) {
     padding: 7px;
+    transition:
+      background 120ms,
+      border-color 120ms,
+      padding 150ms ease;
   }
 
   .headerActions .themeToggle {
     zoom: 0.75;
     margin-inline-end: var(--space-xs);
   }
+}
 
+/* ── Phones ──
+   Row 2: a full-width search field with the Filters toggle beside it; the
+   filter icons open as a third row. */
+@media (max-width: 720px) {
   .searchRow {
     flex-wrap: wrap;
     gap: var(--space-s);
