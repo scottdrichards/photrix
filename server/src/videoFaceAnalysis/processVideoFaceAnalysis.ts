@@ -5,7 +5,7 @@ import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { getLogger } from "../observability/logger.ts";
 import { recordServerDiagnosticEvent } from "../observability/diagnosticsStore.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import type { AnalysisStore } from "../indexDatabase/analysisStore.ts";
+import type { AnalysisStore, QueuedVideoAnalysis } from "../indexDatabase/analysisStore.ts";
 import type { FaceStore } from "../indexDatabase/faceStore.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
@@ -20,7 +20,6 @@ import { collapseFaceTracks, type FrameFaces } from "./collapseFaceTracks.ts";
 import {
   createVideoFaceEta,
   orderVideoFaceQueue,
-  type QueuedVideoFaces,
   type VideoFaceCostInputs,
 } from "./videoFaceCost.ts";
 
@@ -58,11 +57,12 @@ type VideoFaceDatabase = Pick<IndexDatabase, "storagePath"> & {
     | "saveImageAnalysisDecodeError"
     | "getVideoFaceAnalysisProgress"
     | "getVideoFaceQueueCostInputs"
+    | "saveVideoFrameEmbeddings"
   >;
   faces: Pick<FaceStore, "saveFaceDetectionResult">;
 };
 
-type QueuedVideo = QueuedVideoFaces;
+type QueuedVideo = QueuedVideoAnalysis;
 
 /**
  * `unreadable` is the file's own fault (truncated, nothing decodable). It is
@@ -161,11 +161,21 @@ export const processVideoFaceAnalysis = (
     }
   };
 
-  /** Frames analysed, with the time spent in the face model. */
-  const detectInFrames = async (
+  /**
+   * Frames analysed, with the time spent in the worker. Asks only for what the
+   * video still lacks: faces, the frames' CLIP vectors (feedback #150), or both,
+   * from the one decode of each frame.
+   */
+  const analyzeFrames = async (
     frames: AnalysisFrame[],
-  ): Promise<{ frameFaces: FrameFaces[]; detectMs: number }> => {
+    needs: { faces: boolean; embed: boolean },
+  ): Promise<{
+    frameFaces: FrameFaces[];
+    frameEmbeddings: Array<{ timeMs: number; embedding: Float32Array }>;
+    detectMs: number;
+  }> => {
     const frameFaces: FrameFaces[] = [];
+    const frameEmbeddings: Array<{ timeMs: number; embedding: Float32Array }> = [];
     let detectMs = 0;
     for (const frame of frames) {
       ctrl.checkCancelled();
@@ -173,14 +183,18 @@ export const processVideoFaceAnalysis = (
       ctrl.checkCancelled();
       const startedAt = now();
       try {
-        const result = await analyzeImage(frame.path, { faces: true, embed: false });
-        if (result.facesError) throw new Error(result.facesError);
+        const result = await analyzeImage(frame.path, needs);
+        if (needs.faces && result.facesError) throw new Error(result.facesError);
+        if (needs.embed && result.embeddingError) throw new Error(result.embeddingError);
         frameFaces.push({
           timeMs: frame.timeMs,
           startMs: frame.startMs,
           endMs: frame.endMs,
           faces: result.faces ?? [],
         });
+        if (needs.embed && result.embedding) {
+          frameEmbeddings.push({ timeMs: frame.timeMs, embedding: result.embedding });
+        }
       } catch (error) {
         if (isWorkerEvictedError(error)) throw new WorkerEvicted();
         // One frame ffmpeg wrote but Pillow can't read loses that frame only.
@@ -193,7 +207,7 @@ export const processVideoFaceAnalysis = (
         detectMs += now() - startedAt;
       }
     }
-    return { frameFaces, detectMs };
+    return { frameFaces, frameEmbeddings, detectMs };
   };
 
   /** Starts reading a video's frames into its own scratch directory. */
@@ -235,7 +249,7 @@ export const processVideoFaceAnalysis = (
     { video, extracted: pending }: Extraction,
     readAhead: () => void,
   ): Promise<VideoOutcome> => {
-    const { relativePath, durationSeconds } = video;
+    const { relativePath, durationSeconds, needsFaces, needsEmbedding } = video;
     // With the read-ahead working, this is the face model sitting idle.
     const waitStartedAt = now();
     const extracted = await pending;
@@ -264,11 +278,17 @@ export const processVideoFaceAnalysis = (
       }
 
       readAhead();
-      const { frameFaces, detectMs } = await detectInFrames(frames);
-      const faces = collapseFaceTracks(frameFaces);
+      const { frameFaces, frameEmbeddings, detectMs } = await analyzeFrames(frames, {
+        faces: needsFaces,
+        embed: needsEmbedding,
+      });
+      const faces = needsFaces ? collapseFaceTracks(frameFaces) : [];
       // No `regions` write, unlike photos: regions drive the box overlay in the
       // viewer, and a box from one frame means nothing over a playing video.
-      await database.faces.saveFaceDetectionResult(relativePath, faces);
+      if (needsFaces) await database.faces.saveFaceDetectionResult(relativePath, faces);
+      if (needsEmbedding) {
+        await database.analysis.saveVideoFrameEmbeddings(relativePath, frameEmbeddings);
+      }
       const predicted = eta.record(video, {
         extractMs,
         detectMs,
@@ -283,7 +303,8 @@ export const processVideoFaceAnalysis = (
             video.sizeBytes === undefined ? undefined : Math.round(video.sizeBytes / 1e6),
           frames: frames.length,
           detections: frameFaces.reduce((sum, f) => sum + f.faces.length, 0),
-          faces: faces.length,
+          faces: needsFaces ? faces.length : undefined,
+          framesEmbedded: needsEmbedding ? frameEmbeddings.length : undefined,
           extractMs,
           framesWaitMs,
           detectMs,
@@ -422,7 +443,7 @@ export const processVideoFaceAnalysis = (
         itemsProcessed: done,
         total,
         portionComplete: total > 0 ? done / total : undefined,
-        description: ["Finding faces in videos", ...notes].join(" • "),
+        description: ["Finding faces and searchable scenes in videos", ...notes].join(" • "),
         ...(etaMs !== undefined ? { etaMs } : {}),
       };
     },

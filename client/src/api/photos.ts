@@ -339,7 +339,11 @@ export const fetchSemanticSearch = async ({
   if (filterParam) params.set("filter", filterParam);
 
   type SemanticSearchResult = {
-    items: (import("./types").ApiPhotoItem & { similarity: number; sources?: import("./types").SearchSource[] })[];
+    items: (import("./types").ApiPhotoItem & {
+      similarity: number;
+      sources?: import("./types").SearchSource[];
+      matchTimeMs?: number;
+    })[];
     total: number;
     query: string;
     sourceStatus?: SearchSourceStatus;
@@ -366,6 +370,7 @@ export const fetchSemanticSearch = async ({
     items: payload.items.map((item) => ({
       ...createPhotoItem(item),
       searchSources: item.sources,
+      ...(typeof item.matchTimeMs === "number" ? { searchMatchMs: item.matchTimeMs } : {}),
     })),
     total: payload.total,
     page: 1,

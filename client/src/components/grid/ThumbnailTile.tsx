@@ -37,6 +37,21 @@ const SOURCE_LABELS: Record<SearchSource, string> = {
   transcript: "Matched in transcript",
 };
 
+/** "0:42" / "1:02:05", for the moment in a video a search matched. */
+const formatMatchTime = (ms: number): string => {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = String(total % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+};
+
+/** A video matched on image content names the moment (feedback #150). */
+const sourceLabel = (source: SearchSource, matchMs: number | undefined): string =>
+  source === "image" && matchMs !== undefined
+    ? `${SOURCE_LABELS.image} at ${formatMatchTime(matchMs)}`
+    : SOURCE_LABELS[source];
+
 const SOURCE_ICONS: Record<SearchSource, React.ReactNode> = {
   image: <Image24Regular fontSize={14} />,
   audio: <MusicNote224Regular fontSize={14} />,
@@ -763,10 +778,14 @@ export const ThumbnailTile: React.FC<Props> = (props) => {
       {showMatchReasons && searchSources && searchSources.length > 0 ? (
         <span
           className={css.sourceBadges}
-          aria-label={`Matched by: ${searchSources.map((s) => SOURCE_LABELS[s]).join(", ")}`}
+          aria-label={`Matched by: ${searchSources.map((s) => sourceLabel(s, photo.searchMatchMs)).join(", ")}`}
         >
           {searchSources.map((source) => (
-            <span key={source} className={css.sourceBadge} title={SOURCE_LABELS[source]}>
+            <span
+              key={source}
+              className={css.sourceBadge}
+              title={sourceLabel(source, photo.searchMatchMs)}
+            >
               {SOURCE_ICONS[source]}
             </span>
           ))}

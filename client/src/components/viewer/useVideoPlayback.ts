@@ -95,6 +95,9 @@ export const useVideoPlayback = ({
   // Playback position to restore after a direct→HLS switch, so the fallback resumes
   // where buffering stalled instead of jumping to the start.
   const resumeTimeRef = useRef<number | null>(null);
+  // The video a search-match start was last applied to, so it is applied once
+  // per opening and not again on a retry or a direct→HLS switch.
+  const searchStartAppliedRef = useRef<string | null>(null);
   // Derived so navigating to a different video clears the flag in the same render
   // (no extra effect run / flicker) — a fresh video starts by trying direct again.
   const forceTranscode = forcedTranscodePath !== null && forcedTranscodePath === photo?.path;
@@ -127,6 +130,15 @@ export const useVideoPlayback = ({
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !photo || photo.mediaType !== "video") return;
+
+    // Feedback #150: a video found by image search opens at the moment that
+    // matched, through the same resume path a direct→HLS switch uses.
+    if (searchStartAppliedRef.current !== photo.path) {
+      searchStartAppliedRef.current = photo.path;
+      if (photo.searchMatchMs && photo.searchMatchMs > 0) {
+        resumeTimeRef.current ??= photo.searchMatchMs / 1000;
+      }
+    }
 
     let cancelled = false;
     const clientOperationId = playbackOperationIdRef.current ?? createClientOperationId();

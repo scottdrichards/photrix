@@ -403,6 +403,9 @@ export const tables = {
       // Both int8-quantized unit vectors — see indexDatabase/embeddingCodec.ts.
       { name: "imageEmbedding", type: "BLOB" },
       { name: "audioEmbedding", type: "BLOB" },
+      // A video's sampled frames, each with its time, so CLIP search finds the
+      // moment that matches (feedback #150). See videoFrameEmbeddingCodec.ts.
+      { name: "videoFrameEmbeddings", type: "BLOB" },
     ],
     compositeIndexes: [],
   },

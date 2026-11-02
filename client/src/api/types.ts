@@ -34,6 +34,8 @@ export interface PhotoItem {
   name: string;
   mediaType: "photo" | "video";
   searchSources?: SearchSource[];
+  /** For a video found by image search: the moment that matched, in ms (feedback #150). */
+  searchMatchMs?: number;
   originalUrl: string;
   thumbnailUrl: string;
   microThumbnailUrl?: string;

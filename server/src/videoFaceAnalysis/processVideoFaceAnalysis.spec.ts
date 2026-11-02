@@ -53,6 +53,58 @@ describe("processVideoFaceAnalysis", () => {
     ]);
   });
 
+  it("embeds the frames of a video whose faces are done, and leaves its faces alone (feedback #150)", async () => {
+    const asked: Array<{ faces: boolean; embed: boolean }> = [];
+    const fake = fakeDatabase([
+      { relativePath: "v/old.mp4", needsFaces: false, needsEmbedding: true },
+    ]);
+    const runner = processVideoFaceAnalysis(
+      fake.db,
+      async (p, options) => {
+        asked.push(options);
+        return { embedding: Float32Array.of(path.basename(p) === "f0.jpg" ? 1 : 0, 1) };
+      },
+      framesAt(0, 3_000),
+    );
+    await runner.onComplete();
+    expect(asked).toEqual([
+      { faces: false, embed: true },
+      { faces: false, embed: true },
+    ]);
+    expect(fake.saved.has("v/old.mp4")).toBe(false);
+    expect(fake.embedded.get("v/old.mp4")?.map((f) => f.timeMs)).toEqual([0, 3_000]);
+  });
+
+  it("finds faces and embeds frames from one read of a new video", async () => {
+    const asked: Array<{ faces: boolean; embed: boolean }> = [];
+    const fake = fakeDatabase([{ relativePath: "v/new.mp4", needsEmbedding: true }]);
+    const runner = processVideoFaceAnalysis(
+      fake.db,
+      async (_p, options) => {
+        asked.push(options);
+        return { faces: [detected(0)], embedding: Float32Array.of(1, 0) };
+      },
+      framesAt(0),
+    );
+    await runner.onComplete();
+    expect(asked).toEqual([{ faces: true, embed: true }]);
+    expect(fake.saved.get("v/new.mp4")).toHaveLength(1);
+    expect(fake.embedded.get("v/new.mp4")).toHaveLength(1);
+  });
+
+  it("starts the cooldown when CLIP fails on a frame, saving nothing", async () => {
+    const fake = fakeDatabase([{ relativePath: "v/bad.mp4", needsEmbedding: true }]);
+    const runner = processVideoFaceAnalysis(
+      fake.db,
+      async () => ({ faces: [], embeddingError: "CUDA out of memory" }),
+      framesAt(0),
+    );
+    await runner.onComplete();
+    expect(fake.errors).toEqual(["v/bad.mp4"]);
+    expect(fake.saved.has("v/bad.mp4")).toBe(false);
+    expect(fake.embedded.has("v/bad.mp4")).toBe(false);
+  });
+
   it("records a video with no faces as done, so it isn't scanned again", async () => {
     const { saved } = await run(
       [{ relativePath: "v/empty.mp4" }],
@@ -186,7 +238,7 @@ describe("processVideoFaceAnalysis", () => {
     }
     const status = await runner.getStatus!();
     expect(status.description).toBe(
-      "Finding faces in videos • 1 failed, retrying in a week",
+      "Finding faces and searchable scenes in videos • 1 failed, retrying in a week",
     );
     // Only the big clip is left: its 500 MB read, not a third of a 3-video run.
     expect(status.etaMs).toBeGreaterThan(5_000);

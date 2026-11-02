@@ -209,6 +209,15 @@ describe("video face queue", () => {
         /* drain */
       }
 
+      // Faces done, it stays queued for its frames' CLIP vectors (feedback #150).
+      expect(await db.analysis.getVideosNeedingFaceAnalysis()).toEqual([
+        expect.objectContaining({
+          relativePath: "/v/party.mp4",
+          needsFaces: false,
+          needsEmbedding: true,
+        }),
+      ]);
+      await db.analysis.saveVideoFrameEmbeddings("v/party.mp4", []);
       expect(await db.analysis.getVideosNeedingFaceAnalysis()).toEqual([]);
 
       const result = await db.faceClusters.queryFaceClusters({ filter: {} });

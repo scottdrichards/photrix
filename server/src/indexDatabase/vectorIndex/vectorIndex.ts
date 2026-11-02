@@ -2,7 +2,8 @@ import { Worker } from "node:worker_threads";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ScoredFile } from "./vectorSet.ts";
-import type { EmbeddingKind, VectorIndexRequest } from "./vectorIndexProtocol.ts";
+import type { ScoredFrameFile } from "./frameVectorSet.ts";
+import type { EmbeddingKind, IndexedKind, VectorIndexRequest } from "./vectorIndexProtocol.ts";
 
 // Same dev/compiled split as AsyncSqlite: under tsx the worker needs the .mjs
 // shim that registers the TypeScript loader; compiled, it is plain JavaScript.
@@ -31,7 +32,7 @@ export class VectorIndex {
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private failure: Error | null = null;
   /** Resolves once the initial load from the database has finished. */
-  readonly loaded: Promise<{ image: number; audio: number }>;
+  readonly loaded: Promise<{ image: number; audio: number; videos: number }>;
 
   constructor(dbPath: string) {
     this.worker = new Worker(workerScriptPath);
@@ -52,14 +53,34 @@ export class VectorIndex {
     // same policy AsyncSqlite applies to its workers.
     this.worker.on("error", (error: Error) => this.fail(error));
     this.worker.on("exit", (code) => this.fail(new Error(`Vector index worker exited with code ${code}`)));
-    this.loaded = this.request<{ image: number; audio: number }>({ op: "load", dbPath });
+    this.loaded = this.request<{ image: number; audio: number; videos: number }>({
+      op: "load",
+      dbPath,
+    });
   }
 
   upsert(kind: EmbeddingKind, file: FileKey, vector: Uint8Array): Promise<void> {
     return this.request({ op: "upsert", kind, vector, ...file });
   }
 
-  remove(file: FileKey, kinds: EmbeddingKind[]): Promise<void> {
+  /** Replaces every frame vector of a video (feedback #150). */
+  upsertFrames(
+    file: FileKey,
+    frames: Array<{ timeMs: number; embedding: Uint8Array }>,
+  ): Promise<void> {
+    return this.request({ op: "upsertFrames", frames, ...file });
+  }
+
+  /** The best videos for a query, each at its best-matching frame. */
+  searchFrames(
+    query: Uint8Array,
+    limit: number,
+    allowed?: Array<[folder: string, fileName: string]>,
+  ): Promise<ScoredFrameFile[]> {
+    return this.request({ op: "searchFrames", query, limit, allowed });
+  }
+
+  remove(file: FileKey, kinds: IndexedKind[]): Promise<void> {
     return this.request({ op: "remove", kinds, ...file });
   }
 
