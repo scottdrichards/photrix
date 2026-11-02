@@ -376,6 +376,7 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
                       {formatDate(s.lastSeenAt)}
                       {" · "}
                       {s.ip ? `${s.ip} (${s.location})` : s.location}
+                      {s.place ? ` · ${s.place}` : ""}
                     </span>
                   </div>
                   {!s.current && (

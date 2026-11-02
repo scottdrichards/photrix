@@ -4,6 +4,10 @@ import type http from "node:http";
 import Database from "better-sqlite3";
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
 
+// Sessions from public test addresses must not reach a real IP-location
+// service. The one test about place names turns lookups back on with a stub.
+process.env.PHOTRIX_IP_LOCATION = "off";
+
 // A minimal stand-in for AsyncSqlite backed by a real in-memory sqlite db, just
 // enough of the surface (all/run/get with the "sql, ...params" calling
 // convention used throughout authService.ts) to exercise real SQL — needed for
@@ -188,6 +192,40 @@ describe("accountRequestHandler", () => {
     expect(out.getStatus()).toBe(200);
     expect(authService.validateToken(t1)).toBe(false);
     expect(authService.validateToken(t2)).toBe(false);
+  });
+
+  it("names the rough place of an internet session, and never looks up a local one", async () => {
+    const realFetch = globalThis.fetch;
+    delete process.env.PHOTRIX_IP_LOCATION;
+    const asked: string[] = [];
+    const stub = async (url: string) => {
+      asked.push(url);
+      return Response.json({ city: "Portland", region: "Oregon", country: "US" });
+    };
+    globalThis.fetch = stub as typeof fetch;
+    try {
+      const { accountRequestHandler, authService } = await load();
+      const local = authService.issueToken("gail", "10.0.0.5");
+      const remote = authService.issueToken("gail", "203.0.113.50");
+
+      const listed = createJsonResponse();
+      await accountRequestHandler(makeReq("/api/account/sessions", "GET", local), listed.res);
+      const { sessions } = listed.getJson<{
+        sessions: Array<{ ip: string | null; place: string | null }>;
+      }>();
+      expect(sessions).toEqual([
+        expect.objectContaining({ ip: "203.0.113.50", place: "Portland, Oregon, United States" }),
+        expect.objectContaining({ ip: "10.0.0.5", place: null }),
+      ]);
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).toContain("203.0.113.50");
+
+      await authService.revokeToken(local);
+      await authService.revokeToken(remote);
+    } finally {
+      globalThis.fetch = realFetch;
+      process.env.PHOTRIX_IP_LOCATION = "off";
+    }
   });
 
   it("includes a coarse IP/location classification per session", async () => {

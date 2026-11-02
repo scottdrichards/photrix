@@ -27,6 +27,8 @@ export type Session = {
   current: boolean;
   ip: string | null;
   location: string;
+  /** Rough place for an internet session, e.g. "Portland, Oregon, United States". */
+  place?: string | null;
 };
 
 const jsonPost = <T>(url: string, label: string, body?: unknown): Promise<T> =>
