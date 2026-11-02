@@ -198,6 +198,26 @@ export const forwardBufferSeconds = (
   return 0;
 };
 
+/**
+ * Auto mode never climbs above this height (feedback #165). A 4K source also
+ * offers a 2160p rung, but the server encodes it at barely above real time,
+ * enough for one viewer who asked for it, not for every fast connection that
+ * would otherwise drift up to it. It stays a choice in the quality menu.
+ */
+export const AUTO_MAX_HEIGHT = 1080;
+
+/**
+ * The `autoLevelCapping` that keeps Auto at or below AUTO_MAX_HEIGHT: the
+ * highest such level's index, or -1 (no cap) when every level is that small.
+ */
+export const autoLevelCeiling = (levels: readonly { height: number }[]): number => {
+  let ceiling = -1;
+  levels.forEach((level, index) => {
+    if (level.height <= AUTO_MAX_HEIGHT) ceiling = index;
+  });
+  return ceiling === levels.length - 1 ? -1 : ceiling;
+};
+
 // ---------------------------------------------------------------------------
 // hls.js wiring
 // ---------------------------------------------------------------------------
@@ -230,10 +250,14 @@ export const attachHlsAbrUpswitchGuard = (hls: Hls): (() => void) => {
     previousLevel = data.level;
   };
 
+  // Auto's ceiling for this stream: -1 when nothing is above AUTO_MAX_HEIGHT.
+  let ceiling = -1;
+
   const onManifestParsed = () => {
     state = createInitialAbrGuardState();
     previousLevel = null;
-    hls.autoLevelCapping = -1;
+    ceiling = autoLevelCeiling(hls.levels);
+    hls.autoLevelCapping = ceiling;
   };
 
   hls.on(Hls.Events.LEVEL_SWITCHED, onLevelSwitched);
@@ -251,10 +275,13 @@ export const attachHlsAbrUpswitchGuard = (hls: Hls): (() => void) => {
     const candidateIndex = state.capIndex + 1;
     const candidateLevel = hls.levels[candidateIndex];
     if (!candidateLevel) return;
+    // Never lift Auto past its ceiling; only the quality menu goes higher.
+    const topIndex = ceiling === -1 ? hls.levels.length - 1 : ceiling;
+    if (candidateIndex > topIndex) return;
 
     if (shouldUpswitch(state, now, candidateLevel.maxBitrate, forwardBufferSeconds(hls.media))) {
-      const isTopLevel = candidateIndex >= hls.levels.length - 1;
-      const nextCap = isTopLevel ? -1 : candidateIndex;
+      const isTopLevel = candidateIndex >= topIndex;
+      const nextCap = isTopLevel ? ceiling : candidateIndex;
       state = applyUpswitch(state, now, candidateIndex);
       hls.autoLevelCapping = nextCap;
     }

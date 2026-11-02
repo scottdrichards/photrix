@@ -120,7 +120,7 @@ describe("prepareMultibitrateHLSStructure", () => {
       getMultibitrateHLSDirectory,
     } = await import("./generateMultibitrateHLS.ts");
 
-    await prepareMultibitrateHLSStructure(source);
+    await prepareMultibitrateHLSStructure(source, { width: 1920, height: 1080 });
 
     const hlsDir = getMultibitrateHLSDirectory(source);
     const master = readFileSync(getMasterPlaylistPath(hlsDir), "utf-8");
@@ -135,6 +135,57 @@ describe("prepareMultibitrateHLSStructure", () => {
     for (const h of ["360p", "720p", "1080p"]) {
       expect(() => accessSync(path.join(hlsDir, h))).not.toThrow();
     }
+  });
+});
+
+describe("the 4K rung (feedback #165)", () => {
+  const prepare = async (size: { width?: number | null; height?: number | null }) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-uhd-"));
+    process.env.CACHE_DIR = root;
+    process.env.HLS_CACHE_DIR = root;
+    const source = path.join(root, "video.mp4");
+    writeFileSync(source, "video");
+    const mod = await import("./generateMultibitrateHLS.ts");
+    await mod.prepareMultibitrateHLSStructure(source, size);
+    const hlsDir = mod.getMultibitrateHLSDirectory(source);
+    return { master: readFileSync(mod.getMasterPlaylistPath(hlsDir), "utf-8"), hlsDir };
+  };
+
+  it("is offered, last, for a 4K source, landscape or portrait", async () => {
+    for (const size of [
+      { width: 3840, height: 2160 },
+      { width: 2160, height: 3840 },
+    ]) {
+      jest.resetModules();
+      const { master, hlsDir } = await prepare(size);
+      expect(master).toContain("RESOLUTION=3840x2160");
+      expect(master).toContain("2160p/playlist.m3u8");
+      expect(master.indexOf("1080p")).toBeLessThan(master.indexOf("2160p"));
+      expect(() => accessSync(path.join(hlsDir, "2160p"))).not.toThrow();
+    }
+  });
+
+  it("is not offered for a smaller or unknown-size source", async () => {
+    for (const size of [
+      { width: 2560, height: 1440 },
+      { width: 1080, height: 1920 },
+      { width: null, height: null },
+    ]) {
+      jest.resetModules();
+      const { master, hlsDir } = await prepare(size);
+      expect(master).not.toContain("2160p");
+      expect(() => accessSync(path.join(hlsDir, "2160p"))).toThrow();
+    }
+  });
+
+  it("is never served for a source too small for it", async () => {
+    const { clampToSupportedHeight } = await import("./generateMultibitrateHLS.ts");
+    const uhd = { width: 3840, height: 2160 };
+    const hd = { width: 1920, height: 1080 };
+    expect(clampToSupportedHeight(2160, uhd)).toBe(2160);
+    expect(clampToSupportedHeight(2160, hd)).toBe(1080);
+    expect(clampToSupportedHeight(1080, hd)).toBe(1080);
+    expect(clampToSupportedHeight(999, uhd)).toBe(720);
   });
 });
 

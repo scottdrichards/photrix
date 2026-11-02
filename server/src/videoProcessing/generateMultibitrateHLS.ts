@@ -69,8 +69,7 @@ type Variant = {
  * only while actually being fetched: a single ffmpeg encode of one variant runs well
  * above real time, and an idle variant's encode is reaped within seconds of an ABR
  * switch, so at most ~1 (briefly 2, across a switch) run concurrently rather than all
- * three. 2160p (4K) is intentionally not offered: it is the heaviest to encode, rarely
- * beneficial in a browser viewer, and the biggest throughput risk.
+ * three. A 4K source also gets {@link UHD_VARIANT}.
  */
 const HLS_VARIANTS: readonly Variant[] = [
   { height: 360, bitrate: 800_000, maxrate: "1M", bufsize: "1.5M", audioBitrate: "96k" },
@@ -84,14 +83,56 @@ const HLS_VARIANTS: readonly Variant[] = [
   },
 ] as const;
 
-const VARIANT_BY_HEIGHT = new Map(HLS_VARIANTS.map((v) => [v.height, v]));
+/**
+ * 2160p (4K), feedback #165. Offered only when the source is at least that
+ * size (both sides at least 2160 px), so nothing is ever upscaled.
+ *
+ * It is the one rung the encoder barely keeps up with. Measured on the dev
+ * host's i7-10610U iGPU with the whole chain on the GPU, from 20 s of each
+ * source: 4K30 8-bit 1.22x realtime, 4K60 1.08x, 4K30 10-bit 1.27x (1080p from
+ * the same sources: 2.2-2.6x). That is enough for one viewer, not several, so
+ * the client never climbs to it by itself: it is a choice in the quality
+ * menu (see the client's hlsAbrGuard).
+ */
+export const UHD_VARIANT: Variant = {
+  height: 2160,
+  bitrate: 16_000_000,
+  maxrate: "24M",
+  bufsize: "24M",
+  audioBitrate: "160k",
+};
+
+/** Smallest side, in pixels, a source needs for {@link UHD_VARIANT}. */
+const UHD_MIN_SHORT_SIDE = 2160;
+
+/** Source dimensions as indexed; either may be unknown. */
+type SourceSize = { width?: number | null; height?: number | null };
+
+/** True when the source is big enough for the 4K rung. Unknown size counts as no. */
+export const isUhdSource = ({ width, height }: SourceSize): boolean =>
+  typeof width === "number" &&
+  typeof height === "number" &&
+  Math.min(width, height) >= UHD_MIN_SHORT_SIDE;
+
+/** The variants a source of this size is offered, lowest first. */
+export const variantsForSource = (size: SourceSize): readonly Variant[] =>
+  isUhdSource(size) ? [...HLS_VARIANTS, UHD_VARIANT] : HLS_VARIANTS;
+
+const VARIANT_BY_HEIGHT = new Map(
+  [...HLS_VARIANTS, UHD_VARIANT].map((v) => [v.height, v]),
+);
 
 /** Fallback height for a request that names an unsupported one. */
 const DEFAULT_HLS_HEIGHT = 720;
 
-/** Clamps an arbitrary requested height to a supported variant, defaulting when unknown. */
-export const clampToSupportedHeight = (height: number): number =>
-  VARIANT_BY_HEIGHT.has(height) ? height : DEFAULT_HLS_HEIGHT;
+/**
+ * Clamps an arbitrary requested height to a variant this source is offered,
+ * defaulting when unknown. 2160 for a smaller source is the 1080p rung.
+ */
+export const clampToSupportedHeight = (height: number, size: SourceSize): number => {
+  if (height === UHD_VARIANT.height && !isUhdSource(size)) return 1080;
+  return VARIANT_BY_HEIGHT.has(height) ? height : DEFAULT_HLS_HEIGHT;
+};
 
 /**
  * Returns the base directory for HLS output.
@@ -152,6 +193,7 @@ const VARIANT_RESOLUTIONS: Record<number, string> = {
   360: "640x360",
   720: "1280x720",
   1080: "1920x1080",
+  2160: "3840x2160",
 };
 
 const resolutionFor = (variant: Variant): string =>
@@ -170,9 +212,12 @@ const resolutionFor = (variant: Variant): string =>
  * handler), and an idle variant's encode is reaped, so advertising all three does
  * not mean encoding all three at once.
  */
-const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
+const createMasterPlaylist = async (
+  hlsDir: string,
+  variants: readonly Variant[],
+): Promise<void> => {
   const lines = ["#EXTM3U", "#EXT-X-VERSION:3"];
-  for (const variant of HLS_VARIANTS) {
+  for (const variant of variants) {
     lines.push(
       "",
       `#EXT-X-STREAM-INF:BANDWIDTH=${variant.bitrate},RESOLUTION=${resolutionFor(variant)}`,
@@ -191,12 +236,14 @@ const createMasterPlaylist = async (hlsDir: string): Promise<void> => {
  */
 export const prepareMultibitrateHLSStructure = async (
   filePath: string,
+  sourceSize: SourceSize,
 ): Promise<void> => {
   await stat(filePath);
   const hlsDir = getMultibitrateHLSDirectory(filePath);
+  const variants = variantsForSource(sourceSize);
 
   await Promise.all(
-    HLS_VARIANTS.map((v) => mkdir(join(hlsDir, `${v.height}p`), { recursive: true })),
+    variants.map((v) => mkdir(join(hlsDir, `${v.height}p`), { recursive: true })),
   );
 
   const masterExists = await access(getMasterPlaylistPath(hlsDir)).then(
@@ -204,7 +251,7 @@ export const prepareMultibitrateHLSStructure = async (
     () => false,
   );
   if (!masterExists) {
-    await createMasterPlaylist(hlsDir);
+    await createMasterPlaylist(hlsDir, variants);
   }
 };
 
@@ -730,7 +777,8 @@ const encodeVariant = (
 };
 
 /**
- * Generates a single HLS variant (one of the HLS_VARIANTS heights) on the fly,
+ * Generates a single HLS variant on the fly. `height` is one the request
+ * handler has already checked against the source (clampToSupportedHeight),
  * from `startSegment` (default 0, the beginning of the file). Segments not yet written are
  * long-polled by the segment handler (see waitForHlsFile) until ffmpeg produces them.
  * The output is ephemeral and is reaped once playback goes idle.
@@ -744,7 +792,7 @@ export const generateVariantHLS = async (
   },
 ): Promise<void> => {
   await stat(filePath);
-  const variant = VARIANT_BY_HEIGHT.get(clampToSupportedHeight(height));
+  const variant = VARIANT_BY_HEIGHT.get(height) ?? VARIANT_BY_HEIGHT.get(DEFAULT_HLS_HEIGHT);
   if (!variant) throw new Error(`Unsupported HLS height: ${height}`);
 
   const hlsDir = getMultibitrateHLSDirectory(filePath);
