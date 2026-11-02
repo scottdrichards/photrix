@@ -18,6 +18,8 @@
  *   would lose their work.
  */
 
+import { attempt } from "./result";
+
 /** How long the app must have been hidden for a return to count as "coming back". */
 export const RESUME_AFTER_HIDDEN_MS = 60_000;
 /** How often to check while the app stays open and visible. */
@@ -35,16 +37,18 @@ export const entryScriptFromHtml = (html: string): string | null =>
 export const runningEntryScript = (doc: Document = document): string | null =>
   doc.querySelector('script[type="module"][src]')?.getAttribute("src") ?? null;
 
-/** The entry script the server would hand out now, or null if it can't tell. */
+/**
+ * The entry script the server would hand out now, or null if it can't tell.
+ * Failing is expected (offline, or the server mid-restart) and harmless: the
+ * next check tries again, so the failure is not worth logging.
+ */
 export const fetchLatestEntryScript = async (): Promise<string | null> => {
-  try {
-    const response = await fetch("/", { cache: "no-store", headers: { accept: "text/html" } });
-    if (!response.ok) return null;
-    return entryScriptFromHtml(await response.text());
-  } catch {
-    // Offline or the server is restarting: try again next time.
-    return null;
-  }
+  const response = await attempt(
+    fetch("/", { cache: "no-store", headers: { accept: "text/html" } }),
+  );
+  if (!response.ok || !response.value.ok) return null;
+  const html = await attempt(response.value.text());
+  return html.ok ? entryScriptFromHtml(html.value) : null;
 };
 
 /**
