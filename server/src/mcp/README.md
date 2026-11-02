@@ -25,14 +25,14 @@ bun run mcp
 
 Configuration (env vars, e.g. in `server/.env`):
 
-| Variable                 | Default                 | Purpose                                                                              |
-| ------------------------ | ------------------------ | ------------------------------------------------------------------------------------ |
-| `MCP_AUTOSTART`          | `true`                   | Whether the main app starts this in-process on boot. Set `false` to run it standalone only. |
-| `MCP_PORT`               | `3100`                   | Port the MCP server listens on.                                                      |
-| `PHOTRIX_BASE_URL`       | `http://localhost:3000`  | Base URL of the Photrix HTTP server to proxy.                                        |
-| `PHOTRIX_TOKEN`          | _(none)_                 | Default Photrix bearer used when a caller sends no key of their own.                 |
-| `MCP_AUTH_TOKEN`         | _(none)_                 | Legacy shared-secret gate (see Authentication below).                                |
-| `PHOTRIX_MCP_TIMEOUT_MS` | `30000`                  | Per-request timeout when calling Photrix.                                            |
+| Variable                 | Default                 | Purpose                                                                                     |
+| ------------------------ | ----------------------- | ------------------------------------------------------------------------------------------- |
+| `MCP_AUTOSTART`          | `true`                  | Whether the main app starts this in-process on boot. Set `false` to run it standalone only. |
+| `MCP_PORT`               | `3100`                  | Port the MCP server listens on.                                                             |
+| `PHOTRIX_BASE_URL`       | `http://localhost:3000` | Base URL of the Photrix HTTP server to proxy.                                               |
+| `PHOTRIX_TOKEN`          | _(none)_                | Default Photrix bearer used when a caller sends no key of their own.                        |
+| `MCP_AUTH_TOKEN`         | _(none)_                | Legacy shared-secret gate (see Authentication below).                                       |
+| `PHOTRIX_MCP_TIMEOUT_MS` | `30000`                 | Per-request timeout when calling Photrix.                                                   |
 
 ## Authentication
 
@@ -84,14 +84,19 @@ is disabled and no `MCP_AUTH_TOKEN` is set.
 
 ## Tools
 
-| Tool                | What it does                                                                |
-| ------------------- | --------------------------------------------------------------------------- |
-| `search_photos`     | Natural-language / semantic search (CLIP image + CLAP audio + transcripts). |
-| `list_people`       | List face-clustered people (id, name, photo count, year range).             |
-| `get_person_photos` | Photos a given person (by id or name) appears in.                           |
-| `on_this_day`       | Photos taken on a month/day across all years; highest-rated first.          |
-| `query_photos`      | Structured filters: date range, min rating, tag, camera, folder.            |
-| `get_photo_image`   | Fetch an actual photo (JPEG, resized) so the agent can see it.              |
+| Tool                | What it does                                                                             |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| `search_photos`     | Natural-language / semantic search (CLIP image + CLAP audio + transcripts).              |
+| `list_people`       | List face-clustered people (id, name, photo count, year range).                          |
+| `get_person_photos` | Photos a given person (by id or name) appears in.                                        |
+| `on_this_day`       | Photos taken on a month/day across all years; highest-rated first.                       |
+| `query_photos`      | Structured filters (date range, min rating, tag, camera, folder), paginated with `page`. |
+| `list_values`       | Distinct tags / AI tags / camera makes & models / lenses with counts.                    |
+| `get_photo_image`   | Fetch an actual photo (JPEG, resized) so the agent can see it.                           |
+
+Every tool except `get_photo_image` returns both readable text and
+`structuredContent` (validated against an `outputSchema`), so agents can consume
+results without parsing prose.
 
 Photos are identified by a `relativePath` like `/2023/trip/img.jpg`, returned by
 every listing tool and accepted by `get_photo_image`.

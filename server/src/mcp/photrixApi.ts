@@ -77,9 +77,16 @@ type QueryResponse = {
   pageSize: number;
 };
 type DateRangeResponse = { minDate: number | null; maxDate: number | null };
-type CountResponse = { count: number };
 
 export type FilterElement = unknown;
+export const fieldValuesFields = [
+  "tags",
+  "aiTags",
+  "cameraMake",
+  "cameraModel",
+  "lens",
+] as const;
+export type FieldValuesField = (typeof fieldValuesFields)[number];
 type FetchedImage = { base64: string; mimeType: string };
 
 // ---- API calls ----
@@ -93,19 +100,22 @@ export type PhotrixApi = {
     q: string;
     limit: number;
     folder?: string;
-    includeSubfolders: boolean;
     sources?: string[];
   }) => Promise<SearchResponse>;
-  listPeople: (includeSubfolders?: boolean) => Promise<PeopleResponse>;
+  listPeople: () => Promise<PeopleResponse>;
   getPersonPhotos: (clusterId: string) => Promise<ClusterDetailResponse>;
   queryFiles: (opts: {
     filter?: FilterElement;
     metadata: string[];
     pageSize: number;
-    includeSubfolders?: boolean;
+    page?: number;
   }) => Promise<QueryResponse>;
   getDateRange: () => Promise<DateRangeResponse>;
-  getCount: (filter?: FilterElement) => Promise<CountResponse>;
+  listFieldValues: (opts: {
+    field: FieldValuesField;
+    search: string;
+    limit: number;
+  }) => Promise<Array<{ value: string; count: number }>>;
   fetchImage: (relativePath: string, height: number) => Promise<FetchedImage>;
 };
 
@@ -154,16 +164,13 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
     searchPhotos: (opts) => {
       const params = new URLSearchParams({ q: opts.q, limit: String(opts.limit) });
       if (opts.folder) params.set("path", opts.folder);
-      if (opts.includeSubfolders) params.set("includeSubfolders", "true");
+      params.set("includeSubfolders", "true");
       if (opts.sources?.length) params.set("sources", opts.sources.join(","));
       return apiJson<SearchResponse>(`/api/search?${params.toString()}`);
     },
 
-    listPeople: (includeSubfolders = true) => {
-      const params = new URLSearchParams({ aggregate: "people" });
-      if (includeSubfolders) params.set("includeSubfolders", "true");
-      return apiJson<PeopleResponse>(`/api/files/?${params.toString()}`);
-    },
+    listPeople: () =>
+      apiJson<PeopleResponse>(`/api/files/?aggregate=people&includeSubfolders=true`),
 
     getPersonPhotos: (clusterId) => {
       const params = new URLSearchParams({
@@ -179,7 +186,8 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
         metadata: opts.metadata.join(","),
         pageSize: String(opts.pageSize),
       });
-      if (opts.includeSubfolders ?? true) params.set("includeSubfolders", "true");
+      params.set("includeSubfolders", "true");
+      if (opts.page) params.set("page", String(opts.page));
       if (opts.filter !== undefined) params.set("filter", JSON.stringify(opts.filter));
       return apiJson<QueryResponse>(`/api/files/?${params.toString()}`);
     },
@@ -189,10 +197,18 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
         `/api/files/?aggregate=dateRange&includeSubfolders=true`,
       ),
 
-    getCount: (filter) => {
-      const params = new URLSearchParams({ count: "true", includeSubfolders: "true" });
-      if (filter !== undefined) params.set("filter", JSON.stringify(filter));
-      return apiJson<CountResponse>(`/api/files/?${params.toString()}`);
+    listFieldValues: async (opts) => {
+      const params = new URLSearchParams({
+        field: opts.field,
+        q: opts.search,
+        limit: String(opts.limit),
+        includeSubfolders: "true",
+        includeCounts: "true",
+      });
+      const res = await apiJson<{ suggestions: Array<{ value: string; count: number }> }>(
+        `/api/suggestions?${params.toString()}`,
+      );
+      return res.suggestions;
     },
 
     // Pull a display-ready copy of an image so the agent can actually "see" the

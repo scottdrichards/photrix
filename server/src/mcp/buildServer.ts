@@ -1,9 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { viewUrl, type FileItem, type PhotrixApi } from "./photrixApi.ts";
-
-const relativePathOf = (item: { folder: string; fileName: string }): string =>
-  `${item.folder}${item.fileName}`;
+import { attempt } from "../common/result.ts";
+import {
+  fieldValuesFields,
+  viewUrl,
+  type FileItem,
+  type PhotrixApi,
+} from "./photrixApi.ts";
 
 // Metadata fields we ask Photrix to return for file queries. `folder`/`fileName`
 // always come back as the identity; these enrich the result for the agent.
@@ -18,51 +22,78 @@ const FILE_METADATA = [
   "dimensionWidth",
   "dimensionHeight",
 ];
+const ON_THIS_DAY_FETCH = 500;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-const asMs = (value: number | string | null | undefined): number | null => {
-  if (typeof value === "number") return value;
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? null : parsed;
-  }
-  return null;
+const photoSchema = z.object({
+  path: z.string().describe("relativePath; pass to get_photo_image."),
+  viewUrl: z.string(),
+  dateTaken: z.string().optional().describe("YYYY-MM-DD"),
+  rating: z.number().optional(),
+  camera: z.string().optional(),
+  sources: z.array(z.string()).optional().describe("Matching modalities (search only)."),
+});
+type Photo = z.infer<typeof photoSchema>;
+
+const toPhoto = (
+  item: Pick<FileItem, "folder" | "fileName"> &
+    Partial<Omit<FileItem, "folder" | "fileName">> & { sources?: string[] },
+): Photo => {
+  const path = `${item.folder}${item.fileName}`;
+  const ms =
+    typeof item.dateTaken === "string" ? Date.parse(item.dateTaken) : item.dateTaken;
+  return {
+    path,
+    viewUrl: viewUrl(path),
+    dateTaken:
+      typeof ms === "number" && !Number.isNaN(ms)
+        ? new Date(ms).toISOString().slice(0, 10)
+        : undefined,
+    rating: item.rating ? Number(item.rating) : undefined,
+    camera: [item.cameraMake, item.cameraModel].filter(Boolean).join(" ") || undefined,
+    sources: item.sources?.length ? item.sources : undefined,
+  };
 };
 
-const formatFileLine = (item: FileItem): string => {
-  const path = relativePathOf(item);
-  const bits: string[] = [];
-  const ms = asMs(item.dateTaken);
-  if (ms !== null) bits.push(new Date(ms).toISOString().slice(0, 10));
-  if (typeof item.rating === "number" && item.rating > 0) {
-    bits.push(`${"★".repeat(item.rating)}`);
-  }
-  if (item.cameraMake || item.cameraModel) {
-    bits.push([item.cameraMake, item.cameraModel].filter(Boolean).join(" "));
-  }
-  const meta = bits.length ? ` — ${bits.join(" · ")}` : "";
-  return `- ${path}${meta}\n  view: ${viewUrl(path)}`;
-};
+const photoLine = (p: Photo): string =>
+  `- ${p.path}${[
+    p.dateTaken,
+    p.rating && "★".repeat(p.rating),
+    p.camera,
+    p.sources?.join(", "),
+  ]
+    .filter(Boolean)
+    .join(" · ")
+    .replace(/^(.)/, " — $1")}\n  view: ${p.viewUrl}`;
 
-const textResult = (text: string) => ({ content: [{ type: "text" as const, text }] });
-const errorResult = (message: string) => ({
-  content: [{ type: "text" as const, text: message }],
+const success = (text: string, data: Record<string, unknown>): CallToolResult => ({
+  content: [{ type: "text", text }],
+  structuredContent: data,
+});
+const failure = (message: string): CallToolResult => ({
+  content: [{ type: "text", text: message }],
   isError: true,
 });
 
+// Every tool runs through this: a rejected Photrix call becomes an `isError`
+// result the agent can read, instead of a protocol-level failure.
+const guarded =
+  <Args>(run: (args: Args) => Promise<CallToolResult>) =>
+  async (args: Args): Promise<CallToolResult> => {
+    const result = await attempt(run(args));
+    return result.ok ? result.value : failure(result.error.message);
+  };
+
+const readOnly = { readOnlyHint: true, openWorldHint: false };
+const limitField = (max: number, fallback: number, what: string) =>
+  z.number().int().min(1).max(max).default(fallback).describe(`Max ${what}.`);
+
 export const buildPhotrixMcpServer = (api: PhotrixApi): McpServer => {
-  const {
-    fetchImage,
-    getDateRange,
-    getPersonPhotos,
-    listPeople,
-    queryFiles,
-    searchPhotos,
-  } = api;
   const server = new McpServer(
-    { name: "photrix", version: "1.0.0" },
+    { name: "photrix", version: "1.1.0" },
     {
       instructions:
-        "Query a personal photo library (Photrix). Use search_photos for natural-language/semantic search, list_people / get_person_photos for face recognition, on_this_day for nostalgic picks, and query_photos for structured metadata filters. Photos are identified by a relativePath like '/2023/trip/img.jpg'; pass that path to get_photo_image to actually view a picture.",
+        "Query a personal photo library (Photrix). Use search_photos for natural-language/semantic search, list_people / get_person_photos for face recognition, on_this_day for nostalgic picks, and query_photos for structured metadata filters (use list_values to discover valid tags, cameras and lenses). Photos are identified by a relativePath like '/2023/trip/img.jpg'; pass that path to get_photo_image to actually view a picture.",
     },
   );
 
@@ -74,46 +105,29 @@ export const buildPhotrixMcpServer = (api: PhotrixApi): McpServer => {
         "Natural-language / semantic search across the photo library. Matches on image content (CLIP), audio content of videos (CLAP), and speech transcripts. Returns ranked file paths. Example queries: 'sunset over the ocean', 'birthday cake', 'dog on the beach'.",
       inputSchema: {
         query: z.string().describe("Natural-language description of what to find."),
-        limit: z.number().int().min(1).max(200).default(20).describe("Max results."),
+        limit: limitField(200, 20, "results"),
         folder: z
           .string()
           .optional()
-          .describe(
-            "Restrict to a folder path, e.g. '/2023'. Omit to search everything.",
-          ),
+          .describe("Restrict to a folder path, e.g. '/2023'."),
         sources: z
           .array(z.enum(["image", "audio", "transcript"]))
           .optional()
           .describe("Restrict which modalities to search. Defaults to all."),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      outputSchema: { photos: z.array(photoSchema) },
+      annotations: readOnly,
     },
-    async ({ query, limit, folder, sources }) => {
-      try {
-        const res = await searchPhotos({
-          q: query,
-          limit,
-          folder,
-          includeSubfolders: true,
-          sources,
-        });
-        if (res.items.length === 0) {
-          return textResult(`No photos matched "${query}".`);
-        }
-        const lines = res.items
-          .map((item, i) => {
-            const path = `${item.folder}${item.fileName}`;
-            const src = item.sources?.length ? ` [${item.sources.join(", ")}]` : "";
-            return `${i + 1}. ${path}${src}\n   view: ${viewUrl(path)}`;
-          })
-          .join("\n");
-        return textResult(
-          `Found ${res.items.length} match(es) for "${query}":\n${lines}\n\nUse get_photo_image with a path to view one.`,
-        );
-      } catch (err) {
-        return errorResult(err instanceof Error ? err.message : String(err));
-      }
-    },
+    guarded(async ({ query, limit, folder, sources }) => {
+      const res = await api.searchPhotos({ q: query, limit, folder, sources });
+      const photos = res.items.map(toPhoto);
+      return success(
+        photos.length
+          ? `Found ${photos.length} match(es) for "${query}":\n${photos.map(photoLine).join("\n")}\n\nUse get_photo_image with a path to view one.`
+          : `No photos matched "${query}".`,
+        { photos },
+      );
+    }),
   );
 
   server.registerTool(
@@ -127,43 +141,54 @@ export const buildPhotrixMcpServer = (api: PhotrixApi): McpServer => {
           .boolean()
           .default(false)
           .describe("Only return people who have been given a name."),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(200)
-          .default(50)
-          .describe("Max people to list."),
+        limit: limitField(200, 50, "people"),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      outputSchema: {
+        people: z.array(
+          z.object({
+            id: z.string(),
+            name: z.string().optional(),
+            photoCount: z.number(),
+            years: z.string().optional(),
+          }),
+        ),
+        totalPeople: z.number(),
+        totalFaces: z.number(),
+        pendingFaces: z.number().optional().describe("Faces not yet clustered."),
+      },
+      annotations: readOnly,
     },
-    async ({ onlyNamed, limit }) => {
-      try {
-        const res = await listPeople(true);
-        let clusters = res.clusters;
-        if (onlyNamed) clusters = clusters.filter((c) => c.name && c.name.trim());
-        clusters = clusters.slice(0, limit);
-        if (clusters.length === 0) {
-          return textResult(
-            onlyNamed
-              ? "No named people yet. Faces are clustered automatically but names are assigned in the app."
-              : "No people have been recognized yet (face clustering may still be running).",
-          );
-        }
-        const lines = clusters
-          .map((c) => {
-            const name = c.name?.trim() ? c.name : "(unnamed)";
-            const years = c.yearRangeLabel ? `, ${c.yearRangeLabel}` : "";
-            return `- ${c.id}: ${name} — ${c.count} photo(s)${years}`;
-          })
-          .join("\n");
-        return textResult(
-          `${clusters.length} of ${res.totalClusters} people (${res.totalFaces} faces total${res.pendingFaces ? `, ${res.pendingFaces} pending` : ""}):\n${lines}`,
-        );
-      } catch (err) {
-        return errorResult(err instanceof Error ? err.message : String(err));
-      }
-    },
+    guarded(async ({ onlyNamed, limit }) => {
+      const res = await api.listPeople();
+      const people = res.clusters
+        .filter((c) => !onlyNamed || c.name?.trim())
+        .slice(0, limit)
+        .map((c) => ({
+          id: c.id,
+          name: c.name?.trim() || undefined,
+          photoCount: c.count,
+          years: c.yearRangeLabel || undefined,
+        }));
+      const lines = people
+        .map(
+          (p) =>
+            `- ${p.id}: ${p.name ?? "(unnamed)"} — ${p.photoCount} photo(s)${p.years ? `, ${p.years}` : ""}`,
+        )
+        .join("\n");
+      return success(
+        people.length
+          ? `${people.length} of ${res.totalClusters} people (${res.totalFaces} faces total${res.pendingFaces ? `, ${res.pendingFaces} pending` : ""}):\n${lines}`
+          : onlyNamed
+            ? "No named people yet. Faces are clustered automatically but names are assigned in the app."
+            : "No people have been recognized yet (face clustering may still be running).",
+        {
+          people,
+          totalPeople: res.totalClusters,
+          totalFaces: res.totalFaces,
+          pendingFaces: res.pendingFaces,
+        },
+      );
+    }),
   );
 
   server.registerTool(
@@ -176,41 +201,40 @@ export const buildPhotrixMcpServer = (api: PhotrixApi): McpServer => {
         person: z
           .string()
           .describe("Person id like 'person-42', or a name such as 'Alice'."),
-        limit: z.number().int().min(1).max(200).default(30).describe("Max photos."),
+        limit: limitField(200, 30, "photos"),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      outputSchema: {
+        person: z.object({
+          id: z.string(),
+          name: z.string().optional(),
+          photoCount: z.number(),
+        }),
+        photos: z.array(photoSchema),
+      },
+      annotations: readOnly,
     },
-    async ({ person, limit }) => {
-      try {
-        let clusterId = person;
-        if (!/^person-\d+$/.test(person)) {
-          const people = await listPeople(true);
-          const match = people.clusters.find(
+    guarded(async ({ person, limit }) => {
+      const clusterId = /^person-\d+$/.test(person)
+        ? person
+        : (await api.listPeople()).clusters.find(
             (c) => c.name?.trim().toLowerCase() === person.trim().toLowerCase(),
-          );
-          if (!match) {
-            return errorResult(
-              `No person named "${person}" found. Call list_people to see available people and their ids.`,
-            );
-          }
-          clusterId = match.id;
-        }
-        const detail = await getPersonPhotos(clusterId);
-        if (!detail.cluster) {
-          return errorResult(`Person "${clusterId}" not found.`);
-        }
-        const paths = [
-          ...new Set(detail.cluster.faces.map((f) => f.path).filter(Boolean)),
-        ].slice(0, limit);
-        const name = detail.cluster.name?.trim() ? ` (${detail.cluster.name})` : "";
-        const lines = paths.map((p) => `- ${p}\n  view: ${viewUrl(p)}`).join("\n");
-        return textResult(
-          `${clusterId}${name} appears in ${detail.cluster.count} photo(s). Showing ${paths.length}:\n${lines}`,
+          )?.id;
+      if (!clusterId) {
+        return failure(
+          `No person named "${person}" found. Call list_people to see available people and their ids.`,
         );
-      } catch (err) {
-        return errorResult(err instanceof Error ? err.message : String(err));
       }
-    },
+      const { cluster } = await api.getPersonPhotos(clusterId);
+      if (!cluster) return failure(`Person "${clusterId}" not found.`);
+      const photos = [...new Set(cluster.faces.map((f) => f.path).filter(Boolean))]
+        .slice(0, limit)
+        .map((path) => toPhoto({ folder: "", fileName: path }));
+      const name = cluster.name?.trim() || undefined;
+      return success(
+        `${clusterId}${name ? ` (${name})` : ""} appears in ${cluster.count} photo(s). Showing ${photos.length}:\n${photos.map(photoLine).join("\n")}`,
+        { person: { id: clusterId, name, photoCount: cluster.count }, photos },
+      );
+    }),
   );
 
   server.registerTool(
@@ -234,50 +258,57 @@ export const buildPhotrixMcpServer = (api: PhotrixApi): McpServer => {
           .max(31)
           .optional()
           .describe("Day of month 1-31. Defaults to today's day."),
-        limit: z.number().int().min(1).max(100).default(20).describe("Max photos."),
+        limit: limitField(100, 20, "photos"),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      outputSchema: {
+        month: z.number(),
+        day: z.number(),
+        totalMatches: z.number(),
+        photos: z.array(photoSchema),
+      },
+      annotations: readOnly,
     },
-    async ({ month, day, limit }) => {
-      try {
-        const now = new Date();
-        const m = month ?? now.getMonth() + 1;
-        const d = day ?? now.getDate();
-        const { minDate, maxDate } = await getDateRange();
-        if (minDate === null || maxDate === null) {
-          return textResult("The library has no dated photos yet.");
-        }
-        const startYear = new Date(minDate).getFullYear();
-        const endYear = new Date(maxDate).getFullYear();
-        const conditions: unknown[] = [];
-        for (let y = startYear; y <= endYear; y++) {
-          const start = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
-          const end = new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
-          conditions.push({ dateTaken: { min: start, max: end } });
-        }
-        const filter =
-          conditions.length === 1 ? conditions[0] : { operation: "or", conditions };
-        const res = await queryFiles({
-          filter,
-          metadata: FILE_METADATA,
-          pageSize: 500,
-          includeSubfolders: true,
+    guarded(async ({ month, day, limit }) => {
+      const now = new Date();
+      const m = month ?? now.getMonth() + 1;
+      const d = day ?? now.getDate();
+      const { minDate, maxDate } = await api.getDateRange();
+      if (minDate === null || maxDate === null) {
+        return success("The library has no dated photos yet.", {
+          month: m,
+          day: d,
+          totalMatches: 0,
+          photos: [],
         });
-        if (res.items.length === 0) {
-          return textResult(
-            `No photos were taken on ${m}/${d} in any year (${startYear}–${endYear}).`,
-          );
-        }
-        const sorted = [...res.items].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
-        const picks = sorted.slice(0, limit);
-        const lines = picks.map(formatFileLine).join("\n");
-        return textResult(
-          `On ${m}/${d} across ${startYear}–${endYear}, found ${res.items.length} photo(s). Top ${picks.length} (highest-rated first):\n${lines}\n\nTip: pass the first path to get_photo_image to show it.`,
-        );
-      } catch (err) {
-        return errorResult(err instanceof Error ? err.message : String(err));
       }
-    },
+      const startYear = new Date(minDate).getFullYear();
+      const endYear = new Date(maxDate).getFullYear();
+      const conditions = Array.from({ length: endYear - startYear + 1 }, (_, i) => ({
+        dateTaken: {
+          min: new Date(startYear + i, m - 1, d).getTime(),
+          max: new Date(startYear + i, m - 1, d, 23, 59, 59, 999).getTime(),
+        },
+      }));
+      const res = await api.queryFiles({
+        filter: conditions.length === 1 ? conditions[0] : { operation: "or", conditions },
+        metadata: FILE_METADATA,
+        pageSize: ON_THIS_DAY_FETCH,
+      });
+      const photos = res.items
+        .toSorted((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
+        .slice(0, limit)
+        .map(toPhoto);
+      const truncated =
+        res.total > res.items.length
+          ? ` (ranked from the first ${res.items.length} of ${res.total})`
+          : "";
+      return success(
+        photos.length
+          ? `On ${m}/${d} across ${startYear}–${endYear}, found ${res.total} photo(s). Top ${photos.length} (highest-rated first)${truncated}:\n${photos.map(photoLine).join("\n")}\n\nTip: pass the first path to get_photo_image to show it.`
+          : `No photos were taken on ${m}/${d} in any year (${startYear}–${endYear}).`,
+        { month: m, day: d, totalMatches: res.total, photos },
+      );
+    }),
   );
 
   server.registerTool(
@@ -285,7 +316,7 @@ export const buildPhotrixMcpServer = (api: PhotrixApi): McpServer => {
     {
       title: "Query photos by metadata",
       description:
-        "Structured search over photo metadata: date range, minimum star rating, tags, camera, or folder. Combine any subset. Returns file paths with basic metadata.",
+        "Structured search over photo metadata: date range, minimum star rating, tag, camera, or folder. Combine any subset. Returns file paths with basic metadata; use `page` to read past the first `limit` results. Use list_values to discover valid tags and cameras.",
       inputSchema: {
         dateFrom: z
           .string()
@@ -302,57 +333,83 @@ export const buildPhotrixMcpServer = (api: PhotrixApi): McpServer => {
         tag: z.string().optional().describe("A tag/keyword the photo must have."),
         cameraMake: z.string().optional().describe("Camera manufacturer, e.g. 'Canon'."),
         folder: z.string().optional().describe("Folder path, e.g. '/2023/trip'."),
-        limit: z.number().int().min(1).max(200).default(30).describe("Max results."),
+        limit: limitField(200, 30, "results per page"),
+        page: z
+          .number()
+          .int()
+          .min(1)
+          .default(1)
+          .describe("1-based page of `limit` results."),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      outputSchema: { total: z.number(), page: z.number(), photos: z.array(photoSchema) },
+      annotations: readOnly,
     },
-    async ({ dateFrom, dateTo, minRating, tag, cameraMake, folder, limit }) => {
-      try {
-        const conditions: unknown[] = [];
-        if (folder) conditions.push({ folder: { folder, recursive: true } });
-        if (dateFrom || dateTo) {
-          const range: { min?: number; max?: number } = {};
-          if (dateFrom) {
-            const t = Date.parse(dateFrom);
-            if (Number.isNaN(t)) return errorResult(`Invalid dateFrom: ${dateFrom}`);
-            range.min = t;
-          }
-          if (dateTo) {
-            const t = Date.parse(dateTo);
-            if (Number.isNaN(t)) return errorResult(`Invalid dateTo: ${dateTo}`);
-            // Include the whole day when only a date (no time) was given.
-            range.max = t + (dateTo.length <= 10 ? 24 * 60 * 60 * 1000 - 1 : 0);
-          }
-          conditions.push({ dateTaken: range });
-        }
-        if (minRating) conditions.push({ rating: { min: minRating } });
-        if (tag) conditions.push({ tags: tag });
-        if (cameraMake) conditions.push({ cameraMake });
-
-        const filter =
-          conditions.length === 0
-            ? undefined
-            : conditions.length === 1
-              ? conditions[0]
-              : { operation: "and", conditions };
-
-        const res = await queryFiles({
-          filter,
+    guarded(
+      async ({ dateFrom, dateTo, minRating, tag, cameraMake, folder, limit, page }) => {
+        const from = dateFrom === undefined ? undefined : Date.parse(dateFrom);
+        const to = dateTo === undefined ? undefined : Date.parse(dateTo);
+        if (Number.isNaN(from)) return failure(`Invalid dateFrom: ${dateFrom}`);
+        if (Number.isNaN(to)) return failure(`Invalid dateTo: ${dateTo}`);
+        const conditions = [
+          folder && { folder: { folder, recursive: true } },
+          (from !== undefined || to !== undefined) && {
+            dateTaken: {
+              min: from,
+              // A date-only upper bound includes that whole day.
+              max:
+                to === undefined
+                  ? undefined
+                  : to + (dateTo!.length <= 10 ? DAY_MS - 1 : 0),
+            },
+          },
+          minRating && { rating: { min: minRating } },
+          tag && { tags: tag },
+          cameraMake && { cameraMake },
+        ].filter(Boolean);
+        const res = await api.queryFiles({
+          filter:
+            conditions.length > 1 ? { operation: "and", conditions } : conditions[0],
           metadata: FILE_METADATA,
           pageSize: limit,
-          includeSubfolders: true,
+          page,
         });
-        if (res.items.length === 0) {
-          return textResult("No photos matched those filters.");
-        }
-        const lines = res.items.slice(0, limit).map(formatFileLine).join("\n");
-        return textResult(
-          `${res.total} photo(s) matched (showing ${Math.min(limit, res.items.length)}):\n${lines}`,
+        const photos = res.items.map(toPhoto);
+        return success(
+          photos.length
+            ? `${res.total} photo(s) matched (page ${res.page}, showing ${photos.length}):\n${photos.map(photoLine).join("\n")}`
+            : "No photos matched those filters.",
+          { total: res.total, page: res.page, photos },
         );
-      } catch (err) {
-        return errorResult(err instanceof Error ? err.message : String(err));
-      }
+      },
+    ),
+  );
+
+  server.registerTool(
+    "list_values",
+    {
+      title: "List tag / camera / lens values",
+      description:
+        "List the distinct values (with photo counts) a metadata field takes in the library, optionally filtered by a prefix/substring. Use it to find valid arguments for query_photos (e.g. tags, camera makes).",
+      inputSchema: {
+        field: z.enum(fieldValuesFields).describe("Which field to list."),
+        search: z.string().default("").describe("Only values matching this text."),
+        limit: limitField(200, 50, "values"),
+      },
+      outputSchema: {
+        field: z.string(),
+        values: z.array(z.object({ value: z.string(), count: z.number() })),
+      },
+      annotations: readOnly,
     },
+    guarded(async ({ field, search, limit }) => {
+      const values = await api.listFieldValues({ field, search, limit });
+      return success(
+        values.length
+          ? `${values.length} ${field} value(s):\n${values.map((v) => `- ${v.value} (${v.count})`).join("\n")}`
+          : `No ${field} values found.`,
+        { field, values },
+      );
+    }),
   );
 
   server.registerTool(
@@ -371,20 +428,14 @@ export const buildPhotrixMcpServer = (api: PhotrixApi): McpServer => {
           .default(1024)
           .describe("Longest-edge pixel size of the returned image."),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: readOnly,
     },
-    async ({ path, size }) => {
-      try {
-        const image = await fetchImage(path, size);
-        return {
-          content: [
-            { type: "image" as const, data: image.base64, mimeType: image.mimeType },
-          ],
-        };
-      } catch (err) {
-        return errorResult(err instanceof Error ? err.message : String(err));
-      }
-    },
+    guarded(async ({ path, size }) => {
+      const image = await api.fetchImage(path, size);
+      return {
+        content: [{ type: "image", data: image.base64, mimeType: image.mimeType }],
+      };
+    }),
   );
 
   return server;
