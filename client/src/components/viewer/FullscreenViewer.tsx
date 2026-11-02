@@ -24,6 +24,7 @@ import { createClientOperationId, logClientEvent } from "../../diagnostics";
 import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes, type NamedFace } from "./FaceOverlay";
 import { VideoPeopleTimeline } from "./VideoPeopleTimeline";
 import { VideoLoadingOverlay } from "./VideoLoadingOverlay";
+import { VideoScrubPreview } from "./VideoScrubPreview";
 import { videoTimelineRows } from "./videoPeople";
 
 // The people timeline under a video: its rows are this tall, and past this many
@@ -983,6 +984,12 @@ export function FullscreenViewer() {
                       state={playback}
                       lastDataAtRef={lastDataAtRef}
                       onRetry={retryPlayback}
+                    />
+                    <VideoScrubPreview
+                      videoRef={videoRef}
+                      path={photo.path}
+                      durationSeconds={photo.metadata?.duration}
+                      aspectRatio={videoAspectRatio}
                     />
                   </div>
                   {videoStatus && (
