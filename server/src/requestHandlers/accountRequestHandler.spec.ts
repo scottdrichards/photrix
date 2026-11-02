@@ -205,7 +205,7 @@ describe("accountRequestHandler", () => {
     globalThis.fetch = stub as typeof fetch;
     try {
       const { accountRequestHandler, authService } = await load();
-      const local = authService.issueToken("gail", "10.0.0.5");
+      const local = authService.issueToken("gail", "100.64.0.5");
       const remote = authService.issueToken("gail", "203.0.113.50");
 
       const listed = createJsonResponse();
@@ -215,7 +215,7 @@ describe("accountRequestHandler", () => {
       }>();
       expect(sessions).toEqual([
         expect.objectContaining({ ip: "203.0.113.50", place: "Portland, Oregon, United States" }),
-        expect.objectContaining({ ip: "10.0.0.5", place: null }),
+        expect.objectContaining({ ip: "100.64.0.5", place: null }),
       ]);
       expect(asked).toHaveLength(1);
       expect(asked[0]).toContain("203.0.113.50");
