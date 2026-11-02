@@ -11,6 +11,7 @@ const stubApi = (overrides: Partial<PhotrixApi>): PhotrixApi => ({
   getPersonPhotos: unused,
   queryFiles: unused,
   getDateRange: unused,
+  getDateHistogram: unused,
   listFieldValues: unused,
   fetchImage: unused,
   ...overrides,
@@ -48,6 +49,9 @@ describe("Photrix MCP tools", () => {
       "list_people",
       "list_values",
       "on_this_day",
+      "photo_details",
+      "photo_timeline",
+      "photos_near",
       "query_photos",
       "search_photos",
     ]);
@@ -267,5 +271,80 @@ describe("Photrix MCP tools", () => {
       data: "AAAA",
       mimeType: "image/jpeg",
     });
+  });
+
+  it("photos_near searches a bounding box around the point, widened for longitude at high latitudes", async () => {
+    const queryFiles = jest.fn<PhotrixApi["queryFiles"]>().mockResolvedValue({
+      items: [{ folder: "/paris/", fileName: "tower.jpg" }],
+      total: 1,
+      page: 1,
+      pageSize: 30,
+    });
+    const client = await connect(stubApi({ queryFiles }));
+    const result = await call(client, "photos_near", {
+      latitude: 60,
+      longitude: 10,
+      radiusKm: 111,
+    });
+
+    const { filter } = queryFiles.mock.calls[0][0] as { filter: any };
+    const [lat, lon] = filter.conditions.map(
+      (c: any) => Object.values(c)[0] as { min: number; max: number },
+    );
+    expect(lat.max - lat.min).toBeCloseTo(2, 1);
+    expect(lon.max - lon.min).toBeCloseTo(4, 1); // 1/cos(60°) = 2x wider
+    expect(result.structuredContent).toMatchObject({
+      photos: [{ path: "/paris/tower.jpg" }],
+    });
+  });
+
+  it("photo_timeline lists non-empty periods with their dates", async () => {
+    const client = await connect(
+      stubApi({
+        getDateHistogram: () =>
+          Promise.resolve({
+            grouping: "year",
+            buckets: [
+              { start: Date.UTC(2021, 0, 1), end: Date.UTC(2022, 0, 1), count: 40 },
+              { start: Date.UTC(2022, 0, 1), end: Date.UTC(2023, 0, 1), count: 0 },
+            ],
+          }),
+      }),
+    );
+    const result = await call(client, "photo_timeline", {});
+    expect(result.structuredContent).toEqual({
+      periods: [{ from: "2021-01-01", to: "2022-01-01", count: 40 }],
+    });
+  });
+
+  it("photo_details returns all known metadata for one photo and errors when it is missing", async () => {
+    const queryFiles = jest
+      .fn<PhotrixApi["queryFiles"]>()
+      .mockResolvedValueOnce({
+        items: [
+          { folder: "/t/", fileName: "p.jpg", lens: "50mm", iso: 100, tags: ["trip"] },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 1,
+      })
+      .mockResolvedValueOnce({ items: [], total: 0, page: 1, pageSize: 1 });
+    const client = await connect(stubApi({ queryFiles }));
+
+    const found = await call(client, "photo_details", { path: "/t/p.jpg" });
+    expect(found.structuredContent).toMatchObject({
+      path: "/t/p.jpg",
+      metadata: { lens: "50mm", iso: 100, tags: ["trip"] },
+    });
+    expect((queryFiles.mock.calls[0][0] as { filter: unknown }).filter).toEqual({
+      operation: "and",
+      conditions: [
+        { folder: { folder: "/t/", recursive: false } },
+        { fileName: "p.jpg" },
+      ],
+    });
+
+    const missing = await call(client, "photo_details", { path: "/t/none.jpg" });
+    expect(missing.isError).toBe(true);
   });
 });

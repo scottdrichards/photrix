@@ -76,6 +76,10 @@ type QueryResponse = {
   page: number;
   pageSize: number;
 };
+type DateHistogramResponse = {
+  buckets: Array<{ start: number; end: number; count: number }>;
+  grouping: "day" | "month" | "year";
+};
 type DateRangeResponse = { minDate: number | null; maxDate: number | null };
 
 export type FilterElement = unknown;
@@ -111,6 +115,7 @@ export type PhotrixApi = {
     page?: number;
   }) => Promise<QueryResponse>;
   getDateRange: () => Promise<DateRangeResponse>;
+  getDateHistogram: () => Promise<DateHistogramResponse>;
   listFieldValues: (opts: {
     field: FieldValuesField;
     search: string;
@@ -195,6 +200,11 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
     getDateRange: () =>
       apiJson<DateRangeResponse>(
         `/api/files/?aggregate=dateRange&includeSubfolders=true`,
+      ),
+
+    getDateHistogram: () =>
+      apiJson<DateHistogramResponse>(
+        `/api/files/?aggregate=dateHistogram&includeSubfolders=true`,
       ),
 
     listFieldValues: async (opts) => {

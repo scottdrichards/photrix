@@ -22,6 +22,25 @@ const FILE_METADATA = [
   "dimensionWidth",
   "dimensionHeight",
 ];
+const DETAIL_METADATA = [
+  ...FILE_METADATA,
+  "exposureTime",
+  "aperture",
+  "iso",
+  "focalLength",
+  "lens",
+  "flash",
+  "orientation",
+  "duration",
+  "videoCodec",
+  "audioCodec",
+  "tags",
+  "description",
+  "aiDescription",
+  "aiTags",
+  "photoQualityScore",
+];
+const KM_PER_DEGREE = 111.32;
 const ON_THIS_DAY_FETCH = 500;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -408,6 +427,135 @@ export const buildPhotrixMcpServer = (api: PhotrixApi): McpServer => {
           ? `${values.length} ${field} value(s):\n${values.map((v) => `- ${v.value} (${v.count})`).join("\n")}`
           : `No ${field} values found.`,
         { field, values },
+      );
+    }),
+  );
+
+  server.registerTool(
+    "photos_near",
+    {
+      title: "Photos near a location",
+      description:
+        "Find photos with GPS coordinates within a radius of a point (e.g. photos taken in Paris: latitude 48.86, longitude 2.35). Look up the coordinates of a named place yourself.",
+      inputSchema: {
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+        radiusKm: z
+          .number()
+          .min(0.1)
+          .max(2000)
+          .default(25)
+          .describe("Search radius in km (approximated as a box)."),
+        limit: limitField(200, 30, "results per page"),
+        page: z
+          .number()
+          .int()
+          .min(1)
+          .default(1)
+          .describe("1-based page of `limit` results."),
+      },
+      outputSchema: { total: z.number(), page: z.number(), photos: z.array(photoSchema) },
+      annotations: readOnly,
+    },
+    guarded(async ({ latitude, longitude, radiusKm, limit, page }) => {
+      const latDelta = radiusKm / KM_PER_DEGREE;
+      const lonDelta = latDelta / Math.max(Math.cos((latitude * Math.PI) / 180), 0.01);
+      const res = await api.queryFiles({
+        filter: {
+          operation: "and",
+          conditions: [
+            { locationLatitude: { min: latitude - latDelta, max: latitude + latDelta } },
+            {
+              locationLongitude: { min: longitude - lonDelta, max: longitude + lonDelta },
+            },
+          ],
+        },
+        metadata: FILE_METADATA,
+        pageSize: limit,
+        page,
+      });
+      const photos = res.items.map(toPhoto);
+      return success(
+        photos.length
+          ? `${res.total} photo(s) within ~${radiusKm} km (page ${res.page}, showing ${photos.length}):\n${photos.map(photoLine).join("\n")}`
+          : "No geotagged photos found there.",
+        { total: res.total, page: res.page, photos },
+      );
+    }),
+  );
+
+  server.registerTool(
+    "photo_timeline",
+    {
+      title: "Photo timeline",
+      description:
+        "How many photos were taken in each consecutive time slice of the library's date span (slices are equal-length; empty ones are omitted). Use it to answer 'when did I take the most photos' or to pick date ranges for query_photos.",
+      inputSchema: {},
+      outputSchema: {
+        periods: z.array(
+          z.object({
+            from: z.string().describe("YYYY-MM-DD, inclusive"),
+            to: z.string().describe("YYYY-MM-DD, exclusive"),
+            count: z.number(),
+          }),
+        ),
+      },
+      annotations: readOnly,
+    },
+    guarded(async () => {
+      const { buckets } = await api.getDateHistogram();
+      const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+      const periods = buckets
+        .filter((b) => b.count > 0)
+        .map((b) => ({ from: day(b.start), to: day(b.end), count: b.count }));
+      return success(
+        periods.length
+          ? `Photos per period:\n${periods.map((p) => `- ${p.from} → ${p.to}: ${p.count}`).join("\n")}`
+          : "The library has no dated photos yet.",
+        { periods },
+      );
+    }),
+  );
+
+  server.registerTool(
+    "photo_details",
+    {
+      title: "Photo details",
+      description:
+        "All known metadata for one photo or video (EXIF, GPS, lens, exposure, tags, AI description and tags, quality score, duration, ...), given its relativePath.",
+      inputSchema: {
+        path: z.string().describe("The photo's relativePath, e.g. '/2023/trip/img.jpg'."),
+      },
+      outputSchema: {
+        path: z.string(),
+        viewUrl: z.string(),
+        metadata: z.record(z.string(), z.unknown()),
+      },
+      annotations: readOnly,
+    },
+    guarded(async ({ path }) => {
+      const slash = path.lastIndexOf("/") + 1;
+      const res = await api.queryFiles({
+        filter: {
+          operation: "and",
+          conditions: [
+            { folder: { folder: path.slice(0, slash) || "/", recursive: false } },
+            { fileName: path.slice(slash) },
+          ],
+        },
+        metadata: DETAIL_METADATA,
+        pageSize: 1,
+      });
+      if (!res.items[0]) return failure(`No photo at "${path}".`);
+      const { folder: _folder, fileName: _fileName, ...metadata } = res.items[0];
+      const present = Object.fromEntries(
+        Object.entries(metadata).filter(([, v]) => v !== null && v !== undefined),
+      );
+      return success(
+        `${path}\n${Object.entries(present)
+          .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+          .join("\n")}`,
+        { path, viewUrl: viewUrl(path), metadata: present },
       );
     }),
   );
