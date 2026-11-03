@@ -48,6 +48,9 @@ describe("VideoScrubPreview", () => {
   it("shows the storyboard frame for the moment being dragged to, until the real one lands", async () => {
     const { video } = await setup();
     expect(screen.queryByTestId("video-scrub-preview")).toBeNull();
+    act(() => {
+      video.dispatchEvent(new Event("playing"));
+    });
 
     act(() => seekTo(video, 12.5));
     const preview = screen.getByTestId("video-scrub-preview");
@@ -69,8 +72,41 @@ describe("VideoScrubPreview", () => {
     expect(screen.queryByTestId("video-scrub-preview")).toBeNull();
   });
 
+  it("ignores the seeks the player makes for itself while the video loads (feedback #174)", async () => {
+    const { video } = await setup();
+    // hls.js snapping onto the first buffered frame, before anything played.
+    act(() => seekTo(video, 0.033));
+    expect(screen.queryByTestId("video-scrub-preview")).toBeNull();
+
+    act(() => {
+      video.dispatchEvent(new Event("playing"));
+    });
+    act(() => seekTo(video, 20));
+    expect(screen.getByTestId("video-scrub-preview")).toBeInTheDocument();
+
+    // A new source starts over: hidden, and waiting to be played again.
+    act(() => {
+      video.dispatchEvent(new Event("emptied"));
+    });
+    expect(screen.queryByTestId("video-scrub-preview")).toBeNull();
+    act(() => seekTo(video, 1));
+    expect(screen.queryByTestId("video-scrub-preview")).toBeNull();
+  });
+
+  it("answers a drag on a video that has not played yet", async () => {
+    const { video } = await setup();
+    act(() => {
+      video.dispatchEvent(new Event("pointerdown"));
+    });
+    act(() => seekTo(video, 12.5));
+    expect(screen.getByTestId("video-scrub-preview")).toBeInTheDocument();
+  });
+
   it("shows nothing for a video of unknown length", async () => {
     const { video } = await setup(null);
+    act(() => {
+      video.dispatchEvent(new Event("playing"));
+    });
     act(() => seekTo(video, 5));
     expect(screen.queryByTestId("video-scrub-preview")).toBeNull();
   });
@@ -84,6 +120,9 @@ describe("VideoScrubPreview", () => {
       },
     );
     const { video } = await setup();
+    act(() => {
+      video.dispatchEvent(new Event("playing"));
+    });
     act(() => seekTo(video, 5));
     expect(screen.queryByTestId("video-scrub-preview")).toBeNull();
   });
