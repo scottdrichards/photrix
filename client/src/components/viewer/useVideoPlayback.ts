@@ -215,13 +215,20 @@ export const useVideoPlayback = ({
         stats.mode = negotiation.mode;
         stats.reason = negotiation.reason;
 
-        // Restore playback position after a direct→HLS fallback (the ref is only
-        // set on that path). Registered before the source is attached so it catches
-        // the fresh element's metadata load.
-        const restorePlaybackPosition = () => {
+        // Where to open: a direct→HLS fallback resumes where it stalled, a search
+        // match opens at the moment that matched. Taken once per attempt.
+        const takeResumeTime = (): number | null => {
           const resumeAt = resumeTimeRef.current;
           resumeTimeRef.current = null;
-          if (resumeAt === null || !Number.isFinite(resumeAt) || resumeAt <= 0) return;
+          return resumeAt !== null && Number.isFinite(resumeAt) && resumeAt > 0 ? resumeAt : null;
+        };
+
+        // For a plain <video> source (direct, native HLS): seek once metadata has
+        // loaded. Registered before the source is attached so it catches the
+        // fresh element's metadata load. hls.js gets `startPosition` instead.
+        const restorePlaybackPosition = () => {
+          const resumeAt = takeResumeTime();
+          if (resumeAt === null) return;
           video.addEventListener(
             "loadedmetadata",
             () => {
@@ -324,8 +331,16 @@ export const useVideoPlayback = ({
 
         if (hlsJsSupported) {
           const authToken = getToken();
+          // Hand hls.js the start time rather than seeking once metadata loads.
+          // A seek then lands after hls.js has already asked for segment 0, so
+          // the server encodes the start, then cold-starts a second encode at
+          // the seek target while the player waits on it: 3.7–4.7 s to the
+          // first frame and stalls after, against 1–1.5 s this way (the
+          // playback lab, 2026-11-03).
+          const startAt = takeResumeTime();
           const hls = new Hls({
             ...onTheFly,
+            ...(startAt !== null ? { startPosition: startAt } : {}),
             loader: DurationCapturingLoader,
             // Inject auth token into every XHR hls.js makes (manifest, playlists, segments)
             ...(authToken
@@ -337,7 +352,6 @@ export const useVideoPlayback = ({
               : {}),
           });
 
-          restorePlaybackPosition();
           hls.loadSource(hlsUrl);
           hls.attachMedia(video);
           if (!cancelled) {

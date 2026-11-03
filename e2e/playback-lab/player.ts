@@ -110,15 +110,26 @@ export const startPlayback = async (
     /** Lock this level at start, as the viewer does for a saved quality choice. */
     lockLevel?: number;
     hlsConfig?: object;
+    /**
+     * Open the clip part-way in, as the viewer does for a search match or a
+     * direct→HLS fallback. `startPosition` hands the time to hls.js before it
+     * loads anything; `seekOnMetadata` seeks once the first segment's metadata
+     * has loaded, which is how the viewer did it before.
+     */
+    startAt?: { seconds: number; via: "startPosition" | "seekOnMetadata" };
   } = {},
 ): Promise<void> => {
   const src = `/api/files/${encodeURIComponent(name)}?representation=hls`;
   await page.evaluate(
-    ({ src, bandwidthMbps, overrides, startLevel, lockLevel }) => {
+    ({ src, bandwidthMbps, overrides, startLevel, lockLevel, startAt }) => {
       /* eslint-disable @typescript-eslint/no-explicit-any */
       const w = window as any;
       const Hls = w.Hls;
-      const config = { ...w.__labHlsConfig(Hls, bandwidthMbps), ...overrides };
+      const config = {
+        ...w.__labHlsConfig(Hls, bandwidthMbps),
+        ...(startAt?.via === "startPosition" ? { startPosition: startAt.seconds } : {}),
+        ...overrides,
+      };
       const video = document.getElementById("v") as HTMLVideoElement;
       const t0 = performance.now();
       const now = () => Math.round(performance.now() - t0);
@@ -188,6 +199,15 @@ export const startPlayback = async (
         if (m.firstFrameMs !== null && m.waitingSince === null) m.waitingSince = now();
       });
       video.addEventListener("ended", () => { m.ended = true; });
+      if (startAt?.via === "seekOnMetadata") {
+        video.addEventListener(
+          "loadedmetadata",
+          () => {
+            video.currentTime = startAt.seconds;
+          },
+          { once: true },
+        );
+      }
       w.__lab = { m, hls, video, now };
       hls.loadSource(src);
       hls.attachMedia(video);
@@ -198,6 +218,7 @@ export const startPlayback = async (
       overrides: opts.hlsConfig ?? {},
       startLevel: opts.startLevel,
       lockLevel: opts.lockLevel,
+      startAt: opts.startAt,
     },
   );
 };

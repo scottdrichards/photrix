@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +23,9 @@ const serverEnv = {
   MEDIA_ROOT: LAB_MEDIA_ROOT,
   CACHE_DIR: LAB_CACHE,
   INDEX_DB_LOCATION: LAB_CACHE,
+  // Its own segment directory: the default is the one any other Photrix on
+  // the machine uses, so a lab run would read that server's segments as its own.
+  HLS_CACHE_DIR: existsSync("/dev/shm") ? "/dev/shm/photrix-playback-lab" : resolve(LAB_CACHE, "hls"),
   AUTH_PASSWORD: "",
   PHOTRIX_ACCOUNTS: "",
   PHOTRIX_OTEL_ENABLED: "false",

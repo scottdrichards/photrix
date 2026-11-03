@@ -104,6 +104,27 @@ test("seek back after seeking ahead", async ({ page }, info) => {
   }
 });
 
+// A search hit opens its video at the matching moment, near the end here, as
+// with the 92 s clip at 83 s that stalled in production (2026-11-03).
+for (const via of ["startPosition", "seekOnMetadata"] as const) {
+  test(`open at a search match near the end (${via})`, async ({ page }, info) => {
+    await newPlayer(page);
+    const at = LAB_CLIPS.medium.durationS - 8;
+    await startPlayback(page, LAB_CLIPS.medium.name, {
+      bandwidthMbps: LAN_MBPS,
+      startAt: { seconds: at, via },
+    });
+    await playUntil(page, at + 5, 60_000);
+    const m = await readMetrics(page);
+    const s = await report(info, "", m);
+    const fromStart = m.frags.filter((f) => f.sn < at - 2).length;
+    console.log(`[lab] open at ${at}s (${via}): ${fromStart} segment(s) loaded from before the match`);
+    expectSmooth(s);
+    expect.soft(s.reachedS, "played past the match").toBeGreaterThanOrEqual(at + 4);
+    expect.soft(fromStart, "segments fetched from before the match").toBe(0);
+  });
+}
+
 test("switch quality up mid-stream", async ({ page }, info) => {
   await newPlayer(page);
   // Watching at 360p (a saved choice), then picking 1080p by hand a minute in:

@@ -918,6 +918,39 @@ describe("FullscreenViewer", () => {
     });
   });
 
+  it("hands a search match's start time to hls.js instead of seeking after metadata loads", async () => {
+    hlsIsSupportedMock.mockReturnValue(true);
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "hls",
+      url: "http://localhost/a/clip.m3u8",
+      reason: "Hardware-accelerated HLS encoding available",
+    });
+    selectVideo({ searchMatchMs: 83_000, metadata: { duration: 92 } });
+
+    const { container } = render(<FullscreenViewer />);
+    await waitFor(() => expect(hlsInstances).toHaveLength(1));
+    expect(hlsInstances[0].config).toMatchObject({ startPosition: 83 });
+
+    // No seek of its own once metadata loads: hls.js already starts there.
+    const video = container.querySelector("video")!;
+    fireEvent(video, new Event("loadedmetadata"));
+    expect(video.currentTime).toBe(0);
+  });
+
+  it("starts hls.js from the top when there is no position to resume", async () => {
+    hlsIsSupportedMock.mockReturnValue(true);
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "hls",
+      url: "http://localhost/a/clip.m3u8",
+      reason: "Hardware-accelerated HLS encoding available",
+    });
+    selectVideo();
+
+    render(<FullscreenViewer />);
+    await waitFor(() => expect(hlsInstances).toHaveLength(1));
+    expect(hlsInstances[0].config).not.toHaveProperty("startPosition");
+  });
+
   it("says what the player is doing while a video loads, and gets out of the way once it plays", async () => {
     let finishProbe: (profile: unknown) => void = () => {};
     probeVideoPlaybackProfileMock.mockReturnValue(
