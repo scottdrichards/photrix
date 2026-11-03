@@ -693,8 +693,11 @@ export function FullscreenViewer() {
   const videoFaces =
     photo?.mediaType === "video" && peopleFacesPath === photo.path ? peopleFaces : [];
   const peopleInVideo = videoTimelineRows(videoFaces);
+  // Feedback #173: the faces button shows and hides this timeline, hidden
+  // until asked for, as it shows and hides face boxes on a photo.
+  const showPeopleTimeline = showFaces && peopleInVideo.length > 0;
   const peopleTimelinePx =
-    peopleInVideo.length > 0
+    showPeopleTimeline
       ? PEOPLE_TIMELINE_PADDING_PX +
         Math.min(peopleInVideo.length, PEOPLE_TIMELINE_MAX_ROWS) * PEOPLE_TIMELINE_ROW_PX
       : 0;
@@ -707,7 +710,9 @@ export function FullscreenViewer() {
   };
 
   const faceToggleDisabled =
-    photo?.mediaType === "video" || (!hasFaceOverlayData && peopleFaces.length === 0);
+    photo?.mediaType === "video"
+      ? peopleInVideo.length === 0
+      : !hasFaceOverlayData && peopleFaces.length === 0;
 
   const zoomStyle = {
     "--zoom-origin-x": `${photoZoom.originXPercent}%`,
@@ -840,7 +845,8 @@ export function FullscreenViewer() {
                 <button
                   type="button"
                   onClick={() => setShowFaces((current) => !current)}
-                  className={css.faceButton}
+                  className={showFaces ? `${css.faceButton} ${css.infoButtonActive}` : css.faceButton}
+                  aria-pressed={showFaces}
                   aria-label={showFaces ? "Hide faces" : "Show faces"}
                   title={showFaces ? "Hide faces" : "Show faces"}
                   disabled={faceToggleDisabled}
@@ -999,7 +1005,7 @@ export function FullscreenViewer() {
                         : `Streaming${activeLevelHeight ? ` · ${activeLevelHeight}p` : ""}`}
                     </span>
                   )}
-                  {peopleInVideo.length > 0 && (
+                  {showPeopleTimeline && (
                     <div
                       className={css.videoPeople}
                       style={{ maxHeight: `${peopleTimelinePx}px` }}
