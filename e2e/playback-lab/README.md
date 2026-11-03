@@ -28,7 +28,7 @@ PHOTRIX_LAB_MEDIA=/some/dir bun run test:playback-lab   # keep the generated med
 | `PHOTRIX_LAB_LOG_LEVEL` | `info` | the lab server's log level |
 
 The lab boots its own server on its own port, with its own throwaway index and
-cache, auth off, background tasks off and CUDA hidden from its ML workers, so
+cache and its own HLS segment directory, auth off, background tasks off and CUDA hidden from its ML workers, so
 it can run beside a normal instance without touching its library or its GPU
 memory.
 
@@ -59,7 +59,9 @@ phone records); seek far ahead; seek back after seeking ahead; switch quality up
 by hand mid-stream; start below the link's real speed and let Auto climb; pause
 past the server's per-encode idle window; a slow link; a jittery link; three
 viewers at once (two of them in the same clip, far apart); two viewers on the
-same clip 20 s apart.
+same clip 20 s apart; opening a clip near its end, as a search match does, both
+through hls.js `startPosition` (what the viewer does) and by seeking once
+metadata loads (what it used to do), so the two can be compared.
 
 `PHOTRIX_LAB_STOCK_ABR=1` runs the same scenarios with stock hls.js ABR (the
 app's buffer settings, without `encoderAwareHls.ts` or the upswitch guard), for
