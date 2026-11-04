@@ -36,6 +36,13 @@ const formatTime = (seconds: number): string => {
  * The frames come from one storyboard sprite per video (server-built, laid
  * out by shared/video-storyboard), loaded when the video opens so the first
  * drag already has it.
+ *
+ * Feedback #174: the player seeks on its own while a video loads (hls.js
+ * snaps the playhead onto the first buffered frame, a search match or a
+ * fallback opens part-way in), and each of those fires `seeking` too. On a
+ * phone that left a frame parked at the edge of the bar until the video
+ * started. So the preview only answers seeks once the video has played or
+ * been touched, and goes back to waiting when a new source loads.
  */
 export const VideoScrubPreview = ({ videoRef, path, durationSeconds, aspectRatio }: Props) => {
   const plan = planStoryboard(durationSeconds);
@@ -73,14 +80,31 @@ export const VideoScrubPreview = ({ videoRef, path, durationSeconds, aspectRatio
         fraction: total > 0 ? Math.min(1, Math.max(0, seconds / total)) : 0,
       });
     };
+    // Armed by playback or by a hand on the player, not by the seeks the
+    // player makes for itself while it loads.
+    let armed = !video.paused && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
+    const arm = () => {
+      armed = true;
+    };
+    const onSeeking = () => {
+      if (armed) show();
+    };
     const hide = () => setPreview(null);
-    video.addEventListener("seeking", show);
+    const reset = () => {
+      armed = false;
+      hide();
+    };
+    video.addEventListener("seeking", onSeeking);
     video.addEventListener("seeked", hide);
-    video.addEventListener("emptied", hide);
+    video.addEventListener("playing", arm);
+    video.addEventListener("pointerdown", arm);
+    video.addEventListener("emptied", reset);
     return () => {
-      video.removeEventListener("seeking", show);
+      video.removeEventListener("seeking", onSeeking);
       video.removeEventListener("seeked", hide);
-      video.removeEventListener("emptied", hide);
+      video.removeEventListener("playing", arm);
+      video.removeEventListener("pointerdown", arm);
+      video.removeEventListener("emptied", reset);
       setPreview(null);
     };
   }, [videoRef, ready, durationSeconds]);
