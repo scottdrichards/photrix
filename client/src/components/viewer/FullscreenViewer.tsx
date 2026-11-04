@@ -244,7 +244,6 @@ export function FullscreenViewer() {
   const {
     videoStatus,
     playback,
-    lastDataAtRef,
     retry: retryPlayback,
     hlsLevels,
     manualLevel,
@@ -988,7 +987,6 @@ export function FullscreenViewer() {
                     )}
                     <VideoLoadingOverlay
                       state={playback}
-                      lastDataAtRef={lastDataAtRef}
                       onRetry={retryPlayback}
                     />
                     <VideoScrubPreview

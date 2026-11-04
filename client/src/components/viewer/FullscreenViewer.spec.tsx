@@ -967,7 +967,7 @@ describe("FullscreenViewer", () => {
     expect(hlsInstances[0].config).not.toHaveProperty("startPosition");
   });
 
-  it("says what the player is doing while a video loads, and gets out of the way once it plays", async () => {
+  it("shows nothing over a video while it loads or buffers (feedback #175)", async () => {
     let finishProbe: (profile: unknown) => void = () => {};
     probeVideoPlaybackProfileMock.mockReturnValue(
       new Promise((resolve) => {
@@ -983,20 +983,15 @@ describe("FullscreenViewer", () => {
     selectVideo();
 
     const { container } = render(<FullscreenViewer />);
-
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Checking your connection",
-    );
+    await waitFor(() => expect(probeVideoPlaybackProfileMock).toHaveBeenCalled());
+    expect(screen.queryByText(/Checking your connection/)).toBeNull();
     finishProbe({ bandwidthMbps: 5, hevcSupported: false });
-    await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("Starting stream"),
-    );
-
-    fireEvent(container.querySelector("video")!, new Event("playing"));
-    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    await waitFor(() => expect(hlsInstances).toHaveLength(1));
+    expect(screen.queryByText(/Starting stream/)).toBeNull();
 
     fireEvent(container.querySelector("video")!, new Event("waiting"));
-    expect(await screen.findByRole("status")).toHaveTextContent("Buffering");
+    expect(screen.queryByText(/Buffering/)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("starts HLS at the quality the measured connection supports instead of climbing from the lowest", async () => {
