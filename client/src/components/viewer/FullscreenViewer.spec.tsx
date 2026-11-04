@@ -876,7 +876,13 @@ describe("FullscreenViewer", () => {
       .mockResolvedValue(undefined);
 
     const { container } = render(<FullscreenViewer />);
+    // Feedback #173: hidden until the faces button asks for it.
+    const facesButton = await screen.findByRole("button", { name: "Show faces" });
+    await waitFor(() => expect(facesButton).toBeEnabled());
+    expect(screen.queryByText("Ada")).not.toBeInTheDocument();
+    fireEvent.click(facesButton);
     expect(await screen.findByText("Ada")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide faces" })).toHaveAttribute("aria-pressed", "true");
     const video = container.querySelector("video")!;
 
     fireEvent.click(screen.getByRole("button", { name: "Longest" }));
@@ -884,6 +890,16 @@ describe("FullscreenViewer", () => {
     fireEvent.click(screen.getByRole("button", { name: "First" }));
     expect(video.currentTime).toBe(1);
     expect(play).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide faces" }));
+    expect(screen.queryByText("Ada")).not.toBeInTheDocument();
+  });
+
+  it("disables the faces button on a video nobody was found in", async () => {
+    selectVideo({ metadata: { duration: 30 } });
+    render(<FullscreenViewer />);
+    await waitFor(() => expect(fetchPeopleFacesForFileMock).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: "Show faces" })).toBeDisabled();
   });
 
   const selectVideo = (overrides: Partial<PhotoItem> = {}) =>
