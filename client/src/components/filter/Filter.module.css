@@ -6,6 +6,10 @@
   /* Beside the search field, let the field give up width rather than
      wrapping the icons onto a second line. */
   flex-shrink: 0;
+  /* Pin to the row's right edge so the search field's growth (SearchBar's
+     .searchWrapper) is the only thing absorbing leftover width — otherwise
+     the two end up sharing the row with a dead gap after the last icon. */
+  margin-inline-start: auto;
 }
 
 .iconBarButtons {
