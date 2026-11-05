@@ -26,6 +26,19 @@
   gap: var(--space-s);
 }
 
+.subjectThumb {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+/* Beside the face's crop, the question takes the free width. */
+.subjectThumb + .title {
+  flex: 1;
+}
+
 .title {
   margin: 0;
   font-size: 14px;

@@ -1,0 +1,57 @@
+.strip {
+  display: flex;
+  gap: var(--space-xs);
+  overflow-x: auto;
+  padding: var(--space-xs) var(--space-s);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-xs);
+  background: rgba(0, 0, 0, 0.55);
+  scrollbar-width: thin;
+}
+
+.tile {
+  position: relative;
+  box-sizing: border-box;
+  flex: none;
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+}
+
+.tile:hover,
+.tile:focus-visible {
+  border-color: rgba(255, 255, 255, 0.85);
+}
+
+/* Unnamed: the ones waiting for a name stand out. */
+.unnamed {
+  border-color: rgba(255, 196, 64, 0.8);
+}
+
+.crop {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 1px 2px 3px;
+  font-size: 9px;
+  line-height: 1.1;
+  color: #fff;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+}

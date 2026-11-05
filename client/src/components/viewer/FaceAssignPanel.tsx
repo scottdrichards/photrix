@@ -25,6 +25,12 @@ type FaceAssignPanelProps = {
   onClose: () => void;
   /** Called after a successful rename or merge — the caller re-fetches. */
   onAssigned: () => void;
+  /**
+   * The face itself, shown at the top of the panel. For a video's face
+   * (feedback #177): unlike a photo's, it is on a frame that is usually not
+   * the one on screen.
+   */
+  subject?: ClusterFace;
 };
 
 const MAX_SUGGESTIONS = 6;
@@ -47,7 +53,7 @@ const PREVIEW_LIMIT = 6;
  * via `assignFaceToPerson`, and skips the sightings preview, which would show
  * the person it is being taken away from.
  */
-export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelProps) {
+export function FaceAssignPanel({ face, onClose, onAssigned, subject }: FaceAssignPanelProps) {
   const changing = face.name !== null;
   const [previewFaces, setPreviewFaces] = useState<ClusterFace[]>([]);
   const [previewLoading, setPreviewLoading] = useState(true);
@@ -139,6 +145,14 @@ export function FaceAssignPanel({ face, onClose, onAssigned }: FaceAssignPanelPr
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events
     <div className={css.panel} onClick={(e) => e.stopPropagation()}>
       <div className={css.header}>
+        {subject && (
+          <FaceCropImage
+            className={css.subjectThumb}
+            face={subject}
+            size={160}
+            alt={face.name ? `The face tagged ${face.name}` : "The face to name"}
+          />
+        )}
         <h4 className={css.title}>{changing ? `Not ${face.name}? Who is this?` : "Who is this?"}</h4>
         <button
           type="button"

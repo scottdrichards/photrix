@@ -29,7 +29,11 @@ const {
   hlsEventHandlers,
   hlsInstances,
   fetchPeopleFacesForFileMock,
+  renameClusterMock,
+  assignFaceToPersonMock,
 } = vi.hoisted(() => ({
+  renameClusterMock: vi.fn((): Promise<void> => Promise.resolve()),
+  assignFaceToPersonMock: vi.fn((): Promise<void> => Promise.resolve()),
   fetchPeopleFacesForFileMock: vi.fn((): Promise<unknown[]> => Promise.resolve([])),
   fetchPhotoCaptionMock: vi.fn(() => Promise.resolve(null as string | null)),
   streamPhotoDescriptionMock: vi.fn(
@@ -73,6 +77,16 @@ vi.mock("../../api", () => ({
     (fetchPhotoCaptionMock as (...a: unknown[]) => unknown)(...args),
   streamPhotoDescription: (...args: unknown[]) =>
     (streamPhotoDescriptionMock as (...a: unknown[]) => unknown)(...args),
+  // The face-assign panel and face crops (feedback #177).
+  buildFaceCropUrl: (face: { faceId: number; frameTimeMs?: number }) =>
+    `http://localhost/crop/${face.faceId}?t=${face.frameTimeMs ?? ""}`,
+  fetchClusterFacePreview: () => Promise.resolve([]),
+  fetchNamedPeople: () => Promise.resolve([{ id: "person-7", name: "Ada" }]),
+  mergeClusters: () => Promise.resolve(),
+  renameCluster: (...args: unknown[]) =>
+    (renameClusterMock as (...a: unknown[]) => unknown)(...args),
+  assignFaceToPerson: (...args: unknown[]) =>
+    (assignFaceToPersonMock as (...a: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../../diagnostics", () => ({
@@ -881,7 +895,8 @@ describe("FullscreenViewer", () => {
     await waitFor(() => expect(facesButton).toBeEnabled());
     expect(screen.queryByText("Ada")).not.toBeInTheDocument();
     fireEvent.click(facesButton);
-    expect(await screen.findByText("Ada")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Longest" })).toBeInTheDocument();
+    expect(screen.getAllByText("Ada").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Hide faces" })).toHaveAttribute("aria-pressed", "true");
     const video = container.querySelector("video")!;
 
@@ -893,6 +908,89 @@ describe("FullscreenViewer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Hide faces" }));
     expect(screen.queryByText("Ada")).not.toBeInTheDocument();
+  });
+
+  it("names a video's face from its crop (feedback #177)", async () => {
+    fetchPeopleFacesForFileMock.mockResolvedValue([
+      {
+        faceId: 1,
+        box: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 },
+        personId: "person-7",
+        name: "Ada",
+        frameTimeMs: 12_000,
+        appearances: [{ startMs: 10_000, endMs: 20_000 }],
+      },
+      {
+        faceId: 2,
+        box: { x: 0.2, y: 0.3, width: 0.1, height: 0.1 },
+        personId: "person-9",
+        name: null,
+        frameTimeMs: 4_000,
+        appearances: [{ startMs: 2_000, endMs: 6_000 }],
+      },
+      // The same unnamed person, split into a second track: one crop for them.
+      {
+        faceId: 3,
+        box: { x: 0.2, y: 0.3, width: 0.1, height: 0.1 },
+        personId: "person-9",
+        name: null,
+        frameTimeMs: 25_000,
+        appearances: [{ startMs: 24_000, endMs: 26_000 }],
+      },
+    ]);
+    selectVideo({ metadata: { duration: 30 } });
+
+    render(<FullscreenViewer />);
+    const facesButton = await screen.findByRole("button", { name: "Show faces" });
+    await waitFor(() => expect(facesButton).toBeEnabled());
+    fireEvent.click(facesButton);
+
+    const strip = await screen.findByRole("group", { name: "Faces in this video" });
+    // In the order they first appear, the unnamed person once.
+    const tiles = [...strip.querySelectorAll("button")];
+    expect(tiles.map((tile) => tile.getAttribute("aria-label"))).toEqual([
+      "Who is this?",
+      "Ada: not them?",
+    ]);
+    // Each crop is cut from the frame the face was found on.
+    expect(tiles[0].querySelector("img")?.getAttribute("src")).toContain("crop/2?t=4000");
+
+    fireEvent.click(tiles[0]);
+    expect(await screen.findByRole("heading", { name: "Who is this?" })).toBeInTheDocument();
+    expect(screen.getByAltText("The face to name")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Person's name"), { target: { value: "Grace" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(renameClusterMock).toHaveBeenCalledWith("person-9", "Grace"));
+    // Saved: the panel closes and the faces are fetched again with the new name.
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Who is this?" })).not.toBeInTheDocument(),
+    );
+    expect(fetchPeopleFacesForFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("moves a misnamed video face to the right person (feedback #177)", async () => {
+    fetchPeopleFacesForFileMock.mockResolvedValue([
+      {
+        faceId: 1,
+        box: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 },
+        personId: "person-7",
+        name: "Ada",
+        frameTimeMs: 12_000,
+        appearances: [{ startMs: 10_000, endMs: 20_000 }],
+      },
+    ]);
+    selectVideo({ metadata: { duration: 30 } });
+
+    render(<FullscreenViewer />);
+    const facesButton = await screen.findByRole("button", { name: "Show faces" });
+    await waitFor(() => expect(facesButton).toBeEnabled());
+    fireEvent.click(facesButton);
+    fireEvent.click(await screen.findByRole("button", { name: "Ada: not them?" }));
+
+    expect(await screen.findByRole("heading", { name: "Not Ada? Who is this?" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Person's name"), { target: { value: "Grace" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(assignFaceToPersonMock).toHaveBeenCalledWith(1, { name: "Grace" }));
   });
 
   it("disables the faces button on a video nobody was found in", async () => {
