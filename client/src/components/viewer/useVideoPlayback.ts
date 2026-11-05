@@ -10,6 +10,15 @@ import { negotiateVideoPlayback } from "../../api";
 import { getToken } from "../../auth";
 import { createClientOperationId, logClientEvent } from "../../diagnostics";
 import { type PlaybackState } from "./VideoLoadingOverlay";
+import {
+  bufferedAheadS,
+  classifyBottleneck,
+  readSegmentHeaders,
+  shouldShowBottleneck,
+  summarizeSegments,
+  type BottleneckReport,
+  type SegmentSample,
+} from "./playbackBottleneck";
 import { readStorage, writeStorage } from "../../storage";
 import { playVideo } from "../playVideo";
 import { attemptSync } from "../../result";
@@ -21,6 +30,17 @@ type DefaultLoadArgs = Parameters<DefaultLoader["load"]>;
 
 type HlsNetworkDetails = {
   xhr?: XMLHttpRequest;
+};
+
+// hls.js's XHR loader hands back the XMLHttpRequest itself as `networkDetails`;
+// accept a `{ xhr }` wrapper too.
+type ResponseHeaders = Pick<XMLHttpRequest, "getResponseHeader">;
+const responseOf = (networkDetails: unknown): ResponseHeaders | undefined => {
+  if (typeof networkDetails !== "object" || networkDetails === null) return undefined;
+  if (typeof (networkDetails as XMLHttpRequest).getResponseHeader === "function") {
+    return networkDetails as XMLHttpRequest;
+  }
+  return (networkDetails as HlsNetworkDetails).xhr;
 };
 
 type HlsMediaWithSource = HTMLMediaElement & {
@@ -117,7 +137,15 @@ export const useVideoPlayback = ({
     stalledMs: number;
     stallStartedAt: number | null;
     levelSwitches: number;
+    bottleneckMs: Record<BottleneckReport["kind"], number>;
   } | null>(null);
+  // Why playback is buffering, while it is (feedback #178); null otherwise.
+  const [bottleneck, setBottleneck] = useState<BottleneckReport | null>(null);
+  // Re-judges the bottleneck; set by the load effect for the current attempt,
+  // called by the element-event effect on stalls.
+  const evaluateBottleneckRef = useRef<() => void>(() => {});
+  // True from a `waiting` until the next `playing`.
+  const stalledRef = useRef(false);
   // ABR quality selector. `hlsLevels` are the variants the player can switch between
   // (ascending height); `manualLevel` is -1 for Auto/ABR or a level index to lock to;
   // `activeLevelHeight` is the height ABR is currently playing (for the "Auto" label).
@@ -187,8 +215,49 @@ export const useVideoPlayback = ({
       stalledMs: 0,
       stallStartedAt: null as number | null,
       levelSwitches: 0,
+      bottleneckMs: { network: 0, encoder: 0 },
     };
     playbackStatsRef.current = stats;
+
+    // Per-segment timings for the bottleneck indicator and the summary.
+    const segmentSamples: SegmentSample[] = [];
+    let shown: { report: BottleneckReport; since: number } | null = null;
+    stalledRef.current = false;
+    setBottleneck(null);
+    const evaluateBottleneck = () => {
+      if (cancelled) return;
+      const report = classifyBottleneck(segmentSamples);
+      const show = shouldShowBottleneck({
+        report,
+        stalled: stalledRef.current,
+        bufferAheadS: bufferedAheadS(video),
+        showing: shown !== null,
+      });
+      const next = show ? report : null;
+      const now = Date.now();
+      if (shown && shown.report.kind !== next?.kind) {
+        stats.bottleneckMs[shown.report.kind] += now - shown.since;
+      }
+      if (next && next.kind !== shown?.report.kind) {
+        logClientEvent({
+          level: "warn",
+          event: "video.playback.bottleneck",
+          message: `Playback held back by the ${next.kind} for ${photo.path}`,
+          clientOperationId,
+          data: {
+            path: photo.path,
+            ...next,
+            stalled: stalledRef.current,
+            bufferAheadS: Math.round(bufferedAheadS(video) * 10) / 10,
+            recent: summarizeSegments(segmentSamples.slice(-6)),
+          },
+        });
+      }
+      const since = next && next.kind === shown?.report.kind ? shown.since : now;
+      shown = next ? { report: next, since } : null;
+      setBottleneck(next);
+    };
+    evaluateBottleneckRef.current = evaluateBottleneck;
 
     const loadSelectedPlayback = async () => {
       try {
@@ -301,10 +370,7 @@ export const useVideoPlayback = ({
             const originalOnSuccess = callbacks.onSuccess;
             callbacks.onSuccess = (...onSuccessArgs) => {
               const [, , callbackContext, networkDetails] = onSuccessArgs;
-              const details =
-                typeof networkDetails === "object" && networkDetails !== null
-                  ? (networkDetails as HlsNetworkDetails)
-                  : undefined;
+              const response = responseOf(networkDetails);
               const requestType =
                 typeof callbackContext === "object" && callbackContext !== null
                   ? (callbackContext as { type?: string }).type
@@ -312,10 +378,9 @@ export const useVideoPlayback = ({
 
               if (
                 (requestType === "manifest" || requestType === "level") &&
-                details?.xhr
+                response
               ) {
-                const durationHeader =
-                  details.xhr.getResponseHeader("X-Content-Duration");
+                const durationHeader = response.getResponseHeader("X-Content-Duration");
                 if (durationHeader) {
                   const parsed = parseFloat(durationHeader);
                   if (Number.isFinite(parsed) && parsed > 0) {
@@ -358,8 +423,21 @@ export const useVideoPlayback = ({
             setVideoStatus("hls");
             setPlayback({ phase: "starting", since: Date.now(), detail: "Starting stream…" });
           }
-          hls.on(Hls.Events.FRAG_LOADED, () => {
+          hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
             lastDataAtRef.current = Date.now();
+            if (data.frag.type !== "main") return;
+            const { loading, loaded } = data.frag.stats;
+            const server = readSegmentHeaders(responseOf(data.networkDetails));
+            segmentSamples.push({
+              durationS: data.frag.duration,
+              waitMs: server.waitMs,
+              transferMs: Math.max(0, loading.end - loading.first),
+              encodeSpeed: server.encodeSpeed,
+              bytes: loaded,
+            });
+            // A long playback keeps only what the summary and the verdict need.
+            if (segmentSamples.length > 2000) segmentSamples.splice(0, 1000);
+            evaluateBottleneck();
           });
 
           const getDuration = () => serverDuration ?? knownDuration ?? video.duration;
@@ -547,11 +625,22 @@ export const useVideoPlayback = ({
           stalls: stats.stalls,
           stalledMs: stats.stalledMs + (stats.stallStartedAt ? now - stats.stallStartedAt : 0),
           levelSwitches: stats.levelSwitches,
+          // Server wait against download time, per segment (feedback #178).
+          ...summarizeSegments(segmentSamples),
+          bottleneckMs: {
+            network:
+              stats.bottleneckMs.network +
+              (shown?.report.kind === "network" ? now - shown.since : 0),
+            encoder:
+              stats.bottleneckMs.encoder +
+              (shown?.report.kind === "encoder" ? now - shown.since : 0),
+          },
           watchedS: Math.round(video.currentTime),
           droppedFrames: quality?.droppedVideoFrames ?? null,
           totalFrames: quality?.totalVideoFrames ?? null,
         },
       });
+      evaluateBottleneckRef.current = () => {};
       destroyHls();
       clearVideoSource(video);
     };
@@ -623,6 +712,8 @@ export const useVideoPlayback = ({
         stats.stallStartedAt = null;
       }
       setPlayback({ phase: "playing", since: now });
+      stalledRef.current = false;
+      evaluateBottleneckRef.current();
     };
     const onCanPlay = () => {
       logVideoEvent("video.element.canplay", "info");
@@ -634,6 +725,8 @@ export const useVideoPlayback = ({
     const onWaiting = () => {
       logVideoEvent("video.element.waiting", "warn");
       armDirectStallFallback();
+      stalledRef.current = true;
+      evaluateBottleneckRef.current();
       if (!stats?.firstFrameAt) return;
       stats.stalls += 1;
       stats.stallStartedAt ??= Date.now();
@@ -699,6 +792,8 @@ export const useVideoPlayback = ({
     videoStatus,
     /** What the player is waiting on, for VideoLoadingOverlay. */
     playback,
+    /** Why it is buffering, while it is: the network or the encoder (feedback #178). */
+    bottleneck,
     lastDataAtRef,
     /** Starts playback negotiation over, from the overlay's Retry button. */
     retry: () => setRetryNonce((n) => n + 1),

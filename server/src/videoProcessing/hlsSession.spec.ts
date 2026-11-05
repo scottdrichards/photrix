@@ -378,3 +378,51 @@ describe("playback lifecycle hooks", () => {
     delete process.env.PHOTRIX_HLS_IDLE_MS;
   });
 });
+
+describe("measuring encode speed (feedback #178)", () => {
+  it("reads the live speed from the write times of the encode's own last segments", async () => {
+    const { claimVariantEncode, registerHlsProcess, recentEncodeSpeed } = await loadSession();
+    const dir = "/hls/speed";
+    claimVariantEncode(dir, 2160, 100, (i) => i <= 110);
+    registerHlsProcess(dir, 2160, makeChild());
+    // Segment i written at 1.25 s per 1 s segment: 0.8x realtime. The segments
+    // before 100 belong to an older encode, written long before.
+    const writtenAt = (i: number) => (i < 100 ? 0 : 50_000 + (i - 100) * 1250);
+
+    expect(recentEncodeSpeed(dir, 2160, 110, writtenAt)).toBe(0.8);
+    // Two segments into the encode, the window is only its own segments.
+    expect(recentEncodeSpeed(dir, 2160, 102, writtenAt)).toBe(0.8);
+    // One segment in, there is nothing to measure between.
+    expect(recentEncodeSpeed(dir, 2160, 101, writtenAt)).toBeNull();
+    expect(recentEncodeSpeed(dir, 1080, 110, writtenAt)).toBeNull();
+  });
+
+  it("reports each finished encode's speed without the time pacing kept it frozen", async () => {
+    jest.useFakeTimers();
+    const { claimVariantEncode, registerHlsProcess, touchVariant } = await loadSession(60_000);
+    const { listDiagnosticsEvents } = await import("../observability/diagnosticsStore.ts");
+    const dir = "/hls/speed-run";
+    let written = -1;
+    claimVariantEncode(dir, 720, 0, (i) => i <= written);
+    const child = makeChild();
+    registerHlsProcess(dir, 720, child);
+
+    // 40 segments in 20 s of encoding: 2x realtime. Then frozen for 30 s.
+    jest.advanceTimersByTime(20_000);
+    written = 39;
+    jest.advanceTimersByTime(30_000);
+    expect(child.kill).toHaveBeenCalledWith("SIGSTOP");
+    touchVariant(dir, 720, 35);
+    expect(child.kill).toHaveBeenCalledWith("SIGCONT");
+    child.emit("exit", 0, null);
+
+    const runs = listDiagnosticsEvents({ limit: 10 }).filter(
+      (event) => event.event === "video.hls.encode.run",
+    );
+    expect(runs).toHaveLength(1);
+    expect(runs[0].data).toMatchObject({ variantHeight: 720, segments: 40, reason: "exited" });
+    // Frozen from the first pacing tick past 20 s to the thaw at 50 s.
+    expect(runs[0].data?.speed).toBeGreaterThan(1.9);
+    expect(runs[0].data?.speed).toBeLessThan(2.1);
+  });
+});

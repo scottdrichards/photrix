@@ -2,7 +2,7 @@ import * as http from "http";
 import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import { stat, readFile } from "fs/promises";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
-import { createReadStream, existsSync, type Stats } from "fs";
+import { createReadStream, existsSync, statSync, type Stats } from "fs";
 import path from "path";
 import {
   convertImage,
@@ -40,6 +40,7 @@ import { buildVodVariantPlaylist } from "../../videoProcessing/buildHlsPlaylist.
 import {
   keepVariantAlive,
   claimVariantEncode,
+  recentEncodeSpeed,
   registerHlsProcess,
   touchHlsSession,
   touchVariant,
@@ -59,8 +60,13 @@ import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../common/writeJson.ts";
 import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
 import { decodeRequestPath } from "../../common/decodeRequestPath.ts";
-import { attempt } from "../../common/result.ts";
+import { attempt, attemptSync } from "../../common/result.ts";
 import { generateVideoStoryboard } from "../../videoProcessing/videoStoryboard.ts";
+// Let the player tell a slow encoder from a slow network (feedback #178).
+import {
+  ENCODE_SPEED_HEADER,
+  SEGMENT_WAIT_HEADER,
+} from "../../../../shared/hls-segment-headers/src/index.ts";
 
 type Options = {
   database: IndexDatabase;
@@ -498,7 +504,9 @@ const tryHLSStream = async (
       touchVariant(hlsDir, variantHeight, segmentIndex ?? undefined);
 
       // If the segment isn't on disk yet, make sure an encode is running.
-      if (!existsSync(segmentPath) && segmentIndex !== null) {
+      const waitStartedAt = Date.now();
+      const alreadyWritten = existsSync(segmentPath);
+      if (!alreadyWritten && segmentIndex !== null) {
         ensureEncoding(variantHeight, segmentIndex);
       }
 
@@ -544,6 +552,20 @@ const tryHLSStream = async (
         writeJson(res, 404, { error: "HLS segment not found or timed out" });
         return true;
       }
+      const waitMs = Date.now() - waitStartedAt;
+      // Only a request that waited reads the encoder's pace: the encode was then
+      // at its head, so the window is live encoding, not frozen pacing.
+      const encodeSpeed =
+        alreadyWritten || segmentIndex === null
+          ? null
+          : recentEncodeSpeed(hlsDir, variantHeight, segmentIndex, (index) => {
+              const written = attemptSync(() =>
+                statSync(getVariantSegmentPath(hlsDir, variantHeight, segmentFileName(index))),
+              );
+              return written.ok ? written.value.mtimeMs : null;
+            });
+      res.setHeader(SEGMENT_WAIT_HEADER, String(waitMs));
+      if (encodeSpeed !== null) res.setHeader(ENCODE_SPEED_HEADER, String(encodeSpeed));
       recordServerDiagnosticEvent({
         level: "info",
         event: "video.hls.segment.ready",
@@ -553,6 +575,8 @@ const tryHLSStream = async (
           hlsDir,
           variantHeight,
           segment,
+          waitMs,
+          encodeSpeed,
         },
       });
       await streamHlsSegment(res, segmentPath);
