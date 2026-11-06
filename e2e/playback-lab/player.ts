@@ -10,6 +10,8 @@ const CLIENT = resolve(here, "..", "..", "client");
 const HLS_JS = resolve(CLIENT, "node_modules", "hls.js", "dist", "hls.min.js");
 const APP_HLS_CONFIG = resolve(CLIENT, "src", "components", "viewer", "encoderAwareHls.ts");
 const APP_ABR_GUARD = resolve(CLIENT, "src", "components", "viewer", "hlsAbrGuard.ts");
+const APP_BOTTLENECK = resolve(CLIENT, "src", "components", "viewer", "playbackBottleneck.ts");
+const SEGMENT_HEADERS = resolve(CLIENT, "..", "shared", "hls-segment-headers", "src", "index.ts");
 
 /**
  * A client module as a page script: types stripped, imports dropped (hls.js is
@@ -60,6 +62,24 @@ const appAbrGuardScript = (): string =>
     ? "window.__labAttachAbrGuard = () => () => {};"
     : pageScript(APP_ABR_GUARD, "window.__labAttachAbrGuard = attachHlsAbrUpswitchGuard;");
 
+/**
+ * The viewer's bottleneck verdict (client/src/components/viewer/playbackBottleneck.ts,
+ * feedback #178), with the shared header names it imports published first.
+ */
+const appBottleneckScript = (): string =>
+  !existsSync(APP_BOTTLENECK)
+    ? "window.__labClassifyBottleneck = () => null;"
+    : [
+        pageScript(
+          SEGMENT_HEADERS,
+          "window.SEGMENT_WAIT_HEADER = SEGMENT_WAIT_HEADER; window.ENCODE_SPEED_HEADER = ENCODE_SPEED_HEADER;",
+        ),
+        pageScript(
+          APP_BOTTLENECK,
+          "window.__labClassifyBottleneck = classifyBottleneck; window.__labReadSegmentHeaders = readSegmentHeaders;",
+        ),
+      ].join("\n");
+
 type FragSample = {
   level: number;
   sn: number;
@@ -69,6 +89,12 @@ type FragSample = {
   ttfbMs: number;
   totalMs: number;
   bytes: number;
+  /** What the server said it waited for the encoder, and the encoder's pace (feedback #178). */
+  serverWaitMs: number | null;
+  encodeSpeed: number | null;
+  /** First byte to last. */
+  transferMs: number;
+  duration: number;
 };
 
 type LabMetrics = {
@@ -86,6 +112,8 @@ type LabMetrics = {
   ended: boolean;
   currentTime: number;
   bufferedAhead: number;
+  /** The viewer's verdict on the last few segments: network, encoder, or null. */
+  bottleneck: { kind: string } | null;
 };
 
 /** Headless Chromium with the app's hls.js on a blank page served from the lab API's origin. */
@@ -98,6 +126,7 @@ export const openPlayer = async (page: Page): Promise<void> => {
   await page.addScriptTag({ path: HLS_JS });
   await page.addScriptTag({ content: appHlsConfigScript() });
   await page.addScriptTag({ content: appAbrGuardScript() });
+  await page.addScriptTag({ content: appBottleneckScript() });
 };
 
 /** Starts playback of `name` (a file under the lab media root) through HLS. */
@@ -107,8 +136,8 @@ export const startPlayback = async (
   opts: {
     bandwidthMbps?: number | null;
     startLevel?: number;
-    /** Lock this level at start, as the viewer does for a saved quality choice. */
-    lockLevel?: number;
+    /** Lock this level at start, as the viewer does for a saved quality choice ("top": the highest). */
+    lockLevel?: number | "top";
     hlsConfig?: object;
     /**
      * Open the clip part-way in, as the viewer does for a search match or a
@@ -158,6 +187,12 @@ export const startPlayback = async (
           ttfbMs: Math.round(s.first - s.start + (d.frag.stats.serverWaitMs ?? 0)),
           totalMs: Math.round(s.end - s.start + (d.frag.stats.serverWaitMs ?? 0)),
           bytes: d.frag.stats.loaded,
+          ...(() => {
+            const h = w.__labReadSegmentHeaders?.(d.networkDetails) ?? {};
+            return { serverWaitMs: h.waitMs ?? null, encodeSpeed: h.encodeSpeed ?? null };
+          })(),
+          transferMs: Math.round(s.end - s.first),
+          duration: d.frag.duration,
         });
       });
       hls.on(Hls.Events.FRAG_LOAD_EMERGENCY_ABORTED, (_e: unknown, d: any) => {
@@ -182,6 +217,7 @@ export const startPlayback = async (
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         // The viewer's saved quality preference, as a lock from the start.
         if (typeof lockLevel === "number") hls.currentLevel = lockLevel;
+        if (lockLevel === "top") hls.currentLevel = hls.levels.length - 1;
         void video.play().catch(() => {});
       });
       w.__labAttachAbrGuard(hls);
@@ -234,7 +270,18 @@ export const readMetrics = (page: Page): Promise<LabMetrics> =>
       }
     }
     const { waitingSince, ...rest } = m;
+    const w = window as any;
+    const bottleneck = w.__labClassifyBottleneck(
+      m.frags.map((f: any) => ({
+        durationS: f.duration,
+        waitMs: f.serverWaitMs,
+        transferMs: f.transferMs,
+        encodeSpeed: f.encodeSpeed,
+        bytes: f.bytes,
+      })),
+    );
     return {
+      bottleneck,
       ...JSON.parse(JSON.stringify(rest)),
       openStallMs: waitingSince === null ? 0 : now() - waitingSince,
       currentTime: video.currentTime,
@@ -337,6 +384,12 @@ export const summarize = (m: LabMetrics) => {
     errors: m.errors.map((e) => `${e.fatal ? "FATAL " : ""}${e.details}`),
     failed: m.failed,
     reachedS: Math.round(m.currentTime * 10) / 10,
+    encodeSpeedP50: percentile(
+      m.frags.flatMap((f) => (f.encodeSpeed === null ? [] : [f.encodeSpeed])),
+      50,
+    ),
+    transferMsP50: percentile(m.frags.map((f) => f.transferMs), 50),
+    bottleneck: m.bottleneck?.kind ?? null,
   };
 };
 

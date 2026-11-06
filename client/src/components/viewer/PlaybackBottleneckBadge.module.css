@@ -1,0 +1,42 @@
+.root {
+  position: absolute;
+  top: var(--space-s);
+  left: var(--space-s);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  max-width: min(320px, 70%);
+  z-index: 100;
+}
+
+.badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+}
+
+/* Red: the connection can't carry the stream. */
+.network {
+  color: #ff5a52;
+}
+
+/* Amber: the server's encoder is behind. */
+.encoder {
+  color: #ffb340;
+}
+
+.explanation {
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.75);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}

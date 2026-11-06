@@ -25,6 +25,7 @@ import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes, type NamedFace } fr
 import { VideoPeopleTimeline } from "./VideoPeopleTimeline";
 import { VideoLoadingOverlay } from "./VideoLoadingOverlay";
 import { VideoScrubPreview } from "./VideoScrubPreview";
+import { PlaybackBottleneckBadge } from "./PlaybackBottleneckBadge";
 import { videoTimelineRows } from "./videoPeople";
 
 // The people timeline under a video: its rows are this tall, and past this many
@@ -244,6 +245,7 @@ export function FullscreenViewer() {
   const {
     videoStatus,
     playback,
+    bottleneck,
     retry: retryPlayback,
     hlsLevels,
     manualLevel,
@@ -995,6 +997,7 @@ export function FullscreenViewer() {
                       durationSeconds={photo.metadata?.duration}
                       aspectRatio={videoAspectRatio}
                     />
+                    <PlaybackBottleneckBadge key={photo.path} report={bottleneck} />
                   </div>
                   {videoStatus && (
                     <span className={css.videoBadge} data-testid="video-status">

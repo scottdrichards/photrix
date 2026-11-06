@@ -184,6 +184,27 @@ test("slow network", async ({ page }, info) => {
   expectSmooth(s);
 });
 
+// Feedback #178: the viewer names the cause of a stall from the server's
+// per-segment headers. A thin link should read as the network, the 4K rung
+// on a 4K60 10-bit source (~1.1x realtime) as the encoder.
+test("bottleneck: a thin link reads as the network", async ({ page }, info) => {
+  await newPlayer(page);
+  await shapeNetwork(page, { downMbps: 3, latencyMs: 40 });
+  // Locked to the top rung, far more than the link carries.
+  await startPlayback(page, LAB_CLIPS.medium.name, { bandwidthMbps: 3, lockLevel: "top" });
+  await page.waitForTimeout(25_000);
+  const s = await report(info, "", await readMetrics(page));
+  expect.soft(s.bottleneck, "verdict").toBe("network");
+});
+
+test("bottleneck: the 4K rung reads as the encoder", async ({ page }, info) => {
+  await newPlayer(page);
+  await startPlayback(page, LAB_CLIPS.medium.name, { bandwidthMbps: LAN_MBPS, lockLevel: "top" });
+  await page.waitForTimeout(25_000);
+  const s = await report(info, "", await readMetrics(page));
+  expect.soft(s.bottleneck, "verdict").toBe("encoder");
+});
+
 test("jittery network", async ({ page }, info) => {
   await newPlayer(page);
   const cdp = await shapeNetwork(page, { downMbps: 10, latencyMs: 40 });

@@ -2,6 +2,8 @@ import type { ChildProcess } from "node:child_process";
 import { rm } from "node:fs/promises";
 import { getLogger } from "../observability/logger.ts";
 import { pathToken } from "../observability/privacy.ts";
+import { recordServerDiagnosticEvent } from "../observability/diagnosticsStore.ts";
+import { HLS_SEGMENT_SECONDS } from "./buildHlsPlaylist.ts";
 import { closeHlsWatcher } from "./hlsSegmentWatcher.ts";
 
 const log = getLogger("HlsSession");
@@ -65,11 +67,19 @@ type EncodeRun = {
   lastTouched: number;
   // True while frozen by pacing.
   frozen: boolean;
+  // For the encode-speed report: when the current process started, when it was
+  // last frozen, and how long it has spent frozen in total. Frozen time is
+  // pacing, not encoding, so it is left out of the speed.
+  spawnedAt?: number;
+  frozenAt?: number;
+  frozenMs: number;
   pacer?: ReturnType<typeof setInterval>;
   idleTimer?: ReturnType<typeof setTimeout>;
 };
 
 type VariantState = {
+  hlsDir: string;
+  height: number;
   runs: EncodeRun[];
   // Reports whether a segment of this variant is on disk (from the latest claim).
   isProduced: (segment: number) => boolean;
@@ -112,10 +122,50 @@ export const setPlaybackLifecycleHooks = (hooks: PlaybackLifecycleHooks): void =
   playbackHooks = hooks;
 };
 
+const thawAccounting = (run: EncodeRun): void => {
+  if (run.frozenAt !== undefined) run.frozenMs += Date.now() - run.frozenAt;
+  run.frozenAt = undefined;
+};
+
 const stopPacing = (run: EncodeRun): void => {
   if (run.pacer) clearInterval(run.pacer);
   run.pacer = undefined;
   run.frozen = false;
+  thawAccounting(run);
+};
+
+/**
+ * Reports how fast an encode ran once it ends: segments written per second of
+ * unfrozen wall time, in multiples of realtime (feedback #178). Below 1x a
+ * viewer at that quality catches up with the encoder and waits on it.
+ */
+const reportRunSpeed = (run: EncodeRun, hlsDir: string, height: number, reason: string): void => {
+  if (run.spawnedAt === undefined) return;
+  thawAccounting(run);
+  const segments = run.head - run.startSegment + 1;
+  const activeMs = Date.now() - run.spawnedAt - run.frozenMs;
+  run.spawnedAt = undefined;
+  if (segments <= 0 || activeMs <= 0) return;
+  const speed = Math.round(((segments * HLS_SEGMENT_SECONDS * 1000) / activeMs) * 100) / 100;
+  log.info(
+    { hlsDir: pathToken(hlsDir), height, segments, activeMs, speed, reason },
+    "HLS encode run ended",
+  );
+  recordServerDiagnosticEvent({
+    level: speed < 1 ? "warn" : "info",
+    event: "video.hls.encode.run",
+    message: `${height}p encode wrote ${segments} segments at ${speed}x realtime`,
+    data: {
+      hlsDir: pathToken(hlsDir),
+      variantHeight: height,
+      startSegment: run.startSegment,
+      segments,
+      activeMs,
+      frozenMs: run.frozenMs,
+      speed,
+      reason,
+    },
+  });
 };
 
 const advanceHead = (variant: VariantState, run: EncodeRun): void => {
@@ -130,14 +180,20 @@ const pace = (variant: VariantState, run: EncodeRun): void => {
   const lead = run.head - run.maxRequested;
   if (!run.frozen && lead >= PACE_AHEAD_SEGMENTS) {
     run.frozen = child.kill("SIGSTOP");
+    if (run.frozen) run.frozenAt = Date.now();
   } else if (run.frozen && lead < PACE_RESUME_SEGMENTS) {
     child.kill("SIGCONT");
     run.frozen = false;
+    thawAccounting(run);
   }
 };
 
 const killRun = (variant: VariantState, run: EncodeRun): void => {
   clearTimeout(run.idleTimer);
+  if (run.child) {
+    advanceHead(variant, run);
+    reportRunSpeed(run, variant.hlsDir, variant.height, "stopped");
+  }
   stopPacing(run);
   run.child?.kill("SIGKILL");
   run.child = null;
@@ -190,10 +246,10 @@ const ensureSession = (hlsDir: string): Session => {
   return session;
 };
 
-const ensureVariant = (session: Session, height: number): VariantState => {
+const ensureVariant = (session: Session, hlsDir: string, height: number): VariantState => {
   let variant = session.variants.get(height);
   if (!variant) {
-    variant = { runs: [], isProduced: () => false };
+    variant = { hlsDir, height, runs: [], isProduced: () => false };
     session.variants.set(height, variant);
   }
   return variant;
@@ -279,7 +335,7 @@ const coveringRun = (
  * alive; a segment request keeps alive, and paces, the encode producing it.
  */
 export const touchVariant = (hlsDir: string, height: number, segmentIndex?: number): void => {
-  const variant = ensureVariant(ensureSession(hlsDir), height);
+  const variant = ensureVariant(ensureSession(hlsDir), hlsDir, height);
   if (segmentIndex === undefined) {
     for (const run of variant.runs) touchRun(hlsDir, height, variant, run);
     return;
@@ -298,7 +354,7 @@ export const keepVariantAlive = (
   height: number,
   segmentIndex?: number,
 ): (() => void) => {
-  const variant = ensureVariant(ensureSession(hlsDir), height);
+  const variant = ensureVariant(ensureSession(hlsDir), hlsDir, height);
   const run =
     segmentIndex === undefined
       ? variant.runs.at(-1)
@@ -349,7 +405,7 @@ export const claimVariantEncode = (
   requestedSegment?: number,
   isProduced: (segment: number) => boolean = () => false,
 ): EncodeClaim | null => {
-  const variant = ensureVariant(ensureSession(hlsDir), height);
+  const variant = ensureVariant(ensureSession(hlsDir), hlsDir, height);
   variant.isProduced = isProduced;
   variant.runs = variant.runs.filter((run) => !run.dead);
 
@@ -381,6 +437,7 @@ export const claimVariantEncode = (
     waiters: 0,
     lastTouched: Date.now(),
     frozen: false,
+    frozenMs: 0,
   };
   variant.runs.push(run);
   armRunIdle(hlsDir, height, variant, run);
@@ -440,10 +497,14 @@ export const registerHlsProcess = (
   }
   run.child = child;
   stopPacing(run);
+  run.spawnedAt = Date.now();
+  run.frozenMs = 0;
   run.pacer = setInterval(() => pace(variant, run), PACE_CHECK_MS);
   run.pacer.unref?.();
   child.once("exit", () => {
     if (run.child !== child) return;
+    advanceHead(variant, run);
+    reportRunSpeed(run, hlsDir, height, "exited");
     stopPacing(run);
     clearTimeout(run.idleTimer);
     run.child = null;
@@ -453,4 +514,36 @@ export const registerHlsProcess = (
     // A retry spawns within moments of the exit, or never.
     setTimeout(() => exitedRuns.delete(run.id), 30_000).unref?.();
   });
+};
+
+/** How many segments back `recentEncodeSpeed` measures over. */
+const SPEED_WINDOW_SEGMENTS = 5;
+
+/**
+ * How fast the encode that wrote segment `segmentIndex` of variant `height` is
+ * going right now, in multiples of realtime, from the write times of its last
+ * few segments (`writtenAt(i)`, ms, null if absent). Only that encode's own
+ * segments count: an older encode's segments in the same range were written at
+ * other times. Null without at least two segments to measure between.
+ *
+ * Meant for a request that had to wait for its segment: that encode was then
+ * at its head and not paced, so frozen time doesn't distort the window.
+ */
+export const recentEncodeSpeed = (
+  hlsDir: string,
+  height: number,
+  segmentIndex: number,
+  writtenAt: (segment: number) => number | null,
+): number | null => {
+  const variant = sessions.get(hlsDir)?.variants.get(height);
+  if (!variant) return null;
+  const run = coveringRun(variant, segmentIndex, 0);
+  if (!run) return null;
+  const from = Math.max(run.startSegment, segmentIndex - SPEED_WINDOW_SEGMENTS);
+  if (segmentIndex - from < 2) return null;
+  const end = writtenAt(segmentIndex);
+  const start = writtenAt(from);
+  if (end === null || start === null || end <= start) return null;
+  const speed = ((segmentIndex - from) * HLS_SEGMENT_SECONDS * 1000) / (end - start);
+  return Math.round(speed * 100) / 100;
 };

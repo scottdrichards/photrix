@@ -994,6 +994,56 @@ describe("FullscreenViewer", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("says whether the network or the encoder is why a video buffers (feedback #178)", async () => {
+    hlsIsSupportedMock.mockReturnValue(true);
+    negotiateVideoPlaybackMock.mockResolvedValue({
+      mode: "hls",
+      url: "http://localhost/a/clip.m3u8",
+      reason: "Hardware-accelerated HLS encoding available",
+    });
+    selectVideo();
+
+    const { container } = render(<FullscreenViewer />);
+    await waitFor(() => expect(hlsInstances).toHaveLength(1));
+    const fragLoaded = hlsOnMock.mock.calls
+      .filter(([event]) => event === "fragLoaded")
+      .map(([, handler]) => handler as (...args: unknown[]) => void);
+    const loadSegments = (transferMs: number, headers: Record<string, string>) =>
+      React.act(() => {
+        for (let i = 0; i < 4; i++) {
+          const data = {
+            frag: {
+              type: "main",
+              duration: 1,
+              stats: { loaded: 500_000, loading: { start: 0, first: 10, end: 10 + transferMs } },
+            },
+            networkDetails: { getResponseHeader: (name: string) => headers[name] ?? null },
+          };
+          fragLoaded.forEach((handler) => handler("fragLoaded", data));
+        }
+      });
+    const video = container.querySelector("video")!;
+
+    // Segments arrive quickly from a fast encoder: nothing to say.
+    loadSegments(100, { "X-Photrix-Segment-Wait-Ms": "0" });
+    fireEvent(video, new Event("waiting"));
+    expect(screen.queryByTestId("playback-bottleneck")).toBeNull();
+
+    // The encoder falls below realtime while the player is stalled.
+    loadSegments(100, { "X-Photrix-Segment-Wait-Ms": "900", "X-Photrix-Encode-Speed": "0.8" });
+    expect(screen.getByTestId("playback-bottleneck").dataset.kind).toBe("encoder");
+    expect(screen.getByTestId("playback-bottleneck").getAttribute("aria-label")).toMatch(
+      /encoding this quality at 0.8× realtime/,
+    );
+
+    // Then the downloads are what is slow.
+    loadSegments(1500, { "X-Photrix-Segment-Wait-Ms": "0", "X-Photrix-Encode-Speed": "2" });
+    expect(screen.getByTestId("playback-bottleneck").dataset.kind).toBe("network");
+    expect(logClientEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "video.playback.bottleneck" }),
+    );
+  });
+
   it("starts HLS at the quality the measured connection supports instead of climbing from the lowest", async () => {
     hlsIsSupportedMock.mockReturnValue(true);
     negotiateVideoPlaybackMock.mockResolvedValue({
