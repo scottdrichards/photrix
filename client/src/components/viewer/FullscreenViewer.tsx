@@ -23,6 +23,7 @@ import { TagEditor } from "../TagEditor";
 import { createClientOperationId, logClientEvent } from "../../diagnostics";
 import { FaceOverlay, parseFaceRegions, parseFaceTableBoxes, type NamedFace } from "./FaceOverlay";
 import { VideoPeopleTimeline } from "./VideoPeopleTimeline";
+import { VideoFaceStrip, videoFaceCrop } from "./VideoFaceStrip";
 import { VideoLoadingOverlay } from "./VideoLoadingOverlay";
 import { VideoScrubPreview } from "./VideoScrubPreview";
 import { PlaybackBottleneckBadge } from "./PlaybackBottleneckBadge";
@@ -33,6 +34,8 @@ import { videoTimelineRows } from "./videoPeople";
 const PEOPLE_TIMELINE_ROW_PX = 28;
 const PEOPLE_TIMELINE_PADDING_PX = 24;
 const PEOPLE_TIMELINE_MAX_ROWS = 4;
+// The strip of nameable face crops above the timeline (feedback #177).
+const VIDEO_FACE_STRIP_PX = 72;
 import { FaceAssignPanel } from "./FaceAssignPanel";
 import { useSelectionContext } from "../selection/SelectionContext";
 import { ShareOptionsModal } from "../share/ShareOptionsModal";
@@ -697,10 +700,13 @@ export function FullscreenViewer() {
   // Feedback #173: the faces button shows and hides this timeline, hidden
   // until asked for, as it shows and hides face boxes on a photo.
   const showPeopleTimeline = showFaces && peopleInVideo.length > 0;
+  // Feedback #177: with the timeline, the video's faces as crops to name.
+  const showVideoFaceStrip = showPeopleTimeline && !READ_ONLY;
   const peopleTimelinePx =
     showPeopleTimeline
       ? PEOPLE_TIMELINE_PADDING_PX +
-        Math.min(peopleInVideo.length, PEOPLE_TIMELINE_MAX_ROWS) * PEOPLE_TIMELINE_ROW_PX
+        Math.min(peopleInVideo.length, PEOPLE_TIMELINE_MAX_ROWS) * PEOPLE_TIMELINE_ROW_PX +
+        (showVideoFaceStrip ? VIDEO_FACE_STRIP_PX : 0)
       : 0;
   const seekVideo = (ms: number) => {
     const video = videoRef.current;
@@ -999,18 +1005,28 @@ export function FullscreenViewer() {
                     />
                     <PlaybackBottleneckBadge key={photo.path} report={bottleneck} />
                   </div>
-                  {videoStatus && (
+                  {/* Hidden under an open naming panel, which it would cover. */}
+                  {videoStatus && !activeFaceAssign && (
                     <span className={css.videoBadge} data-testid="video-status">
                       {videoStatus === "direct"
                         ? "Original"
                         : `Streaming${activeLevelHeight ? ` · ${activeLevelHeight}p` : ""}`}
                     </span>
                   )}
-                  {showPeopleTimeline && (
+                  {/* Naming a face takes the timeline's place; the space stays so
+                      the video doesn't jump. */}
+                  {showPeopleTimeline && !activeFaceAssign && (
                     <div
                       className={css.videoPeople}
                       style={{ maxHeight: `${peopleTimelinePx}px` }}
                     >
+                      {showVideoFaceStrip && (
+                        <VideoFaceStrip
+                          photo={photo}
+                          faces={videoFaces}
+                          onPick={setActiveFaceAssign}
+                        />
+                      )}
                       <VideoPeopleTimeline
                         faces={videoFaces}
                         durationMs={
@@ -1149,9 +1165,18 @@ export function FullscreenViewer() {
                   )}
                 </SwipePhotoViewer>
               )}
-              {!editMode && !READ_ONLY && photo.mediaType !== "video" && activeFaceAssign && (
+              {!editMode && !READ_ONLY && activeFaceAssign && (
                 <FaceAssignPanel
                   face={activeFaceAssign}
+                  subject={
+                    photo.mediaType === "video"
+                      ? videoFaceCrop(
+                          photo,
+                          videoFaces.find((f) => f.faceId === activeFaceAssign.faceId) ??
+                            activeFaceAssign,
+                        )
+                      : undefined
+                  }
                   onClose={() => setActiveFaceAssign(null)}
                   onAssigned={() => {
                     setActiveFaceAssign(null);
