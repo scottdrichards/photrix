@@ -1,11 +1,13 @@
-/* Grows to a comfortable width beside the filter icons on wide screens and
-   takes whatever the row leaves on phones. */
+/* Grows to fill the space the filter icons leave beside it (capped so the
+   field itself doesn't become unreasonably wide to read/click into on an
+   ultra-wide window), and takes whatever the row leaves on phones. */
 .searchWrapper {
   position: relative;
   display: flex;
   align-items: center;
-  flex: 0 1 380px;
+  flex: 1 1 380px;
   min-width: 200px;
+  max-width: 640px;
 }
 
 .searchBar {
