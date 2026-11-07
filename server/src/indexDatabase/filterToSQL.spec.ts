@@ -33,8 +33,18 @@ describe("filterToSQL", () => {
 
   it("builds folder recursive constraint", () => {
     const result = filterToSQL({ folder: { folder: "albums/2024", recursive: true } });
-    expect(result.where).toBe("folder LIKE ? ESCAPE '\\'");
-    expect(result.params).toEqual(["/albums/2024/%"]);
+    // A range, not LIKE: LIKE ignores ASCII case, so `/albums/` would also match `/ALBUMS/`.
+    expect(result.where).toBe("folder >= ? AND folder < ?");
+    expect(result.params).toEqual(["/albums/2024/", "/albums/20240"]);
+  });
+
+  it("keeps a multi-field condition together inside an or", () => {
+    const result = filterToSQL({
+      operation: "or",
+      conditions: [{ cameraMake: "Canon", rating: 5 }, { fileName: "x.jpg" }],
+    });
+    expect(result.where).toBe("(cameraMake = ? AND rating = ?) OR (fileName = ?)");
+    expect(result.params).toEqual(["Canon", 5, "x.jpg"]);
   });
 
   it("omits where clause for root recursive folder filter", () => {

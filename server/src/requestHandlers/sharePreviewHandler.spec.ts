@@ -41,6 +41,7 @@ const renderPreviewPage = async (
   } as unknown as http.ServerResponse;
 
   const database = {
+    getDefaultExclusionFilter: async () => null,
     queryFiles: jest.fn(() => Promise.resolve({ items: files, total: files.length })),
     faces: {
       countNamedPeopleForFiles: jest.fn(() => Promise.resolve(new Map(Object.entries(namedPeople)))),

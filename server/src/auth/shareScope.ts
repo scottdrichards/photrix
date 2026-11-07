@@ -4,6 +4,7 @@ import {
   type ShareScope,
 } from "../../../shared/filter-contract/src/index.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
+import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { FilterCompileError, filterToSQL } from "../indexDatabase/filterToSQL.ts";
 import { embedText } from "../imageAnalysis/imageAnalysisWorker.ts";
 import { embedTextWithClap } from "../audioProcessing/clapWorker.ts";
@@ -116,13 +117,22 @@ export const assertShareFilterIsScoped = (filter: FilterElement): void => {
   }
 };
 
+/**
+ * The filter every request a share link makes is bounded by: the share's own
+ * scope, minus whatever the owner hides by default (feedback #95). The
+ * exclusions are read per request, so changing them applies to live links.
+ */
 export const resolveShareFilter = async (
   shareScope: ShareScope<unknown>,
+  database: Pick<IndexDatabase, "getDefaultExclusionFilter">,
   cacheKey?: string,
 ): Promise<FilterElement> => {
   const filter = await resolveUncheckedShareFilter(shareScope, cacheKey);
   assertShareFilterIsScoped(filter);
-  return filter;
+  const exclusion = await database.getDefaultExclusionFilter();
+  return exclusion
+    ? { operation: "and", conditions: [filter, { operation: "not", conditions: [exclusion] }] }
+    : filter;
 };
 
 const resolveUncheckedShareFilter = async (

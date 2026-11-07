@@ -13,6 +13,7 @@ import {
 } from "./rowFileRecordConversionFunctions.ts";
 import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
+import { folderSubtreeSQL } from "./utils/folderSubtreeSQL.ts";
 import { prepareTables } from "./prepareTables.ts";
 import { migrateEmbeddingStorage } from "./migrateEmbeddingStorage.ts";
 import { VectorIndex } from "./vectorIndex/vectorIndex.ts";
@@ -980,21 +981,12 @@ export class IndexDatabase {
 
   async removeFolder(relativePath: string): Promise<void> {
     const base = normalizeFolderPath(relativePath);
-    const likePattern = `${escapeLikeLiteral(base)}%`;
+    const { where, params } = folderSubtreeSQL("folder", base);
     const statements = [
-      {
-        sql: "DELETE FROM files WHERE folder LIKE ? ESCAPE '\\'",
-        params: [likePattern],
-      },
-      ...deleteFacesStatements("folder LIKE ? ESCAPE '\\'", [likePattern]),
-      {
-        sql: "DELETE FROM fileEmbeddings WHERE folder LIKE ? ESCAPE '\\'",
-        params: [likePattern],
-      },
-      {
-        sql: "DELETE FROM audioSegments WHERE folder LIKE ? ESCAPE '\\'",
-        params: [likePattern],
-      },
+      { sql: `DELETE FROM files WHERE ${where}`, params },
+      ...deleteFacesStatements(where, params),
+      { sql: `DELETE FROM fileEmbeddings WHERE ${where}`, params },
+      { sql: `DELETE FROM audioSegments WHERE ${where}`, params },
     ];
     await this.db.transaction(statements);
     await this.vectorIndex.removeFolder(base);
@@ -1081,16 +1073,11 @@ export class IndexDatabase {
    * so entries for moved/deleted files can be pruned.
    */
   async getIndexedPaths(subFolder?: string): Promise<string[]> {
-    const base = normalizeFolderPath(subFolder ?? "/");
-    const rows =
-      base === "/"
-        ? await this.db.all<{ folder: string; fileName: string }>(
-            "SELECT folder, fileName FROM files",
-          )
-        : await this.db.all<{ folder: string; fileName: string }>(
-            "SELECT folder, fileName FROM files WHERE folder LIKE ? ESCAPE '\\'",
-            `${escapeLikeLiteral(base)}%`,
-          );
+    const { where, params } = folderSubtreeSQL("folder", subFolder ?? "/");
+    const rows = await this.db.all<{ folder: string; fileName: string }>(
+      `SELECT folder, fileName FROM files WHERE ${where}`,
+      ...params,
+    );
     return rows.map((row) => joinPath(row.folder, row.fileName));
   }
 
@@ -1126,14 +1113,14 @@ export class IndexDatabase {
         .map((row) => ({ name: row.folderName, count: row.count }));
     }
 
-    const escapedPrefix = escapeLikeLiteral(base);
+    const subtree = folderSubtreeSQL("folder", base);
     const prefixLen = base.length;
     const rows = await this.db.all<{ folderName: string | null; count: number }>(
       `SELECT
          substr(folder, ?, instr(substr(folder, ?), '/') - 1) AS folderName,
          COUNT(*) AS count
        FROM files
-       WHERE folder LIKE ? ESCAPE '\\'
+       WHERE ${subtree.where}
           AND length(folder) > ?
           AND instr(substr(folder, ?), '/') > 0
           ${whereFragment}
@@ -1141,7 +1128,7 @@ export class IndexDatabase {
        ORDER BY folderName COLLATE NOCASE ASC`,
       prefixLen + 1,
       prefixLen + 1,
-      `${escapedPrefix}%`,
+      ...subtree.params,
       prefixLen,
       prefixLen + 1,
       ...whereParams,
@@ -1585,36 +1572,59 @@ export class IndexDatabase {
       pageSize = 1_000,
       page: rawPage = 1,
       expandToFolder,
+      scope,
       sort,
       collapseMomentClusters = true,
     } = options;
     const page = Math.max(1, rawPage);
 
     const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    const { where: scopeWhere, params: scopeParams } = filterToSQL(scope ?? {});
 
     // When expandToFolder is enabled, wrap the filter in a folder-IN-subquery so
     // all files in a matched folder are returned, not just the matched files.
+    // The scope is ANDed outside it, so expansion never reaches past a share.
     const folderExpandedWhere =
       expandToFolder && whereClause
         ? `folder IN (SELECT DISTINCT folder FROM files WHERE ${whereClause})`
         : whereClause;
+    const scopedWhere = [folderExpandedWhere, scopeWhere]
+      .filter(Boolean)
+      .map((part) => `(${part})`)
+      .join(" AND ");
+
+    // Moment cluster members are read from `members`: the whole table, or with a
+    // scope only the members inside it, so a stack's size, preview paths and
+    // standing representative never reveal a file outside a share. Inlined (NOT
+    // MATERIALIZED) so each correlated lookup stays a momentClusterId index probe.
+    const members = scopeWhere ? "scopedMembers" : "files";
+    const withMembers = scopeWhere
+      ? `WITH scopedMembers AS NOT MATERIALIZED (SELECT * FROM files WHERE ${scopeWhere}) `
+      : "";
+    const withParams = scopeWhere ? scopeParams : [];
 
     // Default gallery behavior: a moment cluster (burst/near-duplicate group)
     // collapses to just its representative row. Files with no cluster
     // (momentClusterId IS NULL) are unaffected. Callers expanding a stack (or
     // fetching a specific cluster's members) pass collapseMomentClusters: false.
-    const effectiveWhere = collapseMomentClusters
-      ? [
-          folderExpandedWhere,
-          "(momentClusterId IS NULL OR momentClusterRepresentative = 1)",
-        ]
-          .filter(Boolean)
-          .join(" AND ")
-      : folderExpandedWhere;
+    // With a scope that excludes the representative, the stack stands on its
+    // best member inside the scope instead of vanishing.
+    const collapseWhere = scopeWhere
+      ? `(momentClusterId IS NULL OR momentClusterRepresentative = 1 OR (folder, fileName) = (
+           SELECT best.folder, best.fileName FROM scopedMembers AS best
+           WHERE best.momentClusterId = files.momentClusterId
+           ORDER BY best.momentClusterRepresentative DESC, COALESCE(best.photoQualityScore, 0) DESC,
+                    COALESCE(best.sharpnessScore, 0) DESC, best.folder, best.fileName
+           LIMIT 1))`
+      : "(momentClusterId IS NULL OR momentClusterRepresentative = 1)";
+    const effectiveWhere = [scopedWhere, collapseMomentClusters ? collapseWhere : ""]
+      .filter(Boolean)
+      .join(" AND ");
+    const effectiveParams = [...withParams, ...whereParams, ...scopeParams];
 
-    const countSQL = `SELECT COUNT(*) as count FROM files ${effectiveWhere ? `WHERE ${effectiveWhere}` : ""}`;
+    const countSQL = `${withMembers}SELECT COUNT(*) as count FROM files ${effectiveWhere ? `WHERE ${effectiveWhere}` : ""}`;
     const countResult = await (() =>
-      this.db.get<{ count: number }>(countSQL, ...whereParams))();
+      this.db.get<{ count: number }>(countSQL, ...effectiveParams))();
     const total = countResult?.count ?? 0;
 
     // The stack badge needs a member count alongside the representative row;
@@ -1623,10 +1633,10 @@ export class IndexDatabase {
     const extraColumns: string[] = [];
     if (metadata?.includes("momentClusterSize")) {
       extraColumns.push(`(CASE WHEN files.momentClusterId IS NULL THEN NULL ELSE
-             (SELECT COUNT(*) FROM files momentMember WHERE momentMember.momentClusterId = files.momentClusterId)
+             (SELECT COUNT(*) FROM ${members} momentMember WHERE momentMember.momentClusterId = files.momentClusterId)
            END) AS momentClusterSize`);
     }
-    // A handful of the *other* members' paths (representative excluded), so
+    // A handful of the *other* members' paths (the shown row excluded), so
     // the collapsed tile can render a couple of real thumbnails peeking out
     // behind the representative — a genuine "stack of photos" look — instead
     // of an abstract count badge alone. Same opt-in shape as
@@ -1643,7 +1653,7 @@ export class IndexDatabase {
       extraColumns.push(`(CASE WHEN files.momentClusterId IS NULL THEN NULL ELSE
              (SELECT json_group_array(preview.path) FROM (
                SELECT (other.folder || other.fileName) AS path
-               FROM files AS other
+               FROM ${members} AS other
                WHERE other.momentClusterId = files.momentClusterId
                  AND NOT (other.folder = files.folder AND other.fileName = files.fileName)
                ORDER BY COALESCE(other.photoQualityScore, 0) DESC, COALESCE(other.sharpnessScore, 0) DESC
@@ -1656,14 +1666,14 @@ export class IndexDatabase {
 
     const offset = (page - 1) * pageSize;
     const mainSQL = `
-      SELECT ${columns} FROM files
+      ${withMembers}SELECT ${columns} FROM files
       ${effectiveWhere ? `WHERE ${effectiveWhere}` : ""}
       ORDER BY ${buildQueryOrderBy(sort)}
       LIMIT ? OFFSET ?
     `;
 
     const rows = await (() =>
-      this.db.all<Record<string, unknown>>(mainSQL, ...whereParams, pageSize, offset))();
+      this.db.all<Record<string, unknown>>(mainSQL, ...effectiveParams, pageSize, offset))();
 
     const matchedFiles = rows.map((v) =>
       rowToFileRecord(v as Record<string, string | number>, metadata),

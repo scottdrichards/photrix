@@ -144,7 +144,7 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
   const handleAddPasskey = () =>
     run(async () => {
       if (!username) return;
-      const ok = await registerPasskey(username);
+      const ok = await registerPasskey();
       if (!ok) throw new Error("passkey registration failed");
       await reload();
     });

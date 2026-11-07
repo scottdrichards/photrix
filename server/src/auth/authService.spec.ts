@@ -54,3 +54,27 @@ describe("session token expiry", () => {
     expect(validateToken(token)).toBe(true);
   });
 });
+
+// The share-token key used to fall back to AUTH_PASSWORD, so anyone holding a
+// share link could test password guesses against it offline.
+describe("share token secret", () => {
+  afterEach(() => {
+    delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+  });
+
+  it("does not derive the share key from the account password", async () => {
+    process.env.AUTH_PASSWORD = "test-password";
+    const { issueShareToken } = await import("./authService.ts");
+    expect(() => issueShareToken({ filter: { rating: 5 } })).toThrow("PHOTRIX_SHARE_TOKEN_SECRET");
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["too short", "short-secret"],
+  ])("refuses to start with auth enabled and the secret %s", async (_label, secret) => {
+    process.env.AUTH_PASSWORD = "test-password";
+    if (secret) process.env.PHOTRIX_SHARE_TOKEN_SECRET = secret;
+    const { initAuthService } = await import("./authService.ts");
+    await expect(initAuthService({} as never)).rejects.toThrow("PHOTRIX_SHARE_TOKEN_SECRET");
+  });
+});

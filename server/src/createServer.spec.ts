@@ -90,6 +90,7 @@ describe("createServer", () => {
 
   afterEach(async () => {
     delete process.env.AUTH_PASSWORD;
+    delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
     await new Promise((resolve) => server.close(resolve));
     await database.close();
     rmSync(mediaRoot, { recursive: true, force: true });
@@ -189,6 +190,7 @@ describe("createServer", () => {
 
     beforeEach(() => {
       process.env.AUTH_PASSWORD = "test-password";
+      process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
     });
 
     it("refuses a request with no token", async () => {

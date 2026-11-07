@@ -190,14 +190,14 @@ export const loginWithPasskey = async (): Promise<boolean> => {
   }
 };
 
-export const registerPasskey = async (username: string): Promise<boolean> => {
+// Always for the signed-in account: the server reads it from the session.
+export const registerPasskey = async (): Promise<boolean> => {
   try {
     const { startRegistration } = await import("@simplewebauthn/browser");
 
     const optRes = await fetch("/api/auth/passkey/registration-options", {
       method: "POST",
-      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ username }),
+      headers: getAuthHeaders(),
     });
     if (!optRes.ok) return false;
     const { options, sessionId } = (await optRes.json()) as {

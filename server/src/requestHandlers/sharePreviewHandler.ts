@@ -62,7 +62,7 @@ export const sharePreviewHandler = async (
       // wider than a semantic share (often `{}`, the whole library), and this page
       // is unauthenticated: it once advertised the library's total and out-of-scope
       // file paths in og: tags. If resolution fails, show nothing.
-      const shareFilter = await resolveShareFilter(shareScope, token);
+      const shareFilter = await resolveShareFilter(shareScope, database, token);
       // Over-fetch by rating so there is a pool of top-rated candidates to break
       // ties within; the lead image is what most unfurlers actually show.
       const result = await database.queryFiles({

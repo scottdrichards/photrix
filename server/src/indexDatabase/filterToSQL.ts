@@ -7,6 +7,7 @@ import type {
 import { encodeEmbedding } from "./embeddingCodec.ts";
 import { normalizeFolderPath } from "./utils/pathUtils.ts";
 import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
+import { folderSubtreeSQL } from "./utils/folderSubtreeSQL.ts";
 import { tables } from "./tables.ts";
 import {
   faceAttributeConditions,
@@ -131,10 +132,11 @@ const buildFilterSQL = (
     return;
   }
 
-  // Filter condition - one or more field constraints
-  const conditions = filter;
-
-  for (const [key, constraint] of Object.entries(conditions)) {
+  // Filter condition - one or more field constraints, all of which must hold.
+  // They compile to one part: pushed separately, an enclosing `or` would join
+  // them with OR and `{ a, b }` would match `a` alone.
+  const fieldParts: SQLPart[] = [];
+  for (const [key, constraint] of Object.entries(filter)) {
     if (!filterableFields.has(key)) {
       throw new FilterCompileError(`Unknown filter field: ${key}`);
     }
@@ -147,10 +149,17 @@ const buildFilterSQL = (
     const sql = constraintToSQL(key as FilterField, constraint);
     if (sql === UNCONSTRAINED) continue;
     if (sql) {
-      results.push(sql);
+      fieldParts.push(sql);
     } else if (strict) {
       throw new FilterCompileError(`Can't compile the ${key} filter`);
     }
+  }
+  if (fieldParts.length === 1) results.push(fieldParts[0]);
+  else if (fieldParts.length > 1) {
+    results.push({
+      where: fieldParts.map((part) => part.where).join(" AND "),
+      params: fieldParts.flatMap((part) => part.params),
+    });
   }
 };
 
@@ -501,17 +510,12 @@ const constraintToSQL = (
     ) {
       const folderConstraint = constraint;
       const normalizedFolder = normalizeFolderPath(folderConstraint.folder);
-      const escapedFolder = escapeLikeLiteral(normalizedFolder);
 
       if (folderConstraint.recursive) {
         if (normalizedFolder === "/") {
           return UNCONSTRAINED;
         }
-
-        return {
-          where: `folder LIKE ? ESCAPE '\\'`,
-          params: [`${escapedFolder}%`],
-        };
+        return folderSubtreeSQL("folder", normalizedFolder);
       }
 
       return {
