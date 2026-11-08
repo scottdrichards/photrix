@@ -361,6 +361,18 @@
   display: flex;
   gap: var(--space-xs);
   z-index: 100;
+  /* Feedback #179: with a quality picker and several buttons the row used to
+     run off the left edge on a phone. Wrap instead, right-aligned, and stay
+     clear of the live-photo button pinned at the top left. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: calc(100vw - 2 * var(--space-m));
+}
+
+@media (max-width: 900px) {
+  .topRightActions {
+    max-width: calc(100vw - 2 * var(--space-m) - 52px);
+  }
 }
 
 .closeButton,
