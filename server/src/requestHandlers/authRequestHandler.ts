@@ -155,7 +155,7 @@ export const authShareTokenHandler = async (
   // for the description model on a share that may never be created.
   if (parsedUrl.searchParams.get("dryRun") === "1") {
     try {
-      const resolvedFilter = await resolveShareFilter(scope);
+      const resolvedFilter = await resolveShareFilter(scope, database);
       const { total } = await database.queryFiles({
         filter: resolvedFilter,
         metadata: [],
@@ -216,20 +216,15 @@ export const passkeyRegistrationOptionsHandler = async (
     writeJson(res, 401, { error: "Unauthorized" });
     return;
   }
-  if (isShareToken(token)) {
+  // The passkey is always for the signed-in account. Only an interactive
+  // session has one: a share link or API key may not add a sign-in method.
+  const username = getSessionUsername(token);
+  if (!username) {
     writeJson(res, 403, { error: "Forbidden" });
     return;
   }
 
-  const body = await readJsonRequest<{ username?: unknown }>(req, res);
-  if (!body) return;
-
-  if (typeof body.username !== "string") {
-    writeJson(res, 400, { error: "username required" });
-    return;
-  }
-
-  const { options, sessionId } = await generatePasskeyRegistrationOptions(body.username);
+  const { options, sessionId } = await generatePasskeyRegistrationOptions(username);
   writeJson(res, 200, { options, sessionId });
 };
 
@@ -251,6 +246,11 @@ export const passkeyRegistrationVerifyHandler = async (
     writeJson(res, 401, { error: "Unauthorized" });
     return;
   }
+  const username = getSessionUsername(token);
+  if (!username) {
+    writeJson(res, 403, { error: "Forbidden" });
+    return;
+  }
 
   const body = await readJsonRequest<{ sessionId?: unknown; response?: unknown }>(req, res);
   if (!body) return;
@@ -260,7 +260,7 @@ export const passkeyRegistrationVerifyHandler = async (
     return;
   }
 
-  const ok = await verifyPasskeyRegistration(body.sessionId, body.response as never);
+  const ok = await verifyPasskeyRegistration(body.sessionId, body.response as never, username);
   if (!ok) {
     writeJson(res, 400, { error: "Passkey registration failed" });
     return;

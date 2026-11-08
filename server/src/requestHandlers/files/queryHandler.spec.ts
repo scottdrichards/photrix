@@ -267,4 +267,56 @@ describe("queryHandler", () => {
     const payload = JSON.parse(payloadRaw);
     expect(payload.error).toBe("Response too large");
   });
+
+  describe("with a share filter", () => {
+    const shareFilter = { folder: { folder: "/shared/", recursive: true } };
+    const run = async (query: string, database: Partial<Record<keyof IndexDatabase, unknown>>) => {
+      const { res, getBody } = createMockResponse();
+      await queryHandler(
+        new URL(`http://localhost/api/files/?${query}`),
+        "/",
+        { getDefaultExclusionFilter: jest.fn(async () => ({ rating: 1 })), ...database } as unknown as IndexDatabase,
+        res,
+        shareFilter,
+      );
+      return { status: (res.writeHead as jest.Mock).mock.calls[0]?.[0], body: getBody() };
+    };
+
+    it("refuses the whole-library face PCA", async () => {
+      const getFaceClustersPCA = jest.fn();
+      const { status } = await run("aggregate=faceCentroidsPCA", { faceClusters: { getFaceClustersPCA } });
+      expect(status).toBe(403);
+      expect(getFaceClustersPCA).not.toHaveBeenCalled();
+    });
+
+    it("refuses faces for a file outside the share", async () => {
+      const getPeopleFacesForFile = jest.fn();
+      const fileMatchesFilter = jest.fn(async () => false);
+      const { status } = await run("aggregate=facesForFile&path=/private/a.jpg", {
+        fileMatchesFilter,
+        faces: { getPeopleFacesForFile },
+      });
+      expect(status).toBe(403);
+      expect(fileMatchesFilter).toHaveBeenCalledWith("/private/a.jpg", shareFilter);
+      expect(getPeopleFacesForFile).not.toHaveBeenCalled();
+    });
+
+    it("lists only a moment cluster's members inside the share", async () => {
+      const getMomentClusterDetail = jest.fn(async () => null);
+      await run("aggregate=momentClusterDetail&clusterId=7", { moments: { getMomentClusterDetail } });
+      expect(getMomentClusterDetail).toHaveBeenCalledWith("7", shareFilter);
+    });
+
+    // The share filter already carries the owner's default exclusions (see
+    // resolveShareFilter), so `includeExcluded` can't lift them.
+    it("bounds the file query by the share as its scope, whatever includeExcluded says", async () => {
+      const queryFiles = jest.fn(async () => ({ items: [], total: 0, page: 1, pageSize: 1 }));
+      const getDefaultExclusionFilter = jest.fn(async () => ({ rating: 1 }));
+      await run("expandToFolder=true&includeExcluded=true", { queryFiles, getDefaultExclusionFilter });
+      expect(getDefaultExclusionFilter).not.toHaveBeenCalled();
+      expect(queryFiles).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: shareFilter, expandToFolder: true }),
+      );
+    });
+  });
 });

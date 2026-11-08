@@ -59,7 +59,7 @@ const loadShareHandler = async () => {
 
 describe("authShareTokenHandler", () => {
   it("stores a stateless live semantic share definition in the token", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret";
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -94,7 +94,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("rejects invalid semantic share source lists", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret";
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -116,7 +116,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("allows live semantic shares without resolving them up front", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret";
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -143,7 +143,7 @@ describe("authShareTokenHandler", () => {
     ["a root folder", { folder: { folder: "/", recursive: true } }],
     ["an injected field name", { "1) OR (1": "x" }],
   ])("refuses a share scoped by %s", async (_label, filter) => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret";
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -158,7 +158,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("refuses an injected field name on a semantic share", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret";
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -176,7 +176,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("dryRun reports the share size without minting a token", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret";
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -185,6 +185,7 @@ describe("authShareTokenHandler", () => {
     const queryFiles = jest.fn(() => Promise.resolve({ items: [], total: 4321 }));
     const database = {
       queryFiles,
+      getDefaultExclusionFilter: async () => null,
       faces: {
         getFaceClusterNames: () => Promise.resolve(new Map<number, string>()),
       },
@@ -205,5 +206,68 @@ describe("authShareTokenHandler", () => {
     // A preflight must not leave a usable link behind.
     expect(getJson().token).toBeUndefined();
     expect(queryFiles).toHaveBeenCalled();
+  });
+});
+
+// Registration used to take the username from the request body, so any signed-in
+// user — or an API key — could add a passkey to another account and sign in as it.
+describe("passkey registration", () => {
+  const mockPasskeys = () => {
+    const generatePasskeyRegistrationOptions = jest.fn(async () => ({ options: {}, sessionId: "s1" }));
+    const verifyPasskeyRegistration = jest.fn(async () => true);
+    jest.unstable_mockModule("../auth/passkeyService.ts", () => ({
+      isPasskeySupported: () => true,
+      isPublicOriginConfigured: () => true,
+      generatePasskeyRegistrationOptions,
+      verifyPasskeyRegistration,
+      generatePasskeyAuthenticationOptions: jest.fn(),
+      verifyPasskeyAuthentication: jest.fn(),
+    }));
+    return { generatePasskeyRegistrationOptions, verifyPasskeyRegistration };
+  };
+
+  it("registers for the signed-in account, not the one named in the body", async () => {
+    const { generatePasskeyRegistrationOptions } = mockPasskeys();
+    const { issueToken } = await import("../auth/authService.ts");
+    const { passkeyRegistrationOptionsHandler } = await import("./authRequestHandler.ts");
+    const { res, getStatus } = createJsonResponse();
+
+    await passkeyRegistrationOptionsHandler(
+      makeReq(issueToken("alice"), { username: "admin" }, "/api/auth/passkey/registration-options"),
+      res,
+    );
+
+    expect(getStatus()).toBe(200);
+    expect(generatePasskeyRegistrationOptions).toHaveBeenCalledWith("alice");
+  });
+
+  it("refuses an API key, which has no interactive session", async () => {
+    const { generatePasskeyRegistrationOptions } = mockPasskeys();
+    const { issueApiToken } = await import("../auth/authService.ts");
+    const { passkeyRegistrationOptionsHandler } = await import("./authRequestHandler.ts");
+    const { res, getStatus } = createJsonResponse();
+
+    await passkeyRegistrationOptionsHandler(
+      makeReq(issueApiToken("alice", "mcp").token, {}, "/api/auth/passkey/registration-options"),
+      res,
+    );
+
+    expect(getStatus()).toBe(403);
+    expect(generatePasskeyRegistrationOptions).not.toHaveBeenCalled();
+  });
+
+  it("verifies a registration only for the account that started it", async () => {
+    const { verifyPasskeyRegistration } = mockPasskeys();
+    const { issueToken } = await import("../auth/authService.ts");
+    const { passkeyRegistrationVerifyHandler } = await import("./authRequestHandler.ts");
+    const { res, getStatus } = createJsonResponse();
+
+    await passkeyRegistrationVerifyHandler(
+      makeReq(issueToken("alice"), { sessionId: "s1", response: { id: "x" } }, "/api/auth/passkey/registration-verify"),
+      res,
+    );
+
+    expect(getStatus()).toBe(200);
+    expect(verifyPasskeyRegistration).toHaveBeenCalledWith("s1", { id: "x" }, "alice");
   });
 });

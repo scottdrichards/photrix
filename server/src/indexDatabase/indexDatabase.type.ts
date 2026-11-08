@@ -71,6 +71,12 @@ export type QueryOptions = {
    */
   expandToFolder?: boolean;
   /**
+   * A boundary nothing in the result may cross — a share link's filter. Unlike
+   * `filter`, it also bounds what `expandToFolder` widens to and which moment
+   * cluster members are counted, previewed or chosen to stand for a stack.
+   */
+  scope?: FilterElement;
+  /**
    * When true (the default), a file that belongs to a moment cluster (burst /
    * near-duplicate group, see momentClusterEngine.ts) is only included when it
    * is that cluster's representative — the rest of the cluster's members are

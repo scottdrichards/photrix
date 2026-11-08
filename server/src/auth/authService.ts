@@ -94,6 +94,8 @@ const SHARE_TOKEN_PREFIX = "photrix-share-v1";
 let db: AsyncSqlite | null = null;
 
 export const initAuthService = async (database: AsyncSqlite): Promise<void> => {
+  // Fail at startup, not on the first share link.
+  if (isAuthEnabled()) getShareTokenKey();
   db = database;
   const cutoff = Date.now() - SESSION_EXPIRY_MS;
   // Hard-delete expired sessions so the DB doesn't grow unboundedly.
@@ -144,10 +146,18 @@ export const initAuthService = async (database: AsyncSqlite): Promise<void> => {
 // server by sending made-up `photrix-share-v1.*` tokens. Derive once per secret.
 let shareTokenKeyCache: { secret: string; key: Buffer } | null = null;
 
+//
+// Its own random secret, never the account password: every share link carries
+// ciphertext under this key, so a password-derived key let anyone holding a
+// link test password guesses offline.
+const MIN_SHARE_TOKEN_SECRET_LENGTH = 32;
+
 const getShareTokenKey = (): Buffer => {
-  const secret = process.env.PHOTRIX_SHARE_TOKEN_SECRET ?? process.env.AUTH_PASSWORD;
-  if (!secret) {
-    throw new Error("Share token secret is not configured");
+  const secret = process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+  if (!secret || secret.length < MIN_SHARE_TOKEN_SECRET_LENGTH) {
+    throw new Error(
+      `PHOTRIX_SHARE_TOKEN_SECRET must be set to a random string of at least ${MIN_SHARE_TOKEN_SECRET_LENGTH} characters (e.g. \`openssl rand -base64 32\`)`,
+    );
   }
   if (shareTokenKeyCache?.secret !== secret) {
     shareTokenKeyCache = { secret, key: scryptSync(secret, "photrix-share-token", 32) };

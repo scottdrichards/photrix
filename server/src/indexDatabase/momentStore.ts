@@ -1,5 +1,6 @@
 import { AsyncSqlite } from "../common/asyncSqlite.ts";
-import { type MomentClusterDetail } from "./indexDatabase.type.ts";
+import { type FilterElement, type MomentClusterDetail } from "./indexDatabase.type.ts";
+import { filterToSQL } from "./filterToSQL.ts";
 import { pickRepresentative } from "./momentClusterEngine.ts";
 import { splitPath } from "./utils/pathUtils.ts";
 import { decodeEmbedding, encodeEmbedding } from "./embeddingCodec.ts";
@@ -315,9 +316,14 @@ export class MomentStore {
    * this stack" interaction. Ordered representative-first, then by descending
    * quality score so the next-best pick is easy to find.
    */
-  async getMomentClusterDetail(clusterId: string): Promise<MomentClusterDetail | null> {
+  async getMomentClusterDetail(
+    clusterId: string,
+    filter: FilterElement,
+  ): Promise<MomentClusterDetail | null> {
     const numericId = Number.parseInt(clusterId, 10);
     if (!Number.isFinite(numericId)) return null;
+    // Members outside the filter (a share's scope) are not part of the stack.
+    const { where, params } = filterToSQL(filter);
 
     const rows = await this.db.all<{
       folder: string;
@@ -332,9 +338,10 @@ export class MomentStore {
       `SELECT folder, fileName, mimeType, dimensionsWidth, dimensionsHeight,
               momentClusterRepresentative, sharpnessScore, photoQualityScore
        FROM files
-       WHERE momentClusterId = ?
+       WHERE momentClusterId = ?${where ? ` AND (${where})` : ""}
        ORDER BY momentClusterRepresentative DESC, photoQualityScore DESC, sharpnessScore DESC`,
       numericId,
+      ...params,
     );
     if (rows.length === 0) return null;
 

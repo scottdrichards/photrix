@@ -8,7 +8,7 @@ type Props = {
 
 type Phase =
   | { type: "login" }
-  | { type: "register-passkey"; username: string };
+  | { type: "register-passkey" };
 
 export const LoginScreen = ({ onAuthenticated }: Props) => {
   const [username, setUsername] = useState("");
@@ -30,7 +30,7 @@ export const LoginScreen = ({ onAuthenticated }: Props) => {
       const ok = await login(username, password);
       if (ok) {
         if (passkeyAvailable) {
-          setPhase({ type: "register-passkey", username });
+          setPhase({ type: "register-passkey" });
         } else {
           onAuthenticated();
         }
@@ -64,7 +64,7 @@ export const LoginScreen = ({ onAuthenticated }: Props) => {
   const handleRegisterPasskey = async () => {
     if (phase.type !== "register-passkey") return;
     setLoading(true);
-    await registerPasskey(phase.username);
+    await registerPasskey();
     setLoading(false);
     onAuthenticated();
   };

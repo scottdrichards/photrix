@@ -153,9 +153,11 @@ export const generatePasskeyRegistrationOptions = async (username: string) => {
 export const verifyPasskeyRegistration = async (
   sessionId: string,
   response: RegistrationResponseJSON,
+  username: string,
 ): Promise<boolean> => {
   const entry = consumeChallenge(sessionId);
-  if (!entry?.username) return false;
+  // A challenge another account started can't be completed from this session.
+  if (entry?.username !== username) return false;
 
   const { origin, rpID } = getRpConfig();
 

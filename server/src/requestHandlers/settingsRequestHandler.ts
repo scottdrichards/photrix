@@ -9,7 +9,7 @@ import { readJsonRequest } from "../common/readBody.ts";
  * exclusion filter — a standing "hide these by default" filter (e.g. a face
  * cluster or folder) applied to every /api/files-backed view unless the
  * caller passes `includeExcluded=true`. See queryHandler.ts for where it's
- * actually applied.
+ * applied, and resolveShareFilter for share links, which can't opt out.
  */
 export const settingsRequestHandler = async (
   req: http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>,

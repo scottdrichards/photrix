@@ -164,7 +164,7 @@ export const createServer = (
     }
     if (shareScope && route.shareLink === "scoped") {
       try {
-        shareFilter = await resolveShareFilter(shareScope, token ?? undefined);
+        shareFilter = await resolveShareFilter(shareScope, database, token ?? undefined);
       } catch (error) {
         if (!(error instanceof ShareScopeError)) throw error;
         writeJson(res, error.statusCode, { error: error.message });

@@ -409,7 +409,7 @@ export const createRoutes = ({
       shareLink: "forbidden",
       handle: ({ req, res }) => peopleRequestHandler(req, res, database),
     },
-    // The owner's default exclusions still apply to what a share sees (queryHandler.ts).
+    // The owner's default exclusions still apply to what a share sees (resolveShareFilter).
     {
       path: "/api/settings/*",
       shareLink: "forbidden",

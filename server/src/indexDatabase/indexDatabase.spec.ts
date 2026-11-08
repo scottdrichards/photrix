@@ -2005,4 +2005,101 @@ describe("IndexDatabase", () => {
       });
     });
   });
+
+  // A share link's filter arrives as `scope`: everything a query returns, counts
+  // or hints at (stack sizes, preview paths, folder expansion) must stay inside it.
+  describe("share scope boundaries", () => {
+    const share = { folder: { folder: "/shared/", recursive: true } };
+
+    it("matches a recursive folder case-sensitively", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("Family/a.jpg"));
+        await db.addFile(createRecord("FAMILY/secret.jpg"));
+        await db.addFile(createRecord("family/kids/secret.jpg"));
+        const scope = { folder: { folder: "/Family/", recursive: true } };
+
+        const { items } = await db.queryFiles({ filter: scope, metadata: [] });
+        expect(items.map((i) => i.folder + i.fileName)).toEqual(["/Family/a.jpg"]);
+        await expect(db.fileMatchesFilter("/FAMILY/secret.jpg", scope)).resolves.toBe(false);
+        await expect(db.getIndexedPaths("/Family/")).resolves.toEqual(["/Family/a.jpg"]);
+      });
+    });
+
+    it("removes and lists only the folder whose name matches case-sensitively", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("Family/kids/a.jpg"));
+        await db.addFile(createRecord("FAMILY/other/b.jpg"));
+
+        await expect(db.getFolders("/Family/", {})).resolves.toEqual([{ name: "kids", count: 1 }]);
+        await db.removeFolder("/Family/");
+        await expect(db.getIndexedPaths()).resolves.toEqual(["/FAMILY/other/b.jpg"]);
+      });
+    });
+
+    it("keeps expandToFolder inside the scope", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(createRecord("shared/a.jpg"));
+        await db.addFile(createRecord("shared/shared-b.jpg"));
+        await db.addFile(createRecord("trip/shared-pick.jpg"));
+        await db.addFile(createRecord("trip/private.jpg"));
+        const scope = { operation: "or" as const, conditions: [share, { fileName: "shared-pick.jpg" }] };
+
+        const { items, total } = await db.queryFiles({
+          filter: { fileName: { startsWith: "shared" } },
+          scope,
+          metadata: [],
+          expandToFolder: true,
+        });
+        expect(items.map((i) => i.folder + i.fileName).sort()).toEqual([
+          "/shared/a.jpg",
+          "/shared/shared-b.jpg",
+          "/trip/shared-pick.jpg",
+        ]);
+        expect(total).toBe(3);
+      });
+    });
+
+    const addStack = async (db: IndexDatabase) => {
+      await db.addFile(createRecord("private/rep.jpg"));
+      await db.addFile(createRecord("shared/b.jpg"));
+      await db.addFile(createRecord("shared/c.jpg"));
+      const clusterId = await db.moments.createMomentCluster();
+      await db.moments.promoteFileToMomentCluster("/private/", "rep.jpg", clusterId);
+      await db.moments.saveMomentClusteringBatch([
+        { folder: "/shared/", fileName: "b.jpg", momentClusterId: clusterId, sharpnessScore: 10 },
+        { folder: "/shared/", fileName: "c.jpg", momentClusterId: clusterId, sharpnessScore: 20 },
+      ]);
+      await db.moments.setMomentClusterRepresentative(String(clusterId), "/private/rep.jpg");
+      return clusterId;
+    };
+
+    it("collapses a stack to its best in-scope member and counts only in-scope members", async () => {
+      await withTempDb(async (db) => {
+        await addStack(db);
+
+        const { items, total } = await db.queryFiles({
+          filter: {},
+          scope: share,
+          metadata: ["momentClusterSize", "momentClusterPreviewPaths"],
+        });
+        expect(total).toBe(1);
+        expect(items).toHaveLength(1);
+        expect(items[0].folder + items[0].fileName).toBe("/shared/c.jpg");
+        expect(items[0].momentClusterSize).toBe(2);
+        expect(items[0].momentClusterPreviewPaths).toEqual(["/shared/b.jpg"]);
+      });
+    });
+
+    it("lists only in-scope members of a moment cluster", async () => {
+      await withTempDb(async (db) => {
+        const clusterId = await addStack(db);
+
+        const detail = await db.moments.getMomentClusterDetail(String(clusterId), share);
+        expect(detail?.members.map((m) => m.path)).toEqual(["/shared/c.jpg", "/shared/b.jpg"]);
+        await expect(
+          db.moments.getMomentClusterDetail(String(clusterId), { folder: { folder: "/none/" } }),
+        ).resolves.toBeNull();
+      });
+    });
+  });
 });

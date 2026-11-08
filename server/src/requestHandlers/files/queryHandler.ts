@@ -1,7 +1,7 @@
 import type * as http from "http";
 import path from "path";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
-import type { QueryOptions } from "../../indexDatabase/indexDatabase.type.ts";
+import type { FilterElement, QueryOptions } from "../../indexDatabase/indexDatabase.type.ts";
 import { parseSort } from "../../../../shared/filter-contract/src/index.ts";
 import { getFastMediaDimensions } from "../../fileHandling/fileUtils.ts";
 import { stripLeadingSlash } from "../../common/stripLeadingSlash.ts";
@@ -33,16 +33,16 @@ export const queryHandler = async (
   // once (see peopleRequestHandler's /api/settings/default-exclusion) and
   // that then applies to every view funneling through this one handler —
   // grid, map, people, date histograms — without being re-selected each
-  // time. `includeExcluded=true` is the per-request opt-out.
+  // time. `includeExcluded=true` is the per-request opt-out. A share filter
+  // already carries the exclusions (resolveShareFilter), so a share can't opt out.
   const includeExcluded = url.searchParams.get("includeExcluded") === "true";
-  const defaultExclusionFilter = includeExcluded
-    ? null
-    : await database.getDefaultExclusionFilter();
+  const defaultExclusionFilter =
+    includeExcluded || shareFilter ? null : await database.getDefaultExclusionFilter();
 
-  const filter = {
+  // What the caller asked to see; the share filter bounds it from outside.
+  const viewFilter: FilterElement = {
     operation: "and" as const,
     conditions: [
-      ...(shareFilter ? [shareFilter] : []),
       ...(directoryPath || includeSubfolders
         ? [
             {
@@ -53,12 +53,15 @@ export const queryHandler = async (
             },
           ]
         : []),
-      ...(filterParam ? [JSON.parse(filterParam) as QueryOptions["filter"]] : []),
+      ...(filterParam ? [JSON.parse(filterParam) as FilterElement] : []),
       ...(defaultExclusionFilter
         ? [{ operation: "not" as const, conditions: [defaultExclusionFilter] }]
         : []),
     ],
   };
+  const filter: FilterElement = shareFilter
+    ? { operation: "and", conditions: [shareFilter, viewFilter] }
+    : viewFilter;
 
   // Parse metadata (comma-separated list or JSON array)
   let metadata: Array<string> = [];
@@ -81,7 +84,10 @@ export const queryHandler = async (
   }
 
   const queryOptions = {
-    filter,
+    // The share goes in as the scope, not the filter, so folder expansion and
+    // moment stacks can't reach past it.
+    filter: viewFilter,
+    ...(shareFilter ? { scope: shareFilter } : {}),
     metadata: metadata as QueryOptions["metadata"],
     // A count-only request discards `items`, so cap the page to 0 rows: the count
     // query runs regardless, but this avoids materializing (and serializing) a
@@ -127,6 +133,11 @@ export const queryHandler = async (
   }
 
   if (aggregate === "faceCentroidsPCA") {
+    // Every person in the library: nothing here can be narrowed to a share.
+    if (shareFilter) {
+      writeJson(res, 403, { error: "Forbidden" });
+      return;
+    }
     const result = await database.faceClusters.getFaceClustersPCA(
       url.searchParams.get("clusterId") ?? undefined,
     );
@@ -138,6 +149,10 @@ export const queryHandler = async (
     const filePath = url.searchParams.get("path");
     if (!filePath) {
       writeJson(res, 400, { error: "Missing path parameter" });
+      return;
+    }
+    if (shareFilter && !(await database.fileMatchesFilter(filePath, shareFilter))) {
+      writeJson(res, 403, { error: "Forbidden" });
       return;
     }
     const faces = await database.faces.getPeopleFacesForFile(stripLeadingSlash(filePath));
@@ -166,7 +181,10 @@ export const queryHandler = async (
       writeJson(res, 400, { error: "Missing clusterId parameter" });
       return;
     }
-    const detail = await database.moments.getMomentClusterDetail(clusterId);
+    const detail = await database.moments.getMomentClusterDetail(
+      clusterId,
+      shareFilter ?? {},
+    );
     writeJson(res, 200, { cluster: detail });
     return;
   }
