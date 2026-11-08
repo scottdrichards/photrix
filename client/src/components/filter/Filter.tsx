@@ -26,6 +26,7 @@ import { FaceFilterPanel } from "./FaceFilterPanel";
 
 type FilterPanel =
   | "folders"
+  | "mediaType"
   | "faceCluster"
   | "people"
   | "gear"
@@ -238,14 +239,20 @@ export const Filter = () => {
     });
   };
 
-  const handleMediaTypeCycle = () => {
-    const nextMediaTypeFilter: MediaTypeFilter =
-      resolvedMediaTypeFilter === "all"
-        ? "photo"
-        : resolvedMediaTypeFilter === "photo"
-          ? "video"
-          : "all";
-    setFilter({ mediaTypeFilter: nextMediaTypeFilter });
+  // Feedback #181: a checkbox sub-panel instead of a cycle button, so going
+  // straight to videos is one click rather than a heavy photos-only query
+  // first. Both ticked is "all"; unticking the last remaining kind falls back
+  // to "all" rather than an empty library.
+  const handleMediaTypeToggle = (kind: "photo" | "video") => {
+    const photo = kind === "photo" ? !photoMediaVisible : photoMediaVisible;
+    const video = kind === "video" ? !videoMediaVisible : videoMediaVisible;
+    const next: MediaTypeFilter =
+      photo === video ? "all" : photo ? "photo" : "video";
+    setFilter({ mediaTypeFilter: next });
+  };
+
+  const handleClearMediaType = () => {
+    setFilter({ mediaTypeFilter: "all" });
   };
 
   const folderCountFormatter = useMemo(() => new Intl.NumberFormat(), []);
@@ -521,8 +528,8 @@ export const Filter = () => {
           title={`Media type: ${mediaTypeStateLabel}`}
           aria-label="Media type filter"
           aria-pressed={isMediaTypeFilterActive}
-          className={`btn btn-icon ${css.filterIconButton} ${isMediaTypeFilterActive ? "btn-primary" : "btn-subtle"}`}
-          onClick={handleMediaTypeCycle}
+          className={`btn btn-icon ${css.filterIconButton} ${activePanel === "mediaType" || isMediaTypeFilterActive ? "btn-primary" : "btn-subtle"}`}
+          onClick={(e) => handlePanelToggle("mediaType", e.currentTarget)}
         >
           <span className={css.mediaTypeIconStack} aria-hidden="true">
             <span
@@ -537,6 +544,43 @@ export const Filter = () => {
             </span>
           </span>
         </button>
+        {activePanel === "mediaType" && (
+          <div
+            className={`popover-surface ${css.panelSurface}`}
+            style={floatingPanelStyle}
+          >
+            <div className={css.panelSection}>
+              <div className={css.panelHeaderRow}>
+                <h3>Media type</h3>
+                {isMediaTypeFilterActive ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-subtle"
+                    onClick={handleClearMediaType}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+              <label className="switch-label">
+                <input
+                  type="checkbox"
+                  checked={photoMediaVisible}
+                  onChange={() => handleMediaTypeToggle("photo")}
+                />
+                <span>Photos</span>
+              </label>
+              <label className="switch-label">
+                <input
+                  type="checkbox"
+                  checked={videoMediaVisible}
+                  onChange={() => handleMediaTypeToggle("video")}
+                />
+                <span>Videos</span>
+              </label>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* People face */}
