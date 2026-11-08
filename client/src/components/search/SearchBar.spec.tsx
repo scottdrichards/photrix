@@ -116,6 +116,24 @@ describe("SearchBar natural-language interpretation", () => {
     expect(screen.getByText("Summer 2025")).toBeInTheDocument();
   });
 
+  it("minimizes the AI search panel to a pill and remembers it (feedback #182)", async () => {
+    interpretSearchQuery.mockResolvedValue(interpretation);
+    renderSearchBar();
+
+    submit("photos of Sarah at the beach last summer");
+    await screen.findByText("AI search");
+
+    fireEvent.click(screen.getByRole("button", { name: "Minimize AI search filters" }));
+    expect(screen.queryByText("Sarah")).not.toBeInTheDocument();
+    // The derived filters stay applied; only the chips are tucked away.
+    expect(currentFilter().faceClusterFilter).toEqual(["person-12"]);
+    expect(localStorage.getItem("photrix_ai_search_minimized")).toBe("1");
+
+    fireEvent.click(screen.getByRole("button", { name: /Show AI search filters/ }));
+    expect(screen.getByText("Sarah")).toBeInTheDocument();
+    expect(localStorage.getItem("photrix_ai_search_minimized")).toBe("0");
+  });
+
   it("clears the semantic query when nothing visual is left over", async () => {
     interpretSearchQuery.mockResolvedValue({
       interpreted: true,
