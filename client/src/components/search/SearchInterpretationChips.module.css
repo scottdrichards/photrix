@@ -120,3 +120,24 @@
   border-style: solid;
   background: var(--fill2, #f4f4f4);
 }
+
+/* Feedback #182: minimized to a pill so it stops covering the filter buttons. */
+.barMinimized {
+  right: auto;
+  min-width: 0;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.minimizedToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  padding: 3px 8px;
+  cursor: pointer;
+  color: var(--brand, #2563eb);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
