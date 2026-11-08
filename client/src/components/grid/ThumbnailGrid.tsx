@@ -41,7 +41,7 @@ const SEARCH_PAGE_SIZE = 50;
  */
 const LOAD_MORE_MARGIN_PX = 2000;
 const numberFormatter = new Intl.NumberFormat();
-const ALL_SEARCH_SOURCES: readonly SearchSource[] = ["image", "audio", "transcript"];
+const ALL_SEARCH_SOURCES: readonly SearchSource[] = ["image", "audio", "transcript", "metadata"];
 
 type ThumbnailGridProps = {
   view: "library" | "people";

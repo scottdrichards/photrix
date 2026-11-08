@@ -20,7 +20,7 @@ const status = (
   image: SearchStatusDetail["sources"]["image"],
   loads: SearchStatusDetail["loads"] = {},
 ): SearchStatusDetail => ({
-  sources: { image, audio: "ready", transcript: "ready" },
+  sources: { image, audio: "ready", transcript: "ready", metadata: "ready" },
   loads,
 });
 

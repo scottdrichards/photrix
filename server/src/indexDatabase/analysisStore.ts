@@ -624,6 +624,56 @@ export class AnalysisStore {
   }
 
   /**
+   * Feedback #183: plain-text search over what people typed or named — the
+   * people in the image, tags, AI tags, and the names/tags of the face clusters
+   * a file's faces belong to. CLIP only sees pixels, so a photo tagged with
+   * someone's name was unfindable by that name. Every term must match
+   * somewhere (case-insensitive substring), newest first.
+   */
+  async metadataSearch(
+    query: string,
+    filter: FilterElement,
+    limit: number,
+  ): Promise<Array<FileRecord & { similarity: number }>> {
+    const terms = tokenizeTranscriptSearchText(query);
+    if (terms.length === 0) return [];
+    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+
+    const perTerm = `(
+      LOWER(personInImage) LIKE ? ESCAPE '\\'
+      OR LOWER(tags) LIKE ? ESCAPE '\\'
+      OR LOWER(aiTags) LIKE ? ESCAPE '\\'
+      OR EXISTS (
+        SELECT 1 FROM faces
+        JOIN faceClusters AS cluster ON cluster.id = faces.clusterId
+        JOIN faceClusters AS person ON person.id = COALESCE(cluster.personId, faces.clusterId)
+        WHERE faces.folder = files.folder AND faces.fileName = files.fileName
+          AND (LOWER(person.name) LIKE ? ESCAPE '\\' OR LOWER(person.tags) LIKE ? ESCAPE '\\')
+      )
+    )`;
+    const termParams = terms.flatMap((term) => {
+      const like = `%${escapeLikeLiteral(term)}%`;
+      return [like, like, like, like, like];
+    });
+
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT *
+       FROM files
+       WHERE ${terms.map(() => perTerm).join(" AND ")}
+         ${whereClause ? `AND (${whereClause})` : ""}
+       ORDER BY COALESCE(dateTaken, created, modified) DESC
+       LIMIT ?`,
+      ...termParams,
+      ...whereParams,
+      limit,
+    );
+    return rows.map((row) => ({
+      ...rowToFileRecord(row as Record<string, string | number>),
+      similarity: 1,
+    }));
+  }
+
+  /**
    * CLIP search over photos and, since feedback #150, over the sampled frames
    * of videos. Both are scored in the same CLIP space, so they merge by
    * similarity. A video hit carries `matchTimeMs`, the frame that matched, so

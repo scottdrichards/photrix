@@ -146,8 +146,13 @@ export type MediaTypeFilter = "all" | "photo" | "video" | "other";
  * - `audio`: CLAP audio-embedding similarity
  * - `transcript`: substring match against speech transcripts
  */
-export type SearchSource = "image" | "audio" | "transcript";
-export const SEARCH_SOURCES: readonly SearchSource[] = ["image", "audio", "transcript"];
+export type SearchSource = "image" | "audio" | "transcript" | "metadata";
+export const SEARCH_SOURCES: readonly SearchSource[] = [
+  "image",
+  "audio",
+  "transcript",
+  "metadata",
+];
 
 export type ShareScope<TFilter = unknown> = {
   filter: TFilter;

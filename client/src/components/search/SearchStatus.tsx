@@ -5,6 +5,7 @@ import {
   ClosedCaption24Regular,
   Image24Regular,
   MusicNote224Regular,
+  Tag24Regular,
   Warning16Filled,
 } from "@fluentui/react-icons";
 import {
@@ -17,18 +18,20 @@ import { useSearchActivity } from "./searchActivity";
 import { logFailure } from "../../logFailure";
 import css from "./SearchStatus.module.css";
 
-const SOURCE_ORDER: SearchSource[] = ["image", "audio", "transcript"];
+const SOURCE_ORDER: SearchSource[] = ["image", "audio", "transcript", "metadata"];
 
 const SOURCE_NAMES: Record<SearchSource, string> = {
   image: "Images",
   audio: "Audio",
   transcript: "Transcripts",
+  metadata: "Names & tags",
 };
 
 const SOURCE_ICONS: Record<SearchSource, React.ReactNode> = {
   image: <Image24Regular fontSize={14} />,
   audio: <MusicNote224Regular fontSize={14} />,
   transcript: <ClosedCaption24Regular fontSize={14} />,
+  metadata: <Tag24Regular fontSize={14} />,
 };
 
 const POLL_MS = 1_000;
@@ -87,8 +90,8 @@ const FAILURE_TEXT = {
 
 /** A source while the search is in flight, from its model's readiness. */
 const rowWhileSearching = (source: SearchSource, state: SearchModelState | undefined): Row => {
-  // Transcript search is plain SQL: there is no model to wait for.
-  if (source === "transcript" || state === "ready") {
+  // Transcript and name/tag search are plain SQL: there is no model to wait for.
+  if (source === "transcript" || source === "metadata" || state === "ready") {
     return { source, phase: "active", text: "searching…" };
   }
   if (state === "unavailable") return { source, phase: "off", text: "off on this server" };
