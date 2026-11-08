@@ -1,0 +1,72 @@
+.transcript {
+  margin: var(--space-m) 0 0;
+}
+
+.summary {
+  cursor: pointer;
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: var(--space-s) 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+}
+
+.count {
+  margin: var(--space-s) 0 0;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.lines {
+  list-style: none;
+  margin: var(--space-s) 0 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.line {
+  display: flex;
+  gap: var(--space-s);
+  margin-bottom: 6px;
+}
+
+.time {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgba(255, 255, 255, 0.55);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.word {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.word:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+
+.wordHit {
+  composes: word;
+  background: rgba(255, 213, 79, 0.45);
+  border-radius: 3px;
+}

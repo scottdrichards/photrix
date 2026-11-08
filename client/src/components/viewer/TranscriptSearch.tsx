@@ -4,10 +4,10 @@ import type { TranscriptSegment } from "../../api/types";
 import { formatDuration } from "./photoInfoFormat";
 import css from "./TranscriptSearch.module.css";
 
-const MIN_QUERY_LENGTH = 2;
+export const MIN_QUERY_LENGTH = 2;
 
 /** Case- and accent-insensitive form, one character per input character. */
-const fold = (text: string): string =>
+export const fold = (text: string): string =>
   [...text].map((ch) => ch.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase() || ch).join("");
 
 /** Every caption containing the query, in playback order. */

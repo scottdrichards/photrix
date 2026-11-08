@@ -11,6 +11,8 @@ import {
   formatFocalLength,
   formatShutterSpeed,
 } from "./photoInfoFormat";
+import { TranscriptPanel } from "./TranscriptPanel";
+import type { TranscriptSegment } from "../../api/types";
 import type { useAiDescription } from "./useAiDescription";
 
 const READ_ONLY = isSharedView();
@@ -21,6 +23,8 @@ type FileInfoPanelProps = {
   onSaveDescription: (next: string) => void;
   /** Opens a folder in the library (`a/b/`). Absent: the path is plain text. */
   onOpenFolder?: (folderPath: string) => void;
+  /** A video's transcript, with the seek that clicking a word calls. */
+  transcript?: { segments: TranscriptSegment[]; onSeek: (seconds: number) => void };
 };
 
 /**
@@ -70,6 +74,7 @@ export const FileInfoPanel = ({
   aiDescription,
   onSaveDescription,
   onOpenFolder,
+  transcript,
 }: FileInfoPanelProps) => {
   const meta = photo.metadata;
   const { stored: storedAiDescription, description, retry } = aiDescription;
@@ -136,6 +141,10 @@ export const FileInfoPanel = ({
               </p>
             )}
           </>
+        )}
+
+        {photo.mediaType === "video" && transcript && transcript.segments.length > 0 && (
+          <TranscriptPanel segments={transcript.segments} onSeek={transcript.onSeek} />
         )}
 
         {/* Camera */}
