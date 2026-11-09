@@ -184,6 +184,26 @@ describe("Filter", () => {
     );
   });
 
+  it("clears the folder filter from the panel header (feedback #180)", async () => {
+    render(
+      <FilterProvider>
+        <FilterStateInitializer nextFilter={{ path: "2022/04/", includeSubfolders: false }} />
+        <Filter />
+        <FilterStateProbe />
+      </FilterProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Folders filter" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
+
+    await waitFor(() => {
+      const state = JSON.parse(screen.getByTestId("filter-state").textContent ?? "{}");
+      expect(state.path ?? "").toBe("");
+      expect(state.includeSubfolders).toBe(true);
+    });
+    expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+  });
+
   it("shows top people suggestions with counts before typing", async () => {
     fetchSuggestionsWithCountsMock.mockResolvedValue([
       { value: "Sam", count: 14 },

@@ -248,6 +248,10 @@ export const Filter = () => {
     setFilter({ mediaTypeFilter: nextMediaTypeFilter });
   };
 
+  const handleClearFolders = () => {
+    setFilter({ path: "", includeSubfolders: true });
+  };
+
   const folderCountFormatter = useMemo(() => new Intl.NumberFormat(), []);
 
   const isExpandToFolderActive = Boolean(expandToFolder);
@@ -447,16 +451,28 @@ export const Filter = () => {
             <div className={css.panelSection}>
               <div className={css.panelHeaderRow}>
                 <h3>Folders</h3>
-                <label className="switch-label">
-                  <input
-                    type="checkbox"
-                    role="switch"
-                    className="switch-track"
-                    checked={includeSubfolders}
-                    onChange={(e) => setFilter({ includeSubfolders: e.target.checked })}
-                  />
-                  <span>Include subfolders</span>
-                </label>
+                <div className={css.panelHeaderActions}>
+                  <label className="switch-label">
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      className="switch-track"
+                      checked={includeSubfolders}
+                      onChange={(e) => setFilter({ includeSubfolders: e.target.checked })}
+                    />
+                    <span>Include subfolders</span>
+                  </label>
+                  {/* Feedback #180: same top-right Clear as the other filter panels. */}
+                  {isFolderFilterActive ? (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-subtle"
+                      onClick={handleClearFolders}
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
               </div>
               {currentPath ? (
                 <div className={css.breadcrumbRow}>
