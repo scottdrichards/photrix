@@ -267,34 +267,30 @@ describe("Filter", () => {
     );
   });
 
-  it("cycles the photo and video filter directly from the toolbar button", async () => {
+  it("picks photos and videos from a checkbox panel (feedback #181)", async () => {
     renderFilter();
 
-    const mediaTypeButton = screen.getByRole("button", { name: "Media type filter" });
+    fireEvent.click(screen.getByRole("button", { name: "Media type filter" }));
+    const photos = await screen.findByRole("checkbox", { name: "Photos" });
+    const videos = screen.getByRole("checkbox", { name: "Videos" });
+    expect(photos).toBeChecked();
+    expect(videos).toBeChecked();
 
-    fireEvent.click(mediaTypeButton);
+    const mediaType = () =>
+      JSON.parse(screen.getByTestId("filter-state").textContent ?? "{}").mediaTypeFilter;
 
-    await waitFor(() => {
-      expect(screen.getByTestId("filter-state").textContent).toContain(
-        '"mediaTypeFilter":"photo"',
-      );
-    });
+    // Untick photos: straight to videos only, no photos-only detour.
+    fireEvent.click(photos);
+    await waitFor(() => expect(mediaType()).toBe("video"));
 
-    fireEvent.click(mediaTypeButton);
+    // Unticking the last remaining kind falls back to everything.
+    fireEvent.click(videos);
+    await waitFor(() => expect(mediaType()).toBe("all"));
 
-    await waitFor(() => {
-      expect(screen.getByTestId("filter-state").textContent).toContain(
-        '"mediaTypeFilter":"video"',
-      );
-    });
-
-    fireEvent.click(mediaTypeButton);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("filter-state").textContent).toContain(
-        '"mediaTypeFilter":"all"',
-      );
-    });
+    fireEvent.click(photos);
+    await waitFor(() => expect(mediaType()).toBe("video"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(mediaType()).toBe("all"));
   });
 
   it("selects a clustered face from the People face panel", async () => {
@@ -492,7 +488,7 @@ describe("Filter", () => {
 
     const mediaTypeButton = screen.getByRole("button", { name: "Media type filter" });
     fireEvent.click(mediaTypeButton);
-    fireEvent.click(mediaTypeButton);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Photos" }));
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Media type filter" })).toHaveAttribute(
