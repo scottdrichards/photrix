@@ -164,7 +164,7 @@ describe("ThumbnailGrid", () => {
     fetchSearchStatusMock.mockResolvedValue({
       image: "ready",
       audio: "ready",
-      transcript: "ready",
+      transcript: "ready", metadata: "ready",
     });
     observers.length = 0;
   });
@@ -623,7 +623,7 @@ describe("ThumbnailGrid", () => {
     fetchSearchStatusMock.mockResolvedValue({
       image: "loading",
       audio: "loading",
-      transcript: "ready",
+      transcript: "ready", metadata: "ready",
     });
     fetchSemanticSearchMock.mockRejectedValueOnce(
       new SearchUnavailableError({

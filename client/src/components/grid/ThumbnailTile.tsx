@@ -10,6 +10,7 @@ import {
   MusicNote224Regular,
   PlayCircle24Regular,
   Star12Filled,
+  Tag24Regular,
 } from "@fluentui/react-icons";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { buildMomentClusterPreviewUrl, type PhotoItem, type SearchSource } from "../../api";
@@ -35,6 +36,7 @@ const SOURCE_LABELS: Record<SearchSource, string> = {
   image: "Matched on image content",
   audio: "Matched on audio content",
   transcript: "Matched in transcript",
+  metadata: "Matched a name or tag",
 };
 
 /** "0:42" / "1:02:05", for the moment in a video a search matched. */
@@ -56,6 +58,7 @@ const SOURCE_ICONS: Record<SearchSource, React.ReactNode> = {
   image: <Image24Regular fontSize={14} />,
   audio: <MusicNote224Regular fontSize={14} />,
   transcript: <ClosedCaption24Regular fontSize={14} />,
+  metadata: <Tag24Regular fontSize={14} />,
 };
 
 const DEFAULT_RATIO = 1;

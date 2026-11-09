@@ -58,6 +58,7 @@ const getSearchSourceStates = (): Record<SearchSource, SearchModelState> => ({
   image: getImageSearchModelState(),
   audio: getAudioSearchModelState(),
   transcript: "ready",
+  metadata: "ready",
 });
 
 /**
@@ -245,6 +246,7 @@ export const searchRequestHandler = async (
   const useImage = enabledSources.has("image");
   const useAudio = enabledSources.has("audio");
   const useTranscript = enabledSources.has("transcript");
+  const useMetadata = enabledSources.has("metadata");
 
   // Cap how long the whole search waits on any one source. The embedding-based
   // searches depend on Python ML workers that can be slow or wedged (a stuck
@@ -317,7 +319,7 @@ export const searchRequestHandler = async (
   // non-fatal. A disabled source resolves to `[]` without touching its worker,
   // so the slow embedding models are never invoked when their source is off.
   const noResults = Promise.resolve<Array<SearchResult>>([]);
-  const [clipResult, clapResult, transcriptResult] = await Promise.allSettled([
+  const [clipResult, clapResult, transcriptResult, metadataResult] = await Promise.allSettled([
     useImage
       ? timed(
           "clip",
@@ -344,6 +346,9 @@ export const searchRequestHandler = async (
       : noResults,
     useTranscript
       ? timed("transcript", database.analysis.audioTranscriptSearch(q, dbFilter, CANDIDATE_LIMIT))
+      : noResults,
+    useMetadata
+      ? timed("metadata", database.analysis.metadataSearch(q, dbFilter, CANDIDATE_LIMIT))
       : noResults,
   ]);
 
@@ -418,6 +423,7 @@ export const searchRequestHandler = async (
     image: outcomeFor("image", "clip", useImage, clipResult),
     audio: outcomeFor("audio", "clap", useAudio, clapResult),
     transcript: outcomeFor("transcript", "transcript", useTranscript, transcriptResult),
+    metadata: outcomeFor("metadata", "metadata", useMetadata, metadataResult),
   };
 
   const clipHits = applyFloor("clip", useImage, clipResult, CLIP_MIN_SIMILARITY);
@@ -426,6 +432,20 @@ export const searchRequestHandler = async (
     useTranscript && transcriptResult.status === "fulfilled"
       ? transcriptResult.value
       : [];
+  const metadataHits =
+    useMetadata && metadataResult.status === "fulfilled" ? metadataResult.value : [];
+  diagnostics.metadata = !useMetadata
+    ? { status: "skipped" }
+    : metadataResult.status === "fulfilled"
+      ? { status: "fulfilled", ms: timings.metadata, returned: metadataHits.length }
+      : {
+          status: "rejected",
+          ms: timings.metadata,
+          reason:
+            metadataResult.reason instanceof Error
+              ? metadataResult.reason.message
+              : String(metadataResult.reason),
+        };
   diagnostics.transcript = !useTranscript
     ? { status: "skipped" }
     : transcriptResult.status === "fulfilled"
@@ -477,6 +497,7 @@ export const searchRequestHandler = async (
   fuseResults(clipHits, "image");
   fuseResults(clapHits, "audio");
   fuseResults(transcriptHits, "transcript");
+  fuseResults(metadataHits, "metadata");
 
   // Feedback #113: the count of every floor-passing candidate before the
   // display page gets sliced off it — see CANDIDATE_LIMIT above for why this

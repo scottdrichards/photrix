@@ -30,7 +30,7 @@ const icon = () => screen.getByRole("button", { name: /^Search status:/ });
 describe("SearchStatusIcon", () => {
   beforeEach(() => {
     fetchSearchStatusMock.mockReset();
-    fetchSearchStatusMock.mockResolvedValue({ image: "ready", audio: "ready", transcript: "ready" });
+    fetchSearchStatusMock.mockResolvedValue({ image: "ready", audio: "ready", transcript: "ready", metadata: "ready" });
   });
 
   afterEach(() => {
@@ -43,7 +43,7 @@ describe("SearchStatusIcon", () => {
   });
 
   it("shows progress per source while searching, including a model still loading", async () => {
-    fetchSearchStatusMock.mockResolvedValue({ image: "cold", audio: "ready", transcript: "ready" });
+    fetchSearchStatusMock.mockResolvedValue({ image: "cold", audio: "ready", transcript: "ready", metadata: "ready" });
     render(<SearchStatusIcon />);
     publish({ searching: true });
 
@@ -93,7 +93,7 @@ describe("SearchStatusIcon", () => {
 
   it("warns about a source left out, and highlights Retry once its model is ready", async () => {
     const retry = vi.fn();
-    fetchSearchStatusMock.mockResolvedValue({ image: "ready", audio: "ready", transcript: "ready" });
+    fetchSearchStatusMock.mockResolvedValue({ image: "ready", audio: "ready", transcript: "ready", metadata: "ready" });
     render(<SearchStatusIcon />);
     publish({
       outcome: {

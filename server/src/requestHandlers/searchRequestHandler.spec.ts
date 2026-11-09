@@ -76,6 +76,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => []),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => [transcriptRow]),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -105,6 +106,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => []),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => [transcriptRow]),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -113,6 +115,35 @@ describe("searchRequestHandler resilience", () => {
 
     expect(getStatus()).toBe(200);
     expect(getJson().total).toBe(1);
+  });
+
+  it("surfaces a name/tag match that no model would find (feedback #183)", async () => {
+    const handler = await loadHandler({
+      embedText: async () => new Float32Array([1]),
+      embedTextWithClap: async () => new Float32Array([1]),
+    });
+    const tagged = {
+      folder: "/old/",
+      fileName: "tagged.jpg",
+      mimeType: "image/jpeg",
+      similarity: 1,
+    };
+    const database = {
+      analysis: {
+        semanticSearch: jest.fn(async () => []),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => [tagged]),
+      },
+    } as unknown as IndexDatabase;
+
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(makeReq("nate shipp"), res, { database });
+
+    expect(getStatus()).toBe(200);
+    const body = getJson();
+    expect(body.items.map((i: { fileName: string }) => i.fileName)).toEqual(["tagged.jpg"]);
+    expect(body.items[0].sources).toEqual(["metadata"]);
   });
 
   it("keeps a top image hit in the top-N even when transcript matches flood the results", async () => {
@@ -143,6 +174,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => [imageHit]),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => transcriptHits),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -175,6 +207,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => [imageOnly, shared]),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => [shared]),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -208,6 +241,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => [imageOnly, shared]),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => [shared]),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -241,6 +275,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch,
         audioSemanticSearch,
         audioTranscriptSearch: jest.fn(async () => [transcriptHit]),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -273,6 +308,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => []),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -302,6 +338,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch,
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch,
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -349,6 +386,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => []),
         audioSemanticSearch: jest.fn(async () => [confidentVideo, noiseVideo]),
         audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -376,6 +414,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => []),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -424,6 +463,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => imageHits),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -471,6 +511,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => imageHits),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -524,6 +565,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => imageHits),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -553,6 +595,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => imageHits),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -592,6 +635,7 @@ describe("searchRequestHandler resilience", () => {
         semanticSearch: jest.fn(async () => imageHits),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
 
@@ -626,6 +670,7 @@ describe("searchRequestHandler source status", () => {
         semanticSearch: jest.fn(async () => []),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => [transcriptRow]),
+        metadataSearch: jest.fn(async () => []),
       },
     }) as unknown as IndexDatabase;
 
@@ -681,6 +726,7 @@ describe("searchRequestHandler source status", () => {
         semanticSearch: jest.fn(async () => []),
         audioSemanticSearch: jest.fn(async () => []),
         audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => []),
       },
     } as unknown as IndexDatabase;
     const { res, getStatus, getJson } = createJsonResponse();
@@ -710,7 +756,7 @@ describe("searchStatusRequestHandler", () => {
 
     expect(getStatus()).toBe(200);
     expect(getJson()).toEqual({
-      sources: { image: "loading", audio: "unavailable", transcript: "ready" },
+      sources: { image: "loading", audio: "unavailable", transcript: "ready", metadata: "ready" },
       // Feedback #162: how far along a load is, against the last one.
       loads: { image: { loadingForMs: 12_000, lastLoadMs: 38_000 }, audio: {} },
     });

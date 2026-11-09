@@ -1671,6 +1671,40 @@ describe("IndexDatabase", () => {
       });
     });
 
+    it("finds files by a tagged person or tag, case-insensitively (feedback #183)", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(
+          createRecord("old/tagged.jpg", {
+            mimeType: "image/jpeg",
+            personInImage: ["Nate Shipp"],
+            exifProcessedAt: new Date(),
+          }),
+        );
+        await db.addFile(
+          createRecord("old/keyword.jpg", {
+            mimeType: "image/jpeg",
+            tags: ["Nate", "lake"],
+            exifProcessedAt: new Date(),
+          }),
+        );
+        await db.addFile(
+          createRecord("old/other.jpg", {
+            mimeType: "image/jpeg",
+            personInImage: ["Sam"],
+            exifProcessedAt: new Date(),
+          }),
+        );
+
+        const both = await db.analysis.metadataSearch("nate shipp", {}, 10);
+        expect(both.map((r) => r.fileName)).toEqual(["tagged.jpg"]);
+
+        const one = await db.analysis.metadataSearch("NATE", {}, 10);
+        expect(one.map((r) => r.fileName).sort()).toEqual(["keyword.jpg", "tagged.jpg"]);
+
+        expect(await db.analysis.metadataSearch("nobody", {}, 10)).toEqual([]);
+      });
+    });
+
     const addImageWithEmbedding = async (
       db: IndexDatabase,
       relativePath: string,
