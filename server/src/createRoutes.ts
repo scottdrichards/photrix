@@ -28,6 +28,7 @@ import { statusBackgroundTasksRequestHandler } from "./requestHandlers/statusBac
 import { featureFlagsRequestHandler } from "./requestHandlers/featureFlagsRequestHandler.ts";
 import { networkProbeRequestHandler } from "./requestHandlers/networkProbeRequestHandler.ts";
 import { dayPhotoRequestHandler } from "./requestHandlers/dayPhotoRequestHandler.ts";
+import { screensaverRequestHandler } from "./requestHandlers/screensaverRequestHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
 import { pageTitleHandler } from "./requestHandlers/pageTitleHandler.ts";
 import { photoCaptionRequestHandler } from "./requestHandlers/photoCaptionRequestHandler.ts";
@@ -267,6 +268,14 @@ export const createRoutes = ({
       path: "/api/day-photo/*",
       shareLink: "forbidden",
       handle: ({ req, res }) => dayPhotoRequestHandler(req, res),
+    },
+    // Weighted-random "top photos" of the last year for the wall screensaver.
+    // Whole-library selection, so outside every share.
+    {
+      method: "GET",
+      path: "/api/screensaver*",
+      shareLink: "forbidden",
+      handle: ({ req, res }) => screensaverRequestHandler(req, res),
     },
     // A share link browses its own subtree: the listing is ANDed with the share
     // filter and the requested path is clamped to the shared root.
