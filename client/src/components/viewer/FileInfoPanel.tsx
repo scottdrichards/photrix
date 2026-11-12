@@ -1,9 +1,10 @@
+import { Suspense } from "react";
 import type { PhotoItem } from "../../api";
 import { cx } from "../../cx";
 import { isSharedView } from "../../hooks/useShareFilter";
 import { DescriptionEditor } from "./DescriptionEditor";
 import css from "./FullscreenViewer.module.css";
-import { MiniMap } from "../map/MiniMap";
+import { lazyPart } from "../../lazyPart";
 import {
   formatAperture,
   formatDuration,
@@ -14,6 +15,11 @@ import {
 import type { useAiDescription } from "./useAiDescription";
 
 const READ_ONLY = isSharedView();
+
+// Loaded with the first photo that has a location, not with the viewer.
+const { Part: MiniMap } = lazyPart("mini map", () =>
+  import("../map/MiniMap").then((module) => module.MiniMap),
+);
 
 type FileInfoPanelProps = {
   photo: PhotoItem;
@@ -310,10 +316,12 @@ export const FileInfoPanel = ({
           )}
         </dl>
 
-        <MiniMap
-          latitude={photo.metadata?.locationLatitude}
-          longitude={photo.metadata?.locationLongitude}
-        />
+        <Suspense fallback={null}>
+          <MiniMap
+            latitude={photo.metadata?.locationLatitude}
+            longitude={photo.metadata?.locationLongitude}
+          />
+        </Suspense>
       </aside>
   );
 };

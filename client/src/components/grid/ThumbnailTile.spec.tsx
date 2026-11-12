@@ -513,8 +513,13 @@ describe("ThumbnailTile", () => {
         configurable: true,
       });
 
-      const bar = container.querySelector('[class*="scrubBar"]');
-      expect(bar).not.toBeNull();
+      // The bar shows once the player is attached, and the player loads on
+      // demand, so it follows the <video> element by a moment.
+      const bar = await waitFor(() => {
+        const found = container.querySelector('[class*="scrubBar"]');
+        expect(found).not.toBeNull();
+        return found;
+      });
 
       fireEvent.pointerDown(bar as Element, { clientX: 50 });
       fireEvent.pointerUp(bar as Element, { clientX: 50 });

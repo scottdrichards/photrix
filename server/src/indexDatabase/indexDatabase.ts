@@ -3,6 +3,7 @@ import path from "node:path";
 import { CACHE_DIR } from "../common/cacheUtils.ts";
 import { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
+import { queryCacheKey, WriteInvalidatedCache } from "../common/writeInvalidatedCache.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
 import { MetadataGroups, type FileRecord } from "./fileRecord.type.ts";
 import { filterToSQL } from "./filterToSQL.ts";
@@ -180,6 +181,12 @@ export class IndexDatabase {
   // setDefaultExclusionFilter.
   private defaultExclusionFilterCache: QueryOptions["filter"] | null | undefined =
     undefined;
+  // Small aggregates over the whole filtered library, kept until the next
+  // write: the grid's total, folder lists, the date histogram and date range.
+  // The grid asks for the same total with every page it loads, and counting is
+  // the expensive half of that query (a pass over every file, against an
+  // index-ordered read of 200). Cached results are shared: read-only.
+  private aggregateCache!: WriteInvalidatedCache;
   // Incremental face clustering: assignments are persisted on the faces rows
   // and centroids in the faceClusters table, so People queries are plain
   // indexed reads. See faceClusterEngine.ts.
@@ -245,6 +252,12 @@ export class IndexDatabase {
         "mmap_size = 4294967296",
         "cache_size = -65536",
       ],
+      // Every query the app serves runs on a read connection, so the memory map
+      // has to be set there too; it was only ever set on the writer. Measured
+      // 2026-11-12 on the 3 GB live index: the grid's count 493 ms -> 312 ms. A
+      // larger page cache on top of the map measured no different, so the
+      // readers keep the default.
+      readPragmas: ["mmap_size = 4294967296"],
       customFunctions: [
         { name: "REGEXP", options: { deterministic: true }, type: "regexp" },
         {
@@ -272,6 +285,8 @@ export class IndexDatabase {
     // completing with 0 items before this migration fires off-path.
     await this.backfillHeicEmbeddedVideoDetection();
     await this.backfillTags();
+
+    this.aggregateCache = new WriteInvalidatedCache(() => this.db.writeGeneration, 256);
 
     const faceClusterEngine = new FaceClusterEngine(this.db);
     this.faceClusters = new FaceClusterStore(this.db, faceClusterEngine, () =>
@@ -1086,7 +1101,17 @@ export class IndexDatabase {
     filter: FilterElement = {},
   ): Promise<Array<{ name: string; count: number }>> {
     const base = normalizeFolderPath(relativePath);
-    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    const { where, params } = filterToSQL(filter);
+    return this.aggregateCache.get(queryCacheKey(`folders\u0000${base}\u0000${where}`, params), () =>
+      this.computeFolders(base, where, params),
+    );
+  }
+
+  private async computeFolders(
+    base: string,
+    whereClause: string,
+    whereParams: ReturnType<typeof filterToSQL>["params"],
+  ): Promise<Array<{ name: string; count: number }>> {
     const whereFragment = whereClause ? `AND (${whereClause})` : "";
 
     if (base === "/") {
@@ -1623,9 +1648,13 @@ export class IndexDatabase {
     const effectiveParams = [...withParams, ...whereParams, ...scopeParams];
 
     const countSQL = `${withMembers}SELECT COUNT(*) as count FROM files ${effectiveWhere ? `WHERE ${effectiveWhere}` : ""}`;
-    const countResult = await (() =>
-      this.db.get<{ count: number }>(countSQL, ...effectiveParams))();
-    const total = countResult?.count ?? 0;
+    // Not awaited here: it runs beside the page query below, on another read
+    // connection, instead of in front of it.
+    const counting = this.aggregateCache.get(
+      queryCacheKey(countSQL, effectiveParams),
+      async () =>
+        (await this.db.get<{ count: number }>(countSQL, ...effectiveParams))?.count ?? 0,
+    );
 
     // The stack badge needs a member count alongside the representative row;
     // only joined in when asked for, so the common case (no metadata request
@@ -1672,8 +1701,16 @@ export class IndexDatabase {
       LIMIT ? OFFSET ?
     `;
 
-    const rows = await (() =>
-      this.db.all<Record<string, unknown>>(mainSQL, ...effectiveParams, pageSize, offset))();
+    const [counted, rows] = await Promise.all([
+      counting,
+      this.db.all<Record<string, unknown>>(mainSQL, ...effectiveParams, pageSize, offset),
+    ]);
+    // A page that comes back short is the last one, so where it ends is the
+    // total. The two queries read separate snapshots; taking the total from the
+    // rows keeps them agreeing at the end of the list, where a total that ran
+    // ahead of the rows would have the grid asking for a page that isn't there.
+    const isLastPage = rows.length < pageSize && (rows.length > 0 || offset === 0);
+    const total = isLastPage ? offset + rows.length : counted;
 
     const matchedFiles = rows.map((v) =>
       rowToFileRecord(v as Record<string, string | number>, metadata),
@@ -1692,7 +1729,16 @@ export class IndexDatabase {
   async getDateRange(
     filter: FilterElement,
   ): Promise<{ minDate: Date | null; maxDate: Date | null }> {
-    const { where: whereClause, params } = filterToSQL(filter);
+    const { where, params } = filterToSQL(filter);
+    return this.aggregateCache.get(queryCacheKey(`dateRange\u0000${where}`, params), () =>
+      this.computeDateRange(where, params),
+    );
+  }
+
+  private async computeDateRange(
+    whereClause: string,
+    params: ReturnType<typeof filterToSQL>["params"],
+  ): Promise<{ minDate: Date | null; maxDate: Date | null }> {
     // typeof(dateTaken) = 'integer' guards against rows where dateTaken was
     // written as a TEXT/ISO string. SQLite sorts TEXT above every INTEGER, so a
     // single stray string poisons MAX(dateTaken) with garbage.
@@ -1727,7 +1773,18 @@ export class IndexDatabase {
     filter: FilterElement,
     bucketCount = 40,
   ): Promise<DateHistogramResult> {
-    const { where: whereClause, params } = filterToSQL(filter);
+    const { where, params } = filterToSQL(filter);
+    return this.aggregateCache.get(
+      queryCacheKey(`dateHistogram\u0000${bucketCount}\u0000${where}`, params),
+      () => this.computeDateHistogram(where, params, bucketCount),
+    );
+  }
+
+  private async computeDateHistogram(
+    whereClause: string,
+    params: ReturnType<typeof filterToSQL>["params"],
+    bucketCount: number,
+  ): Promise<DateHistogramResult> {
     // Only integer timestamps take part: guards against TEXT dateTaken values
     // that would poison MIN/MAX and the bucket math (see getDateRange).
     const baseWhere = `dateTaken IS NOT NULL AND typeof(dateTaken) = 'integer'${

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PhotoItem } from "../../../api";
 import { negotiateVideoPlayback } from "../../../api";
 import { probeVideoPlaybackProfile } from "../../../videoPlaybackProfile";
-import { attachTileVideo, type TileVideoHandle } from "./attachTileVideo";
+import type { TileVideoHandle } from "./attachTileVideo";
 import {
   acquirePlaybackSlot,
   isAmbientPlaybackAllowed,
@@ -140,6 +140,12 @@ export const useTileVideoPreview = ({ photo, active, deliberate }: Options) => {
           hardStop();
           return;
         }
+
+        // The player (hls.js) is a third of the app's code, so it loads with the
+        // first preview instead of with the page. The viewer shares it and is
+        // fetched soon after the page loads, so it is normally here already.
+        const { attachTileVideo } = await import("./attachTileVideo");
+        if (torndown) return;
 
         const element = videoRef.current;
         if (!element) {

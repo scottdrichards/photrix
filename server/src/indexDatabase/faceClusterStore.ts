@@ -1,5 +1,6 @@
 import { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
+import { queryCacheKey, WriteInvalidatedCache } from "../common/writeInvalidatedCache.ts";
 import { filterToSQL } from "./filterToSQL.ts";
 import { type FaceClusterCentroid, type FaceClusterDetailResult, type FaceClusterFace, type FaceClusterSummary, type FaceClusterPCAResult, type FaceClusterResult, type FaceReviewFace, type FaceReviewResult, type QueryOptions } from "./indexDatabase.type.ts";
 import { encodeEmbedding } from "./embeddingCodec.ts";
@@ -146,6 +147,8 @@ type FaceClusterPCASeed = {
 };
 
 /** People as clusters of faces: clustering, the People-tab layout, merges, review and cluster geometry. */
+type FilterParams = ReturnType<typeof filterToSQL>["params"];
+
 export class FaceClusterStore {
   private pcaCache: FaceClusterPCAResult | null = null;
   private pcaCacheInflight: Promise<FaceClusterPCAResult> | null = null;
@@ -166,23 +169,130 @@ export class FaceClusterStore {
   /** Keyed by the filter's SQL and params, then by clusterId. */
   private filteredCountCache = new Map<string, Map<number, number>>();
 
+  // The People list for a filter, kept until the next write. Under the default
+  // view's exclusion filter it costs about a second, and the People tab and the
+  // face filter panel each ask for it again every time they open. Few entries:
+  // one result is ~1.3 MB of JSON on the live library.
+  private readonly peopleCache: WriteInvalidatedCache;
+
   constructor(
     private readonly db: AsyncSqlite,
     private readonly faceClusters: FaceClusterEngine,
     private readonly invalidateStatusCountsCache: () => void,
-  ) {}
+  ) {
+    this.peopleCache = new WriteInvalidatedCache(() => this.db.writeGeneration, 8);
+  }
 
   /** Computes the People-tab PCA layout ahead of the first request for it. */
   async warmPCACache(): Promise<void> {
     this.pcaCache = await this.computePCACache();
   }
 
+  /** The result is shared between callers: treat it as read-only. */
   async queryFaceClusters(options: {
     filter: QueryOptions["filter"];
   }): Promise<FaceClusterResult> {
-    const { filter } = options;
-    const { where: whereClause, params: whereParams } = filterToSQL(filter);
+    const { where, params } = filterToSQL(options.filter);
+    return this.peopleCache.get(queryCacheKey(`people\u0000${where}`, params), () =>
+      this.computeFaceClusters(where, params),
+    );
+  }
 
+  private async computeFaceClusters(
+    whereClause: string,
+    whereParams: FilterParams,
+  ): Promise<FaceClusterResult> {
+    // The two passes are independent reads, so they run side by side.
+    const [aggregateRows, pendingRow] = await Promise.all([
+      this.aggregatePeople(whereClause, whereParams),
+      this.countPendingFaces(whereClause, whereParams),
+    ]);
+
+    // Step 2: hydrate the representative faces — only for the clusters the
+    // response actually lists.
+    const listed = aggregateRows.slice(0, MAX_FACE_CLUSTERS_LISTED);
+    const representatives = new Map<number, FaceClusterFace>();
+    const clusterNames = new Map<number, string | null>();
+    const clusterTags = new Map<number, string | null>();
+    if (listed.length) {
+      const representativeRows = await this.db.all<{
+        id: number;
+        folder: string;
+        fileName: string;
+        boxX: number;
+        boxY: number;
+        boxWidth: number;
+        boxHeight: number;
+        frameTimeMs: number | null;
+        mimeType: string | null;
+        dimensionWidth: number | null;
+        dimensionHeight: number | null;
+        regions: string | null;
+      }>(
+        `SELECT
+           faces.id AS id,
+           faces.folder,
+           faces.fileName,
+           faces.boxX,
+           faces.boxY,
+           faces.boxWidth,
+           faces.boxHeight,
+           faces.frameTimeMs,
+           files.mimeType,
+           files.dimensionsWidth AS dimensionWidth,
+           files.dimensionsHeight AS dimensionHeight,
+           files.regions
+         FROM faces
+         JOIN files
+           ON files.folder = faces.folder
+          AND files.fileName = faces.fileName
+         WHERE faces.id IN (${listed.map(() => "?").join(", ")})`,
+        ...listed.map((row) => row.id),
+      );
+      for (const row of representativeRows) {
+        representatives.set(row.id, faceRowToClusterFace(row));
+      }
+
+      const nameRows = await this.db.all<{
+        id: number;
+        name: string | null;
+        tags: string | null;
+      }>(
+        `SELECT id, name, tags FROM faceClusters WHERE id IN (${listed.map(() => "?").join(", ")})`,
+        ...listed.map((row) => row.personId),
+      );
+      for (const row of nameRows) {
+        clusterNames.set(row.id, row.name);
+        clusterTags.set(row.id, row.tags);
+      }
+    }
+
+    const clusters = listed.flatMap((row) => {
+      const representative = representatives.get(row.id);
+      if (!representative) return [];
+      return [
+        {
+          id: faceClusterIdToString(row.personId),
+          count: row.count,
+          representative,
+          name: clusterNames.get(row.personId) ?? null,
+          tags: parsePersonTags(clusterTags.get(row.personId) ?? null),
+        },
+      ];
+    });
+
+    return {
+      clusters,
+      totalFaces: aggregateRows.reduce((sum, row) => sum + row.count, 0),
+      totalClusters: aggregateRows.length,
+      pendingFaces: pendingRow?.count ?? 0,
+    };
+  }
+
+  private async aggregatePeople(
+    whereClause: string,
+    whereParams: FilterParams,
+  ): Promise<{ personId: number; count: number; id: number }[]> {
     // Step 1: per-cluster count + representative face id. SQLite bare-column
     // semantics: with a MAX() aggregate, non-aggregated columns take their
     // values from the row that produced the max — so `id` here is the face
@@ -271,13 +381,19 @@ export class FaceClusterStore {
         .map(([personId, data]) => ({ personId, count: data.count, id: data.id }))
         .sort((a, b) => b.count - a.count || a.personId - b.personId);
     }
+    return aggregateRows;
+  }
 
+  private countPendingFaces(
+    whereClause: string,
+    whereParams: FilterParams,
+  ): Promise<{ count: number } | undefined> {
     // Same join-order forcing as above. Only faces that pass the clusterId IS
     // NULL index constraint get a row fetch (for the LENGTH check), so the
     // BLOB drag is limited to the actual pending backlog. Without a filter the
     // needing_cluster partial index answers the count directly.
-    const pendingRow = whereClause
-      ? await this.db.get<{ count: number }>(
+    return whereClause
+      ? this.db.get<{ count: number }>(
           `WITH filtered_files AS MATERIALIZED (
              SELECT folder, fileName FROM files WHERE ${whereClause}
            )
@@ -289,89 +405,9 @@ export class FaceClusterStore {
            WHERE faces.clusterId IS NULL`,
           ...whereParams,
         )
-      : await this.db.get<{ count: number }>(
+      : this.db.get<{ count: number }>(
           `SELECT COUNT(*) AS count FROM faces WHERE clusterId IS NULL`,
         );
-
-    // Step 2: hydrate the representative faces — only for the clusters the
-    // response actually lists.
-    const listed = aggregateRows.slice(0, MAX_FACE_CLUSTERS_LISTED);
-    const representatives = new Map<number, FaceClusterFace>();
-    const clusterNames = new Map<number, string | null>();
-    const clusterTags = new Map<number, string | null>();
-    if (listed.length) {
-      const representativeRows = await this.db.all<{
-        id: number;
-        folder: string;
-        fileName: string;
-        boxX: number;
-        boxY: number;
-        boxWidth: number;
-        boxHeight: number;
-        frameTimeMs: number | null;
-        mimeType: string | null;
-        dimensionWidth: number | null;
-        dimensionHeight: number | null;
-        regions: string | null;
-      }>(
-        `SELECT
-           faces.id AS id,
-           faces.folder,
-           faces.fileName,
-           faces.boxX,
-           faces.boxY,
-           faces.boxWidth,
-           faces.boxHeight,
-           faces.frameTimeMs,
-           files.mimeType,
-           files.dimensionsWidth AS dimensionWidth,
-           files.dimensionsHeight AS dimensionHeight,
-           files.regions
-         FROM faces
-         JOIN files
-           ON files.folder = faces.folder
-          AND files.fileName = faces.fileName
-         WHERE faces.id IN (${listed.map(() => "?").join(", ")})`,
-        ...listed.map((row) => row.id),
-      );
-      for (const row of representativeRows) {
-        representatives.set(row.id, faceRowToClusterFace(row));
-      }
-
-      const nameRows = await this.db.all<{
-        id: number;
-        name: string | null;
-        tags: string | null;
-      }>(
-        `SELECT id, name, tags FROM faceClusters WHERE id IN (${listed.map(() => "?").join(", ")})`,
-        ...listed.map((row) => row.personId),
-      );
-      for (const row of nameRows) {
-        clusterNames.set(row.id, row.name);
-        clusterTags.set(row.id, row.tags);
-      }
-    }
-
-    const clusters = listed.flatMap((row) => {
-      const representative = representatives.get(row.id);
-      if (!representative) return [];
-      return [
-        {
-          id: faceClusterIdToString(row.personId),
-          count: row.count,
-          representative,
-          name: clusterNames.get(row.personId) ?? null,
-          tags: parsePersonTags(clusterTags.get(row.personId) ?? null),
-        },
-      ];
-    });
-
-    return {
-      clusters,
-      totalFaces: aggregateRows.reduce((sum, row) => sum + row.count, 0),
-      totalClusters: aggregateRows.length,
-      pendingFaces: pendingRow?.count ?? 0,
-    };
   }
 
   async getFaceClusterDetail(options: {

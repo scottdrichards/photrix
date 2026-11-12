@@ -4,14 +4,17 @@ import {
   Person24Regular,
   Share24Regular,
 } from "@fluentui/react-icons";
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
 import { buildShareScope, fetchShareScopeCount, LARGE_SHARE_THRESHOLD } from "./api";
-import { FullscreenViewer } from "./components/viewer/FullscreenViewer";
+import {
+  LazyFullscreenViewer,
+  preloadFullscreenViewer,
+} from "./components/viewer/LazyFullscreenViewer";
+import { lazyPart } from "./lazyPart";
 import { AccountPanel } from "./components/account/AccountPanel";
 import { LoginScreen } from "./components/account/LoginScreen";
-import { PeopleView } from "./components/people/PeopleView";
 import { SearchBar } from "./components/search/SearchBar";
 import { ShareLinkModal } from "./components/share/ShareLinkModal";
 import { LargeShareWarningModal } from "./components/share/LargeShareWarningModal";
@@ -55,6 +58,12 @@ import {
 import { attempt } from "./result";
 import { logFailure } from "./logFailure";
 import { FeatureFlagsProvider } from "./featureFlags/FeatureFlagsContext";
+
+const { Part: PeopleView } = lazyPart("people", () =>
+  import("./components/people/PeopleView").then((module) => module.PeopleView),
+);
+
+const VIEWER_PRELOAD_DELAY_MS = 2_000;
 
 // Extract a token from the URL immediately (before auth check) so share links self-authenticate.
 extractUrlToken();
@@ -339,6 +348,13 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
     void probeVideoPlaybackProfile();
   }, []);
 
+  // Opening a photo is the next thing most visits do, so the viewer is fetched
+  // once the first screen has had the connection to itself for a moment.
+  useEffect(() => {
+    const timer = window.setTimeout(preloadFullscreenViewer, VIEWER_PRELOAD_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   // Feedback #127: floating the view-toggle/sort bar at the bottom of the
   // viewport (see #121/#122/#123) still needs to get out of the way while
   // scrolling through the grid — it should only be there when the grid is
@@ -529,15 +545,17 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
             onTotalChange={handleTotalChange}
           />
         ) : (
-          <PeopleView
-            view={view}
-            onViewChange={handleViewChange}
-            personId={nav.people.personId}
-            groupId={nav.people.groupId}
-            onNavigate={handlePeopleNavigate}
-          />
+          <Suspense fallback={null}>
+            <PeopleView
+              view={view}
+              onViewChange={handleViewChange}
+              personId={nav.people.personId}
+              groupId={nav.people.groupId}
+              onNavigate={handlePeopleNavigate}
+            />
+          </Suspense>
         )}
-        <FullscreenViewer />
+        <LazyFullscreenViewer />
       </div>
     </SortDockProvider>
     </TopRailPortalProvider>
