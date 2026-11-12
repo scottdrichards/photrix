@@ -123,3 +123,76 @@ describe("AsyncSqlite worker death", () => {
     }
   });
 });
+
+describe("AsyncSqlite write generation", () => {
+  it("changes with every write and never with a read", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "async-sqlite-generation-spec-"));
+    const db = await AsyncSqlite.open(join(dir, "test.db"), { readPoolSize: 1 });
+    try {
+      const seen = [db.writeGeneration];
+      const changedSinceLast = () => {
+        seen.push(db.writeGeneration);
+        return seen.at(-1) !== seen.at(-2);
+      };
+
+      await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)");
+      expect(changedSinceLast()).toBe(true);
+      await db.run("INSERT INTO t (v) VALUES (?)", "hello");
+      expect(changedSinceLast()).toBe(true);
+      await db.transaction([{ sql: "INSERT INTO t (v) VALUES (?)", params: ["again"] }]);
+      expect(changedSinceLast()).toBe(true);
+
+      await db.all("SELECT v FROM t");
+      await db.get("SELECT v FROM t");
+      expect(changedSinceLast()).toBe(false);
+
+      // A failed write may still have changed something: it counts.
+      await expect(db.run("INSERT INTO missing (v) VALUES (1)")).rejects.toThrow();
+      expect(changedSinceLast()).toBe(true);
+    } finally {
+      await db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("differs while a write is in flight from both before and after it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "async-sqlite-generation-spec-"));
+    const db = await AsyncSqlite.open(join(dir, "test.db"), { readPoolSize: 1 });
+    try {
+      await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)");
+      const before = db.writeGeneration;
+      const write = db.run("INSERT INTO t (v) VALUES (?)", "hello");
+      const during = db.writeGeneration;
+      await write;
+      const after = db.writeGeneration;
+      expect(new Set([before, during, after]).size).toBe(3);
+    } finally {
+      await db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("AsyncSqlite read connections", () => {
+  it("apply readPragmas, and not the writer's pragmas", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "async-sqlite-pragma-spec-"));
+    const db = await AsyncSqlite.open(join(dir, "test.db"), {
+      readPoolSize: 2,
+      pragmas: ["cache_size = -1234"],
+      readPragmas: ["cache_size = -4321"],
+    });
+    try {
+      // Two reads at once land on the two read connections.
+      const reads = await Promise.all([
+        db.get<{ cache_size: number }>("PRAGMA cache_size"),
+        db.get<{ cache_size: number }>("PRAGMA cache_size"),
+      ]);
+      expect(reads.map((row) => row?.cache_size)).toEqual([-4321, -4321]);
+      const writer = await db.getFromWriteWorker<{ cache_size: number }>("PRAGMA cache_size");
+      expect(writer?.cache_size).toBe(-1234);
+    } finally {
+      await db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

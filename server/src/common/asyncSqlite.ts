@@ -21,6 +21,11 @@ type CustomFunctionType =
 
 type AsyncSqliteOptions = {
   pragmas?: string[];
+  /**
+   * Pragmas for the read-only connections. They never see `pragmas`: most of
+   * those (journal mode, checkpointing) only mean something on the writer.
+   */
+  readPragmas?: string[];
   /** Number of read workers (default: PHOTRIX_DB_READ_WORKERS env or 2). */
   readPoolSize?: number;
   customFunctions?: Array<{
@@ -101,7 +106,27 @@ export class AsyncSqlite {
   // said ok. Now the first death fails everything from then on, loudly.
   private closing = false;
   private failure: Error | null = null;
+  private writeEpoch = 0;
   private failureListeners: Array<(error: Error) => void> = [];
+
+  /**
+   * Changes whenever a write starts and again when it settles. A read whose
+   * result is kept for later is still current while this equals the value taken
+   * before the read began: no write was in flight then, and none has started
+   * since.
+   */
+  get writeGeneration(): number {
+    return this.writeEpoch;
+  }
+
+  private async write<T>(op: string, payload: Record<string, unknown>): Promise<T> {
+    this.writeEpoch++;
+    try {
+      return await this.send<T>(this.writeWorker, op, payload);
+    } finally {
+      this.writeEpoch++;
+    }
+  }
 
   /** The error that killed a worker, or null while every worker is alive. */
   get failed(): Error | null {
@@ -189,6 +214,7 @@ export class AsyncSqlite {
         spawned.push(
           await spawnWorker(dbPath, {
             readonly: true,
+            pragmas: options.readPragmas,
             customFunctions: options.customFunctions,
           }),
         );
@@ -322,17 +348,17 @@ export class AsyncSqlite {
   }
 
   async run(sql: string, ...params: unknown[]): Promise<RunResult> {
-    return this.send<RunResult>(this.writeWorker, "run", { sql, params });
+    return this.write<RunResult>("run", { sql, params });
   }
 
   async exec(sql: string): Promise<void> {
-    await this.send<void>(this.writeWorker, "exec", { sql });
+    await this.write<void>("exec", { sql });
   }
 
   async transaction(
     statements: Array<{ sql: string; params: unknown[] }>,
   ): Promise<void> {
-    await this.send<void>(this.writeWorker, "transaction", { statements });
+    await this.write<void>("transaction", { statements });
   }
 
   async close(): Promise<void> {
