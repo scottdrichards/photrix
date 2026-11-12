@@ -254,7 +254,8 @@ describe("App", () => {
 
     expect(screen.getByTestId("thumbnail-grid")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "People" }));
-    expect(screen.getByTestId("people-view")).toBeInTheDocument();
+    // The People view loads on demand, so it arrives a moment after the click.
+    expect(await screen.findByTestId("people-view")).toBeInTheDocument();
   });
 
   // Feedback #127: the floating view-toggle/sort bar must hide once the grid

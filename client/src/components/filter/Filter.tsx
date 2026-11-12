@@ -12,17 +12,22 @@ import {
   Star24Regular,
 } from "@fluentui/react-icons";
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Spinner } from "../../Spinner";
 import css from "./Filter.module.css";
 import { fetchFolders, fetchSuggestionsWithCounts, type FolderSummary } from "../../api";
 import type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
 import { DateHistogram } from "./DateHistogram";
-import { MapFilter } from "../map/MapFilter";
+import { lazyPart } from "../../lazyPart";
 import { OptionListWithCounts } from "./OptionListWithCounts";
 import { useFilter } from "./FilterContext";
 import { SuggestionFilterField } from "./SuggestionFilterField";
 import { FaceFilterPanel } from "./FaceFilterPanel";
+
+// The map library is a sixth of the app's code and only this panel draws a map.
+const { Part: MapFilter } = lazyPart("map filter", () =>
+  import("../map/MapFilter").then((module) => module.MapFilter),
+);
 
 type FilterPanel =
   | "folders"
@@ -817,7 +822,9 @@ export const Filter = () => {
             className={`popover-surface ${css.mapPanelSurface}`}
             style={floatingPanelStyle}
           >
-            <MapFilter compact />
+            <Suspense fallback={null}>
+              <MapFilter compact />
+            </Suspense>
           </div>
         )}
       </div>
