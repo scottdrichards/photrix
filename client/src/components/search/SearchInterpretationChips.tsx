@@ -12,6 +12,7 @@ import type {
   InterpretedPersonAlternative,
 } from "../../../../shared/filter-contract/src";
 import css from "./SearchInterpretationChips.module.css";
+import { readStorage, writeStorage } from "../../storage";
 
 type Props = {
   /** The natural-language query these chips were derived from. */
@@ -34,13 +35,7 @@ type Props = {
 // minimized to a small pill. The choice sticks across searches and reloads.
 const MINIMIZED_KEY = "photrix_ai_search_minimized";
 
-const readMinimized = (): boolean => {
-  try {
-    return localStorage.getItem(MINIMIZED_KEY) === "1";
-  } catch {
-    return false;
-  }
-};
+const readMinimized = (): boolean => readStorage(MINIMIZED_KEY) === "1";
 
 const chipKey = (chip: InterpretedFilterChip) => `${chip.field}:${chip.value ?? chip.label}`;
 
@@ -70,11 +65,7 @@ export const SearchInterpretationChips = ({
     const next = !minimized;
     setMinimized(next);
     setPickingFor(null);
-    try {
-      localStorage.setItem(MINIMIZED_KEY, next ? "1" : "0");
-    } catch {
-      // Private mode etc.: the toggle still works for this page view.
-    }
+    writeStorage(MINIMIZED_KEY, next ? "1" : "0");
   };
 
   if (minimized) {
