@@ -351,6 +351,19 @@ export class AsyncSqlite {
     return this.write<RunResult>("run", { sql, params });
   }
 
+  /**
+   * A write that leaves `writeGeneration` alone, so results cached against it
+   * survive. Only for bookkeeping in a table that no cached read looks at: a
+   * session's last-seen time, say. That one is written on the first request
+   * after a minute away, which is the page load, and as an ordinary write it
+   * dropped every cached total at the moment they were wanted.
+   *
+   * Anything a query could return must go through `run`.
+   */
+  async runBookkeeping(sql: string, ...params: unknown[]): Promise<RunResult> {
+    return this.send<RunResult>(this.writeWorker, "run", { sql, params });
+  }
+
   async exec(sql: string): Promise<void> {
     await this.write<void>("exec", { sql });
   }

@@ -253,7 +253,7 @@ const touchApiToken = (token: string): void => {
   const last = apiTokenLastTouched.get(token) ?? 0;
   if (now - last < API_TOKEN_TOUCH_INTERVAL_MS) return;
   apiTokenLastTouched.set(token, now);
-  db?.run("UPDATE api_tokens SET lastUsedAt = ? WHERE token = ?", [now, token]).catch(
+  db?.runBookkeeping("UPDATE api_tokens SET lastUsedAt = ? WHERE token = ?", [now, token]).catch(
     logFailure(log, "Could not record API token use"),
   );
 };
@@ -272,7 +272,7 @@ const touchSession = (token: string): void => {
   if (now - last < SESSION_TOUCH_INTERVAL_MS) return;
   sessionLastTouched.set(token, now);
   data.lastSeenAt = now;
-  db?.run("UPDATE auth_sessions SET lastSeenAt = ? WHERE token = ?", [now, token]).catch(
+  db?.runBookkeeping("UPDATE auth_sessions SET lastSeenAt = ? WHERE token = ?", [now, token]).catch(
     logFailure(log, "Could not record session activity"),
   );
 };

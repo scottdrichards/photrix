@@ -146,6 +146,11 @@ describe("AsyncSqlite write generation", () => {
       await db.get("SELECT v FROM t");
       expect(changedSinceLast()).toBe(false);
 
+      // Bookkeeping is written, and leaves the generation alone.
+      await db.runBookkeeping("UPDATE t SET v = ? WHERE id = 1", "seen");
+      expect(changedSinceLast()).toBe(false);
+      expect(await db.get("SELECT v FROM t WHERE id = 1")).toEqual({ v: "seen" });
+
       // A failed write may still have changed something: it counts.
       await expect(db.run("INSERT INTO missing (v) VALUES (1)")).rejects.toThrow();
       expect(changedSinceLast()).toBe(true);
