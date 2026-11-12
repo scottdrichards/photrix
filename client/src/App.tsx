@@ -13,6 +13,7 @@ import {
   preloadFullscreenViewer,
 } from "./components/viewer/LazyFullscreenViewer";
 import { lazyPart } from "./lazyPart";
+import { whenNetworkQuiet } from "./whenNetworkQuiet";
 import { AccountPanel } from "./components/account/AccountPanel";
 import { LoginScreen } from "./components/account/LoginScreen";
 import { SearchBar } from "./components/search/SearchBar";
@@ -62,8 +63,6 @@ import { FeatureFlagsProvider } from "./featureFlags/FeatureFlagsContext";
 const { Part: PeopleView } = lazyPart("people", () =>
   import("./components/people/PeopleView").then((module) => module.PeopleView),
 );
-
-const VIEWER_PRELOAD_DELAY_MS = 2_000;
 
 // Extract a token from the URL immediately (before auth check) so share links self-authenticate.
 extractUrlToken();
@@ -349,11 +348,8 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   }, []);
 
   // Opening a photo is the next thing most visits do, so the viewer is fetched
-  // once the first screen has had the connection to itself for a moment.
-  useEffect(() => {
-    const timer = window.setTimeout(preloadFullscreenViewer, VIEWER_PRELOAD_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, []);
+  // ahead of that: once the first screen has stopped loading, not during it.
+  useEffect(() => whenNetworkQuiet(preloadFullscreenViewer), []);
 
   // Feedback #127: floating the view-toggle/sort bar at the bottom of the
   // viewport (see #121/#122/#123) still needs to get out of the way while
