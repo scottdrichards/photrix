@@ -58,6 +58,21 @@ describe("resolveShareFilter", () => {
     await expect(result).rejects.toMatchObject({ statusCode: 403 });
   });
 
+  it("serves a deliberate whole-library share (feedback #187)", async () => {
+    await expect(
+      resolveShareFilter({ filter: {}, wholeLibrary: true }, noExclusions, "t-whole"),
+    ).resolves.toEqual({});
+  });
+
+  it("still refuses an uncompilable clause on a whole-library share", async () => {
+    const result = resolveShareFilter(
+      { filter: { "1) OR (1": "x" }, wholeLibrary: true },
+      noExclusions,
+      "t-whole-bad",
+    );
+    await expect(result).rejects.toMatchObject({ statusCode: 403 });
+  });
+
   it("refuses a semantic share whose resolved filter still drops a clause", async () => {
     embedText.mockResolvedValueOnce(new Float32Array([]));
     const scope = { filter: {}, semanticQuery: "x", searchSources: ["image" as const] };
