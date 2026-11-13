@@ -12,8 +12,12 @@ const SWIPE_COMMIT_MAX_PX = 90;
 const DOUBLE_TAP_MS = 300;
 const AXIS_LOCK_PX = 8;
 // How long the full-resolution image takes to fade in over its low-res
-// underlay. The underlay is only taken away after this, never during it.
+// underlay. The underlay goes when that fade ends, never during it.
 const IMAGE_FADE_MS = 220;
+// Fallback for a fade whose transitionend never arrives (no transition
+// support, an interrupted fade). A timer of exactly IMAGE_FADE_MS was not
+// enough: under load the fade starts frames late and the underlay left early.
+const UNDERLAY_RETIRE_FALLBACK_MS = IMAGE_FADE_MS + 600;
 
 const clampN = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
@@ -155,7 +159,7 @@ export function SwipePhotoViewer({
       setUnderlayRetired(false);
       return;
     }
-    const timer = setTimeout(() => setUnderlayRetired(true), IMAGE_FADE_MS);
+    const timer = setTimeout(() => setUnderlayRetired(true), UNDERLAY_RETIRE_FALLBACK_MS);
     return () => clearTimeout(timer);
   }, [fullImageLoaded, photo.path]);
 
@@ -453,6 +457,9 @@ export function SwipePhotoViewer({
               data-role="image"
               className={css.image}
               draggable={false}
+              onTransitionEnd={(e) => {
+                if (e.propertyName === "opacity" && fullImageLoaded) setUnderlayRetired(true);
+              }}
               onLoad={(e) => {
                 const img = e.currentTarget;
                 const src = img.currentSrc || img.src;
