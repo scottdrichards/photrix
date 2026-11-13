@@ -1003,7 +1003,10 @@ export function FullscreenViewer() {
                       durationSeconds={photo.metadata?.duration}
                       aspectRatio={videoAspectRatio}
                     />
-                    <PlaybackBottleneckBadge key={photo.path} report={bottleneck} />
+                    {/* Feedback #185: never the same key as the <video>, its
+                        sibling. Two children keyed by one path broke
+                        reconciliation, so "next" left the old video on screen. */}
+                    <PlaybackBottleneckBadge key={`bottleneck:${photo.path}`} report={bottleneck} />
                   </div>
                   {/* Hidden under an open naming panel, which it would cover. */}
                   {videoStatus && !activeFaceAssign && (
