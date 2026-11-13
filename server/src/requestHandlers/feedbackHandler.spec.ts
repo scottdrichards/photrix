@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import type http from "node:http";
 import { EventEmitter } from "node:events";
-import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
+import type { AsyncSqlite } from "../common/asyncSqlite.ts";
+import { FeedbackStore } from "../feedback/feedbackStore.ts";
 import { feedbackHandler } from "./feedbackHandler.ts";
 
 const createMockReq = (
@@ -46,7 +47,7 @@ afterEach(() => {
 describe("feedbackHandler", () => {
   it("inserts a plain (non-external) submission when not marked external", async () => {
     const run = jest.fn(async () => ({ changes: 1 }));
-    const database = { asyncSqlite: { run, all: jest.fn() } } as unknown as IndexDatabase;
+    const database = new FeedbackStore({ run, all: jest.fn() } as unknown as AsyncSqlite);
     const { res, getStatus, getJson } = createMockRes();
 
     await feedbackHandler(
@@ -66,7 +67,7 @@ describe("feedbackHandler", () => {
 
   it("tags a submission as external when markExternal is set (feedback #99)", async () => {
     const run = jest.fn(async () => ({ changes: 1 }));
-    const database = { asyncSqlite: { run, all: jest.fn() } } as unknown as IndexDatabase;
+    const database = new FeedbackStore({ run, all: jest.fn() } as unknown as AsyncSqlite);
     const { res, getStatus } = createMockRes();
 
     await feedbackHandler(
@@ -88,7 +89,7 @@ describe("feedbackHandler", () => {
 
   it("rejects an empty submission without touching the database", async () => {
     const run = jest.fn(async () => ({ changes: 1 }));
-    const database = { asyncSqlite: { run, all: jest.fn() } } as unknown as IndexDatabase;
+    const database = new FeedbackStore({ run, all: jest.fn() } as unknown as AsyncSqlite);
     const { res, getStatus } = createMockRes();
 
     await feedbackHandler(
@@ -114,7 +115,7 @@ describe("feedbackHandler", () => {
         hasDiagnostics: 1,
       },
     ]);
-    const database = { asyncSqlite: { run: jest.fn(), all } } as unknown as IndexDatabase;
+    const database = new FeedbackStore({ run: jest.fn(), all } as unknown as AsyncSqlite);
     const { res, getJson } = createMockRes();
 
     await feedbackHandler(createMockReq("GET", "/api/feedback"), res, database);
@@ -139,7 +140,7 @@ describe("feedbackHandler", () => {
 
   it("saves a diagnostics report for the submitting browser session so it can be reproduced", async () => {
     const run = jest.fn(async () => ({ changes: 1 }));
-    const database = { asyncSqlite: { run, all: jest.fn() } } as unknown as IndexDatabase;
+    const database = new FeedbackStore({ run, all: jest.fn() } as unknown as AsyncSqlite);
     const buildDiagnosticsReport = jest.fn(async (clientSessionId: string) => ({
       clientSessionId,
       events: [{ event: "video.playback.summary" }],
@@ -165,9 +166,7 @@ describe("feedbackHandler", () => {
 
   it("serves a suggestion's saved diagnostics report", async () => {
     const get = jest.fn(async () => ({ diagnostics: JSON.stringify({ events: [] }) }));
-    const database = {
-      asyncSqlite: { run: jest.fn(), all: jest.fn(), get },
-    } as unknown as IndexDatabase;
+    const database = new FeedbackStore({ run: jest.fn(), all: jest.fn(), get } as unknown as AsyncSqlite);
     const { res, getStatus, getJson } = createMockRes();
 
     await feedbackHandler(
@@ -183,9 +182,7 @@ describe("feedbackHandler", () => {
 
   it("404s a suggestion with no saved diagnostics", async () => {
     const get = jest.fn(async () => ({ diagnostics: null }));
-    const database = {
-      asyncSqlite: { run: jest.fn(), all: jest.fn(), get },
-    } as unknown as IndexDatabase;
+    const database = new FeedbackStore({ run: jest.fn(), all: jest.fn(), get } as unknown as AsyncSqlite);
     const { res, getStatus } = createMockRes();
 
     await feedbackHandler(

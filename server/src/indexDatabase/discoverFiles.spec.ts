@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
+import { openIndexSqlite } from "./openIndexSqlite.ts";
 import { createDeferred } from "../common/createDeferred.fixture.ts";
 
 const mkTempDir = async (prefix: string): Promise<string> =>
@@ -25,7 +26,7 @@ describe("discoverFiles", () => {
       await fs.writeFile(path.join(rootDir, "a.jpg"), "a");
       await fs.writeFile(path.join(rootDir, "nested", "b.mp4"), "b");
 
-      db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir, await openIndexSqlite());
       await db.init();
       await fileSystemScanFolder(db).onComplete();
 
@@ -52,7 +53,7 @@ describe("discoverFiles", () => {
       await fs.writeFile(path.join(rootDir, "keep.jpg"), "k");
       await fs.writeFile(path.join(rootDir, "nested", "gone.jpg"), "g");
 
-      db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir, await openIndexSqlite());
       await db.init();
       await fileSystemScanFolder(db).onComplete();
       expect(await db.countAllEntries()).toBe(2);
@@ -80,7 +81,7 @@ describe("discoverFiles", () => {
       await fs.writeFile(path.join(rootDir, "ready.jpg"), "x");
       await fs.writeFile(path.join(rootDir, "copying.jpg"), Buffer.alloc(0));
 
-      db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir, await openIndexSqlite());
       await db.init();
       await fileSystemScanFolder(db).onComplete();
 

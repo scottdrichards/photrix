@@ -27,6 +27,8 @@ import { startPeriodicRescan } from "./indexDatabase/fileSystemRescanRecent.ts";
 import { processExifMetadata } from "./indexDatabase/processExifMetadata.ts";
 import { processFileInfoMetadata } from "./indexDatabase/processFileInfo.ts";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
+import { openIndexSqlite } from "./indexDatabase/openIndexSqlite.ts";
+import { FeedbackStore } from "./feedback/feedbackStore.ts";
 import { processFaceClustering } from "./indexDatabase/processFaceClustering.ts";
 import { processMomentClustering } from "./indexDatabase/processMomentClustering.ts";
 import { initAuthService } from "./auth/authService.ts";
@@ -88,11 +90,15 @@ const startServer = async () => {
   }
 
   const mediaRoot = process.env.MEDIA_ROOT || "./exampleFolder";
-  const database = new IndexDatabase(mediaRoot);
+  // One connection, handed to each module that owns tables in it. init()
+  // creates every module's tables, so it runs before any of them reads.
+  const indexSqlite = await openIndexSqlite();
+  const { sqlite } = indexSqlite;
+  const database = new IndexDatabase(mediaRoot, indexSqlite);
   await database.init();
-  const featureFlags = await FeatureFlagStore.load(database.asyncSqlite, process.env);
-  await initAuthService(database.asyncSqlite);
-  initPasskeyService(database.asyncSqlite);
+  const featureFlags = await FeatureFlagStore.load(sqlite, process.env);
+  await initAuthService(sqlite);
+  initPasskeyService(sqlite);
 
   const taskOrchestrator = createTaskOrchestrator({
     // Freeze the heavy ML worker processes (SIGSTOP) while a user request is in
@@ -134,6 +140,7 @@ const startServer = async () => {
   // behind it.
   const server = createServer(database, mediaRoot, {
     featureFlags,
+    feedback: new FeedbackStore(sqlite),
     taskOrchestrator,
   });
   logger.info({ mediaRoot, port: process.env.PORT ?? 3000 }, "Server started");
@@ -385,7 +392,7 @@ const startServer = async () => {
   process.on("SIGHUP", () => shutdown("SIGHUP"));
   // A dead SQLite worker isn't replaced, so every DB call fails from then on.
   // Exit and let systemd (Restart=always) bring up a fresh process.
-  database.asyncSqlite.onFailure((err) => {
+  sqlite.onFailure((err) => {
     logger.fatal({ err }, "SQLite worker died — restarting");
     shutdown("sqlite-worker-failure");
   });

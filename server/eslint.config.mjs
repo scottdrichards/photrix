@@ -16,6 +16,7 @@ const modules = {
   common: ["observability"],
   accel: ["python"],
   featureFlags: ["common"],
+  feedback: ["common"],
   mcp: ["common"],
   taskOrchestrator: ["common", "observability"],
   backgroundTasks: ["taskOrchestrator"],
@@ -40,7 +41,7 @@ const modules = {
   requestHandlers: [
     "common", "observability", "featureFlags", "taskOrchestrator", "auth", "videoProcessing", "fileHandling",
     "faceDetection", "indexDatabase", "imageProcessing", "imageAnalysis", "audioProcessing", "shareDescription",
-    "naturalLanguageSearch", "photoCaption", "systemStatus", "shareScope",
+    "naturalLanguageSearch", "photoCaption", "systemStatus", "shareScope", "feedback",
   ],
   // main.ts, createServer.ts, createRoutes.ts: the composition root.
   "(root)": ["*"],

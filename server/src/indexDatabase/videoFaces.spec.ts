@@ -1,4 +1,5 @@
 import { describe, it, expect, jest } from "@jest/globals";
+import type { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { splitPath } from "./utils/pathUtils.ts";
 import { AnalysisStore } from "./analysisStore.ts";
@@ -145,7 +146,7 @@ describe("video face queue", () => {
   });
 
   it("stores when each person is on screen, and hands it to whoever asks who is in the video", async () => {
-    await withTempDb(async (db) => {
+    await withTempDb(async (db, sqlite) => {
       await addVideo(db, "v/party.mp4", { duration: 20 });
       const appearances = [
         { startMs: 0, endMs: 3_000 },
@@ -178,7 +179,7 @@ describe("video face queue", () => {
         },
       ]);
       const rows = () =>
-        db.asyncSqlite.all<{ n: number }>("SELECT COUNT(*) AS n FROM faceAppearances");
+        sqlite.all<{ n: number }>("SELECT COUNT(*) AS n FROM faceAppearances");
       expect((await rows())[0].n).toBe(1);
       await db.removeFile("v/party.mp4");
       expect((await rows())[0].n).toBe(0);
@@ -240,7 +241,7 @@ describe("video face queue", () => {
   // Feedback #153: video faces score lower than photo faces, so a capped
   // person's best-match-first list used to hold none of them.
   describe("a capped person's detail keeps videos' share", () => {
-    const seedPerson = async (db: IndexDatabase) => {
+    const seedPerson = async (db: IndexDatabase, sqlite: AsyncSqlite) => {
       const face = (seed: number, frameTimeMs?: number) => ({
         box: { x: 0.1, y: 0.2, width: 0.2, height: 0.3 },
         confidence: 0.9,
@@ -261,7 +262,7 @@ describe("video face queue", () => {
       const { clusters } = await db.faceClusters.queryFaceClusters({ filter: {} });
       expect(clusters).toHaveLength(1);
       // Pin the ranking: every photo face outscores every video face.
-      await db.asyncSqlite.run(
+      await sqlite.run(
         `UPDATE faces SET clusterSimilarity =
            CASE WHEN frameTimeMs IS NULL THEN 0.9 - id * 0.001 ELSE 0.5 - id * 0.001 END`,
       );
@@ -278,11 +279,11 @@ describe("video face queue", () => {
       ["unfiltered, named", {}, true],
       ["filtered, named", { folder: { folder: "/f/", recursive: true } }, true],
     ])("swaps the weakest photo for a video face (%s)", async (_label, filter, named) => {
-      await withTempDb(async (db) => {
-        const clusterId = await seedPerson(db);
+      await withTempDb(async (db, sqlite) => {
+        const clusterId = await seedPerson(db, sqlite);
         if (named) {
           expect(await db.faceClusters.renameCluster(clusterId, "Riley")).toBe(true);
-          const [root] = await db.asyncSqlite.all<{ personId: number | null }>(
+          const [root] = await sqlite.all<{ personId: number | null }>(
             "SELECT personId FROM faceClusters WHERE name = 'Riley'",
           );
           expect(root.personId).not.toBeNull();
@@ -306,8 +307,8 @@ describe("video face queue", () => {
     });
 
     it("shows at least one video face, and every face when under the cap", async () => {
-      await withTempDb(async (db) => {
-        const clusterId = await seedPerson(db);
+      await withTempDb(async (db, sqlite) => {
+        const clusterId = await seedPerson(db, sqlite);
         const tight = await db.faceClusters.getFaceClusterDetail({ filter: {}, clusterId, maxFaces: 2 });
         expect(videoCount(tight.cluster!.faces)).toBe(1);
         expect(tight.cluster!.faces).toHaveLength(2);
@@ -327,8 +328,8 @@ describe("video face queue", () => {
         ["a positive filter, named", { mimeType: "image/jpeg" }, true],
         ["a not filter, named", { operation: "not", conditions: [{ mimeType: "video/mp4" }] }, true],
       ])("keeps only the faces whose files pass (%s)", async (_label, filter, named) => {
-        await withTempDb(async (db) => {
-          const clusterId = await seedPerson(db);
+        await withTempDb(async (db, sqlite) => {
+          const clusterId = await seedPerson(db, sqlite);
           if (named) expect(await db.faceClusters.renameCluster(clusterId, "Riley")).toBe(true);
           const detail = await db.faceClusters.getFaceClusterDetail({
             filter: filter as Parameters<typeof db.faceClusters.getFaceClusterDetail>[0]["filter"],
@@ -344,8 +345,8 @@ describe("video face queue", () => {
       });
 
       it("returns no person when the filter leaves none of their faces", async () => {
-        await withTempDb(async (db) => {
-          const clusterId = await seedPerson(db);
+        await withTempDb(async (db, sqlite) => {
+          const clusterId = await seedPerson(db, sqlite);
           const detail = await db.faceClusters.getFaceClusterDetail({
             filter: { mimeType: "image/png" },
             clusterId,

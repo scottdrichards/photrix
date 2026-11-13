@@ -21,6 +21,7 @@ import { FilterCompileError } from "./indexDatabase/filterToSQL.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
 import { sharePreviewHandler } from "./requestHandlers/sharePreviewHandler.ts";
 import type { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
+import type { FeedbackStore } from "./feedback/feedbackStore.ts";
 import { createRoutes, matchesRoute, type ApiRequest } from "./createRoutes.ts";
 
 const log = getLogger("httpServer");
@@ -37,6 +38,7 @@ const KEEP_ALIVE_TIMEOUT_MS = 65_000;
 type ServerOptions = {
   taskOrchestrator: TaskOrchestrator;
   featureFlags: FeatureFlagStore;
+  feedback: FeedbackStore;
 };
 
 /** A request header's value, or its first value when repeated. */
@@ -93,6 +95,7 @@ export const createServer = (
     storageRoot: storagePath,
     taskOrchestrator,
     featureFlags: options.featureFlags,
+    feedback: options.feedback,
   });
 
   const handleRequest = async (req: ApiRequest, res: http.ServerResponse) => {
