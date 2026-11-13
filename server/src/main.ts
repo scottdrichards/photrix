@@ -61,6 +61,7 @@ import {
   processThumbnailBackfill,
   readThumbnailBackfillLimits,
 } from "./imageProcessing/thumbnailBackfill.ts";
+import { listPeopleFaces } from "./imageProcessing/faceCropBackfill.ts";
 import { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
 
 const startServer = async () => {
@@ -321,6 +322,7 @@ const startServer = async () => {
         processThumbnailBackfill(database, {
           ...thumbnailBackfillConfig,
           isEnabled: () => featureFlags.isEnabled("thumbnailBackfill"),
+          listPeopleFaces: () => listPeopleFaces(database),
         }),
       // One file at a time through the shared conversion pool: about one
       // decode's worth of CPU, so it fits beside image analysis. It also

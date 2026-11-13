@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
+import { attempt } from "../common/result.ts";
 import type { StandardHeight } from "../common/standardHeights.ts";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
@@ -11,6 +12,8 @@ import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
 import { convertImageToMultipleSizes, IMAGE_OUTPUT_EXTENSION } from "./convertImage.ts";
 import { convertEmbeddedThumbnail } from "./embeddedThumbnail.ts";
+import { planFaceCropWork } from "./faceCropBackfill.ts";
+import type { FaceClusterFace } from "../indexDatabase/indexDatabase.type.ts";
 
 const log = getLogger("thumbnailBackfill");
 
@@ -75,6 +78,12 @@ type ThumbnailBackfillLimits = {
 type ThumbnailBackfillConfig = ThumbnailBackfillLimits & {
   /** Read before every file, so switching the feature flag takes effect at once. */
   isEnabled: () => boolean;
+  /**
+   * The faces the People list shows. When given, each pass starts by making
+   * their crops (see faceCropBackfill.ts): there are few, and they are the
+   * slowest thing left on a first visit to the People tab.
+   */
+  listPeopleFaces?: () => Promise<FaceClusterFace[]>;
 };
 
 const positiveNumber = (raw: string | undefined, fallback: number): number => {
@@ -234,6 +243,41 @@ export const processThumbnailBackfill = (
     // CANDIDATE_REFRESH_MS) resumes where it was and only adds what is new.
     const done = new Set<string>();
 
+    // Makes one file's missing thumbnails, at the pass's pace. `key` is what a
+    // failure is remembered under for the rest of the process.
+    const make = async (key: string, label: string, work: PlannedWork) => {
+      await pace(work.readBytes);
+      // The pacing sleep can span the start of a user request; yield to it.
+      await waitForTurn();
+
+      const workStartedAt = now();
+      try {
+        await work.run();
+        generated += 1;
+        readBytes += work.readBytes;
+      } catch (err) {
+        failedPaths.add(key);
+        failed += 1;
+        log.debug({ err, path: label }, "Thumbnail backfill failed for file");
+      }
+      await sleep(restAfter(now() - workStartedAt));
+    };
+
+    // The People list is a convenience here: if it can't be read, the grid's
+    // thumbnails are still worth making.
+    const listed = config.listPeopleFaces ? await attempt(config.listPeopleFaces()) : null;
+    if (listed && !listed.ok) {
+      log.warn({ err: listed.error }, "Could not list the People faces; skipping their crops");
+    }
+    for (const face of listed?.ok ? listed.value : []) {
+      await waitForTurn();
+      description = "Generating People face crops";
+      const key = `face:${face.faceId}`;
+      if (failedPaths.has(key)) continue;
+      const work = await planFaceCropWork(database.storagePath, face);
+      if (work) await make(key, face.path, work);
+    }
+
     for (let fresh = true; fresh;) {
       fresh = false;
       const listedAt = now();
@@ -254,23 +298,7 @@ export const processThumbnailBackfill = (
         const fullPath = path.join(database.storagePath, stripLeadingSlash(relativePath));
         if (failedPaths.has(fullPath)) continue;
         const work = await planThumbnailWork(fullPath, mimeType, sizeInBytes);
-        if (!work) continue;
-
-        await pace(work.readBytes);
-        // The pacing sleep can span the start of a user request; yield to it.
-        await waitForTurn();
-
-        const workStartedAt = now();
-        try {
-          await work.run();
-          generated += 1;
-          readBytes += work.readBytes;
-        } catch (err) {
-          failedPaths.add(fullPath);
-          failed += 1;
-          log.debug({ err, path: relativePath }, "Thumbnail backfill failed for file");
-        }
-        await sleep(restAfter(now() - workStartedAt));
+        if (work) await make(fullPath, relativePath, work);
       }
     }
 
