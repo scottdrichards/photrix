@@ -112,6 +112,15 @@ and `fileSystemRescanRecent.ts` re-queue the entry stages.
 | API calls                       | `api/*.ts` (all through `api/http.ts` `fetchWithDiagnostics`)     |
 | Diagnostics / perf telemetry    | `diagnostics.ts`, `clientPerf.ts`                                 |
 
+## Module boundaries
+
+A module is a directory under `server/src/`, `client/src/` or
+`client/src/components/`. Which module may import from which is written down in
+each workspace's `eslint.config.mjs` and enforced by `bun run lint`
+(`eslint.boundaries.mjs`). A new cross-module import fails until it is either
+moved or added to that map on purpose. The `grandfathered` list beside the map
+is the backlog of known violations: it may shrink, never grow.
+
 ## Something is slow or broken
 
 See `DIAGNOSTICS.md`: pull `GET /api/diagnostics/report?clientSessionId=…`
