@@ -45,7 +45,6 @@
   background-position: center;
   background-repeat: no-repeat;
   background-size: contain;
-  transition: opacity 220ms ease-out;
   z-index: 0;
 }
 
@@ -63,7 +62,6 @@
   height: 100%;
   object-fit: contain;
   display: block;
-  transition: opacity 220ms ease-out;
 }
 
 .neighborImage {

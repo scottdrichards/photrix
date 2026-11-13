@@ -11,6 +11,9 @@ const SWIPE_COMMIT_RATIO = 0.22;
 const SWIPE_COMMIT_MAX_PX = 90;
 const DOUBLE_TAP_MS = 300;
 const AXIS_LOCK_PX = 8;
+// How long the full-resolution image takes to fade in over its low-res
+// underlay. The underlay is only taken away after this, never during it.
+const IMAGE_FADE_MS = 220;
 
 const clampN = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
@@ -66,7 +69,8 @@ type SwipePhotoViewerProps = {
    * `document.startViewTransition` (see SelectionContext's `setSelected`).
    */
   viewTransitionName?: string;
-  onImageLoad: (e: React.SyntheticEvent<HTMLImageElement>) => void;
+  /** The full-resolution image has loaded *and* decoded, so it can paint at once. */
+  onImageLoad: (img: HTMLImageElement) => void;
   onNext: () => void;
   onPrev: () => void;
   onClose: () => void;
@@ -120,6 +124,11 @@ export function SwipePhotoViewer({
   const [trackAnimating, setTrackAnimating] = useState(false);
   const [zoom, setZoom] = useState<ZoomState>(NO_ZOOM);
   const [zoomAnimating, setZoomAnimating] = useState(true);
+  // Feedback #186: the low-res underlay and the full image used to cross-fade,
+  // so halfway through both were half transparent and the black backdrop
+  // showed through as a flash. The underlay now stays fully opaque until the
+  // full image has finished fading in on top of it, and only then goes.
+  const [underlayRetired, setUnderlayRetired] = useState(false);
   // Streams the full-resolution image via fetch (rather than a bare <img src>)
   // so a slow load gets a real percentage/ETA instead of an indefinite gray
   // box — see useProgressiveImageFetch. Only the centre photo, not the
@@ -138,7 +147,17 @@ export function SwipePhotoViewer({
     pointers.current.clear();
     gesture.current.mode = "idle";
     pendingCommit.current = null;
+    setUnderlayRetired(false);
   }, [photo.path]);
+
+  useEffect(() => {
+    if (!fullImageLoaded) {
+      setUnderlayRetired(false);
+      return;
+    }
+    const timer = setTimeout(() => setUnderlayRetired(true), IMAGE_FADE_MS);
+    return () => clearTimeout(timer);
+  }, [fullImageLoaded, photo.path]);
 
   // Track the pane size so the letterboxed box is measured against the visible
   // area (which shrinks when the info panel opens), not the raw viewport.
@@ -420,8 +439,12 @@ export function SwipePhotoViewer({
               className={css.thumb}
               aria-hidden="true"
               style={{
-                backgroundImage: `url("${photo.thumbnailUrl}")`,
-                opacity: fullImageLoaded ? 0 : 1,
+                // The mid-size preview over the grid thumbnail: whichever is
+                // already cached shows. The swipe neighbours render that same
+                // preview, so stepping to the next photo doesn't drop to the
+                // blurrier grid thumbnail first.
+                backgroundImage: `url("${photo.previewUrl}"), url("${photo.thumbnailUrl}")`,
+                opacity: underlayRetired ? 0 : 1,
               }}
             />
             <img
@@ -430,9 +453,22 @@ export function SwipePhotoViewer({
               data-role="image"
               className={css.image}
               draggable={false}
-              onLoad={onImageLoad}
+              onLoad={(e) => {
+                const img = e.currentTarget;
+                const src = img.currentSrc || img.src;
+                // `load` fires before a large image is decoded; revealing it
+                // then shows a blank frame while it decodes. Wait for decode.
+                const reveal = () => {
+                  if (img.isConnected && (img.currentSrc || img.src) === src) onImageLoad(img);
+                };
+                if (typeof img.decode === "function") img.decode().then(reveal, reveal);
+                else reveal();
+              }}
               style={{
                 opacity: fullImageLoaded ? 1 : 0,
+                // Fade in only. Going back to hidden (the next photo) is
+                // instant, over an underlay that is already fully opaque.
+                transition: fullImageLoaded ? `opacity ${IMAGE_FADE_MS}ms ease-out` : "none",
                 ...(editStyle?.filter ? { filter: editStyle.filter } : {}),
                 ...(editStyle?.transform ? { transform: editStyle.transform } : {}),
                 ...(editStyle?.clipPath ? { clipPath: editStyle.clipPath } : {}),

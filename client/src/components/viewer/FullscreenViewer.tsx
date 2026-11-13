@@ -1142,9 +1142,9 @@ export function FullscreenViewer() {
                   fullImageLoaded={fullImageLoaded}
                   viewTransitionName={photoViewTransitionName(photo.path)}
                   editStyle={isDirty(savedAdj) ? computeStyle(savedAdj, savedSvgId) : undefined}
-                  onImageLoad={(e) => {
+                  onImageLoad={(img) => {
                     setFullImageLoaded(true);
-                    const { naturalWidth, naturalHeight } = e.currentTarget;
+                    const { naturalWidth, naturalHeight } = img;
                     if (naturalWidth > 0 && naturalHeight > 0) {
                       setPhotoAspectRatio(naturalWidth / naturalHeight);
                     }
