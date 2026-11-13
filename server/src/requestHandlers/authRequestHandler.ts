@@ -106,6 +106,10 @@ export const authShareTokenHandler = async (
   }
 
   const semanticQuery = body.semanticQuery?.trim();
+  // Feedback #187: sharing everything is allowed, but only when asked for by
+  // name. The client asks after the owner confirms the large-share warning.
+  const wholeLibraryRequested = body.wholeLibrary === true && !semanticQuery;
+  let wholeLibrary = false;
 
   // `{}` is not null but scopes nothing. A semantic share may have an empty base
   // filter (its query is the scope, resolved per request), but its base filter
@@ -114,6 +118,10 @@ export const authShareTokenHandler = async (
   try {
     if (semanticQuery) {
       filterToSQL(body.filter, { strict: true });
+    } else if (wholeLibraryRequested) {
+      // Recorded only when the filter really restricts nothing, so the flag
+      // can't relax the check for a link that was meant to be scoped.
+      wholeLibrary = !filterToSQL(body.filter, { strict: true }).where;
     } else {
       assertShareFilterIsScoped(body.filter);
     }
@@ -143,6 +151,7 @@ export const authShareTokenHandler = async (
     ...(searchSources && searchSources.length < SEARCH_SOURCES.length
       ? { searchSources }
       : {}),
+    ...(wholeLibrary ? { wholeLibrary: true } : {}),
   };
 
   // Preflight: how many items would this share actually grant?
@@ -179,7 +188,9 @@ export const authShareTokenHandler = async (
   const label =
     typeof rawLabel === "string" && rawLabel.trim()
       ? rawLabel.trim()
-      : await generateShareDescription({
+      : wholeLibrary
+        ? "All photos"
+        : await generateShareDescription({
           filter: body.filter,
           ...(semanticQuery ? { semanticQuery } : {}),
           database,
