@@ -20,22 +20,27 @@ const modules = {
   taskOrchestrator: ["common", "observability"],
   backgroundTasks: ["taskOrchestrator"],
   auth: ["common", "observability"],
-  videoProcessing: ["common", "observability", "taskOrchestrator"],
-  fileHandling: ["videoProcessing"],
-  faceDetection: [],
+  faceDetection: ["common"],
+  // Reaches up to systemStatus for one free-VRAM reading before an encode.
+  videoProcessing: ["common", "observability", "taskOrchestrator", "systemStatus"],
+  fileHandling: ["common", "videoProcessing"],
   indexDatabase: ["common", "observability", "fileHandling", "faceDetection"],
   // Pipeline stages and features: each reads and writes the index.
   imageProcessing: ["common", "observability", "python", "taskOrchestrator", "videoProcessing", "indexDatabase"],
   imageAnalysis: ["common", "observability", "python", "accel", "taskOrchestrator", "faceDetection", "indexDatabase"],
   audioProcessing: ["common", "observability", "python", "taskOrchestrator", "imageAnalysis", "indexDatabase"],
   videoFaceAnalysis: ["common", "observability", "taskOrchestrator", "faceDetection", "videoProcessing", "imageAnalysis", "indexDatabase"],
+  // What the machine and the task queue are doing right now, for the status page and reports.
+  systemStatus: ["common", "observability", "taskOrchestrator", "audioProcessing"],
+  // Turns a share link's scope into the filter its requests are confined to.
+  shareScope: ["indexDatabase", "imageAnalysis", "audioProcessing"],
   shareDescription: ["observability", "indexDatabase"],
   naturalLanguageSearch: ["observability", "indexDatabase", "shareDescription"],
   photoCaption: ["common", "observability", "shareDescription"],
   requestHandlers: [
     "common", "observability", "featureFlags", "taskOrchestrator", "auth", "videoProcessing", "fileHandling",
     "faceDetection", "indexDatabase", "imageProcessing", "imageAnalysis", "audioProcessing", "shareDescription",
-    "naturalLanguageSearch", "photoCaption",
+    "naturalLanguageSearch", "photoCaption", "systemStatus", "shareScope",
   ],
   // main.ts, createServer.ts, createRoutes.ts: the composition root.
   "(root)": ["*"],
@@ -44,18 +49,6 @@ const modules = {
 // Known violations. Fix one, delete its line; do not add to this list.
 const stagesInDatabase = "pipeline stage living in the persistence module";
 const grandfathered = {
-  "common/cacheUtils.ts -> videoProcessing": "clearing a file's cache closes HLS watchers",
-  "observability/systemMetrics.ts -> common": "system metrics are not logging",
-  "observability/systemMetrics.ts -> taskOrchestrator": "system metrics are not logging",
-  "observability/systemMetrics.ts -> audioProcessing": "system metrics are not logging",
-  "observability/buildDiagnosticsReport.ts -> taskOrchestrator": "the report is a composer, not logging",
-  "faceDetection/identifyFaces.ts -> indexDatabase": "vector maths lives in the cluster engine",
-  "fileHandling/fileUtils.ts -> indexDatabase": "ExifMetadata is declared by the database",
-  "videoProcessing/getVideoMetadata.ts -> indexDatabase": "ExifMetadata is declared by the database",
-  "auth/shareScope.ts -> indexDatabase": "share-filter resolution is not authentication",
-  "auth/shareScope.ts -> imageAnalysis": "share-filter resolution is not authentication",
-  "auth/shareScope.ts -> audioProcessing": "share-filter resolution is not authentication",
-  "auth/shareFolderScope.ts -> indexDatabase": "share-filter resolution is not authentication",
   "indexDatabase/analysisStore.ts -> videoFaceAnalysis": "queue-cost types declared by the consumer",
   "indexDatabase/fileSystemScanFolder.ts -> taskOrchestrator": stagesInDatabase,
   "indexDatabase/processExifMetadata.ts -> taskOrchestrator": stagesInDatabase,

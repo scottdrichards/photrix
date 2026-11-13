@@ -16,7 +16,7 @@ import {
   isAuthEnabled,
   validateToken,
 } from "./auth/authService.ts";
-import { resolveShareFilter, ShareScopeError } from "./auth/shareScope.ts";
+import { resolveShareFilter, ShareScopeError } from "./shareScope/shareScope.ts";
 import { FilterCompileError } from "./indexDatabase/filterToSQL.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
 import { sharePreviewHandler } from "./requestHandlers/sharePreviewHandler.ts";

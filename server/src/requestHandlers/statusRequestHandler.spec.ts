@@ -15,7 +15,7 @@ const mockGetSystemMetrics = jest.fn(() => ({
   },
 }));
 
-jest.unstable_mockModule("../observability/systemMetrics.ts", () => ({
+jest.unstable_mockModule("../systemStatus/systemMetrics.ts", () => ({
   getSystemMetrics: mockGetSystemMetrics,
 }));
 

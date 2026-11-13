@@ -33,11 +33,11 @@ filter), so that file is also the share-link access policy.
 | `/api/settings/…`                        | `settingsRequestHandler.ts`                         | `settings` table                                                                                         |
 | `/api/auth/…`, `/api/account`            | `authRequestHandler.ts`, `accountRequestHandler.ts` | `auth/`                                                                                                  |
 | `GET /share`                             | `sharePreviewHandler.ts`                            | `shareDescription/`                                                                                      |
-| `/api/status`, `/api/status/stream`      | `statusRequestHandler.ts`                           | `observability/systemMetrics.ts`, task orchestrator snapshot                                             |
+| `/api/status`, `/api/status/stream`      | `statusRequestHandler.ts`                           | `systemStatus/systemMetrics.ts`, task orchestrator snapshot                                             |
 | `GET /api/network-probe`                 | `networkProbeRequestHandler.ts`                     | bytes for the client's bandwidth measurement                                                             |
 | `/api/feedback[/:id[/diagnostics]]`      | `feedbackHandler.ts`                                | `feedback` table; saves a diagnostics report per suggestion                                              |
 | `/api/diagnostics/events`                | `diagnosticsRequestHandler.ts`                      | `observability/diagnosticsStore.ts`                                                                      |
-| `GET /api/diagnostics/perf`, `…/report`  | `diagnosticsReportRequestHandler.ts`                | `observability/perfMonitor.ts`, `observability/buildDiagnosticsReport.ts`                                |
+| `GET /api/diagnostics/perf`, `…/report`  | `diagnosticsReportRequestHandler.ts`                | `observability/perfMonitor.ts`, `systemStatus/buildDiagnosticsReport.ts`                                |
 
 ### Serving a file (`filesRequestHandler.ts`)
 

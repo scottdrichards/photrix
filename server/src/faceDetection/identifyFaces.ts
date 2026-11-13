@@ -1,4 +1,5 @@
-import { dotProduct, toAlignedFloat32 } from "../indexDatabase/faceClusterEngine.ts";
+import { dotProduct } from "../common/dotProduct.ts";
+import { toAlignedFloat32 } from "../common/toAlignedFloat32.ts";
 import type { DetectedFace } from "./faceDetector.type.ts";
 
 /**

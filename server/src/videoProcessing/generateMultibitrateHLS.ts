@@ -14,7 +14,7 @@ import {
   isHighBitDepthPixelFormat,
   type VideoSourceProfile,
 } from "./getVideoMetadata.ts";
-import { queryGpuFreeMB } from "../observability/systemMetrics.ts";
+import { queryGpuFreeMB } from "../systemStatus/systemMetrics.ts";
 import { reclaimGpuForUser } from "../taskOrchestrator/computeWorkers.ts";
 
 const log = getLogger("HLS");
