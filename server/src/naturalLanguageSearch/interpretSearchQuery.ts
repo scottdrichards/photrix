@@ -12,6 +12,10 @@ import {
   mediaTypeEvidence,
   queryMentions,
   ratingEvidence,
+  typedDateWords,
+  typedMediaWords,
+  typedRatingWords,
+  typedWordsNaming,
   yearsInQuery,
 } from "./queryEvidence.ts";
 import { resolveDateIntent } from "./resolveDateIntent.ts";
@@ -138,6 +142,12 @@ const asStringList = (value: unknown): string[] => {
 };
 
 const dedupe = (values: string[]) => [...new Set(values)];
+
+/** Attach the typed words behind a chip, when any can be pointed to. */
+const withSourceText = (
+  chip: InterpretedFilterChip,
+  sourceText: string,
+): InterpretedFilterChip => (sourceText ? { ...chip, sourceText } : chip);
 
 type InterpretOptions = {
   query: string;
@@ -279,7 +289,9 @@ export const interpretSearchQuery = async ({
     if (chosen.includes(chip.value)) continue;
     chosen.push(chip.value);
     const alternatives = alternativesFor(match);
-    chips.push(alternatives.length > 0 ? { ...chip, alternatives } : chip);
+    chips.push(
+      withSourceText(alternatives.length > 0 ? { ...chip, alternatives } : chip, typedWordsNaming(trimmedQuery, match.name)),
+    );
   }
   // Someone already filtered on is not an alternative to anyone else.
   for (const chip of chips) {
@@ -318,7 +330,12 @@ export const interpretSearchQuery = async ({
     } else if (queryMentions(trimmedQuery, leafOf(match))) {
       filter.path = `${match}/`;
       filter.includeSubfolders = true;
-      chips.push({ field: "path", label: `Folder: ${match}` });
+      chips.push(
+        withSourceText(
+          { field: "path", label: `Folder: ${match}` },
+          typedWordsNaming(trimmedQuery, leafOf(match)),
+        ),
+      );
     }
   }
 
@@ -327,10 +344,12 @@ export const interpretSearchQuery = async ({
   const mediaType = mediaTypeEvidence(trimmedQuery);
   if (mediaType && (raw.mediaType === mediaType || raw.mediaType === undefined)) {
     filter.mediaTypeFilter = mediaType;
-    chips.push({
-      field: "mediaTypeFilter",
-      label: mediaType === "photo" ? "Photos only" : "Videos only",
-    });
+    chips.push(
+      withSourceText(
+        { field: "mediaTypeFilter", label: mediaType === "photo" ? "Photos only" : "Videos only" },
+        typedMediaWords(trimmedQuery),
+      ),
+    );
   }
 
   if (
@@ -341,7 +360,9 @@ export const interpretSearchQuery = async ({
   ) {
     const rating = Math.min(5, Math.round(raw.minRating));
     filter.ratingFilter = { rating, atLeast: true };
-    chips.push({ field: "ratingFilter", label: `${rating}+ stars` });
+    chips.push(
+      withSourceText({ field: "ratingFilter", label: `${rating}+ stars` }, typedRatingWords(trimmedQuery)),
+    );
   }
 
   // Dates come from the query's own wording first. The model is a fallback for
@@ -368,7 +389,9 @@ export const interpretSearchQuery = async ({
     const resolved = resolveDateIntent(proposedDate, now);
     if (resolved) {
       filter.dateRange = { start: resolved.start, end: resolved.end };
-      chips.push({ field: "dateRange", label: resolved.label });
+      chips.push(
+        withSourceText({ field: "dateRange", label: resolved.label }, typedDateWords(trimmedQuery)),
+      );
     } else {
       ignored.push("date");
     }

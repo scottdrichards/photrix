@@ -299,6 +299,12 @@ export type InterpretedFilterChip = {
    * name ("rachel" → every Rachel), so the user can swap to the one they meant.
    */
   alternatives?: InterpretedPersonAlternative[];
+  /**
+   * The words of the typed query this chip was derived from ("christmas" for a
+   * December date). Removing the chip puts them back into the free-text
+   * search instead of dropping them (feedback #184).
+   */
+  sourceText?: string;
 };
 
 /** A person a person chip can be swapped to. */

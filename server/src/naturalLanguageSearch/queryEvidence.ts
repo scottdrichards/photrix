@@ -65,6 +65,30 @@ export const queryMentions = (
   return matchAnyWord ? significantWords.some(matches) : significantWords.every(matches);
 };
 
+/**
+ * The words of the query, as typed, that `matches` picks out by their
+ * normalised token and position. Used to say which words produced a chip.
+ */
+const typedWordsWhere = (
+  query: string,
+  matches: (tokens: string[], index: number) => boolean,
+): string => {
+  const words = query.split(/\s+/).filter(Boolean);
+  const tokens = words.map((word) => word.toLowerCase().replace(/[^a-z0-9']/g, ""));
+  return words
+    .filter((_, index) => tokens[index] && matches(tokens, index))
+    .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+    .join(" ");
+};
+
+/** The typed words that name `value` (a person's or folder's name). */
+export const typedWordsNaming = (query: string, value: string): string => {
+  const valueWords = tokenize(value);
+  return typedWordsWhere(query, (tokens, index) =>
+    valueWords.some((word) => tokenMatches(tokens[index], word)),
+  );
+};
+
 const PHOTO_WORDS = [
   "photo",
   "photos",
@@ -96,6 +120,12 @@ const VIDEO_WORDS = [
   "films",
 ];
 
+/** The typed words that asked for a media type ("videos"). */
+export const typedMediaWords = (query: string): string =>
+  typedWordsWhere(query, (tokens, index) =>
+    PHOTO_WORDS.includes(tokens[index]) || VIDEO_WORDS.includes(tokens[index]),
+  );
+
 /** The media type the query itself asks for, if any. */
 export const mediaTypeEvidence = (query: string): "photo" | "video" | null => {
   const tokens = new Set(tokenize(query));
@@ -121,6 +151,15 @@ const RATING_WORDS = [
   "rated",
   "rating",
 ];
+
+/** The typed words that asked for quality ("best", "4 stars"). */
+export const typedRatingWords = (query: string): string =>
+  typedWordsWhere(
+    query,
+    (tokens, index) =>
+      RATING_WORDS.includes(tokens[index]) ||
+      (/^[1-5]$/.test(tokens[index]) && RATING_WORDS.includes(tokens[index + 1] ?? "")),
+  );
 
 /** Does the query ask for quality at all? */
 export const ratingEvidence = (query: string): boolean => {
@@ -239,6 +278,36 @@ export const hasTemporalEvidence = (query: string): boolean => {
       /^(19|20)\d{2}$/.test(token),
   );
 };
+
+const isTemporalToken = (tokens: string[], index: number): boolean => {
+  const token = tokens[index];
+  if (
+    TEMPORAL_HINTS.has(token) ||
+    token in SEASON_WORDS ||
+    token in HOLIDAY_WORDS ||
+    token in MONTH_WORDS ||
+    token in RECENT_UNIT_WORDS ||
+    /^(19|20)\d{2}$/.test(token)
+  ) {
+    return true;
+  }
+  const next = tokens[index + 1] ?? "";
+  // "new year", and the count in "two weeks" / "3 years ago".
+  if (token === "new" && /^years?$/.test(next)) return true;
+  const isCount = token in NUMBER_WORDS || /^\d+$/.test(token);
+  if (isCount && (next in RECENT_UNIT_WORDS || next in HOLIDAY_WORDS || next in SEASON_WORDS)) {
+    return true;
+  }
+  // "between 2015 and 2018", "2015 to 2018".
+  return (
+    (token === "between" || token === "and" || token === "to") &&
+    /^(19|20)\d{2}$/.test(next)
+  );
+};
+
+/** The typed words that made up the date ("christmas", "last summer"). */
+export const typedDateWords = (query: string): string =>
+  typedWordsWhere(query, isTemporalToken);
 
 /** Every 4-digit year the query literally spells out. */
 export const yearsInQuery = (query: string): number[] =>
