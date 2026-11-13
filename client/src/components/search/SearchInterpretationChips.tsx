@@ -4,7 +4,6 @@ import {
   Dismiss12Regular,
   PersonSwap16Regular,
   Sparkle16Filled,
-  TextT16Regular,
 } from "@fluentui/react-icons";
 import { useState } from "react";
 import type {
@@ -20,11 +19,11 @@ type Props = {
   chips: InterpretedFilterChip[];
   /** People/places the query named that do not exist in this library. */
   ignored: string[];
+  /**
+   * Drop the chip's filter. Feedback #184: the words it was derived from go
+   * back into the free-text search rather than disappearing.
+   */
   onRemoveChip: (chip: InterpretedFilterChip) => void;
-  /** Which chips can be demoted to plain search text (people). */
-  canSearchAsText?: (chip: InterpretedFilterChip) => boolean;
-  /** Replace the chip's filter with the words the user typed for it. */
-  onSearchChipAsText?: (chip: InterpretedFilterChip) => void;
   /** Swap a person chip for one of the other people its typed name matched. */
   onSwapPerson?: (chip: InterpretedFilterChip, to: InterpretedPersonAlternative) => void;
   /** Restore the plain search: original query text, no derived filters. */
@@ -52,8 +51,6 @@ export const SearchInterpretationChips = ({
   chips,
   ignored,
   onRemoveChip,
-  canSearchAsText,
-  onSearchChipAsText,
   onSwapPerson,
   onUndo,
 }: Props) => {
@@ -119,22 +116,16 @@ export const SearchInterpretationChips = ({
                 <PersonSwap16Regular />
               </button>
             )}
-            {onSearchChipAsText && canSearchAsText?.(chip) && (
-              <button
-                type="button"
-                className={css.chipRemove}
-                onClick={() => onSearchChipAsText(chip)}
-                aria-label={`Search ${chip.label} as text instead`}
-                title="Search the name as text instead of this person"
-              >
-                <TextT16Regular />
-              </button>
-            )}
             <button
               type="button"
               className={css.chipRemove}
               onClick={() => onRemoveChip(chip)}
               aria-label={`Remove filter ${chip.label}`}
+              title={
+                chip.field === "semanticQuery"
+                  ? "Remove"
+                  : "Remove this filter and search its words as text"
+              }
             >
               <Dismiss12Regular />
             </button>

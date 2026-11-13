@@ -178,6 +178,8 @@ describe("SearchBar natural-language interpretation", () => {
 
     const filter = currentFilter();
     expect(filter.faceClusterFilter).toBeUndefined();
+    // The name goes back into the free-text search (feedback #184).
+    expect(filter.semanticQuery).toBe("at the beach Sarah");
     expect(filter.mediaTypeFilter).toBe("photo");
     expect(filter.dateRange).toBeDefined();
     expect(screen.queryByLabelText("Remove filter Sarah")).not.toBeInTheDocument();
@@ -341,17 +343,6 @@ describe("SearchBar person chips stay in step with the filter (feedback #166)", 
     window.localStorage.clear();
   });
 
-  it("empties the box when the last chip is removed", async () => {
-    renderWithFaceControl();
-    submit("rachel");
-    await screen.findByText("AI search");
-
-    fireEvent.click(screen.getByLabelText("Remove filter Rachel Johnson Shepherd"));
-
-    expect(currentFilter().faceClusterFilter).toBeUndefined();
-    expect(input().value).toBe("");
-    expect(screen.queryByLabelText("Clear search")).not.toBeInTheDocument();
-  });
 
   it("drops the chip and the query when the person is removed elsewhere", async () => {
     renderWithFaceControl();
@@ -365,12 +356,12 @@ describe("SearchBar person chips stay in step with the filter (feedback #166)", 
     expect(currentFilter().semanticQuery).toBeUndefined();
   });
 
-  it("can search the typed name as text instead of the person", async () => {
+  it("searches the typed name as text when the person chip is removed", async () => {
     renderWithFaceControl();
     submit("rachel");
     await screen.findByText("AI search");
 
-    fireEvent.click(screen.getByLabelText("Search Rachel Johnson Shepherd as text instead"));
+    fireEvent.click(screen.getByLabelText("Remove filter Rachel Johnson Shepherd"));
 
     const filter = currentFilter();
     expect(filter.faceClusterFilter).toBeUndefined();
@@ -379,14 +370,53 @@ describe("SearchBar person chips stay in step with the filter (feedback #166)", 
     expect(screen.queryByText("AI search")).not.toBeInTheDocument();
   });
 
-  it("offers text search only on person chips", async () => {
-    interpretSearchQuery.mockResolvedValue(interpretation);
+  it("turns a misread date back into search text (feedback #184)", async () => {
+    interpretSearchQuery.mockResolvedValue({
+      interpreted: true,
+      query: "christmas lights",
+      filter: {
+        dateRange: { start: Date.UTC(2025, 11, 1), end: Date.UTC(2026, 0, 1) - 1 },
+        semanticQuery: "lights",
+      },
+      chips: [
+        { field: "dateRange", label: "December 2025", sourceText: "christmas" },
+        { field: "semanticQuery", label: "“lights”" },
+      ],
+      ignored: [],
+    } satisfies SearchInterpretation);
     renderWithFaceControl();
-    submit("photos of Sarah at the beach last summer");
+    submit("christmas lights");
     await screen.findByText("AI search");
 
-    expect(screen.getByLabelText("Search Sarah as text instead")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Search Summer 2025 as text instead")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Remove filter December 2025"));
+
+    const filter = currentFilter();
+    expect(filter.dateRange).toBeUndefined();
+    expect(filter.semanticQuery).toBe("lights christmas");
+    expect(input().value).toBe("lights christmas");
+  });
+
+  it("doesn't repeat a word the search already has", async () => {
+    interpretSearchQuery.mockResolvedValue({
+      interpreted: true,
+      query: "christmas lights",
+      filter: {
+        dateRange: { start: Date.UTC(2025, 11, 1), end: Date.UTC(2026, 0, 1) - 1 },
+        semanticQuery: "christmas lights",
+      },
+      chips: [
+        { field: "dateRange", label: "December 2025", sourceText: "christmas" },
+        { field: "semanticQuery", label: "“christmas lights”" },
+      ],
+      ignored: [],
+    } satisfies SearchInterpretation);
+    renderWithFaceControl();
+    submit("christmas lights");
+    await screen.findByText("AI search");
+
+    fireEvent.click(screen.getByLabelText("Remove filter December 2025"));
+
+    expect(currentFilter().semanticQuery).toBe("christmas lights");
   });
 });
 
