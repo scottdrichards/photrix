@@ -11,6 +11,17 @@ const REQUEST_TIMEOUT_MS = Number(process.env.PHOTRIX_MCP_TIMEOUT_MS) || 30_000;
 
 export const photrixBaseUrl = BASE_URL;
 
+// Where a person opens a result. BASE_URL is how *this process* reaches Photrix,
+// usually a loopback address that means nothing on the agent's machine, so links
+// use the public origin when one is configured.
+const PUBLIC_URL = (process.env.PHOTRIX_PUBLIC_URL ?? BASE_URL).replace(/\/+$/, "");
+
+// The people list costs a full face aggregation on a cache miss, and a name
+// lookup needs it too, so a burst of tool calls would otherwise repeat it.
+// Keyed by the caller's token: every user may see a different library.
+const PEOPLE_CACHE_TTL_MS = 60_000;
+const peopleCache = new Map<string, { at: number; value: Promise<PeopleResponse> }>();
+
 // Photrix serves files at /api/files/<relativePath>. Folder paths start with a
 // leading "/", which the route does not want, and each segment must be
 // percent-encoded so spaces/unicode in file names survive the fetch.
@@ -18,8 +29,8 @@ const encodeRelativePath = (relativePath: string): string =>
   relativePath.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
 
 // A human-openable URL for a result (auth may still be required in the browser).
-export const viewUrl = (relativePath: string, height = 1024): string =>
-  `${BASE_URL}/api/files/${encodeRelativePath(relativePath)}?representation=webSafe&height=${height}`;
+export const viewUrl = (relativePath: string, height = 1080): string =>
+  `${PUBLIC_URL}/api/files/${encodeRelativePath(relativePath)}?representation=webSafe&height=${height}`;
 
 // ---- Response shapes (subset of what the endpoints return) ----
 
@@ -80,6 +91,7 @@ type DateRangeResponse = { minDate: number | null; maxDate: number | null };
 type CountResponse = { count: number };
 
 export type FilterElement = unknown;
+export type SortParam = `${"date" | "rating"}:${"asc" | "desc"}`;
 type FetchedImage = { base64: string; mimeType: string };
 
 // ---- API calls ----
@@ -102,11 +114,15 @@ export type PhotrixApi = {
     filter?: FilterElement;
     metadata: string[];
     pageSize: number;
+    page?: number;
+    sort?: SortParam;
     includeSubfolders?: boolean;
   }) => Promise<QueryResponse>;
   getDateRange: () => Promise<DateRangeResponse>;
   getCount: (filter?: FilterElement) => Promise<CountResponse>;
   fetchImage: (relativePath: string, height: number) => Promise<FetchedImage>;
+  /** "ok", "unauthorized" (Photrix refused the token), or a reachability error. */
+  checkAuth: () => Promise<"ok" | "unauthorized">;
 };
 
 export const createPhotrixApi = (token?: string): PhotrixApi => {
@@ -162,7 +178,14 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
     listPeople: (includeSubfolders = true) => {
       const params = new URLSearchParams({ aggregate: "people" });
       if (includeSubfolders) params.set("includeSubfolders", "true");
-      return apiJson<PeopleResponse>(`/api/files/?${params.toString()}`);
+      const key = `${authToken ?? ""}\u0000${params.toString()}`;
+      const hit = peopleCache.get(key);
+      if (hit && Date.now() - hit.at < PEOPLE_CACHE_TTL_MS) return hit.value;
+      const value = apiJson<PeopleResponse>(`/api/files/?${params.toString()}`);
+      peopleCache.set(key, { at: Date.now(), value });
+      // A failure must not be served from the cache for the next minute.
+      value.catch(() => peopleCache.delete(key));
+      return value;
     },
 
     getPersonPhotos: (clusterId) => {
@@ -181,6 +204,10 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
       });
       if (opts.includeSubfolders ?? true) params.set("includeSubfolders", "true");
       if (opts.filter !== undefined) params.set("filter", JSON.stringify(opts.filter));
+      // Sort and page on the server: fetching a big page to sort it here cost
+      // ~18 s for on_this_day, against ~0.1 s for the sorted page.
+      if (opts.sort) params.set("sort", opts.sort);
+      if (opts.page && opts.page > 1) params.set("page", String(opts.page));
       return apiJson<QueryResponse>(`/api/files/?${params.toString()}`);
     },
 
@@ -214,6 +241,16 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
       const mimeType = res.headers.get("content-type") ?? "image/jpeg";
       const buffer = Buffer.from(await res.arrayBuffer());
       return { base64: buffer.toString("base64"), mimeType };
+    },
+
+    // Any route behind Photrix's auth gate answers 401 for a bad token; this one
+    // only reads in-process state, so it costs nothing to ask.
+    checkAuth: async () => {
+      const res = await apiFetch("/api/feature-flags");
+      await res.body?.cancel();
+      if (res.status === 401) return "unauthorized";
+      if (!res.ok) throw new Error(`Photrix auth check returned ${res.status}`);
+      return "ok";
     },
   };
 };
