@@ -23,6 +23,7 @@ import { StatusModal } from "./components/status/StatusModal";
 import { SuggestionModal } from "./components/feedback/SuggestionModal";
 import { ThumbnailGrid } from "./components/grid/ThumbnailGrid";
 import { TopRailPortalProvider } from "./components/TopRailPortal";
+import { Wordmark } from "./components/Wordmark";
 import { SortDockProvider } from "./components/grid/SortDockPortal";
 import { Filter } from "./components/filter/Filter";
 import { FilterProvider, useFilter } from "./components/filter/FilterContext";
@@ -386,7 +387,7 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
           <header className={css.header}>
             <div className={css.title}>
               <h2>
-                {sharedView ? "Photrix" : <a className={css.homeLink} href="/">Photrix</a>}
+                {sharedView ? <Wordmark /> : <a className={css.homeLink} href="/"><Wordmark /></a>}
               </h2>
               <small>
                 {sharedView ? (

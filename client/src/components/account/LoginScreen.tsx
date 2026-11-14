@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { isPasskeyAvailable, login, loginWithPasskey, registerPasskey } from "../../auth";
+import { Wordmark } from "../Wordmark";
 import css from "./LoginScreen.module.css";
 
 type Props = {
@@ -73,7 +74,7 @@ export const LoginScreen = ({ onAuthenticated }: Props) => {
     return (
       <div className={css.overlay}>
         <div className={css.card}>
-          <h2 className={css.title}>Photrix</h2>
+          <h2 className={css.title}><Wordmark /></h2>
           <p className={css.subtitle}>Save a passkey for faster sign-in next time?</p>
           <div className={css.form}>
             <button
@@ -99,7 +100,7 @@ export const LoginScreen = ({ onAuthenticated }: Props) => {
   return (
     <div className={css.overlay}>
       <div className={css.card}>
-        <h2 className={css.title}>Photrix</h2>
+        <h2 className={css.title}><Wordmark /></h2>
         <p className={css.subtitle}>Sign in to continue</p>
         <form onSubmit={(e) => void handlePasswordSubmit(e)} className={css.form}>
           <input
