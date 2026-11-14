@@ -1,5 +1,3 @@
-import type http from "node:http";
-
 /**
  * Coarse, fully offline IP classification for the account "sessions" list:
  * "Local network" (private, CGNAT, link-local), "Internet", or "This server"
@@ -70,16 +68,4 @@ export const compareSessionsForList = (
   LABEL_ORDER.indexOf(a.location) - LABEL_ORDER.indexOf(b.location) ||
   b.lastSeenAt - a.lastSeenAt;
 
-/**
- * Best-effort client address for a request: the first hop of X-Forwarded-For
- * when present (this app is commonly reached through a reverse proxy for its
- * public domain — see project notes on remote access over the public domain),
- * else the raw socket address.
- */
-export const clientIpFromRequest = (req: http.IncomingMessage): string | null => {
-  const xff = req.headers["x-forwarded-for"];
-  const forwarded = Array.isArray(xff) ? xff[0] : xff;
-  const firstHop = forwarded?.split(",")[0]?.trim();
-  if (firstHop) return firstHop;
-  return req.socket?.remoteAddress ?? null;
-};
+export { clientIpFromRequest } from "../common/clientIp.ts";

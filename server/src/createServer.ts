@@ -14,8 +14,10 @@ import {
   extractToken,
   getShareScope,
   isAuthEnabled,
+  tokenKind,
   validateToken,
 } from "./auth/authService.ts";
+import { takeRequest, type TokenKind } from "./auth/tokenRateLimit.ts";
 import { resolveShareFilter, ShareScopeError } from "./shareScope/shareScope.ts";
 import { FilterCompileError } from "./indexDatabase/filterToSQL.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
@@ -25,6 +27,30 @@ import type { FeedbackStore } from "./feedback/feedbackStore.ts";
 import { createRoutes, matchesRoute, type ApiRequest } from "./createRoutes.ts";
 
 const log = getLogger("httpServer");
+
+/**
+ * Spends one request from the token's rate budget, answering 429 when it is
+ * spent. Returns false when the request must stop here.
+ */
+const lastRateLimitLog = new Map<TokenKind, number>();
+const withinRateLimit = (
+  token: string,
+  kind: TokenKind,
+  res: http.ServerResponse,
+): boolean => {
+  const decision = takeRequest(token, kind);
+  if (decision.allowed) return true;
+  // Name the kind, never the token: the log must not hold a credential. Once a
+  // minute per kind, so a flood doesn't become a log flood.
+  const now = Date.now();
+  if (now - (lastRateLimitLog.get(kind) ?? 0) >= 60_000) {
+    lastRateLimitLog.set(kind, now);
+    log.warn({ tokenKind: kind }, "Token rate limit reached");
+  }
+  res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+  writeJson(res, 429, { error: "Too many requests" });
+  return false;
+};
 
 const PORT = process.env.PORT || 3000;
 
@@ -118,6 +144,10 @@ export const createServer = (
     // The link-preview page for a shared link. It validates the share token
     // itself, so it runs before the auth gate.
     if (req.method === "GET" && pathname === "/share") {
+      // The preview resolves the share's filter against the database, so a
+      // link that is hammered here costs as much as one hammered on /api.
+      const shareToken = new URL(req.url, "http://localhost").searchParams.get("token");
+      if (shareToken && !withinRateLimit(shareToken, "share", res)) return;
       await sharePreviewHandler(req, res, database);
       return;
     }
@@ -138,6 +168,7 @@ export const createServer = (
         writeJson(res, 401, { error: "Unauthorized" });
         return;
       }
+      if (!withinRateLimit(token, tokenKind(token), res)) return;
     }
     const shareScope = token ? getShareScope(token) : null;
 

@@ -31,37 +31,37 @@ Configuration (env vars, e.g. in `server/.env`):
 | `MCP_PORT`               | `3100`                   | Port the MCP server listens on.                                                      |
 | `PHOTRIX_BASE_URL`       | `http://localhost:3000`  | Base URL of the Photrix HTTP server to proxy.                                        |
 | `PHOTRIX_PUBLIC_URL`     | `PHOTRIX_BASE_URL`       | Origin used for the `view:` links in tool results. Set it to the address people open Photrix at; the default is usually a loopback address that only works on the server. |
-| `PHOTRIX_TOKEN`          | _(none)_                 | Default Photrix bearer used when a caller sends no key of their own.                 |
-| `MCP_AUTH_TOKEN`         | _(none)_                 | Legacy shared-secret gate (see Authentication below).                                |
 | `PHOTRIX_MCP_TIMEOUT_MS` | `30000`                  | Per-request timeout when calling Photrix.                                            |
 
 ## Authentication
 
-There are two modes, chosen by whether `MCP_AUTH_TOKEN` is set:
+Every caller sends its own **personal MCP key** as `Authorization: Bearer <key>`,
+and the MCP server forwards that key to Photrix, so each agent acts as a
+specific user. Generate a key in the Photrix web app: account panel, then
+**MCP keys**. A revoked key stops working immediately.
 
-- **Per-user keys (recommended, `MCP_AUTH_TOKEN` unset):** each caller sends
-  `Authorization: Bearer <mcp-key>` and the MCP server **forwards that key to
-  Photrix**, so every agent authenticates as a specific user. Generate a key
-  from the Photrix web app → account panel → **MCP keys**, or via the API. A
-  revoked key immediately stops working (Photrix returns 401). If a caller sends
-  no bearer, the server falls back to the env `PHOTRIX_TOKEN`.
+There is **no server-side credential**. A request without a key is refused, so
+the endpoint can sit on a public URL without becoming a way into the library.
+(`PHOTRIX_TOKEN` and `MCP_AUTH_TOKEN` used to configure a shared fallback key
+and a shared gate. Both are gone; the server logs a warning if either is still
+set.)
 
-  The key is checked with Photrix before a request is served, so a wrong or
-  revoked key gets an HTTP 401 at connect time rather than a client that
-  connects and then fails every tool call. A key that passed is remembered for
-  five minutes. If Photrix can't be reached, the request is served anyway and
-  the tools report the error.
-- **Legacy shared secret (`MCP_AUTH_TOKEN` set):** callers must send
-  `Authorization: Bearer <MCP_AUTH_TOKEN>` to reach `/mcp`, and the MCP server
-  talks to Photrix using the single env `PHOTRIX_TOKEN`.
+The key is checked with Photrix before a request is served, so a wrong or
+revoked key gets an HTTP 401 at connect time rather than a client that connects
+and then fails every tool call. A key that passed is remembered for five
+minutes. If Photrix can't be reached, the request is served anyway and the tools
+report the error.
 
-You can also obtain a raw Photrix bearer for `PHOTRIX_TOKEN` via:
+Photrix rate-limits each key (see `PHOTRIX_RATE_API_*` in `.env.example`). The
+MCP server passes a 429 through with its `Retry-After`, and forwards the
+caller's address in `X-Forwarded-For` so Photrix sees the real client.
 
-```bash
-curl -s -X POST "$PHOTRIX_BASE_URL/api/auth/login" \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"<your AUTH_PASSWORD>"}'
-```
+### Serving it publicly
+
+Put a reverse proxy route for `/mcp` in front of `MCP_PORT`. If the site's
+fallback serves the web app for unknown paths, also answer
+`/.well-known/oauth-*` with a 404: MCP clients look there for a sign-in method
+after a 401, and an HTML page in reply confuses them.
 
 ## Transport
 
@@ -85,9 +85,8 @@ Claude Desktop config:
 }
 ```
 
-Use a per-user **MCP key** from the account panel as the bearer (per-user mode),
-or the `MCP_AUTH_TOKEN` value in legacy mode. Omit `headers` only if Photrix auth
-is disabled and no `MCP_AUTH_TOKEN` is set.
+Use a personal **MCP key** from the account panel as the bearer. A key is
+required even when Photrix sign-in is disabled; any value works then.
 
 ## Tools
 
