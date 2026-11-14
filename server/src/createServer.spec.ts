@@ -11,6 +11,7 @@ import { walkFiles } from "./fileHandling/fileUtils.ts";
 import { createTaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
 import { issueShareToken, issueToken } from "./auth/authService.ts";
+import { resetTokenRateLimits } from "./auth/tokenRateLimit.ts";
 
 // Port 0: the OS picks a free port, so this suite can run alongside the others.
 process.env.PORT = "0";
@@ -95,6 +96,8 @@ describe("createServer", () => {
   afterEach(async () => {
     delete process.env.AUTH_PASSWORD;
     delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+    delete process.env.PHOTRIX_RATE_SHARE_BURST;
+    resetTokenRateLimits();
     await new Promise((resolve) => server.close(resolve));
     await database.close();
     rmSync(mediaRoot, { recursive: true, force: true });
@@ -203,6 +206,30 @@ describe("createServer", () => {
 
     it("leaves /api/health public", async () => {
       expect((await request("/api/health")).status).toBe(200);
+    });
+
+    it("rate-limits a share link once its burst is spent, without affecting other tokens", async () => {
+      process.env.PHOTRIX_RATE_SHARE_BURST = "3";
+      const share = issueShareToken(shareScope);
+      for (let i = 0; i < 3; i++) {
+        expect((await request("/api/folders/", { token: share })).status).toBe(200);
+      }
+
+      const limited = await request("/api/folders/", { token: share });
+      expect(limited.status).toBe(429);
+      expect(Number(limited.headers["retry-after"])).toBeGreaterThanOrEqual(1);
+      // The link-preview page draws from the same budget.
+      expect((await request(`/share?token=${encodeURIComponent(share)}`)).status).toBe(429);
+
+      expect((await request("/api/folders/", { token: issueShareToken(shareScope) })).status).toBe(200);
+      expect((await request("/api/folders/", { token: issueToken() })).status).toBe(200);
+    });
+
+    it("answers an unknown token 401, never 429, so the client still shows sign-in", async () => {
+      process.env.PHOTRIX_RATE_SHARE_BURST = "1";
+      for (let i = 0; i < 5; i++) {
+        expect((await request("/api/folders/", { token: "not-a-token" })).status).toBe(401);
+      }
     });
 
     it("accepts a signed-in session", async () => {

@@ -97,8 +97,8 @@ type FetchedImage = { base64: string; mimeType: string };
 // ---- API calls ----
 
 // Each MCP request builds its own token-bound api so a remote agent
-// authenticates to Photrix with *its own* key (falling back to the env
-// PHOTRIX_TOKEN for single-user setups). Photrix is the single source of auth:
+// authenticates to Photrix with *its own* key; there is no fallback key.
+// Photrix is the single source of auth:
 // a revoked key simply produces a 401 here.
 export type PhotrixApi = {
   searchPhotos: (opts: {
@@ -121,14 +121,16 @@ export type PhotrixApi = {
   getDateRange: () => Promise<DateRangeResponse>;
   getCount: (filter?: FilterElement) => Promise<CountResponse>;
   fetchImage: (relativePath: string, height: number) => Promise<FetchedImage>;
-  /** "ok", "unauthorized" (Photrix refused the token), or a reachability error. */
-  checkAuth: () => Promise<"ok" | "unauthorized">;
+  /** Whether Photrix accepts the key. Throws when Photrix can't be reached. */
+  checkAuth: () => Promise<"ok" | "unauthorized" | { retryAfterSeconds: number }>;
 };
 
-export const createPhotrixApi = (token?: string): PhotrixApi => {
-  const authToken = token ?? process.env.PHOTRIX_TOKEN;
-  const authHeaders = (): Record<string, string> =>
-    authToken ? { Authorization: `Bearer ${authToken}` } : {};
+export const createPhotrixApi = (token: string, clientIp: string | null = null): PhotrixApi => {
+  const authToken = token;
+  const authHeaders = (): Record<string, string> => ({
+    Authorization: `Bearer ${authToken}`,
+    ...(clientIp ? { "X-Forwarded-For": clientIp } : {}),
+  });
 
   const apiFetch = async (pathWithQuery: string): Promise<Response> => {
     const controller = new AbortController();
@@ -155,6 +157,11 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
       }
       throw new Error(
         `Could not reach Photrix at ${BASE_URL}${pathWithQuery}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (res.status === 429) {
+      throw new Error(
+        `Rate limit reached for this MCP key; retry in ${res.headers.get("retry-after") ?? "a few"} s.`,
       );
     }
     if (!res.ok) {
@@ -249,6 +256,9 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
       const res = await apiFetch("/api/feature-flags");
       await res.body?.cancel();
       if (res.status === 401) return "unauthorized";
+      if (res.status === 429) {
+        return { retryAfterSeconds: Number(res.headers.get("retry-after")) || 1 };
+      }
       if (!res.ok) throw new Error(`Photrix auth check returned ${res.status}`);
       return "ok";
     },
