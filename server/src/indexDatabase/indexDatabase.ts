@@ -1,7 +1,6 @@
-import { mkdir, stat } from "node:fs/promises";
-import path from "node:path";
-import { CACHE_DIR } from "../common/cacheUtils.ts";
-import { AsyncSqlite } from "../common/asyncSqlite.ts";
+import { stat } from "node:fs/promises";
+import type { AsyncSqlite } from "../common/asyncSqlite.ts";
+import type { IndexSqlite } from "./openIndexSqlite.ts";
 import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
 import { queryCacheKey, WriteInvalidatedCache } from "../common/writeInvalidatedCache.ts";
 import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
@@ -150,11 +149,8 @@ type StatusCounts = {
 
 export class IndexDatabase {
   public readonly storagePath: string;
-  private db!: AsyncSqlite;
-  get asyncSqlite(): AsyncSqlite {
-    return this.db;
-  }
-  private dbFilePath!: string;
+  private readonly db: AsyncSqlite;
+  private readonly dbFilePath: string;
   private walCheckpointTimer?: ReturnType<typeof setInterval>;
   // In-memory copy of every CLIP/CLAP vector, so semantic search is one pass
   // over packed memory instead of a full-table SQL scan. Every write to
@@ -217,59 +213,20 @@ export class IndexDatabase {
     this._mediaRootUnavailable = value;
   }
 
-  constructor(storagePath: string) {
+  /** Takes over the connection: `init()` creates its tables and `close()` closes it. */
+  constructor(storagePath: string, { sqlite, filePath }: IndexSqlite) {
     this.storagePath = storagePath;
+    this.db = sqlite;
+    this.dbFilePath = filePath;
+  }
+
+  /** Set once the SQLite worker has died; every query fails from then on. */
+  get failed(): Error | null {
+    return this.db.failed;
   }
 
   /** Can't be part of constructor because it's async */
   async init(): Promise<void> {
-    const envDbLocation = process.env.INDEX_DB_LOCATION?.trim();
-    const databaseDirectory = envDbLocation || CACHE_DIR;
-    this.dbFilePath = path.join(path.resolve(databaseDirectory), "index.db");
-
-    const directoryPath = path.dirname(this.dbFilePath);
-    const rootPath = path.parse(directoryPath).root;
-    if (directoryPath !== rootPath) {
-      await mkdir(directoryPath, { recursive: true });
-    }
-
-    this.db = await AsyncSqlite.open(this.dbFilePath, {
-      pragmas: [
-        "journal_mode = WAL",
-        "synchronous = NORMAL",
-        "wal_autocheckpoint = 1000",
-        // Cap the on-disk WAL after a checkpoint. Without this SQLite leaves the
-        // WAL at its high-water mark even once frames are written back, so a one-
-        // time spike (or a stalled checkpoint) stays on disk forever.
-        "journal_size_limit = 67108864",
-        // Read through a memory map (one shared copy in the OS page cache, not a
-        // private copy per connection) plus a 64 MB page cache per connection.
-        // Measured 2026-10-26 on the 3 GB live index: a deep grid page 125 ms →
-        // 48 ms, the status aggregate 360 ms → 150 ms; small indexed queries
-        // unchanged. 4 GB is address space, sized above the database file.
-        // The file must stay on local disk: a mapped read that hits an I/O
-        // error kills the process (SIGBUS) instead of failing the query.
-        "mmap_size = 4294967296",
-        "cache_size = -65536",
-      ],
-      // Every query the app serves runs on a read connection, so the memory map
-      // has to be set there too; it was only ever set on the writer. Measured
-      // 2026-11-12 on the 3 GB live index: the grid's count 493 ms -> 312 ms. A
-      // larger page cache on top of the map measured no different, so the
-      // readers keep the default.
-      readPragmas: ["mmap_size = 4294967296"],
-      customFunctions: [
-        { name: "REGEXP", options: { deterministic: true }, type: "regexp" },
-        {
-          // Similarity over int8 embedding blobs (see embeddingCodec.ts), for
-          // queries that compare against a subset of vectors inside SQL.
-          name: "cosine_similarity_i8",
-          options: { deterministic: true },
-          type: "cosine_similarity_i8",
-        },
-      ],
-    });
-
     // Must precede prepareTables: it moves embeddings into their side tables by
     // reading legacy columns that prepareTables would otherwise have dropped.
     await migrateEmbeddingStorage(this.db);
@@ -378,7 +335,7 @@ export class IndexDatabase {
     await this.startupMaintenance;
     // Fields are unset if init() failed part-way; close whatever got opened.
     await (this.vectorIndex as VectorIndex | undefined)?.close();
-    await (this.db as AsyncSqlite | undefined)?.close();
+    await this.db.close();
   }
 
   /**

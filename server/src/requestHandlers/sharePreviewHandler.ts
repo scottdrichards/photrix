@@ -1,7 +1,7 @@
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getShareLinkLabel, getShareScope } from "../auth/authService.ts";
-import { resolveShareFilter } from "../auth/shareScope.ts";
+import { resolveShareFilter } from "../shareScope/shareScope.ts";
 import { attempt } from "../common/result.ts";
 import { getLogger } from "../observability/logger.ts";
 

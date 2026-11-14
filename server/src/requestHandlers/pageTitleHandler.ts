@@ -1,7 +1,7 @@
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
-import { combineFilters } from "../auth/shareScope.ts";
+import { combineFilters } from "../shareScope/shareScope.ts";
 import { generateShareDescription } from "../shareDescription/generateShareDescription.ts";
 import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";

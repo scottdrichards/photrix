@@ -2,10 +2,8 @@ import { watch } from "node:fs";
 import { lstat, rename as fsRename } from "node:fs/promises";
 import path from "node:path";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
-import {
-  clearMirroredCacheForFile,
-  getMirroredCacheBaseDirectory,
-} from "../common/cacheUtils.ts";
+import { getMirroredCacheBaseDirectory } from "../common/cacheUtils.ts";
+import { clearMirroredCacheForFile } from "../fileHandling/clearMirroredCacheForFile.ts";
 import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";

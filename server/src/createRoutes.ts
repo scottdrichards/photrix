@@ -2,12 +2,13 @@ import type http from "node:http";
 import type { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import type { TaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import type { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
+import type { FeedbackStore } from "./feedback/feedbackStore.ts";
 import type { ShareScope } from "../../shared/filter-contract/src/index.ts";
 import type { FilterElement } from "./indexDatabase/indexDatabase.type.ts";
 import { writeJson } from "./common/writeJson.ts";
 import { decodeRequestPath } from "./common/decodeRequestPath.ts";
-import { extractShareFolderRoots } from "./auth/shareFolderScope.ts";
-import { buildDiagnosticsReport } from "./observability/buildDiagnosticsReport.ts";
+import { extractShareFolderRoots } from "./shareScope/shareFolderScope.ts";
+import { buildDiagnosticsReport } from "./systemStatus/buildDiagnosticsReport.ts";
 import { analyzeImage } from "./imageAnalysis/imageAnalysisWorker.ts";
 import { killAllSessions } from "./videoProcessing/hlsSession.ts";
 import { createCoverageReporter } from "./requestHandlers/analysisCoverage.ts";
@@ -85,6 +86,7 @@ export type RouteDeps = {
   storageRoot: string;
   taskOrchestrator: TaskOrchestrator;
   featureFlags: FeatureFlagStore;
+  feedback: FeedbackStore;
 };
 
 export const matchesRoute = (
@@ -109,6 +111,7 @@ export const createRoutes = ({
   storageRoot,
   taskOrchestrator,
   featureFlags,
+  feedback,
 }: RouteDeps): Route[] => {
   const getCoverage = createCoverageReporter(database.analysis);
 
@@ -170,7 +173,7 @@ export const createRoutes = ({
       path: "/api/health",
       shareLink: "allowed",
       handle: ({ res }) => {
-        if (database.asyncSqlite?.failed) {
+        if (database.failed) {
           writeJson(res, 503, {
             status: "error",
             message: "Database worker died; the server is restarting",
@@ -388,7 +391,7 @@ export const createRoutes = ({
       path: "/api/feedback",
       shareLink: "allowed",
       handle: ({ req, res, shareScope }) =>
-        feedbackHandler(req, res, database, {
+        feedbackHandler(req, res, feedback, {
           markExternal: Boolean(shareScope),
           buildDiagnosticsReport: (clientSessionId) =>
             buildDiagnosticsReport(clientSessionId, taskOrchestrator),
@@ -398,7 +401,7 @@ export const createRoutes = ({
       path: "/api/feedback*",
       shareLink: "forbidden",
       handle: ({ req, res }) =>
-        feedbackHandler(req, res, database, {
+        feedbackHandler(req, res, feedback, {
           markExternal: false,
           buildDiagnosticsReport: (clientSessionId) =>
             buildDiagnosticsReport(clientSessionId, taskOrchestrator),

@@ -1,7 +1,9 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
+import { openIndexSqlite } from "./openIndexSqlite.ts";
 
 /**
  * Runs `testFn` against a fresh, empty database over an empty media root, then
@@ -12,17 +14,20 @@ import { IndexDatabase } from "./indexDatabase.ts";
  * fields a test just set, and cleanup must not delete the directory under a
  * load still in progress.
  */
-export const withTempDb = async (testFn: (db: IndexDatabase) => Promise<void>) => {
+export const withTempDb = async (
+  testFn: (db: IndexDatabase, sqlite: AsyncSqlite) => Promise<void>,
+) => {
   const mediaRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-media-root-"));
   const dbRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-db-root-"));
   process.env.INDEX_DB_LOCATION = dbRoot;
   let db: IndexDatabase | undefined;
   try {
-    db = new IndexDatabase(mediaRoot);
+    const indexSqlite = await openIndexSqlite();
+    db = new IndexDatabase(mediaRoot, indexSqlite);
     await db.init();
     await db.startupMaintenance;
     await db.vectorIndexLoaded;
-    await testFn(db);
+    await testFn(db, indexSqlite.sqlite);
   } finally {
     await db?.close();
     rmSync(mediaRoot, { recursive: true, force: true });
