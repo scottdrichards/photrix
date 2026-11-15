@@ -1,5 +1,34 @@
+/* One focus distance d drives everything: d = 0 is the wordmark's plane
+   (P included), d = 1 is a cloud backdrop behind it, d < 0 is in front of
+   both. Each plane's blur is its distance from d (6px per unit for the
+   word, 4.5px for the clouds), so they always agree on where focus is. A
+   slight scale with d is focus breathing. In the keyframes below:
+     word blur = 6px x |d|, cloud blur = 4.5px x |d - 1|, scale = 1 - 0.03 x d,
+   with matching percentages and easings on both planes. Keep that relation
+   if you retune them, or the two planes stop agreeing.
+
+   The story: start in front (both soft), creep up, pass through the word
+   without stopping, overshoot to the clouds (clouds crisp, word soft), hold,
+   back up onto the word, settle. Then the colour sweep.
+
+   On load it starts already blurred and holds 0.5s before moving. A replay
+   (hover or click) starts from a sharp word, so it first eases out to the
+   starting blur over 0.5s. Both put the sweep at 2.81s. */
+
 .wordmark {
+  position: relative;
+  isolation: isolate;
   white-space: nowrap;
+}
+
+.scene {
+  position: relative;
+  display: inline-block;
+}
+
+.focus {
+  display: inline-block;
+  transform-origin: 40% 60%;
 }
 
 /* The mark is a capital P: it sits on the baseline and stands a little taller
@@ -11,80 +40,255 @@
   margin-inline-end: 0.03em;
 }
 
-.rest {
+.letters {
   position: relative;
-  display: inline-block;
 }
 
-/* Focus hunting. The word starts sharp and eases out of focus over 0.4 s,
-   soft and slightly large (focus breathing), rather than jumping straight to
-   blurred. Then it hunts: past sharp, back, a smaller miss each time before it
-   settles. It runs only while .play is set, so until then the word sits
-   sharp. */
-.focus {
-  display: inline-block;
-  transform-origin: 30% 60%;
+/* Cartoon clouds with crisp edges, so it is obvious when they rather than
+   the word are in focus. Behind the text, and only during a play. */
+.backdrop {
+  position: absolute;
+  inset: -0.22em -0.5em -0.08em -0.35em;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  transform-origin: 40% 60%;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 28' preserveAspectRatio='none'%3E%3Cg fill='%237cc4f0' opacity='.45'%3E%3Crect x='3' y='17' width='30' height='8' rx='4'/%3E%3Ccircle cx='9' cy='18' r='6'/%3E%3Ccircle cx='17' cy='12' r='8'/%3E%3Ccircle cx='26' cy='15' r='6.5'/%3E%3Crect x='50' y='11' width='38' height='8' rx='4'/%3E%3Ccircle cx='56' cy='12' r='5'/%3E%3Ccircle cx='65' cy='7' r='7'/%3E%3Ccircle cx='75' cy='9' r='6'/%3E%3Ccircle cx='83' cy='12' r='4.5'/%3E%3Crect x='86' y='21' width='13' height='5' rx='2.5'/%3E%3Ccircle cx='90' cy='21' r='3.2'/%3E%3Ccircle cx='95' cy='20' r='3.8'/%3E%3C/g%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
 }
 
-.play .focus {
-  animation: hunt 2.1s cubic-bezier(0.45, 0, 0.3, 1) both;
+.intro .focus {
+  animation: word-intro 2.6s 0.5s both;
 }
 
-@keyframes hunt {
+.intro .backdrop {
+  animation:
+    cloud-intro 2.6s 0.5s both,
+    cloud-fade-intro 2.6s 0.5s both;
+}
+
+.replay .focus {
+  animation: word-replay 3.1s both;
+}
+
+.replay .backdrop {
+  animation:
+    cloud-replay 3.1s both,
+    cloud-fade-replay 3.1s both;
+}
+
+@keyframes word-intro {
   0% {
-    filter: blur(0);
-    opacity: 1;
-    transform: scale(1);
-    animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1);
-  }
-  19% {
     filter: blur(6px);
-    opacity: 0.5;
-    transform: scale(1.05);
+    transform: scale(1.03);
+    animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
   }
-  35% {
-    filter: blur(0.4px);
-    opacity: 1;
-    transform: scale(1);
-  }
-  45% {
-    filter: blur(3.2px);
-    transform: scale(0.985);
-  }
-  56% {
-    filter: blur(0.2px);
+  30% {
+    filter: blur(1.08px);
     transform: scale(1.01);
+    animation-timing-function: linear;
   }
-  65% {
-    filter: blur(1.6px);
-    transform: scale(1.004);
+  42% {
+    filter: blur(0px);
+    transform: scale(1);
+    animation-timing-function: cubic-bezier(0.2, 0.45, 0.4, 1);
   }
-  74% {
-    filter: blur(0.1px);
-    transform: scale(0.998);
+  60% {
+    filter: blur(5.4px);
+    transform: scale(0.97);
+    animation-timing-function: linear;
   }
-  81% {
-    filter: blur(0.7px);
+  70% {
+    filter: blur(5.4px);
+    transform: scale(0.97);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.35, 1);
   }
-  89%,
+  87% {
+    filter: blur(0px);
+    transform: scale(1);
+    animation-timing-function: ease-out;
+  }
+  93% {
+    filter: blur(0.36px);
+    transform: scale(1);
+    animation-timing-function: ease-in-out;
+  }
   100% {
-    filter: blur(0);
-    opacity: 1;
+    filter: blur(0px);
     transform: scale(1);
   }
 }
 
-/* A band of the logo's colours, clipped to the letters, crossing once the
-   focus has landed. Transparent either side of the band, so outside it the
-   ordinary text shows through. */
+@keyframes word-replay {
+  0% {
+    filter: blur(0px);
+    transform: scale(1);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  }
+  16.13% {
+    filter: blur(6px);
+    transform: scale(1.03);
+    animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
+  }
+  41.29% {
+    filter: blur(1.08px);
+    transform: scale(1.01);
+    animation-timing-function: linear;
+  }
+  51.35% {
+    filter: blur(0px);
+    transform: scale(1);
+    animation-timing-function: cubic-bezier(0.2, 0.45, 0.4, 1);
+  }
+  66.45% {
+    filter: blur(5.4px);
+    transform: scale(0.97);
+    animation-timing-function: linear;
+  }
+  74.84% {
+    filter: blur(5.4px);
+    transform: scale(0.97);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.35, 1);
+  }
+  89.1% {
+    filter: blur(0px);
+    transform: scale(1);
+    animation-timing-function: ease-out;
+  }
+  94.13% {
+    filter: blur(0.36px);
+    transform: scale(1);
+    animation-timing-function: ease-in-out;
+  }
+  100% {
+    filter: blur(0px);
+    transform: scale(1);
+  }
+}
+
+@keyframes cloud-intro {
+  0% {
+    filter: blur(9px);
+    transform: scale(1.03);
+    animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
+  }
+  30% {
+    filter: blur(5.31px);
+    transform: scale(1.01);
+    animation-timing-function: linear;
+  }
+  42% {
+    filter: blur(4.5px);
+    transform: scale(1);
+    animation-timing-function: cubic-bezier(0.2, 0.45, 0.4, 1);
+  }
+  60% {
+    filter: blur(0.45px);
+    transform: scale(0.97);
+    animation-timing-function: linear;
+  }
+  70% {
+    filter: blur(0.45px);
+    transform: scale(0.97);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.35, 1);
+  }
+  87% {
+    filter: blur(4.5px);
+    transform: scale(1);
+    animation-timing-function: ease-out;
+  }
+  93% {
+    filter: blur(4.77px);
+    transform: scale(1);
+    animation-timing-function: ease-in-out;
+  }
+  100% {
+    filter: blur(4.5px);
+    transform: scale(1);
+  }
+}
+
+@keyframes cloud-replay {
+  0% {
+    filter: blur(4.5px);
+    transform: scale(1);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  }
+  16.13% {
+    filter: blur(9px);
+    transform: scale(1.03);
+    animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
+  }
+  41.29% {
+    filter: blur(5.31px);
+    transform: scale(1.01);
+    animation-timing-function: linear;
+  }
+  51.35% {
+    filter: blur(4.5px);
+    transform: scale(1);
+    animation-timing-function: cubic-bezier(0.2, 0.45, 0.4, 1);
+  }
+  66.45% {
+    filter: blur(0.45px);
+    transform: scale(0.97);
+    animation-timing-function: linear;
+  }
+  74.84% {
+    filter: blur(0.45px);
+    transform: scale(0.97);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.35, 1);
+  }
+  89.1% {
+    filter: blur(4.5px);
+    transform: scale(1);
+    animation-timing-function: ease-out;
+  }
+  94.13% {
+    filter: blur(4.77px);
+    transform: scale(1);
+    animation-timing-function: ease-in-out;
+  }
+  100% {
+    filter: blur(4.5px);
+    transform: scale(1);
+  }
+}
+
+@keyframes cloud-fade-intro {
+  0%,
+  78% {
+    opacity: 1;
+  }
+  95%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes cloud-fade-replay {
+  0% {
+    opacity: 0;
+  }
+  16.13%,
+  81.55% {
+    opacity: 1;
+  }
+  95.81%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* A band of the logo's colours, clipped to the letters, crossing once focus
+   has landed. With a 300% background the letters show a third of the gradient
+   at a time, so keeping the band inside 34%-66% means it starts and ends fully
+   off the letters. */
 .sheen {
   position: absolute;
   inset: 0;
   pointer-events: none;
   color: transparent;
-  /* With a 300% background the letters show a third of the gradient at a
-     time, so keeping the band inside 34%-66% means it starts and ends fully
-     off the letters. */
   background: linear-gradient(
       100deg,
       transparent 0 34.5%,
@@ -104,8 +308,9 @@
   filter: drop-shadow(0 0 0.12em rgb(242 140 200 / 45%));
 }
 
-.play .sheen {
-  animation: sheen 1.6s cubic-bezier(0.45, 0, 0.25, 1) 1.7s both;
+.intro .sheen,
+.replay .sheen {
+  animation: sheen 1.6s cubic-bezier(0.45, 0, 0.25, 1) 2.81s both;
 }
 
 @keyframes sheen {
@@ -118,12 +323,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .play .focus {
+  .scene .focus,
+  .scene .backdrop,
+  .scene .sheen {
     animation: none;
-  }
-
-  .sheen {
-    display: none;
   }
 }
 
