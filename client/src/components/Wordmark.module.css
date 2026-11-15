@@ -11,6 +11,107 @@
   margin-inline-end: 0.03em;
 }
 
+.rest {
+  position: relative;
+  display: inline-block;
+}
+
+/* Focus hunting: soft and slightly large (focus breathing), past sharp, back,
+   and a smaller miss each time before it settles. */
+.focus {
+  display: inline-block;
+  transform-origin: 30% 60%;
+  animation: hunt 1.7s cubic-bezier(0.45, 0, 0.3, 1) both;
+}
+
+@keyframes hunt {
+  0% {
+    filter: blur(7px);
+    opacity: 0.35;
+    transform: scale(1.06);
+  }
+  20% {
+    filter: blur(0.4px);
+    opacity: 1;
+    transform: scale(1);
+  }
+  32% {
+    filter: blur(3.2px);
+    transform: scale(0.985);
+  }
+  46% {
+    filter: blur(0.2px);
+    transform: scale(1.01);
+  }
+  57% {
+    filter: blur(1.6px);
+    transform: scale(1.004);
+  }
+  68% {
+    filter: blur(0.1px);
+    transform: scale(0.998);
+  }
+  77% {
+    filter: blur(0.7px);
+  }
+  86%,
+  100% {
+    filter: blur(0);
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* A band of the logo's colours, clipped to the letters, crossing once the
+   focus has landed. Transparent either side of the band, so outside it the
+   ordinary text shows through. */
+.sheen {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: transparent;
+  /* With a 300% background the letters show a third of the gradient at a
+     time, so keeping the band inside 34%-66% means it starts and ends fully
+     off the letters. */
+  background: linear-gradient(
+      100deg,
+      transparent 0 34.5%,
+      #5ed0eb 40%,
+      #8a7ff0 45%,
+      #d264a8 49.5%,
+      #f3a6cc 52.5%,
+      #f1d982 56.5%,
+      #e0784e 61%,
+      transparent 65.5% 100%
+    )
+    no-repeat;
+  background-size: 300% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: drop-shadow(0 0 0.12em rgb(242 140 200 / 45%));
+  animation: sheen 1.6s cubic-bezier(0.45, 0, 0.25, 1) 1.3s both;
+}
+
+@keyframes sheen {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .focus {
+    animation: none;
+  }
+
+  .sheen {
+    display: none;
+  }
+}
+
 .srOnly {
   position: absolute;
   width: 1px;
