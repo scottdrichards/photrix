@@ -6,8 +6,8 @@ import {
   canonicalFolderPath,
   isFolderWithinShareScope,
   type ShareFolderRoot,
-} from "../auth/shareFolderScope.ts";
-import { combineFilters } from "../auth/shareScope.ts";
+} from "../shareScope/shareFolderScope.ts";
+import { combineFilters } from "../shareScope/shareScope.ts";
 
 type Options = {
   database: IndexDatabase;

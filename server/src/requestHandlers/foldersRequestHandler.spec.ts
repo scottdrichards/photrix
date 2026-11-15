@@ -3,7 +3,7 @@ import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
 import { foldersRequestHandler } from "./foldersRequestHandler.ts";
-import { extractShareFolderRoots } from "../auth/shareFolderScope.ts";
+import { extractShareFolderRoots } from "../shareScope/shareFolderScope.ts";
 
 /**
  * Feedback #32: a share link should be able to browse into subfolders of what was

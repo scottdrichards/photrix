@@ -1003,7 +1003,10 @@ export function FullscreenViewer() {
                       durationSeconds={photo.metadata?.duration}
                       aspectRatio={videoAspectRatio}
                     />
-                    <PlaybackBottleneckBadge key={photo.path} report={bottleneck} />
+                    {/* Feedback #185: never the same key as the <video>, its
+                        sibling. Two children keyed by one path broke
+                        reconciliation, so "next" left the old video on screen. */}
+                    <PlaybackBottleneckBadge key={`bottleneck:${photo.path}`} report={bottleneck} />
                   </div>
                   {/* Hidden under an open naming panel, which it would cover. */}
                   {videoStatus && !activeFaceAssign && (
@@ -1142,9 +1145,9 @@ export function FullscreenViewer() {
                   fullImageLoaded={fullImageLoaded}
                   viewTransitionName={photoViewTransitionName(photo.path)}
                   editStyle={isDirty(savedAdj) ? computeStyle(savedAdj, savedSvgId) : undefined}
-                  onImageLoad={(e) => {
+                  onImageLoad={(img) => {
                     setFullImageLoaded(true);
-                    const { naturalWidth, naturalHeight } = e.currentTarget;
+                    const { naturalWidth, naturalHeight } = img;
                     if (naturalWidth > 0 && naturalHeight > 0) {
                       setPhotoAspectRatio(naturalWidth / naturalHeight);
                     }

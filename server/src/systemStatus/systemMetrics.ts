@@ -8,7 +8,7 @@ import {
 } from "../taskOrchestrator/computeWorkers.ts";
 import { getWhisperRuntimeState, type WhisperRuntimeState } from "../audioProcessing/whisperRuntimeState.ts";
 import { attempt } from "../common/result.ts";
-import { getLogger } from "./logger.ts";
+import { getLogger } from "../observability/logger.ts";
 
 const log = getLogger("systemMetrics");
 

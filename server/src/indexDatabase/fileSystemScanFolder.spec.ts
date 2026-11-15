@@ -16,6 +16,7 @@ jest.unstable_mockModule("node:fs/promises", () => ({
 
 const { fileSystemScanFolder } = await import("./fileSystemScanFolder.ts");
 const { IndexDatabase } = await import("./indexDatabase.ts");
+const { openIndexSqlite } = await import("./openIndexSqlite.ts");
 
 describe("fileSystemScanFolder", () => {
   it("keeps a listed file it can't stat, and prunes one that is really gone", async () => {
@@ -26,7 +27,7 @@ describe("fileSystemScanFolder", () => {
       for (const name of ["keep.jpg", "flaky.jpg", "deleted.jpg"]) {
         await fs.writeFile(path.join(rootDir, name), "x");
       }
-      db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir, await openIndexSqlite());
       await db.init();
       await fileSystemScanFolder(db).onComplete();
       expect(await db.countAllEntries()).toBe(3);

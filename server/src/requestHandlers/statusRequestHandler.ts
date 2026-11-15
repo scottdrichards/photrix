@@ -4,7 +4,7 @@ import type {
   BackgroundTaskStatus,
 } from "../../../shared/filter-contract/src/index.ts";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
-import { getSystemMetrics } from "../observability/systemMetrics.ts";
+import { getSystemMetrics } from "../systemStatus/systemMetrics.ts";
 import { isGpuReclaimed } from "../taskOrchestrator/computeWorkers.ts";
 import { getLogger } from "../observability/logger.ts";
 

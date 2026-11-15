@@ -7,7 +7,7 @@ const databaseWithFolders = (
 ) =>
   ({
     getFolders: async (path: string) => byPath[path] ?? [],
-    asyncSqlite: { all: async () => [] },
+    faces: { listMostSeenNamedPeople: async () => [] },
     queryFieldSuggestions: async () => [],
   }) as unknown as IndexDatabase;
 
@@ -63,7 +63,7 @@ describe("loadSearchVocabulary folders (feedback #111)", () => {
         if (path === "/OK/") return [{ name: "Fine", count: 1 }];
         return [];
       },
-      asyncSqlite: { all: async () => [] },
+      faces: { listMostSeenNamedPeople: async () => [] },
       queryFieldSuggestions: async () => [],
     } as unknown as IndexDatabase;
 

@@ -1,0 +1,21 @@
+.wordmark {
+  white-space: nowrap;
+}
+
+/* The mark is a capital P: it sits on the baseline and stands a little taller
+   than the lowercase letters after it. */
+.mark {
+  height: 1.05em;
+  width: auto;
+  vertical-align: -0.12em;
+  margin-inline-end: 0.03em;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

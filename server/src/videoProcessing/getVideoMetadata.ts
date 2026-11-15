@@ -1,6 +1,5 @@
 import { toError } from "../common/toError.ts";
 import { spawn } from "child_process";
-import type { ExifMetadata } from "../indexDatabase/fileRecord.type.ts";
 
 // A probe reads headers and returns in well under a second; one that hangs (a
 // damaged file, a stalled media-share read) would otherwise block whatever is
@@ -182,9 +181,19 @@ export const getCachedVideoSourceProfile = memoizePerFile((filePath: string) =>
   getVideoSourceProfile(filePath),
 );
 
-export const getVideoMetadata = async (
-  filePath: string,
-): Promise<Partial<ExifMetadata>> => {
+/** What ffprobe reports about a video, in the index's metadata field names. */
+export type VideoMetadata = {
+  dateTaken?: Date;
+  duration?: number;
+  orientation?: number;
+  dimensionWidth?: number;
+  dimensionHeight?: number;
+  videoCodec?: string;
+  framerate?: number;
+  audioCodec?: string;
+};
+
+export const getVideoMetadata = async (filePath: string): Promise<VideoMetadata> => {
   return new Promise((resolve, reject) => {
     const args = [
       "-v",
@@ -221,7 +230,7 @@ export const getVideoMetadata = async (
         const videoStream = streams.find((s) => s.codec_type === "video");
         const audioStream = streams.find((s) => s.codec_type === "audio");
 
-        const metadata: Partial<ExifMetadata> = {};
+        const metadata: VideoMetadata = {};
 
         if (format && format.tags) {
           if (format.tags.creation_time) {

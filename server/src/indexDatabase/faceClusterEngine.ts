@@ -3,6 +3,8 @@ import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
 import { getLogger } from "../observability/logger.ts";
 import { decodeEmbedding } from "./embeddingCodec.ts";
 import { attempt } from "../common/result.ts";
+import { dotProduct } from "../common/dotProduct.ts";
+import { toAlignedFloat32 } from "../common/toAlignedFloat32.ts";
 
 const log = getLogger("faceClusterEngine");
 
@@ -1294,13 +1296,6 @@ export class FaceClusterEngine {
   }
 }
 
-/** Copies a possibly-unaligned BLOB into an aligned Float32Array view. */
-export const toAlignedFloat32 = (buffer: Buffer | Uint8Array): Float32Array => {
-  const aligned = new Uint8Array(buffer.byteLength);
-  aligned.set(buffer);
-  return new Float32Array(aligned.buffer);
-};
-
 /**
  * Converts a stored face embedding BLOB into a Float32 unit vector.
  *
@@ -1329,27 +1324,6 @@ const referenceSimilarity = (
   cluster.anchor
     ? dotProduct(unit, cluster.anchor)
     : dotProduct(unit, cluster.mean) / cluster.magnitude;
-
-/** 4-way unrolled dot product — ~1.5× the plain loop on 512-dim vectors. */
-export const dotProduct = (a: Float32Array, b: Float32Array): number => {
-  const length = Math.min(a.length, b.length);
-  const limit = length - (length % 4);
-  let d0 = 0;
-  let d1 = 0;
-  let d2 = 0;
-  let d3 = 0;
-  for (let i = 0; i < limit; i += 4) {
-    d0 += a[i] * b[i];
-    d1 += a[i + 1] * b[i + 1];
-    d2 += a[i + 2] * b[i + 2];
-    d3 += a[i + 3] * b[i + 3];
-  }
-  let rest = 0;
-  for (let i = limit; i < length; i += 1) {
-    rest += a[i] * b[i];
-  }
-  return d0 + d1 + d2 + d3 + rest;
-};
 
 const magnitudeOf = (vector: Float32Array): number => {
   let magnitudeSquared = 0;

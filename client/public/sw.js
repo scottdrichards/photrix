@@ -7,7 +7,7 @@
 // after a deploy. Only top-level navigations are intercepted; every other
 // request goes straight to the network without touching this worker.
 
-const CACHE = "photrix-offline-v1";
+const CACHE = "photrix-offline-v2";
 const OFFLINE_URL = "/offline.html";
 
 self.addEventListener("install", (event) => {

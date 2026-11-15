@@ -712,6 +712,18 @@ export class FaceStore {
     return rows.map((row) => ({ id: faceClusterIdToString(row.id), name: row.name }));
   }
 
+  /** The named people with the most faces, most first: the ones a search is likeliest to mean. */
+  async listMostSeenNamedPeople(limit: number): Promise<Array<{ id: string; name: string }>> {
+    const rows = await this.db.all<{ id: number; name: string }>(
+      `SELECT id, name FROM faceClusters
+        WHERE name IS NOT NULL AND TRIM(name) != ''
+        ORDER BY weight DESC
+        LIMIT ?`,
+      limit,
+    );
+    return rows.map((row) => ({ id: faceClusterIdToString(row.id), name: row.name }));
+  }
+
   /**
    * Display names for the given face-cluster ids, resolved through merges the
    * same way `getPeopleFacesForFile` does. Unnamed clusters are omitted.

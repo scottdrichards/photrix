@@ -4,7 +4,7 @@ import { readdirSync } from "node:fs";
 import { access, open } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { ExifMetadata } from "../indexDatabase/fileRecord.type.ts";
+import type { ExifMetadata } from "./exifMetadata.type.ts";
 import { getVideoMetadata } from "../videoProcessing/getVideoMetadata.ts";
 import { mimeTypeForFilename } from "./mimeTypes.ts";
 

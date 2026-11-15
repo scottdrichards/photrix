@@ -62,18 +62,11 @@ const loadPeople = async (database: IndexDatabase): Promise<VocabularyPerson[]> 
   // Named face clusters first: a name the user has actually assigned in the
   // People tab is the strongest signal, and gives an exact cluster filter.
   try {
-    const rows = await database.asyncSqlite.all<{ id: number; name: string | null }>(
-      `SELECT id, name FROM faceClusters
-        WHERE name IS NOT NULL AND TRIM(name) != ''
-        ORDER BY weight DESC
-        LIMIT ?`,
-      MAX_PEOPLE,
-    );
-    for (const row of rows) {
-      const name = row.name?.trim();
-      if (!name || seen.has(name.toLowerCase())) continue;
+    for (const person of await database.faces.listMostSeenNamedPeople(MAX_PEOPLE)) {
+      const name = person.name.trim();
+      if (seen.has(name.toLowerCase())) continue;
       seen.add(name.toLowerCase());
-      people.push({ name, clusterId: `person-${row.id}` });
+      people.push({ name, clusterId: person.id });
     }
   } catch (error) {
     // A library with face clustering disabled has no such table/rows; the

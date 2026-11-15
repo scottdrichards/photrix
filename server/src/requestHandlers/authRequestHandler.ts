@@ -27,7 +27,7 @@ import {
   normalizeShareSearchSources,
   resolveShareFilter,
   ShareScopeError,
-} from "../auth/shareScope.ts";
+} from "../shareScope/shareScope.ts";
 import { clientIpFromRequest } from "../auth/ipLocation.ts";
 import { LoginThrottledError, throttleLogin } from "../auth/loginThrottle.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";

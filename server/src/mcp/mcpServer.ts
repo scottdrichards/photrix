@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { buildPhotrixMcpServer } from "./buildServer.ts";
@@ -27,6 +28,16 @@ const PORT =
 // PHOTRIX_TOKEN used to authenticate to Photrix). Set to require callers to send
 // `Authorization: Bearer <MCP_AUTH_TOKEN>`.
 const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
+
+// Per-user mode checks the caller's key with Photrix before serving anything, so
+// a wrong or revoked key fails the client's connect with a 401 instead of
+// connecting fine and failing on every tool call. A key that passed is
+// remembered briefly so each request doesn't pay a round trip; a revocation
+// still takes effect at once on the tool calls, which Photrix itself checks.
+const VERIFIED_KEY_TTL_MS = 5 * 60_000;
+const verifiedKeys = new Map<string, number>();
+const keyId = (bearer: string | undefined) =>
+  createHash("sha256").update(bearer ?? "").digest("hex");
 
 const jsonRpcError = (
   res: http.ServerResponse,
@@ -86,9 +97,28 @@ const handleRequest = async (
         ? authHeader.slice(7)
         : undefined;
     const photrixToken = MCP_AUTH_TOKEN ? undefined : callerBearer;
+    const api = createPhotrixApi(photrixToken);
+
+    if (!MCP_AUTH_TOKEN) {
+      const id = keyId(photrixToken);
+      const verifiedAt = verifiedKeys.get(id);
+      if (verifiedAt === undefined || Date.now() - verifiedAt > VERIFIED_KEY_TTL_MS) {
+        // Photrix being unreachable is not the caller's fault: let the request
+        // through and the tools report it, rather than failing the connect.
+        const verdict = await api.checkAuth().catch(() => "unreachable" as const);
+        if (verdict === "unauthorized") {
+          verifiedKeys.delete(id);
+          jsonRpcError(res, 401, "Unauthorized: Photrix rejected this MCP key.", {
+            "www-authenticate": 'Bearer realm="photrix"',
+          });
+          return;
+        }
+        if (verdict === "ok") verifiedKeys.set(id, Date.now());
+      }
+    }
 
     const body = await readJsonBody(req, { ifEmpty: null }).then((b) => b ?? undefined);
-    const mcp = buildPhotrixMcpServer(createPhotrixApi(photrixToken));
+    const mcp = buildPhotrixMcpServer(api);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

@@ -5,6 +5,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
+import { openIndexSqlite } from "./indexDatabase/openIndexSqlite.ts";
+import { FeedbackStore } from "./feedback/feedbackStore.ts";
 import { walkFiles } from "./fileHandling/fileUtils.ts";
 import { createTaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
@@ -65,7 +67,8 @@ describe("createServer", () => {
     writeFileSync(path.join(mediaRoot, "subFolder", "child.jpg"), "child");
     writeFileSync(path.join(mediaRoot, "otherFolder", "other.jpg"), "other");
 
-    database = new IndexDatabase(mediaRoot);
+    const indexSqlite = await openIndexSqlite();
+    database = new IndexDatabase(mediaRoot, indexSqlite);
     await database.init();
     await database.startupMaintenance;
     await database.addPaths(
@@ -82,7 +85,8 @@ describe("createServer", () => {
 
     server = createServer(database, mediaRoot, {
       taskOrchestrator: createTaskOrchestrator(database),
-      featureFlags: await FeatureFlagStore.load(database.asyncSqlite, {}),
+      featureFlags: await FeatureFlagStore.load(indexSqlite.sqlite, {}),
+      feedback: new FeedbackStore(indexSqlite.sqlite),
     });
     if (!server.listening)
       await new Promise((resolve) => server.once("listening", resolve));

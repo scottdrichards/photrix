@@ -8,13 +8,13 @@ import {
   FACE_CLUSTER_SIMILARITY_THRESHOLD,
   FaceClusterEngine,
   type FaceVerdict,
-  dotProduct,
   toUnitFloat32,
   LOW_CONFIDENCE_CLUSTER_ID,
   MIN_FACE_CONFIDENCE_FOR_CLUSTERING,
   UNCLUSTERABLE_CLUSTER_ID,
-  toAlignedFloat32,
 } from "./faceClusterEngine.ts";
+import { dotProduct } from "../common/dotProduct.ts";
+import { toAlignedFloat32 } from "../common/toAlignedFloat32.ts";
 import {
   planOptimization,
   scoreAnomalies,

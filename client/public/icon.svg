@@ -1,9 +1,112 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a7fd6"/><stop offset="1" stop-color="#0f5da3"/></linearGradient></defs>
-  <rect width="512" height="512" rx="112" fill="url(#g)"/>
-  <g fill="none" stroke="#fff" stroke-width="26" stroke-linejoin="round" stroke-linecap="round">
-    <rect x="112" y="144" width="288" height="224" rx="28"/>
-    <path d="M112 326 L208 236 L268 292 L312 252 L400 330"/>
-  </g>
-  <circle cx="318" cy="210" r="26" fill="#ffd35f"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-33.5 -15 430 430">
+<defs>
+<linearGradient id="gBg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#252e34"/><stop offset=".45" stop-color="#222a30"/><stop offset=".75" stop-color="#192026"/><stop offset="1" stop-color="#0f1417"/></linearGradient>
+<radialGradient id="gGlow" gradientUnits="userSpaceOnUse" cx="178" cy="40" r="175" gradientTransform="translate(0 12) scale(1 .7)"><stop offset="0" stop-color="#3d5f86" stop-opacity=".75"/><stop offset=".5" stop-color="#34506e" stop-opacity=".35"/><stop offset="1" stop-color="#2a3a48" stop-opacity="0"/></radialGradient>
+<radialGradient id="gVig" cx=".5" cy=".42" r=".75"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".38"/></radialGradient>
+<linearGradient id="gBlue" gradientUnits="userSpaceOnUse" x1="0" y1="28" x2="0" y2="372"><stop offset="0" stop-color="#8be8f8"/><stop offset="0.07" stop-color="#72e0f3"/><stop offset="0.13" stop-color="#5ed0eb"/><stop offset="0.24" stop-color="#40a2d3"/><stop offset="0.36" stop-color="#3183bf"/><stop offset="0.47" stop-color="#2068a8"/><stop offset="0.53" stop-color="#124f87"/><stop offset="0.65" stop-color="#0a3d6e"/><stop offset="0.77" stop-color="#072b57"/><stop offset="1" stop-color="#08284f"/></linearGradient>
+<linearGradient id="gBlueIn" gradientUnits="userSpaceOnUse" x1="0" y1="60" x2="0" y2="372"><stop offset="0" stop-color="#0b4c84"/><stop offset="0.16" stop-color="#175386"/><stop offset="0.23" stop-color="#246692"/><stop offset="0.35" stop-color="#3384b3"/><stop offset="0.55" stop-color="#2a80b6"/><stop offset="0.67" stop-color="#125b94"/><stop offset="0.8" stop-color="#0e4180"/><stop offset="0.93" stop-color="#1d509a"/><stop offset="1" stop-color="#255aa6"/></linearGradient>
+<linearGradient id="gLav" gradientUnits="userSpaceOnUse" x1="200" y1="0" x2="268" y2="0"><stop offset="0" stop-color="#3f9fd6" stop-opacity="0"/><stop offset="0.4" stop-color="#3f9ed4" stop-opacity=".8"/><stop offset="0.7" stop-color="#7fb0e4" stop-opacity=".8"/><stop offset="1" stop-color="#d6b8e4" stop-opacity=".95"/></linearGradient>
+<linearGradient id="gO1" gradientUnits="userSpaceOnUse" x1="160" y1="50" x2="300" y2="125"><stop offset="0" stop-color="#4a2760"/><stop offset="0.17" stop-color="#6a3570"/><stop offset="0.28" stop-color="#983e84"/><stop offset="0.4" stop-color="#d264a8"/><stop offset="0.53" stop-color="#e890a8"/><stop offset="0.69" stop-color="#eeb0a7"/><stop offset="0.83" stop-color="#ebd095"/><stop offset="0.94" stop-color="#f1d982"/><stop offset="1" stop-color="#eecb78"/></linearGradient>
+<linearGradient id="gO2" gradientUnits="userSpaceOnUse" x1="300" y1="125" x2="150" y2="290"><stop offset="0" stop-color="#eecb78"/><stop offset="0.04" stop-color="#e0a865"/><stop offset="0.075" stop-color="#cf8654"/><stop offset="0.13" stop-color="#b85c48"/><stop offset="0.19" stop-color="#9e3c3e"/><stop offset="0.28" stop-color="#902a30"/><stop offset="0.38" stop-color="#801b2d"/><stop offset="0.5" stop-color="#74152c"/><stop offset="0.62" stop-color="#6e1838"/><stop offset="0.74" stop-color="#5e1c4a"/><stop offset="0.85" stop-color="#512e5e"/><stop offset="0.93" stop-color="#35265a"/><stop offset="1" stop-color="#2a2458"/></linearGradient>
+<linearGradient id="gW1" gradientUnits="userSpaceOnUse" x1="115" y1="115" x2="280" y2="160"><stop offset="0" stop-color="#180e24"/><stop offset="0.08" stop-color="#24122c"/><stop offset="0.16" stop-color="#572a5a"/><stop offset="0.34" stop-color="#652e68"/><stop offset="0.47" stop-color="#883067"/><stop offset="0.6" stop-color="#b23a6c"/><stop offset="0.72" stop-color="#c94670"/><stop offset="0.87" stop-color="#c86669"/><stop offset="0.93" stop-color="#cd7458"/><stop offset="1" stop-color="#cf8050"/></linearGradient>
+<linearGradient id="gW2" gradientUnits="userSpaceOnUse" x1="275" y1="165" x2="200" y2="265"><stop offset="0" stop-color="#cf8050"/><stop offset="0.18" stop-color="#d27a4f"/><stop offset="0.34" stop-color="#cf6a4a"/><stop offset="0.52" stop-color="#b84848"/><stop offset="0.69" stop-color="#9c3444"/><stop offset="0.87" stop-color="#84284c"/><stop offset="1" stop-color="#6a2458"/></linearGradient>
+<linearGradient id="gL1" gradientUnits="userSpaceOnUse" x1="158" y1="60" x2="289" y2="150"><stop offset="0" stop-color="#b060a8" stop-opacity="0"/><stop offset="0.2" stop-color="#d878c0" stop-opacity=".7"/><stop offset="0.45" stop-color="#f3a6cc"/><stop offset="0.75" stop-color="#f8cdb8"/><stop offset="1" stop-color="#fae2a6"/></linearGradient>
+<linearGradient id="gL2" gradientUnits="userSpaceOnUse" x1="289" y1="155" x2="110" y2="262"><stop offset="0" stop-color="#fae2a6"/><stop offset="0.1" stop-color="#f6b888"/><stop offset="0.25" stop-color="#ee8c74"/><stop offset="0.42" stop-color="#e8707c"/><stop offset="0.58" stop-color="#d85c90"/><stop offset="0.75" stop-color="#a04c98"/><stop offset="0.9" stop-color="#5a4590" stop-opacity=".8"/><stop offset="1" stop-color="#3a3a80" stop-opacity=".3"/></linearGradient>
+<linearGradient id="gRim1" gradientUnits="userSpaceOnUse" x1="160" y1="45" x2="318" y2="150"><stop offset="0" stop-color="#cbb8ec"/><stop offset="0.47" stop-color="#cbb8ec"/><stop offset="0.62" stop-color="#f0c4d4"/><stop offset="0.82" stop-color="#fbe6a8"/><stop offset="1" stop-color="#f6c684"/></linearGradient>
+<linearGradient id="gRim2" gradientUnits="userSpaceOnUse" x1="318" y1="150" x2="120" y2="280"><stop offset="0" stop-color="#f6c684"/><stop offset="0.12" stop-color="#f0a468"/><stop offset="0.3" stop-color="#d86c58"/><stop offset="0.5" stop-color="#b84860"/><stop offset="0.7" stop-color="#a04488"/><stop offset="0.88" stop-color="#70408c"/><stop offset="1" stop-color="#3c2a66" stop-opacity=".4"/></linearGradient>
+<linearGradient id="gStemRim" gradientUnits="userSpaceOnUse" x1="0" y1="40" x2="0" y2="372"><stop offset="0" stop-color="#cbb8ec"/><stop offset="0.05" stop-color="#bdb6ee"/><stop offset="0.08" stop-color="#8aa8e8"/><stop offset="0.12" stop-color="#62a0e0"/><stop offset="0.2" stop-color="#5594dc"/><stop offset="0.36" stop-color="#4c9be0"/><stop offset="0.8" stop-color="#3c7ed6"/><stop offset="1" stop-color="#2f6fd0"/></linearGradient>
+<linearGradient id="gRidge" gradientUnits="userSpaceOnUse" x1="0" y1="62" x2="0" y2="366"><stop offset="0" stop-color="#7fe6ff" stop-opacity="0"/><stop offset="0.1" stop-color="#86e8ff" stop-opacity=".95"/><stop offset="0.45" stop-color="#72d8fb" stop-opacity=".95"/><stop offset="0.7" stop-color="#58b4ee" stop-opacity=".6"/><stop offset="0.88" stop-color="#4a8cdc" stop-opacity=".25"/><stop offset="1" stop-color="#4a8cdc" stop-opacity=".1"/></linearGradient>
+<linearGradient id="gInRim" gradientUnits="userSpaceOnUse" x1="140" y1="90" x2="250" y2="230"><stop offset="0" stop-color="#c070b0" stop-opacity="0"/><stop offset="0.1" stop-color="#c868ac" stop-opacity=".6"/><stop offset="0.4" stop-color="#f090a8" stop-opacity=".85"/><stop offset="0.7" stop-color="#f8c0a0" stop-opacity=".95"/><stop offset="0.8" stop-color="#f6b090"/><stop offset="0.9" stop-color="#ee8a84"/><stop offset="1" stop-color="#e2668e"/></linearGradient>
+<radialGradient id="gCres" gradientUnits="userSpaceOnUse" cx="185" cy="160" r="108"><stop offset=".69" stop-color="#52b8ea"/><stop offset=".73" stop-color="#3688c8"/><stop offset=".8" stop-color="#26669c"/><stop offset=".95" stop-color="#1c5288"/></radialGradient>
+<linearGradient id="gCresShade" gradientUnits="userSpaceOnUse" x1="110" y1="0" x2="255" y2="0"><stop offset="0" stop-color="#05183a" stop-opacity=".6"/><stop offset="0.08" stop-color="#05183a" stop-opacity="0"/><stop offset="0.45" stop-color="#062a5c" stop-opacity="0"/><stop offset="0.7" stop-color="#062a5c" stop-opacity=".5"/><stop offset="1" stop-color="#062a5c" stop-opacity=".9"/></linearGradient>
+<linearGradient id="gEdge" gradientUnits="userSpaceOnUse" x1="318" y1="120" x2="190" y2="292"><stop offset="0" stop-color="#4a0c1c" stop-opacity="0"/><stop offset="0.3" stop-color="#4a0c1c" stop-opacity=".5"/><stop offset="0.75" stop-color="#3a0c24" stop-opacity=".4"/><stop offset="1" stop-color="#3a0c24" stop-opacity="0"/></linearGradient>
+<radialGradient id="gDisc" gradientUnits="userSpaceOnUse" cx="185" cy="160" r="75"><stop offset="0" stop-color="#2b3742"/><stop offset=".45" stop-color="#232f39"/><stop offset=".85" stop-color="#202b34"/><stop offset="1" stop-color="#161d24"/></radialGradient>
+<linearGradient id="gFade" gradientUnits="userSpaceOnUse" x1="0" y1="108" x2="0" y2="142"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff"/></linearGradient>
+<mask id="mBot" maskUnits="userSpaceOnUse" x="0" y="0" width="344" height="402"><rect width="344" height="402" fill="url(#gFade)"/></mask>
+<linearGradient id="gFadeW" gradientUnits="userSpaceOnUse" x1="0" y1="150" x2="0" y2="182"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff"/></linearGradient>
+<mask id="mWBot" maskUnits="userSpaceOnUse" x="0" y="0" width="344" height="402"><rect width="344" height="402" fill="url(#gFadeW)"/></mask>
+<path id="ring" d="M110 160 A125 125 0 0 1 222.8 35.6 A130 130 0 1 1 110 266.2 Z"/>
+<path id="blue" d="M48 372 V160 A132 132 0 0 1 312 160 H110 V318 A62 54 0 0 1 48 372 Z"/>
+<clipPath id="cRing"><use href="#ring"/></clipPath>
+<clipPath id="cBlue"><use href="#blue"/></clipPath>
+<clipPath id="cWall"><circle cx="185" cy="160" r="104"/></clipPath>
+<clipPath id="cCres"><circle cx="150" cy="170" r="105"/></clipPath>
+<clipPath id="cLow"><rect x="0" y="160" width="344" height="242"/></clipPath>
+<clipPath id="cDisc"><circle cx="185" cy="160" r="66"/></clipPath>
+<filter id="fShadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+<filter id="fSoft2" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="3"/></filter>
+<filter id="fNoise" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+<feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="3" seed="7" result="n"/>
+<feColorMatrix in="n" type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  1.3 0 0 0 -.68" result="light"/>
+<feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  -1.5 0 0 0 .75" result="dark"/>
+<feMerge><feMergeNode in="dark"/><feMergeNode in="light"/></feMerge>
+</filter>
+<clipPath id="cTile"><rect x="-33.5" y="-15" width="430" height="430" rx="94"/></clipPath>
+</defs>
+<g clip-path="url(#cTile)">
+<rect x="-33.5" y="-15" width="430" height="430" fill="url(#gBg)"/>
+<rect x="-33.5" y="-15" width="430" height="430" fill="url(#gGlow)"/>
+<rect x="-33.5" y="-15" width="430" height="430" fill="url(#gVig)"/>
+<g filter="url(#fShadow)" opacity=".55" transform="translate(3 6)"><use href="#blue"/><use href="#ring"/></g>
+
+<use href="#blue" fill="url(#gBlue)"/>
+<use href="#blue" fill="url(#gLav)"/>
+<path d="M77.5 160 A102.5 102.5 0 0 1 282.5 160 H110 V318 A62 54 0 0 1 48 372 V370 A29.5 55 0 0 0 77.5 315 Z" fill="url(#gBlueIn)"/>
+<g clip-path="url(#cBlue)" fill="none">
+<path d="M49.5 372 V160 A130.5 130.5 0 0 1 310.5 160" stroke="#9fdcff" stroke-opacity=".3" stroke-width="3.5"/>
+<path d="M282.5 160 A102.5 102.5 0 0 0 77.5 160 V315 A29.5 55 0 0 1 48 370" stroke="url(#gRidge)" stroke-width="2.6"/>
+<path d="M48 372 A62 54 0 0 0 110 318 V160 A125 125 0 0 1 235.8 35" stroke="url(#gStemRim)" stroke-width="9"/>
+</g>
+
+<g clip-path="url(#cRing)">
+<use href="#ring" fill="url(#gO1)"/>
+<use href="#ring" fill="url(#gO2)" mask="url(#mBot)"/>
+<path d="M310 124.2 A130 130 0 0 1 153.6 286.1" fill="none" stroke="url(#gEdge)" stroke-width="26" filter="url(#fSoft2)"/>
+<path d="M211.8 32.8 A130 130 0 0 1 311.1 191.4" fill="none" stroke="url(#gRim1)" stroke-width="8"/>
+<path d="M314.7 169.1 A130 130 0 0 1 110 266.2" fill="none" stroke="url(#gRim2)" stroke-width="6.5"/>
+<g clip-path="url(#cWall)">
+<circle cx="185" cy="160" r="104" fill="url(#gW1)"/>
+<circle cx="185" cy="160" r="104" fill="url(#gW2)" mask="url(#mWBot)"/>
+<g clip-path="url(#cLow)"><g clip-path="url(#cCres)">
+<circle cx="185" cy="160" r="104" fill="url(#gCres)"/>
+<circle cx="185" cy="160" r="104" fill="url(#gCresShade)"/>
+<circle cx="185" cy="160" r="76.5" fill="none" stroke="#7fd4f8" stroke-opacity=".5" stroke-width="3"/>
+</g></g>
+<path d="M148.9 92 A77 77 0 0 1 250.5 200.6 A105 105 0 0 1 198.5 263.1" fill="none" stroke="url(#gInRim)" stroke-width="4"/>
+</g>
+<path d="M163.4 58.3 A104 104 0 0 1 288.6 150.9" fill="none" stroke="url(#gL1)" stroke-width="3"/>
+<path d="M288.6 150.9 A104 104 0 0 1 94.9 212" fill="none" stroke="url(#gL2)" stroke-width="3"/>
+</g>
+
+<circle cx="185" cy="160" r="75" fill="url(#gDisc)"/>
+<g clip-path="url(#cDisc)">
+<g fill="#394249">
+<polygon points="200 134 100 -39.2 26.8 34"/>
+<polygon points="215 160 315 -13.2 215 -40"/>
+<polygon points="200 186 400 186 373.2 86"/>
+<polygon points="170 186 270 359.2 343.2 286"/>
+<polygon points="155 160 55 333.2 155 360"/>
+<polygon points="170 134 -30 134 -3.2 234"/>
+</g>
+<g fill="#4a545c">
+<polygon points="200 134 26.8 34 0 134"/>
+<polygon points="215 160 215 -40 115 -13.2"/>
+<polygon points="200 186 373.2 86 300 12.8"/>
+<polygon points="170 186 343.2 286 370 186"/>
+<polygon points="155 160 155 360 255 333.2"/>
+<polygon points="170 134 -3.2 234 70 307.2"/>
+</g>
+<polygon points="215 160 200 186 170 186 155 160 170 134 200 134" fill="#25313b"/>
+<g stroke="#222d36" stroke-width="5.5" stroke-linecap="round">
+<line x1="215" y1="160" x2="100" y2="-39.2"/>
+<line x1="200" y1="186" x2="315" y2="-13.2"/>
+<line x1="170" y1="186" x2="400" y2="186"/>
+<line x1="155" y1="160" x2="270" y2="359.2"/>
+<line x1="170" y1="134" x2="55" y2="333.2"/>
+<line x1="200" y1="134" x2="-30" y2="134"/>
+</g>
+</g>
+
+<rect x="-33.5" y="-15" width="430" height="430" filter="url(#fNoise)" opacity=".27"/>
+</g>
 </svg>

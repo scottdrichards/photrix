@@ -33,11 +33,11 @@ filter), so that file is also the share-link access policy.
 | `/api/settings/…`                        | `settingsRequestHandler.ts`                         | `settings` table                                                                                         |
 | `/api/auth/…`, `/api/account`            | `authRequestHandler.ts`, `accountRequestHandler.ts` | `auth/`                                                                                                  |
 | `GET /share`                             | `sharePreviewHandler.ts`                            | `shareDescription/`                                                                                      |
-| `/api/status`, `/api/status/stream`      | `statusRequestHandler.ts`                           | `observability/systemMetrics.ts`, task orchestrator snapshot                                             |
+| `/api/status`, `/api/status/stream`      | `statusRequestHandler.ts`                           | `systemStatus/systemMetrics.ts`, task orchestrator snapshot                                             |
 | `GET /api/network-probe`                 | `networkProbeRequestHandler.ts`                     | bytes for the client's bandwidth measurement                                                             |
 | `/api/feedback[/:id[/diagnostics]]`      | `feedbackHandler.ts`                                | `feedback` table; saves a diagnostics report per suggestion                                              |
 | `/api/diagnostics/events`                | `diagnosticsRequestHandler.ts`                      | `observability/diagnosticsStore.ts`                                                                      |
-| `GET /api/diagnostics/perf`, `…/report`  | `diagnosticsReportRequestHandler.ts`                | `observability/perfMonitor.ts`, `observability/buildDiagnosticsReport.ts`                                |
+| `GET /api/diagnostics/perf`, `…/report`  | `diagnosticsReportRequestHandler.ts`                | `observability/perfMonitor.ts`, `systemStatus/buildDiagnosticsReport.ts`                                |
 
 ### Serving a file (`filesRequestHandler.ts`)
 
@@ -111,6 +111,15 @@ and `fileSystemRescanRecent.ts` re-queue the entry stages.
 | Status, share, account          | `components/status/`, `components/share/`, `components/account/`  |
 | API calls                       | `api/*.ts` (all through `api/http.ts` `fetchWithDiagnostics`)     |
 | Diagnostics / perf telemetry    | `diagnostics.ts`, `clientPerf.ts`                                 |
+
+## Module boundaries
+
+A module is a directory under `server/src/`, `client/src/` or
+`client/src/components/`. Which module may import from which is written down in
+each workspace's `eslint.config.mjs` and enforced by `bun run lint`
+(`eslint.boundaries.mjs`). A new cross-module import fails until it is either
+moved or added to that map on purpose. The `grandfathered` list beside the map
+is the backlog of known violations: it may shrink, never grow.
 
 ## Something is slow or broken
 

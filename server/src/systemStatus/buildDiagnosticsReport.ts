@@ -1,6 +1,6 @@
 import os from "node:os";
-import { listDiagnosticsEvents } from "./diagnosticsStore.ts";
-import { getPerfSnapshot } from "./perfMonitor.ts";
+import { listDiagnosticsEvents } from "../observability/diagnosticsStore.ts";
+import { getPerfSnapshot } from "../observability/perfMonitor.ts";
 import { getSystemMetrics } from "./systemMetrics.ts";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 

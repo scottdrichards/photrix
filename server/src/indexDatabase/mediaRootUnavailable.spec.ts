@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
+import { openIndexSqlite } from "./openIndexSqlite.ts";
 
 const mkTempDir = async (prefix: string): Promise<string> =>
   fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -22,7 +23,7 @@ describe("fileSystemScanFolder: media root unavailable", () => {
     try {
       await fs.writeFile(path.join(rootDir, "keep.jpg"), "k");
 
-      db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir, await openIndexSqlite());
       await db.init();
       await fileSystemScanFolder(db).onComplete();
       expect(await db.countAllEntries()).toBe(1);
@@ -52,7 +53,7 @@ describe("fileSystemScanFolder: media root unavailable", () => {
     try {
       await fs.writeFile(path.join(rootDir, "keep.jpg"), "k");
 
-      db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir, await openIndexSqlite());
       await db.init();
       await fileSystemScanFolder(db).onComplete();
       expect(await db.countAllEntries()).toBe(1);
@@ -82,7 +83,7 @@ describe("fileSystemScanFolder: media root unavailable", () => {
       await fs.writeFile(path.join(rootDir, "keep.jpg"), "k");
       await fs.writeFile(path.join(rootDir, "gone.jpg"), "g");
 
-      db = new IndexDatabase(rootDir);
+      db = new IndexDatabase(rootDir, await openIndexSqlite());
       await db.init();
       await fileSystemScanFolder(db).onComplete();
       expect(await db.countAllEntries()).toBe(2);

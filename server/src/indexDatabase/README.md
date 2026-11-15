@@ -6,7 +6,9 @@ SQLite persistence layer for all indexed file metadata, embeddings, and face dat
 
 | File                                                                          | What it owns                                                                   |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `indexDatabase.ts`                                                            | `IndexDatabase` class — the single database handle; all query/mutation methods |
+| `openIndexSqlite.ts`                                                          | Opens the one SQLite connection (path, pragmas, SQL functions)                 |
+| `indexDatabase.ts`                                                            | `IndexDatabase` class: file queries and mutations, and the stores below        |
+| `faceStore.ts`, `faceClusterStore.ts`, `momentStore.ts`, `analysisStore.ts`   | Face, person, moment and analysis-queue queries (`database.faces`, …)          |
 | `tables.ts`                                                                   | Schema DDL (`CREATE TABLE`, `CREATE INDEX`)                                    |
 | `prepareTables.ts`                                                            | Migration runner — applies DDL at startup                                      |
 | `filterToSQL.ts`                                                              | Converts JSON filter trees (from HTTP params) to parameterized WHERE clauses   |
@@ -15,8 +17,18 @@ SQLite persistence layer for all indexed file metadata, embeddings, and face dat
 | `rowFileRecordConversionFunctions.ts`                                         | Converts raw DB rows → typed `FileRecord` objects                              |
 | `faceClusterEngine.ts`                                                        | Incremental DBSCAN face clustering against centroid embeddings                 |
 | `processFaceClustering.ts`                                                    | Orchestrates clustering passes triggered by the task runner                    |
-| `discoverFiles.ts` / `fileSystemScanFolder.ts` / `fileSystemMonitorFolder.ts` | FS walk + inotify watcher                                                      |
+| `fileSystemScanFolder.ts` / `fileSystemMonitorFolder.ts`                      | FS walk + inotify watcher                                                      |
 | `pca.ts`                                                                      | PCA projection for face embedding visualisation                                |
+
+## Who may run SQL
+
+The connection is private to the modules that own tables. `main.ts` opens it
+with `openIndexSqlite()` and hands it to `IndexDatabase`, `auth/`,
+`featureFlags/` and `feedback/`; each queries only its own tables. Everything
+else, request handlers included, calls a method on one of those. To query from
+somewhere new, add a method to the store that owns the table.
+
+Every table is declared in `tables.ts`, whichever module owns it.
 
 ## Invariants
 

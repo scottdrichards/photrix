@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
-import type http from "node:http";
+import http from "node:http";
 
 // Fresh module state per test — MCP_PORT/MCP_AUTH_TOKEN are read into
 // module-level consts at import time (see mcpServer.ts), so each test that
@@ -23,7 +23,35 @@ describe("startMcpServer", () => {
     }
     delete process.env.MCP_PORT;
     delete process.env.MCP_AUTH_TOKEN;
+    delete process.env.PHOTRIX_BASE_URL;
+    if (photrix) {
+      await new Promise<void>((resolve) => photrix?.close(() => resolve()));
+      photrix = undefined;
+    }
   });
+
+  let photrix: http.Server | undefined;
+  // A stand-in Photrix whose auth gate accepts exactly one key.
+  const startFakePhotrix = async (goodKey: string): Promise<string> => {
+    photrix = http.createServer((req, res) => {
+      const ok = req.headers["authorization"] === `Bearer ${goodKey}`;
+      res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
+      res.end(ok ? "{}" : JSON.stringify({ error: "Unauthorized" }));
+    });
+    await new Promise<void>((resolve) => photrix?.listen(0, "127.0.0.1", resolve));
+    return `http://127.0.0.1:${listeningPort(photrix)}`;
+  };
+
+  const listTools = (port: number, bearer?: string) =>
+    fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
 
   const listeningPort = (srv: http.Server): number => {
     const address = srv.address();
@@ -79,5 +107,38 @@ describe("startMcpServer", () => {
 
     const second = await loadServer({ MCP_PORT: String(port) });
     await expect(second.startMcpServer()).rejects.toThrow();
+  });
+
+  it("401s at connect when Photrix rejects the caller's key, so the client sees an auth failure", async () => {
+    const photrixUrl = await startFakePhotrix("good-key");
+    const { startMcpServer } = await loadServer({
+      MCP_PORT: "0",
+      PHOTRIX_BASE_URL: photrixUrl,
+    });
+    server = await startMcpServer();
+    const port = listeningPort(server);
+
+    const rejected = await listTools(port, "wrong-key");
+    expect(rejected.status).toBe(401);
+    expect(rejected.headers.get("www-authenticate")).toMatch(/^Bearer/);
+
+    const missing = await listTools(port);
+    expect(missing.status).toBe(401);
+
+    const accepted = await listTools(port, "good-key");
+    expect(accepted.status).toBe(200);
+    const body = (await accepted.json()) as { result: { tools: { name: string }[] } };
+    expect(body.result.tools.map((t) => t.name)).toContain("get_person_photos");
+  });
+
+  it("still serves when Photrix is unreachable, leaving the error to the tools", async () => {
+    const { startMcpServer } = await loadServer({
+      MCP_PORT: "0",
+      // Nothing listens on port 9 (discard) here; the auth probe fails to connect.
+      PHOTRIX_BASE_URL: "http://127.0.0.1:9",
+    });
+    server = await startMcpServer();
+    const response = await listTools(listeningPort(server), "any-key");
+    expect(response.status).toBe(200);
   });
 });

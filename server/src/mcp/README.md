@@ -30,6 +30,7 @@ Configuration (env vars, e.g. in `server/.env`):
 | `MCP_AUTOSTART`          | `true`                   | Whether the main app starts this in-process on boot. Set `false` to run it standalone only. |
 | `MCP_PORT`               | `3100`                   | Port the MCP server listens on.                                                      |
 | `PHOTRIX_BASE_URL`       | `http://localhost:3000`  | Base URL of the Photrix HTTP server to proxy.                                        |
+| `PHOTRIX_PUBLIC_URL`     | `PHOTRIX_BASE_URL`       | Origin used for the `view:` links in tool results. Set it to the address people open Photrix at; the default is usually a loopback address that only works on the server. |
 | `PHOTRIX_TOKEN`          | _(none)_                 | Default Photrix bearer used when a caller sends no key of their own.                 |
 | `MCP_AUTH_TOKEN`         | _(none)_                 | Legacy shared-secret gate (see Authentication below).                                |
 | `PHOTRIX_MCP_TIMEOUT_MS` | `30000`                  | Per-request timeout when calling Photrix.                                            |
@@ -44,6 +45,12 @@ There are two modes, chosen by whether `MCP_AUTH_TOKEN` is set:
   from the Photrix web app → account panel → **MCP keys**, or via the API. A
   revoked key immediately stops working (Photrix returns 401). If a caller sends
   no bearer, the server falls back to the env `PHOTRIX_TOKEN`.
+
+  The key is checked with Photrix before a request is served, so a wrong or
+  revoked key gets an HTTP 401 at connect time rather than a client that
+  connects and then fails every tool call. A key that passed is remembered for
+  five minutes. If Photrix can't be reached, the request is served anyway and
+  the tools report the error.
 - **Legacy shared secret (`MCP_AUTH_TOKEN` set):** callers must send
   `Authorization: Bearer <MCP_AUTH_TOKEN>` to reach `/mcp`, and the MCP server
   talks to Photrix using the single env `PHOTRIX_TOKEN`.
@@ -87,11 +94,18 @@ is disabled and no `MCP_AUTH_TOKEN` is set.
 | Tool                | What it does                                                                |
 | ------------------- | --------------------------------------------------------------------------- |
 | `search_photos`     | Natural-language / semantic search (CLIP image + CLAP audio + transcripts). |
-| `list_people`       | List face-clustered people (id, name, photo count, year range).             |
-| `get_person_photos` | Photos a given person (by id or name) appears in.                           |
-| `on_this_day`       | Photos taken on a month/day across all years; highest-rated first.          |
-| `query_photos`      | Structured filters: date range, min rating, tag, camera, folder.            |
-| `get_photo_image`   | Fetch an actual photo (JPEG, resized) so the agent can see it.              |
+| `list_people`       | List face-clustered people (id, name, face count), optionally by name.      |
+| `get_person_photos` | Photos a person appears in, by id or name; date range, sort, paging.        |
+| `on_this_day`       | Photos taken on a month/day across all years; highest-rated first, paged.   |
+| `query_photos`      | Structured filters: date range, min rating, tag, camera, folder; sort, paging. |
+| `get_photo_image`   | Fetch a photo as a JPEG (small 320px / medium 640px / large 1080px high).   |
+
+A name passed to `get_person_photos` may be a first or partial name. When it
+matches more than one person the tool lists them instead of guessing.
+
+`get_photo_image` sizes are Photrix's standard heights. Photrix rounds any other
+height up to the next one, and anything above the largest means the original
+file, which can be tens of megabytes, so the tool doesn't accept arbitrary sizes.
 
 Photos are identified by a `relativePath` like `/2023/trip/img.jpg`, returned by
 every listing tool and accepted by `get_photo_image`.
@@ -107,3 +121,8 @@ every listing tool and accepted by `get_photo_image`.
 - **Dates**: Photrix stores `dateTaken` as epoch-ms integers and its filter layer
   only converts `Date` instances (never JSON strings), so date filters are sent
   as epoch-ms numbers. `on_this_day` builds an `OR` of per-year day ranges.
+- **Sort and page on the server.** Every listing passes `sort` and `page` to
+  Photrix and asks for exactly `limit` rows. Fetching a large page to sort it in
+  the MCP server was two orders of magnitude slower on a large library.
+- **People list cache**: the face aggregation behind `list_people` (and a
+  name lookup) is cached per caller key for a minute.
