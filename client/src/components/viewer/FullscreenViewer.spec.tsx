@@ -840,6 +840,26 @@ describe("FullscreenViewer", () => {
     expect(setSelected).toHaveBeenCalledWith(null);
   });
 
+  it("replaces the video when moving to the next one (feedback #185)", () => {
+    const selection = (path: string) => ({
+      selected: createPhoto({ path, name: path, mediaType: "video" }),
+      selectionMode: false,
+      setSelected: vi.fn(),
+      selectNext: vi.fn(),
+      selectPrevious: vi.fn(),
+    });
+    useSelectionContextMock.mockReturnValue(selection("a/one.mp4"));
+    const { rerender } = render(<FullscreenViewer />);
+    expect(document.querySelectorAll("video")).toHaveLength(1);
+
+    useSelectionContextMock.mockReturnValue(selection("a/two.mp4"));
+    rerender(<FullscreenViewer />);
+    useSelectionContextMock.mockReturnValue(selection("a/three.mp4"));
+    rerender(<FullscreenViewer />);
+
+    expect(document.querySelectorAll("video")).toHaveLength(1);
+  });
+
   it("renders video element for selected video media", () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto({
