@@ -159,6 +159,12 @@ export type ShareScope<TFilter = unknown> = {
   semanticQuery?: string;
   searchSources?: SearchSource[];
   sortBy?: SortOption;
+  /**
+   * The owner deliberately shared the whole library (feedback #187). Without
+   * it, a filter that restricts nothing is refused, so an accidental or
+   * uncompilable scope can never widen into the whole library.
+   */
+  wholeLibrary?: boolean;
   /** Human-readable label embedded for link-preview generation. */
   description?: string;
 };

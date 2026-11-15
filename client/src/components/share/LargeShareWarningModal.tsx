@@ -3,8 +3,10 @@ import { createPortal } from "react-dom";
 import css from "./LargeShareWarningModal.module.css";
 
 type Props = {
-  /** How many items the pending share would grant access to. */
-  count: number;
+  /** How many items the pending share would grant access to; null if unknown. */
+  count: number | null;
+  /** No filter at all: the link covers everything in the library. */
+  wholeLibrary?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -16,7 +18,12 @@ type Props = {
  * link to the entire library — valid, but rarely what someone means to hand
  * out. This makes the size of the grant explicit before the link exists.
  */
-export const LargeShareWarningModal = ({ count, onConfirm, onCancel }: Props) => {
+export const LargeShareWarningModal = ({
+  count,
+  wholeLibrary = false,
+  onConfirm,
+  onCancel,
+}: Props) => {
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   // Focus the safe choice, so a stray Enter cancels rather than shares.
@@ -49,8 +56,24 @@ export const LargeShareWarningModal = ({ count, onConfirm, onCancel }: Props) =>
         <div className={css.handle} />
         <h3 className={css.title}>This is a large share, are you sure?</h3>
         <p className={css.body}>
-          This link will give anyone who opens it access to{" "}
-          <span className={css.count}>{count.toLocaleString()} items</span>.
+          {wholeLibrary ? (
+            <>
+              Nothing is filtered, so this link will give anyone who opens it access to{" "}
+              <span className={css.count}>
+                your whole library
+                {count !== null ? ` (${count.toLocaleString()} items)` : ""}
+              </span>
+              .
+            </>
+          ) : (
+            <>
+              This link will give anyone who opens it access to{" "}
+              <span className={css.count}>
+                {count !== null ? `${count.toLocaleString()} items` : "an unknown number of items"}
+              </span>
+              .
+            </>
+          )}
         </p>
         <div className={css.actions}>
           <button ref={cancelRef} className="btn btn-subtle" onClick={onCancel}>

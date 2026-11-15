@@ -155,7 +155,9 @@ const ShareButton = () => {
   // A share whose size crossed the threshold and is waiting on confirmation.
   const [pendingLarge, setPendingLarge] = useState<{
     scope: unknown;
-    count: number;
+    /** Null when the size couldn't be measured. */
+    count: number | null;
+    wholeLibrary: boolean;
   } | null>(null);
 
   const mintAndShow = async (shareScope: unknown) => {
@@ -176,8 +178,9 @@ const ShareButton = () => {
     path: filter.path,
     includeSubfolders: filter.includeSubfolders,
   });
-  // The server refuses a link that scopes nothing — it would be the whole
-  // library — so say why here instead of failing silently on click.
+  // Feedback #187: a view with no filter shares the whole library. That is
+  // allowed, but always behind the large-share warning, and the server only
+  // accepts it when the scope says so by name.
   const isUnscoped =
     !shareScope.semanticQuery &&
     typeof shareScope.filter === "object" &&
@@ -185,26 +188,35 @@ const ShareButton = () => {
     Object.keys(shareScope.filter).length === 0;
 
   const handleShare = async () => {
-    if (loading || isUnscoped) return;
+    if (loading) return;
     setLoading(true);
     try {
 
       // Size the share before minting. A failure here must not block sharing —
       // the count is a guardrail, not a gate — so fall through to the normal
       // path if it can't be determined.
-      const counted = await attempt(fetchShareScopeCount(shareScope));
+      const scope = isUnscoped ? { ...shareScope, wholeLibrary: true } : shareScope;
+      const counted = await attempt(fetchShareScopeCount(scope));
       if (!counted.ok) {
         logFailure("share.count.failed", "Could not size the share; sharing without the large-share check")(
           counted.error,
         );
       }
 
+      if (isUnscoped) {
+        setPendingLarge({
+          scope,
+          count: counted.ok ? counted.value : null,
+          wholeLibrary: true,
+        });
+        return;
+      }
       if (counted.ok && counted.value > LARGE_SHARE_THRESHOLD) {
-        setPendingLarge({ scope: shareScope, count: counted.value });
+        setPendingLarge({ scope: shareScope, count: counted.value, wholeLibrary: false });
         return;
       }
 
-      await mint(shareScope);
+      await mint(scope);
     } finally {
       setLoading(false);
     }
@@ -231,14 +243,10 @@ const ShareButton = () => {
   return (
     <>
       <button
-        title={
-          isUnscoped
-            ? "Open a folder, add a filter or search to share"
-            : "Share current view"
-        }
+        title={isUnscoped ? "Share your whole library" : "Share current view"}
         className="btn btn-subtle"
         onClick={() => void handleShare()}
-        disabled={loading || isUnscoped}
+        disabled={loading}
       >
         <Share24Regular fontSize={20} />
         <span className={css.btnLabel} role="status">
@@ -249,6 +257,7 @@ const ShareButton = () => {
       {pendingLarge && (
         <LargeShareWarningModal
           count={pendingLarge.count}
+          wholeLibrary={pendingLarge.wholeLibrary}
           onConfirm={() => void confirmLarge()}
           onCancel={() => setPendingLarge(null)}
         />

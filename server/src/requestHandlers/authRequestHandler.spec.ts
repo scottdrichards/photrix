@@ -157,6 +157,65 @@ describe("authShareTokenHandler", () => {
     await authService.revokeToken(authToken);
   });
 
+  it("shares the whole library only when asked for by name (feedback #187)", async () => {
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    const authService = await import("../auth/authService.ts");
+    const authToken = authService.issueToken();
+    const handler = await loadShareHandler();
+    const { res, getStatus, getJson } = createJsonResponse();
+
+    await handler(makeReq(authToken, { filter: {}, wholeLibrary: true }), res, fakeDatabase);
+
+    expect(getStatus()).toBe(200);
+    const shareToken = getJson().token ?? "";
+    expect(authService.getShareScope(shareToken)).toEqual({
+      filter: {},
+      wholeLibrary: true,
+      description: "All photos",
+    });
+
+    await authService.revokeToken(authToken);
+    await authService.revokeToken(shareToken);
+  });
+
+  it("doesn't record a whole-library flag on a link that is scoped anyway", async () => {
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    const authService = await import("../auth/authService.ts");
+    const authToken = authService.issueToken();
+    const handler = await loadShareHandler();
+    const { res, getJson } = createJsonResponse();
+
+    await handler(
+      makeReq(authToken, { filter: { rating: { min: 4 } }, wholeLibrary: true }),
+      res,
+      fakeDatabase,
+    );
+
+    const shareToken = getJson().token ?? "";
+    expect(authService.getShareScope(shareToken)?.wholeLibrary).toBeUndefined();
+
+    await authService.revokeToken(authToken);
+    await authService.revokeToken(shareToken);
+  });
+
+  it("refuses a whole-library share whose filter can't compile", async () => {
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    const authService = await import("../auth/authService.ts");
+    const authToken = authService.issueToken();
+    const handler = await loadShareHandler();
+    const { res, getStatus } = createJsonResponse();
+
+    await handler(
+      makeReq(authToken, { filter: { "1) OR (1": "x" }, wholeLibrary: true }),
+      res,
+      fakeDatabase,
+    );
+
+    expect(getStatus()).toBe(400);
+
+    await authService.revokeToken(authToken);
+  });
+
   it("refuses an injected field name on a semantic share", async () => {
     process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
     const authService = await import("../auth/authService.ts");

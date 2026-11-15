@@ -102,7 +102,10 @@ export const combineFilters = (conditions: FilterElement[]): FilterElement => {
  * whole library while every `if (shareFilter)` check believes a scope is in
  * force. Compiled strictly, so a clause that would be dropped fails instead.
  */
-export const assertShareFilterIsScoped = (filter: FilterElement): void => {
+export const assertShareFilterIsScoped = (
+  filter: FilterElement,
+  { allowWholeLibrary = false }: { allowWholeLibrary?: boolean } = {},
+): void => {
   let where: string;
   try {
     ({ where } = filterToSQL(filter, { strict: true }));
@@ -112,7 +115,9 @@ export const assertShareFilterIsScoped = (filter: FilterElement): void => {
     }
     throw error;
   }
-  if (!where) {
+  // A whole-library share still compiles strictly above, so a clause that
+  // can't compile is refused rather than silently widening anything.
+  if (!where && !allowWholeLibrary) {
     throw new ShareScopeError("This share link has no scope", 403);
   }
 };
@@ -128,12 +133,16 @@ export const resolveShareFilter = async (
   cacheKey?: string,
 ): Promise<FilterElement> => {
   const filter = await resolveUncheckedShareFilter(shareScope, cacheKey);
-  assertShareFilterIsScoped(filter);
+  assertShareFilterIsScoped(filter, { allowWholeLibrary: isWholeLibraryShare(shareScope) });
   const exclusion = await database.getDefaultExclusionFilter();
   return exclusion
     ? { operation: "and", conditions: [filter, { operation: "not", conditions: [exclusion] }] }
     : filter;
 };
+
+/** Only a plain share can be whole-library; a semantic share is scoped by its query. */
+export const isWholeLibraryShare = (shareScope: ShareScope<unknown>): boolean =>
+  shareScope.wholeLibrary === true && !shareScope.semanticQuery?.trim();
 
 const resolveUncheckedShareFilter = async (
   shareScope: ShareScope<unknown>,
