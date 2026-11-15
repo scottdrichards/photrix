@@ -133,7 +133,7 @@ describe("startMcpServer", () => {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
         authorization: "Bearer busy-key",
-        "x-forwarded-for": "203.0.113.7, 10.0.0.1",
+        "x-forwarded-for": "203.0.113.7, 198.51.100.1",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
