@@ -5,9 +5,9 @@ import css from "./Wordmark.module.css";
 /** How long the wordmark sits still after it appears before the first play. */
 export const WORDMARK_INTRO_DELAY_MS = 2000;
 
-/** One play: the focus hunt, then the colour sweep (1.3 s delay + 1.6 s in
+/** One play: the focus hunt, then the colour sweep (1.7 s delay + 1.6 s in
     Wordmark.module.css). A replay asked for before this has passed is ignored. */
-export const WORDMARK_PLAY_MS = 2900;
+export const WORDMARK_PLAY_MS = 3300;
 
 const prefersReducedMotion = () =>
   typeof window.matchMedia === "function" &&
