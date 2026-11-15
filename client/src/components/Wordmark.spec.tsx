@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { Wordmark, WORDMARK_INTRO_DELAY_MS, WORDMARK_PLAY_MS } from "./Wordmark";
+import { Wordmark, WORDMARK_PLAY_MS } from "./Wordmark";
 
 const setReducedMotion = (reduce: boolean) => {
   Object.defineProperty(window, "matchMedia", {
@@ -14,9 +14,9 @@ const setReducedMotion = (reduce: boolean) => {
   });
 };
 
-const letters = (container: HTMLElement) => container.querySelector('[data-part="rest"]');
-const isPlaying = (container: HTMLElement) =>
-  letters(container)?.hasAttribute("data-playing");
+const scene = (container: HTMLElement) => container.querySelector('[data-part="scene"]');
+const playKind = (container: HTMLElement) => scene(container)?.getAttribute("data-play");
+const wordmark = () => screen.getByText("Photrix").parentElement!;
 const finish = () => act(() => vi.advanceTimersByTime(WORDMARK_PLAY_MS));
 
 describe("Wordmark", () => {
@@ -34,49 +34,45 @@ describe("Wordmark", () => {
     expect(screen.getByText("Photrix")).toBeTruthy();
   });
 
-  it("sits still, then plays a couple of seconds after it appears", () => {
+  it("arrives out of focus: the intro plays as soon as it appears", () => {
     const { container } = render(<Wordmark />);
-    expect(isPlaying(container)).toBe(false);
-    act(() => vi.advanceTimersByTime(WORDMARK_INTRO_DELAY_MS - 1));
-    expect(isPlaying(container)).toBe(false);
-    act(() => vi.advanceTimersByTime(1));
-    expect(isPlaying(container)).toBe(true);
+    expect(playKind(container)).toBe("intro");
   });
 
-  it("plays at once on hover, without waiting for the intro", () => {
+  it("lets the intro finish before a hover can replay it", () => {
     const { container } = render(<Wordmark />);
-    fireEvent.mouseEnter(screen.getByText("Photrix").parentElement!);
-    expect(isPlaying(container)).toBe(true);
-    const played = letters(container);
-    act(() => vi.advanceTimersByTime(WORDMARK_INTRO_DELAY_MS));
-    expect(letters(container)).toBe(played);
+    const intro = scene(container);
+    fireEvent.mouseEnter(wordmark());
+    fireEvent.click(wordmark());
+    expect(scene(container)).toBe(intro);
+
+    finish();
+    fireEvent.mouseEnter(wordmark());
+    expect(playKind(container)).toBe("replay");
+    expect(scene(container)).not.toBe(intro);
   });
 
-  it("lets a play finish, then replays on hover or click", () => {
+  it("replays on click once a replay has finished", () => {
     const { container } = render(<Wordmark />);
-    const wordmark = screen.getByText("Photrix").parentElement!;
-    act(() => vi.advanceTimersByTime(WORDMARK_INTRO_DELAY_MS));
-    const first = letters(container);
-
-    fireEvent.mouseEnter(wordmark);
-    fireEvent.click(wordmark);
-    expect(letters(container)).toBe(first);
+    finish();
+    fireEvent.click(wordmark());
+    const first = scene(container);
+    fireEvent.click(wordmark());
+    expect(scene(container)).toBe(first);
 
     finish();
-    fireEvent.mouseEnter(wordmark);
-    const second = letters(container);
-    expect(second).not.toBe(first);
-
-    finish();
-    fireEvent.click(wordmark);
-    expect(letters(container)).not.toBe(second);
+    fireEvent.click(wordmark());
+    expect(scene(container)).not.toBe(first);
+    expect(playKind(container)).toBe("replay");
   });
 
   it("never plays under reduced motion", () => {
     setReducedMotion(true);
     const { container } = render(<Wordmark />);
-    fireEvent.mouseEnter(screen.getByText("Photrix").parentElement!);
-    act(() => vi.advanceTimersByTime(WORDMARK_INTRO_DELAY_MS * 2));
-    expect(isPlaying(container)).toBe(false);
+    expect(playKind(container)).toBe("still");
+    fireEvent.mouseEnter(wordmark());
+    finish();
+    fireEvent.click(wordmark());
+    expect(playKind(container)).toBe("still");
   });
 });
