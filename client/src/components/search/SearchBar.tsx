@@ -83,7 +83,8 @@ const isChipStillApplied = (
 
 /**
  * The words of the typed query that named this person: "rachel" for a chip
- * labelled "Rachel Johnson Shepherd". Falls back to the label itself.
+ * labelled "Rachel Johnson Shepherd". Falls back to the label itself. Only
+ * needed when the server didn't say which words a chip came from.
  */
 const typedTermForChip = (query: string, chip: InterpretedFilterChip): string => {
   const nameWords = new Set(chip.label.toLowerCase().split(/\s+/).filter(Boolean));
@@ -93,6 +94,24 @@ const typedTermForChip = (query: string, chip: InterpretedFilterChip): string =>
   return typed.length > 0
     ? typed.map((word) => word.replace(/['’]s$|[^\p{L}\p{N}'’-]/gu, "")).join(" ")
     : chip.label;
+};
+
+/**
+ * Feedback #184: what a removed chip hands back to the free-text search. The
+ * server says which typed words produced it ("christmas" for a December date);
+ * the free-text chip itself has nothing to hand back.
+ */
+const textForChip = (query: string, chip: InterpretedFilterChip): string | undefined => {
+  if (chip.field === "semanticQuery") return undefined;
+  if (chip.sourceText) return chip.sourceText;
+  return isPersonChip(chip) ? typedTermForChip(query, chip) : undefined;
+};
+
+/** Append `extra` to `text`, skipping words the text already has. */
+const appendWords = (text: string | undefined, extra: string): string | undefined => {
+  const have = new Set((text ?? "").toLowerCase().split(/\s+/).filter(Boolean));
+  const added = extra.split(/\s+/).filter((word) => word && !have.has(word.toLowerCase()));
+  return [text, ...added].filter(Boolean).join(" ") || undefined;
 };
 
 type ActiveInterpretation = {
@@ -205,11 +224,17 @@ export const SearchBar = () => {
     else setFilter({ semanticQuery: undefined });
   };
 
-  /** Drop one derived filter, keeping the rest of the interpretation in place. */
-  const handleRemoveChip = (chip: InterpretedFilterChip, extraText?: string) => {
+  /**
+   * Drop one derived filter, keeping the rest of the interpretation in place.
+   * The words it came from go back into the free-text search (feedback #184):
+   * "christmas lights" read as December, and removing that should leave a
+   * search for christmas lights, not just "lights".
+   */
+  const handleRemoveChip = (chip: InterpretedFilterChip) => {
     const active = interpretation;
     if (!active) return;
-    const leftover = [filter.semanticQuery, extraText].filter(Boolean).join(" ") || undefined;
+    const extraText = textForChip(active.query, chip);
+    const leftover = extraText ? appendWords(filter.semanticQuery, extraText) : filter.semanticQuery;
 
     const remaining = active.chips.filter(
       (candidate) =>
@@ -241,15 +266,6 @@ export const SearchBar = () => {
     setInterpretation(remaining.length > 0 ? { ...active, chips: remaining } : null);
     // With the last derived filter gone, the box shows what is still searched.
     if (remaining.length === 0 || extraText) showLeftoverQuery(leftover);
-  };
-
-  /**
-   * Feedback #166: search for the name as words (tags, captions, transcripts)
-   * instead of as this one person, e.g. a different Rachel or a tag.
-   */
-  const handleSearchChipAsText = (chip: InterpretedFilterChip) => {
-    if (!interpretation) return;
-    handleRemoveChip(chip, typedTermForChip(interpretation.query, chip));
   };
 
   /**
@@ -389,9 +405,7 @@ export const SearchBar = () => {
           query={interpretation.query}
           chips={interpretation.chips}
           ignored={interpretation.ignored}
-          onRemoveChip={(chip) => handleRemoveChip(chip)}
-          canSearchAsText={isPersonChip}
-          onSearchChipAsText={handleSearchChipAsText}
+          onRemoveChip={handleRemoveChip}
           onSwapPerson={handleSwapPerson}
           onUndo={handleUndoInterpretation}
         />

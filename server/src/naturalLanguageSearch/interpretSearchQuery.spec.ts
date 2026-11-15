@@ -56,6 +56,30 @@ describe("interpretSearchQuery", () => {
     ]);
   });
 
+  it("records the typed words behind each chip (feedback #184)", async () => {
+    const result = await interpret(
+      "photos of Sarah at the beach last summer",
+      respondWith({ people: ["Sarah"], mediaType: "photo", visual: "at the beach" }),
+    );
+
+    expect(
+      result.interpreted && result.chips.map(({ label, sourceText }) => [label, sourceText]),
+    ).toEqual([
+      ["Sarah", "Sarah"],
+      ["Photos only", "photos"],
+      ["Summer 2025", "last summer"],
+      ["“at the beach”", undefined],
+    ]);
+  });
+
+  it("says a holiday date came from the holiday's name (feedback #184)", async () => {
+    const result = await interpret("christmas lights", respondWith({ visual: "lights" }));
+
+    expect(result.interpreted && result.chips).toContainEqual(
+      expect.objectContaining({ field: "dateRange", sourceText: "christmas" }),
+    );
+  });
+
   it("maps a folder and video request onto the path filter", async () => {
     const result = await interpret(
       "videos from the Trips folder",
@@ -267,6 +291,7 @@ describe("interpretSearchQuery", () => {
           field: "faceClusterFilter",
           label: "Rachel Smith",
           value: "person-1",
+          sourceText: "rachel",
           alternatives: [
             { field: "faceClusterFilter", label: "Rachel Jones", value: "person-2" },
             { field: "peopleInImageFilter", label: "Rachel", value: "Rachel" },
@@ -282,6 +307,7 @@ describe("interpretSearchQuery", () => {
         field: "faceClusterFilter",
         label: "Rachel Smith",
         value: "person-1",
+        sourceText: "rachel smith",
       });
     });
 
