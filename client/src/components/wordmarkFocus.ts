@@ -12,6 +12,11 @@
  * 25 m overshoot and the 18 m correction defocus the word by under 0.3 px, as
  * they would in a real camera at this distance. The visible part of the hunt is
  * the rack in from 3 m.
+ *
+ * The camera is handheld, too. It starts off-aim and drifts onto the word with
+ * a small overshoot, while a hand tremor shakes it. Both die away as focus
+ * locks. A handheld wobble is mostly rotation, which shifts near and far planes
+ * by the same amount, so the word and the clouds move together.
  */
 
 export const SUBJECT_M = 20;
@@ -25,7 +30,29 @@ const CLOUD_SOFTNESS_PX = 1.5;
 /** Focus breathing: the image grows slightly as the lens racks closer. */
 const BREATHING_PER_DIOPTRE = 0.04;
 /** Keyframes are sampled at this interval; the browser interpolates between them. */
-const FRAME_MS = 1000 / 30;
+const FRAME_MS = 1000 / 60;
+
+/** Camera shake, in em so it scales with the wordmark. */
+const SHAKE_EM = 0.08;
+/** Where the camera is pointing when it starts, as a multiple of SHAKE_EM. */
+const AIM_START = { x: -1.3, y: 0.8 };
+/** The drift onto the word: a damped swing, with this time constant and rate. */
+const AIM_SETTLE_MS = 420;
+const AIM_SWING_HZ = 0.9;
+type Wave = readonly [hz: number, phase: number, weight: number];
+/** Hand tremor: a few incommensurate sines, slow sway plus a faster jitter. */
+const TREMOR: { x: readonly Wave[]; y: readonly Wave[] } = {
+  x: [
+    [1.7, 0.4, 0.55],
+    [3.1, 1.9, 0.3],
+    [8.3, 0.7, 0.12],
+  ],
+  y: [
+    [1.3, 2.2, 0.5],
+    [2.7, 0.3, 0.32],
+    [9.1, 1.4, 0.1],
+  ],
+};
 
 export const SHEEN_MS = 1600;
 export const SHEEN_EASING = "cubic-bezier(0.45, 0, 0.25, 1)";
@@ -98,6 +125,31 @@ export const blurPx = (lensD: number, objectM: number) =>
 
 const round = (v: number) => Math.round(v * 100) / 100;
 
+const tremor = (waves: readonly Wave[], ms: number) =>
+  waves.reduce(
+    (sum, [hz, phase, weight]) =>
+      sum + weight * Math.sin(2 * Math.PI * hz * (ms / 1000) + phase),
+    0,
+  );
+
+/**
+ * The camera's offset, in em, at a time into a play: the drift onto the word
+ * plus the tremor, both gone once focus has locked. A replay starts from a
+ * steady camera, so its shake rises over the rack out instead of jumping.
+ */
+export const shakeAt = (play: FocusPlay, ms: number) => {
+  const focusEnd = focusMs(play);
+  if (ms >= focusEnd) return { x: 0, y: 0 };
+  const lead = segments(play)[0].ms;
+  const rise = play === "replay" ? easeInOut(Math.min(1, ms / lead)) : 1;
+  const steadying = (1 - ms / focusEnd) ** 1.5;
+  const swing =
+    Math.exp(-ms / AIM_SETTLE_MS) * Math.cos(2 * Math.PI * AIM_SWING_HZ * (ms / 1000));
+  const axis = (start: number, waves: readonly Wave[]) =>
+    SHAKE_EM * rise * steadying * (start * swing + tremor(waves, ms));
+  return { x: axis(AIM_START.x, TREMOR.x), y: axis(AIM_START.y, TREMOR.y) };
+};
+
 /**
  * Web Animations keyframes for one play: the word (P included) and the clouds
  * share a timeline. The clouds fade in on a replay's rack out and fade away
@@ -117,18 +169,21 @@ export const focusKeyframes = (play: FocusPlay) => {
   for (const t of [...times].sort((a, b) => a - b)) {
     const lens = lensDioptresAt(play, t);
     const offset = round((t / durationMs) * 10000) / 10000;
+    const shake = shakeAt(play, t);
     const scale = `scale(${round((1 + BREATHING_PER_DIOPTRE * (lens - 1 / SUBJECT_M)) * 100) / 100})`;
+    const em = (v: number) => `${Math.round(v * 1000) / 1000 || 0}em`;
+    const transform = `translate(${em(shake.x)}, ${em(shake.y)}) ${scale}`;
     const fadeIn = play === "replay" ? Math.min(1, t / lead) : 1;
     const fadeOut = t <= focusEnd ? 1 : 1 - (t - focusEnd) / CLOUD_FADE_MS;
     word.push({
       offset,
       filter: `blur(${round(blurPx(lens, SUBJECT_M))}px)`,
-      transform: scale,
+      transform,
     });
     clouds.push({
       offset,
       filter: `blur(${round(blurPx(lens, CLOUDS_M) + CLOUD_SOFTNESS_PX)}px)`,
-      transform: scale,
+      transform,
       opacity: round(Math.min(fadeIn, fadeOut)),
     });
   }

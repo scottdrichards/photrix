@@ -4,6 +4,7 @@ import {
   focusKeyframes,
   focusMs,
   lensDioptresAt,
+  shakeAt,
   START_M,
   SUBJECT_M,
   type FocusPlay,
@@ -61,5 +62,37 @@ describe("wordmark focus optics", () => {
       expect(offsets).toEqual([...offsets].sort((a, b) => a - b));
       expect(clouds[clouds.length - 1].opacity).toBe(0);
     }
+  });
+
+  describe("handheld shake", () => {
+    const magnitude = ({ x, y }: { x: number; y: number }) => Math.hypot(x, y);
+    const largest = (play: FocusPlay, from: number, to: number) =>
+      Math.max(
+        ...Array.from({ length: to - from }, (_, i) =>
+          magnitude(shakeAt(play, from + i)),
+        ),
+      );
+
+    it("starts off-aim on load, and steady on a replay", () => {
+      expect(magnitude(shakeAt("intro", 0))).toBeGreaterThan(0.05);
+      expect(magnitude(shakeAt("replay", 0))).toBe(0);
+    });
+
+    it("stays small, steadies as focus locks, and ends dead still", () => {
+      for (const play of plays) {
+        const end = focusMs(play);
+        expect(largest(play, 0, end)).toBeLessThan(0.25);
+        expect(largest(play, end - 250, end)).toBeLessThan(largest(play, 0, 600) / 5);
+        expect(shakeAt(play, end)).toEqual({ x: 0, y: 0 });
+      }
+    });
+
+    it("moves the word and the clouds together", () => {
+      for (const play of plays) {
+        const { word, clouds } = focusKeyframes(play);
+        expect(clouds.map((k) => k.transform)).toEqual(word.map((k) => k.transform));
+        expect(word[word.length - 1].transform).toBe("translate(0em, 0em) scale(1)");
+      }
+    });
   });
 });
