@@ -218,7 +218,7 @@ describe("FullscreenViewer", () => {
     expect(setSelected).toHaveBeenCalledWith(null);
   });
 
-  it("fades the thumbnail placeholder out after the full image loads", () => {
+  it("keeps the low-res placeholder opaque until the full image has faded in (feedback #186)", async () => {
     useSelectionContextMock.mockReturnValue({
       selected: createPhoto(),
       selectionMode: false,
@@ -238,8 +238,10 @@ describe("FullscreenViewer", () => {
 
     fireEvent.load(image);
 
-    expect(placeholder).toHaveStyle({ opacity: "0" });
-    expect(image).toHaveStyle({ opacity: "1" });
+    // No cross-fade: the placeholder stays solid while the image fades in.
+    await waitFor(() => expect(image).toHaveStyle({ opacity: "1" }));
+    expect(placeholder).toHaveStyle({ opacity: "1" });
+    await waitFor(() => expect(placeholder).toHaveStyle({ opacity: "0" }));
   });
 
   it("opens share and download quality options from preview actions", () => {
