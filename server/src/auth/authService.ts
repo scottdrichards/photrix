@@ -232,6 +232,10 @@ export const getShareScope = (token: string): ShareScope<unknown> | null =>
 
 export const isShareToken = (token: string): boolean => isStatelessShareToken(token);
 
+/** Which kind of credential a token is, for per-kind rate limits. Call after validateToken. */
+export const tokenKind = (token: string): "session" | "api" | "share" =>
+  tokens.has(token) ? "session" : apiTokens.has(token) ? "api" : "share";
+
 export const validateCredentials = async (
   username: string,
   password: string,

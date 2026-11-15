@@ -486,7 +486,7 @@ export const buildPhotrixMcpServer = (api: PhotrixApi): McpServer => {
     {
       title: "View a photo",
       description:
-        "Fetch an actual photo so you can see it, given its relativePath (from any other tool, e.g. '/2023/trip/img.jpg'). Returns a JPEG scaled to the chosen height: small 320px, medium 640px, large 1080px. HEIC/RAW are converted. For a video, returns a still frame.",
+        "Fetch an actual photo so you can see it, given its relativePath (from any other tool, e.g. '/2023/trip/img.jpg'). Returns an image scaled to the chosen height: small 320px, medium 640px, large 1080px. HEIC/RAW are converted. For a video, returns a still frame.",
       inputSchema: {
         path: z.string().describe("The photo's relativePath, e.g. '/2023/trip/img.jpg'."),
         size: z
