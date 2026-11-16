@@ -1,11 +1,19 @@
 import {
+  Calendar16Regular,
   ChevronDown16Regular,
   ChevronUp16Regular,
   Dismiss12Regular,
+  Filmstrip16Regular,
+  Folder16Regular,
+  Image16Regular,
+  Person16Regular,
   PersonSwap16Regular,
+  ScanPerson16Regular,
+  Search16Regular,
   Sparkle16Filled,
+  Star16Regular,
 } from "@fluentui/react-icons";
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import type {
   InterpretedFilterChip,
   InterpretedPersonAlternative,
@@ -36,7 +44,37 @@ const MINIMIZED_KEY = "photrix_ai_search_minimized";
 
 const readMinimized = (): boolean => readStorage(MINIMIZED_KEY) === "1";
 
-const chipKey = (chip: InterpretedFilterChip) => `${chip.field}:${chip.value ?? chip.label}`;
+const chipKey = (chip: InterpretedFilterChip) =>
+  `${chip.field}:${chip.value ?? chip.label}`;
+
+/**
+ * Feedback #188: each chip leads with the icon of the filter it set, the same
+ * glyph as that filter's button in the filter bar, so a chip says which
+ * control it changed. `kind` names it for assistive tech, where the label
+ * alone ("Ana", "2022") does not say what sort of filter it is.
+ */
+const chipType = (chip: InterpretedFilterChip): { kind: string; icon: ReactElement } => {
+  switch (chip.field) {
+    case "faceClusterFilter":
+      return { kind: "Face", icon: <ScanPerson16Regular /> };
+    case "peopleInImageFilter":
+      return { kind: "Tagged person", icon: <Person16Regular /> };
+    case "path":
+    case "includeSubfolders":
+      return { kind: "Folder", icon: <Folder16Regular /> };
+    case "mediaTypeFilter":
+      return {
+        kind: "Media type",
+        icon: /video/i.test(chip.label) ? <Filmstrip16Regular /> : <Image16Regular />,
+      };
+    case "ratingFilter":
+      return { kind: "Rating", icon: <Star16Regular /> };
+    case "dateRange":
+      return { kind: "Date", icon: <Calendar16Regular /> };
+    case "semanticQuery":
+      return { kind: "Search text", icon: <Search16Regular /> };
+  }
+};
 
 /**
  * The visible, undoable form of an AI-interpreted query.
@@ -99,38 +137,51 @@ export const SearchInterpretationChips = ({
       </span>
 
       <div className={css.chips}>
-        {chips.map((chip) => (
-          <span key={chipKey(chip)} className={css.chip}>
-            {chip.label}
-            {onSwapPerson && (chip.alternatives?.length ?? 0) > 0 && (
+        {chips.map((chip) => {
+          const { kind, icon } = chipType(chip);
+          return (
+            <span key={chipKey(chip)} className={css.chip}>
+              <span
+                className={css.chipIcon}
+                role="img"
+                aria-label={kind}
+                title={`${kind} filter`}
+              >
+                {icon}
+              </span>
+              {chip.label}
+              {onSwapPerson && (chip.alternatives?.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  className={css.chipRemove}
+                  onClick={() =>
+                    setPickingFor((current) =>
+                      current === chipKey(chip) ? null : chipKey(chip),
+                    )
+                  }
+                  aria-label={`Pick a different person than ${chip.label}`}
+                  aria-expanded={pickingFor === chipKey(chip)}
+                  title="Pick a different person"
+                >
+                  <PersonSwap16Regular />
+                </button>
+              )}
               <button
                 type="button"
                 className={css.chipRemove}
-                onClick={() =>
-                  setPickingFor((current) => (current === chipKey(chip) ? null : chipKey(chip)))
+                onClick={() => onRemoveChip(chip)}
+                aria-label={`Remove filter ${chip.label}`}
+                title={
+                  chip.field === "semanticQuery"
+                    ? "Remove"
+                    : "Remove this filter and search its words as text"
                 }
-                aria-label={`Pick a different person than ${chip.label}`}
-                aria-expanded={pickingFor === chipKey(chip)}
-                title="Pick a different person"
               >
-                <PersonSwap16Regular />
+                <Dismiss12Regular />
               </button>
-            )}
-            <button
-              type="button"
-              className={css.chipRemove}
-              onClick={() => onRemoveChip(chip)}
-              aria-label={`Remove filter ${chip.label}`}
-              title={
-                chip.field === "semanticQuery"
-                  ? "Remove"
-                  : "Remove this filter and search its words as text"
-              }
-            >
-              <Dismiss12Regular />
-            </button>
-          </span>
-        ))}
+            </span>
+          );
+        })}
       </div>
 
       {picking && onSwapPerson && (
