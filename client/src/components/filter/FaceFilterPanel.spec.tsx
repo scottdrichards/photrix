@@ -283,6 +283,33 @@ describe("FaceFilterPanel attribute controls", () => {
     expect(screen.getByText(/still need scoring in the background/i)).toBeTruthy();
   });
 
+  it("narrows the faces to the names matching what is typed (feedback #192)", async () => {
+    renderPanel();
+    const scott = await screen.findByRole("button", { name: "Scott, 5 faces" });
+    const unnamed = screen.getByRole("button", { name: "7 faces" });
+
+    const search = screen.getByRole("searchbox", { name: "Search faces by name" });
+    fireEvent.change(search, { target: { value: "sco" } });
+    expect(scott).toBeInTheDocument();
+    expect(unnamed).not.toBeInTheDocument();
+
+    // Picking from the narrowed list still filters, and the search stays put.
+    fireEvent.click(screen.getByRole("button", { name: "Scott, 5 faces" }));
+    await waitFor(() => expect(lastClusterFilter).toEqual(["person-12"]));
+    expect(screen.getByRole("searchbox", { name: "Search faces by name" })).toHaveValue("sco");
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search faces by name" }), {
+      target: { value: "nobody" },
+    });
+    expect(screen.queryByRole("button", { name: "Scott, 5 faces" })).not.toBeInTheDocument();
+    expect(screen.getByText("No named face matches “nobody”.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search faces by name" }), {
+      target: { value: "" },
+    });
+    expect(await screen.findByRole("button", { name: "7 faces" })).toBeInTheDocument();
+  });
+
   it("stores the selected face match mode", async () => {
     renderPanel();
     await waitFor(() => expect(chip("Smiling")).toBeTruthy());
