@@ -9,6 +9,7 @@ import { ollamaGenerate } from "../shareDescription/ollamaGenerate.ts";
 import {
   extractDateIntent,
   hasTemporalEvidence,
+  joinedPhrases,
   mediaTypeEvidence,
   queryMentions,
   ratingEvidence,
@@ -16,6 +17,7 @@ import {
   typedMediaWords,
   typedRatingWords,
   typedWordsNaming,
+  withoutNames,
   yearsInQuery,
 } from "./queryEvidence.ts";
 import { resolveDateIntent } from "./resolveDateIntent.ts";
@@ -210,8 +212,12 @@ export const interpretSearchQuery = async ({
   // People — only names that exist in this library. A named face cluster wins
   // over the metadata tag: it filters on recognized faces rather than on
   // whatever the file happened to be tagged with.
+  // Matched against everyone the library knows, not only the few the prompt
+  // lists: the model copies a name out of the query whether or not it was on
+  // the list, and that name used to be reported as "ignored" (feedback #193).
+  const knownPeople = vocabulary.knownPeople ?? vocabulary.people;
   const peopleByName = new Map(
-    vocabulary.people.map((person) => [normalizeForMatch(person.name), person]),
+    knownPeople.map((person) => [normalizeForMatch(person.name), person]),
   );
   // Fallback for a partial name: the model is told to "copy exactly from the
   // People list", but a small local model routinely mangles a multi-word name
@@ -226,7 +232,7 @@ export const interpretSearchQuery = async ({
   // theirs, in any order/count. Trust it only when exactly one candidate
   // qualifies; an ambiguous requested word (e.g. "Johnson" alone, shared by
   // several people) must not guess.
-  const peopleWithWords = vocabulary.people.map((person) => ({
+  const peopleWithWords = knownPeople.map((person) => ({
     person,
     words: new Set(person.name.split(/\s+/).map(normalizeForMatch).filter(Boolean)),
   }));
@@ -257,6 +263,21 @@ export const interpretSearchQuery = async ({
   };
   const clusterIds: string[] = [];
   const taggedNames: string[] = [];
+  const chosenNames: string[] = [];
+  const addPerson = (match: VocabularyPerson) => {
+    const chip = asAlternative(match);
+    const chosen = chip.field === "faceClusterFilter" ? clusterIds : taggedNames;
+    if (chosen.includes(chip.value)) return;
+    chosen.push(chip.value);
+    chosenNames.push(match.name);
+    const alternatives = alternativesFor(match);
+    chips.push(
+      withSourceText(
+        alternatives.length > 0 ? { ...chip, alternatives } : chip,
+        typedWordsNaming(trimmedQuery, match.name),
+      ),
+    );
+  };
   for (const requested of dedupe(asStringList(raw.people))) {
     const normalizedRequested = normalizeForMatch(requested);
     const requestedWords = requested
@@ -284,14 +305,64 @@ export const interpretSearchQuery = async ({
     // A real person the user never asked for is the worst case: the filter looks
     // legitimate and quietly empties the grid. Require the name in the query.
     if (!queryMentions(trimmedQuery, match.name, { matchAnyWord: true })) continue;
-    const chip = asAlternative(match);
-    const chosen = chip.field === "faceClusterFilter" ? clusterIds : taggedNames;
-    if (chosen.includes(chip.value)) continue;
-    chosen.push(chip.value);
-    const alternatives = alternativesFor(match);
-    chips.push(
-      withSourceText(alternatives.length > 0 ? { ...chip, alternatives } : chip, typedWordsNaming(trimmedQuery, match.name)),
-    );
+    addPerson(match);
+  }
+
+  // Feedback #193: "Ana and Bo" came back from the model as Ana alone. Where
+  // the query joins two phrases and *both* sides name a known person, both
+  // were asked for, whatever the model returned. One side alone is not
+  // enough ("Rose with a dog", "sunset and May"): a lone name-like word is
+  // exactly what the model is there to judge.
+  //
+  // A side reads outward from the joiner. Its nearest word picks the people
+  // with that word in their name, and further words narrow them ("Ana Lee"
+  // over "Ana Cruz"). Still ambiguous, it is not guessed at, the same as an
+  // ambiguous name from the model.
+  const peopleNamedBy = (
+    tokens: string[],
+  ): { candidates: VocabularyPerson[]; meant: VocabularyPerson[] } => {
+    const asWord = (token: string) => normalizeForMatch(token.replace(/'s$/, ""));
+    const nearest = tokens[0] ? asWord(tokens[0]) : "";
+    if (nearest.length < 2) return { candidates: [], meant: [] };
+    let candidates = peopleWithWords.filter(({ words }) => words.has(nearest));
+    let matchedWords = 1;
+    for (const token of tokens.slice(1, 4)) {
+      if (candidates.length <= 1) break;
+      const narrowed = candidates.filter(({ words }) => words.has(asWord(token)));
+      if (narrowed.length === 0) break;
+      candidates = narrowed;
+      matchedWords += 1;
+    }
+    // "Sarah" typed alone means the person called just Sarah, not Sarah Connor.
+    const exact = candidates.filter(({ words }) => words.size === matchedWords);
+    return {
+      candidates: candidates.map(({ person }) => person),
+      meant: (exact.length === 1 ? exact : candidates).map(({ person }) => person),
+    };
+  };
+  const isChosen = (person: VocabularyPerson) => chosenNames.includes(person.name);
+  for (const { left, right } of joinedPhrases(trimmedQuery)) {
+    const sides = [
+      { tokens: left, ...peopleNamedBy(left) },
+      { tokens: right, ...peopleNamedBy(right) },
+    ];
+    if (sides.some(({ candidates }) => candidates.length === 0)) continue;
+    for (const { tokens, candidates, meant } of sides) {
+      // The model already picked someone these words could mean: its choice
+      // stands, with the others offered as alternatives (feedback #170).
+      if (candidates.some(isChosen)) continue;
+      if (meant.length === 1) addPerson(meant[0]);
+      else if (!ignored.some((entry) => normalizeForMatch(entry) === normalizeForMatch(tokens[0]))) {
+        ignored.push(tokens[0]);
+      }
+    }
+  }
+  // A name the model returned in a form that matched nobody, when the join
+  // has since found who it meant, was not ignored after all.
+  for (let index = ignored.length - 1; index >= 0; index -= 1) {
+    if (chosenNames.some((name) => typedWordsNaming(ignored[index], name))) {
+      ignored.splice(index, 1);
+    }
   }
   // Someone already filtered on is not an alternative to anyone else.
   for (const chip of chips) {
@@ -400,6 +471,10 @@ export const interpretSearchQuery = async ({
   // Whatever is left describes the picture itself and goes to CLIP unchanged.
   let visual =
     typeof raw.visual === "string" ? raw.visual.trim().slice(0, MAX_VISUAL_LENGTH) : "";
+  // The people chips already filter on these names. Left in the text search
+  // they match nothing visual, and a model that dropped the second of two
+  // names tends to leave it, or just the "with" before it, here.
+  if (visual && chosenNames.length > 0) visual = withoutNames(visual, chosenNames);
 
   // Nothing structured came back: the "interpretation" is just the original
   // query, so say so and let the plain search stand rather than re-rendering the

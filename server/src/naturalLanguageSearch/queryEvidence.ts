@@ -60,9 +60,56 @@ export const queryMentions = (
     return tokens.some((token) => tokenMatches(token, words[0]));
   }
   if (normalize(query).includes(normalize(value))) return true;
-  const significantWords = words.filter((word) => word.length >= 4);
+  // Short words are skipped as too common to be evidence, unless the name has
+  // nothing else: "Ana Lee" was never matched at all, and a folder of only
+  // short words matched every query.
+  const longWords = words.filter((word) => word.length >= 4);
+  const significantWords = longWords.length > 0 ? longWords : words;
   const matches = (word: string) => tokens.some((token) => tokenMatches(token, word));
   return matchAnyWord ? significantWords.some(matches) : significantWords.every(matches);
+};
+
+// What joins two names into "these people together". A comma covers
+// "Ana, Bo and Cy"; "with" covers "Ana with Bo".
+const JOINERS = /\s*(?:,|&|\+|\band\b|\bwith\b|\bplus\b)\s*/gi;
+
+/** Leading/trailing joiner words left on a phrase once its names are taken out. */
+const EDGE_JOINERS = /^(?:(?:and|with|plus|of)\b|[,&+\s])+|(?:\b(?:and|with|plus|of)|[,&+\s])+$/gi;
+
+/**
+ * Every place the query joins two phrases ("Ana and Bo", "Ana, Bo and Cy",
+ * "Ana with Bo"): the words on each side, nearest the joiner first.
+ *
+ * Feedback #193: the model often returns only the first of two joined names.
+ * The join is evidence the interpreter can check for itself: when both sides
+ * turn out to name a known person, both were asked for.
+ */
+export const joinedPhrases = (query: string): Array<{ left: string[]; right: string[] }> => {
+  const segments = query
+    .split(JOINERS)
+    .map(tokenize)
+    .filter((tokens) => tokens.length > 0);
+  return segments.slice(0, -1).map((segment, index) => ({
+    left: [...segment].reverse(),
+    right: segments[index + 1],
+  }));
+};
+
+/**
+ * `text` without the words that name one of `names`, and without the joiner
+ * words that removal leaves dangling at either end ("with Ana" becomes "").
+ */
+export const withoutNames = (text: string, names: string[]): string => {
+  const nameWords = names.flatMap(tokenize);
+  return text
+    .split(/\s+/)
+    .filter((word) => {
+      const [token] = tokenize(word);
+      return !token || !nameWords.some((nameWord) => tokenMatches(token, nameWord));
+    })
+    .join(" ")
+    .replace(EDGE_JOINERS, "")
+    .trim();
 };
 
 /**

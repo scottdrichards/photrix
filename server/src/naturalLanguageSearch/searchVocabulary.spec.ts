@@ -74,3 +74,27 @@ describe("loadSearchVocabulary folders (feedback #111)", () => {
     expect(vocabulary.folders).toContain("OK/Fine");
   });
 });
+
+describe("loadSearchVocabulary people (feedback #193)", () => {
+  it("lists the most-seen people for the prompt and keeps everyone for matching", async () => {
+    clearSearchVocabularyCache();
+    const named = Array.from({ length: 55 }, (_, index) => ({
+      id: `person-${index + 1}`,
+      name: `Person ${index + 1}`,
+    }));
+    const database = {
+      getFolders: async () => [],
+      faces: { listMostSeenNamedPeople: async () => named },
+      queryFieldSuggestions: async () => ["Tagged Only", "person 3"],
+    } as unknown as IndexDatabase;
+
+    const vocabulary = await loadSearchVocabulary(database);
+
+    expect(vocabulary.people).toHaveLength(40);
+    expect(vocabulary.people[0]).toEqual({ name: "Person 1", clusterId: "person-1" });
+    expect(vocabulary.knownPeople).toHaveLength(56);
+    expect(vocabulary.knownPeople).toContainEqual({ name: "Person 55", clusterId: "person-55" });
+    // A tag that repeats a named face adds nothing; a new one is kept, untied to a face.
+    expect(vocabulary.knownPeople).toContainEqual({ name: "Tagged Only" });
+  });
+});
