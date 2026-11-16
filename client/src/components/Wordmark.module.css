@@ -1,19 +1,6 @@
-/* One focus distance d drives everything: d = 0 is the wordmark's plane
-   (P included), d = 1 is a cloud backdrop behind it, d < 0 is in front of
-   both. Each plane's blur is its distance from d (6px per unit for the
-   word, 4.5px for the clouds), so they always agree on where focus is. A
-   slight scale with d is focus breathing. In the keyframes below:
-     word blur = 6px x |d|, cloud blur = 4.5px x |d - 1|, scale = 1 - 0.03 x d,
-   with matching percentages and easings on both planes. Keep that relation
-   if you retune them, or the two planes stop agreeing.
-
-   The story: start in front (both soft), creep up, pass through the word
-   without stopping, overshoot to the clouds (clouds crisp, word soft), hold,
-   back up onto the word, settle. Then the colour sweep.
-
-   On load it starts already blurred and holds 0.5s before moving. A replay
-   (hover or click) starts from a sharp word, so it first eases out to the
-   starting blur over 0.5s. Both put the sweep at 2.81s. */
+/* The focus effect is driven from wordmarkFocus.ts with the Web Animations
+   API: the blur, scale and cloud opacity come from a model of a real lens, so
+   none of it is keyframed here. These rules only lay the scene out. */
 
 .wordmark {
   position: relative;
@@ -44,8 +31,8 @@
   position: relative;
 }
 
-/* Cartoon clouds with crisp edges, so it is obvious when they rather than
-   the word are in focus. Behind the text, and only during a play. */
+/* Clouds far behind the word. Shown only during a play; the script fades
+   them in and out. */
 .backdrop {
   position: absolute;
   inset: -0.22em -0.5em -0.08em -0.35em;
@@ -53,231 +40,8 @@
   pointer-events: none;
   opacity: 0;
   transform-origin: 40% 60%;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 28' preserveAspectRatio='none'%3E%3Cg fill='%237cc4f0' opacity='.45'%3E%3Crect x='3' y='17' width='30' height='8' rx='4'/%3E%3Ccircle cx='9' cy='18' r='6'/%3E%3Ccircle cx='17' cy='12' r='8'/%3E%3Ccircle cx='26' cy='15' r='6.5'/%3E%3Crect x='50' y='11' width='38' height='8' rx='4'/%3E%3Ccircle cx='56' cy='12' r='5'/%3E%3Ccircle cx='65' cy='7' r='7'/%3E%3Ccircle cx='75' cy='9' r='6'/%3E%3Ccircle cx='83' cy='12' r='4.5'/%3E%3Crect x='86' y='21' width='13' height='5' rx='2.5'/%3E%3Ccircle cx='90' cy='21' r='3.2'/%3E%3Ccircle cx='95' cy='20' r='3.8'/%3E%3C/g%3E%3C/svg%3E")
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 28' preserveAspectRatio='none'%3E%3Cg fill='%237cc4f0' opacity='.3'%3E%3Crect x='3' y='17' width='30' height='8' rx='4'/%3E%3Ccircle cx='9' cy='18' r='6'/%3E%3Ccircle cx='17' cy='12' r='8'/%3E%3Ccircle cx='26' cy='15' r='6.5'/%3E%3Crect x='50' y='11' width='38' height='8' rx='4'/%3E%3Ccircle cx='56' cy='12' r='5'/%3E%3Ccircle cx='65' cy='7' r='7'/%3E%3Ccircle cx='75' cy='9' r='6'/%3E%3Ccircle cx='83' cy='12' r='4.5'/%3E%3Crect x='86' y='21' width='13' height='5' rx='2.5'/%3E%3Ccircle cx='90' cy='21' r='3.2'/%3E%3Ccircle cx='95' cy='20' r='3.8'/%3E%3C/g%3E%3C/svg%3E")
     center / 100% 100% no-repeat;
-}
-
-.intro .focus {
-  animation: word-intro 2.6s 0.5s both;
-}
-
-.intro .backdrop {
-  animation:
-    cloud-intro 2.6s 0.5s both,
-    cloud-fade-intro 2.6s 0.5s both;
-}
-
-.replay .focus {
-  animation: word-replay 3.1s both;
-}
-
-.replay .backdrop {
-  animation:
-    cloud-replay 3.1s both,
-    cloud-fade-replay 3.1s both;
-}
-
-@keyframes word-intro {
-  0% {
-    filter: blur(6px);
-    transform: scale(1.03);
-    animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
-  }
-  30% {
-    filter: blur(1.08px);
-    transform: scale(1.01);
-    animation-timing-function: linear;
-  }
-  42% {
-    filter: blur(0px);
-    transform: scale(1);
-    animation-timing-function: cubic-bezier(0.2, 0.45, 0.4, 1);
-  }
-  60% {
-    filter: blur(5.4px);
-    transform: scale(0.97);
-    animation-timing-function: linear;
-  }
-  70% {
-    filter: blur(5.4px);
-    transform: scale(0.97);
-    animation-timing-function: cubic-bezier(0.45, 0, 0.35, 1);
-  }
-  87% {
-    filter: blur(0px);
-    transform: scale(1);
-    animation-timing-function: ease-out;
-  }
-  93% {
-    filter: blur(0.36px);
-    transform: scale(1);
-    animation-timing-function: ease-in-out;
-  }
-  100% {
-    filter: blur(0px);
-    transform: scale(1);
-  }
-}
-
-@keyframes word-replay {
-  0% {
-    filter: blur(0px);
-    transform: scale(1);
-    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
-  }
-  16.13% {
-    filter: blur(6px);
-    transform: scale(1.03);
-    animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
-  }
-  41.29% {
-    filter: blur(1.08px);
-    transform: scale(1.01);
-    animation-timing-function: linear;
-  }
-  51.35% {
-    filter: blur(0px);
-    transform: scale(1);
-    animation-timing-function: cubic-bezier(0.2, 0.45, 0.4, 1);
-  }
-  66.45% {
-    filter: blur(5.4px);
-    transform: scale(0.97);
-    animation-timing-function: linear;
-  }
-  74.84% {
-    filter: blur(5.4px);
-    transform: scale(0.97);
-    animation-timing-function: cubic-bezier(0.45, 0, 0.35, 1);
-  }
-  89.1% {
-    filter: blur(0px);
-    transform: scale(1);
-    animation-timing-function: ease-out;
-  }
-  94.13% {
-    filter: blur(0.36px);
-    transform: scale(1);
-    animation-timing-function: ease-in-out;
-  }
-  100% {
-    filter: blur(0px);
-    transform: scale(1);
-  }
-}
-
-@keyframes cloud-intro {
-  0% {
-    filter: blur(9px);
-    transform: scale(1.03);
-    animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
-  }
-  30% {
-    filter: blur(5.31px);
-    transform: scale(1.01);
-    animation-timing-function: linear;
-  }
-  42% {
-    filter: blur(4.5px);
-    transform: scale(1);
-    animation-timing-function: cubic-bezier(0.2, 0.45, 0.4, 1);
-  }
-  60% {
-    filter: blur(0.45px);
-    transform: scale(0.97);
-    animation-timing-function: linear;
-  }
-  70% {
-    filter: blur(0.45px);
-    transform: scale(0.97);
-    animation-timing-function: cubic-bezier(0.45, 0, 0.35, 1);
-  }
-  87% {
-    filter: blur(4.5px);
-    transform: scale(1);
-    animation-timing-function: ease-out;
-  }
-  93% {
-    filter: blur(4.77px);
-    transform: scale(1);
-    animation-timing-function: ease-in-out;
-  }
-  100% {
-    filter: blur(4.5px);
-    transform: scale(1);
-  }
-}
-
-@keyframes cloud-replay {
-  0% {
-    filter: blur(4.5px);
-    transform: scale(1);
-    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
-  }
-  16.13% {
-    filter: blur(9px);
-    transform: scale(1.03);
-    animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
-  }
-  41.29% {
-    filter: blur(5.31px);
-    transform: scale(1.01);
-    animation-timing-function: linear;
-  }
-  51.35% {
-    filter: blur(4.5px);
-    transform: scale(1);
-    animation-timing-function: cubic-bezier(0.2, 0.45, 0.4, 1);
-  }
-  66.45% {
-    filter: blur(0.45px);
-    transform: scale(0.97);
-    animation-timing-function: linear;
-  }
-  74.84% {
-    filter: blur(0.45px);
-    transform: scale(0.97);
-    animation-timing-function: cubic-bezier(0.45, 0, 0.35, 1);
-  }
-  89.1% {
-    filter: blur(4.5px);
-    transform: scale(1);
-    animation-timing-function: ease-out;
-  }
-  94.13% {
-    filter: blur(4.77px);
-    transform: scale(1);
-    animation-timing-function: ease-in-out;
-  }
-  100% {
-    filter: blur(4.5px);
-    transform: scale(1);
-  }
-}
-
-@keyframes cloud-fade-intro {
-  0%,
-  78% {
-    opacity: 1;
-  }
-  95%,
-  100% {
-    opacity: 0;
-  }
-}
-
-@keyframes cloud-fade-replay {
-  0% {
-    opacity: 0;
-  }
-  16.13%,
-  81.55% {
-    opacity: 1;
-  }
-  95.81%,
-  100% {
-    opacity: 0;
-  }
 }
 
 /* A band of the logo's colours, clipped to the letters, crossing once focus
@@ -306,28 +70,6 @@
   -webkit-background-clip: text;
   background-clip: text;
   filter: drop-shadow(0 0 0.12em rgb(242 140 200 / 45%));
-}
-
-.intro .sheen,
-.replay .sheen {
-  animation: sheen 1.6s cubic-bezier(0.45, 0, 0.25, 1) 2.81s both;
-}
-
-@keyframes sheen {
-  from {
-    background-position: 100% 0;
-  }
-  to {
-    background-position: 0 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .scene .focus,
-  .scene .backdrop,
-  .scene .sheen {
-    animation: none;
-  }
 }
 
 .srOnly {

@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { Wordmark, WORDMARK_PLAY_MS } from "./Wordmark";
+import { Wordmark } from "./Wordmark";
+import { playMs } from "./wordmarkFocus";
 
 const setReducedMotion = (reduce: boolean) => {
   Object.defineProperty(window, "matchMedia", {
@@ -14,10 +15,12 @@ const setReducedMotion = (reduce: boolean) => {
   });
 };
 
-const scene = (container: HTMLElement) => container.querySelector('[data-part="scene"]');
-const playKind = (container: HTMLElement) => scene(container)?.getAttribute("data-play");
+const scene = (container: HTMLElement) => container.querySelector('[data-part="scene"]')!;
+const playKind = (container: HTMLElement) => scene(container).getAttribute("data-play");
+const runs = (container: HTMLElement) =>
+  Number(scene(container).getAttribute("data-run"));
 const wordmark = () => screen.getByText("Photrix").parentElement!;
-const finish = () => act(() => vi.advanceTimersByTime(WORDMARK_PLAY_MS));
+const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms));
 
 describe("Wordmark", () => {
   beforeEach(() => {
@@ -41,29 +44,26 @@ describe("Wordmark", () => {
 
   it("lets the intro finish before a hover can replay it", () => {
     const { container } = render(<Wordmark />);
-    const intro = scene(container);
     fireEvent.mouseEnter(wordmark());
     fireEvent.click(wordmark());
-    expect(scene(container)).toBe(intro);
+    expect(playKind(container)).toBe("intro");
 
-    finish();
+    wait(playMs("intro"));
     fireEvent.mouseEnter(wordmark());
     expect(playKind(container)).toBe("replay");
-    expect(scene(container)).not.toBe(intro);
+    expect(runs(container)).toBe(1);
   });
 
-  it("replays on click once a replay has finished", () => {
+  it("ignores clicks mid-replay, then replays once it has finished", () => {
     const { container } = render(<Wordmark />);
-    finish();
+    wait(playMs("intro"));
     fireEvent.click(wordmark());
-    const first = scene(container);
     fireEvent.click(wordmark());
-    expect(scene(container)).toBe(first);
+    expect(runs(container)).toBe(1);
 
-    finish();
+    wait(playMs("replay"));
     fireEvent.click(wordmark());
-    expect(scene(container)).not.toBe(first);
-    expect(playKind(container)).toBe("replay");
+    expect(runs(container)).toBe(2);
   });
 
   it("never plays under reduced motion", () => {
@@ -71,7 +71,7 @@ describe("Wordmark", () => {
     const { container } = render(<Wordmark />);
     expect(playKind(container)).toBe("still");
     fireEvent.mouseEnter(wordmark());
-    finish();
+    wait(playMs("intro"));
     fireEvent.click(wordmark());
     expect(playKind(container)).toBe("still");
   });
