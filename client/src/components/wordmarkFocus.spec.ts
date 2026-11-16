@@ -20,13 +20,13 @@ const lensPath = (play: FocusPlay) =>
   );
 
 describe("wordmark focus optics", () => {
-  it("pulls from 3 m out to 25 m, back to 18 m, and settles on 20 m", () => {
+  it("pulls from 3 m out to 40 m, back to 13 m, and settles on 20 m", () => {
     const path = lensPath("intro").map((d) => 1 / d);
     expect(path[0]).toBeCloseTo(START_M);
     const furthest = Math.max(...path);
-    expect(furthest).toBeCloseTo(25, 1);
+    expect(furthest).toBeCloseTo(40, 0);
     const afterOvershoot = path.slice(path.indexOf(furthest));
-    expect(Math.min(...afterOvershoot)).toBeCloseTo(18, 1);
+    expect(Math.min(...afterOvershoot)).toBeCloseTo(13, 1);
     expect(path[path.length - 1]).toBeCloseTo(SUBJECT_M);
   });
 
@@ -38,16 +38,25 @@ describe("wordmark focus optics", () => {
   it("never brings the clouds into focus", () => {
     for (const play of plays) {
       const sharpest = Math.min(...lensPath(play).map((d) => blurPx(d, CLOUDS_M)));
-      expect(sharpest).toBeGreaterThan(0.8);
+      expect(sharpest).toBeGreaterThan(0.45);
     }
   });
 
-  it("ends with the word sharp, and its misses near 20 m stay subtle", () => {
+  it("takes about half a second to pull focus, once it starts", () => {
+    expect(focusMs("intro") - focusMs("replay")).toBe(0);
+    const pull = focusMs("intro") - 250;
+    expect(pull).toBeGreaterThanOrEqual(400);
+    expect(pull).toBeLessThanOrEqual(600);
+  });
+
+  it("ends with the word sharp, and its misses read as misses but stay subtle", () => {
     for (const play of plays) {
       const path = lensPath(play);
       expect(blurPx(path[path.length - 1], SUBJECT_M)).toBeCloseTo(0);
-      expect(blurPx(1 / 25, SUBJECT_M)).toBeLessThan(0.3);
-      expect(blurPx(1 / 18, SUBJECT_M)).toBeLessThan(0.3);
+    }
+    for (const missM of [40, 13]) {
+      expect(blurPx(1 / missM, SUBJECT_M)).toBeGreaterThan(0.5);
+      expect(blurPx(1 / missM, SUBJECT_M)).toBeLessThan(1.2);
     }
     expect(blurPx(1 / START_M, SUBJECT_M)).toBeGreaterThan(5);
   });
@@ -82,7 +91,10 @@ describe("wordmark focus optics", () => {
       for (const play of plays) {
         const end = focusMs(play);
         expect(largest(play, 0, end)).toBeLessThan(0.25);
-        expect(largest(play, end - 250, end)).toBeLessThan(largest(play, 0, 600) / 5);
+        const tail = Math.round(end / 5);
+        expect(largest(play, end - tail, end)).toBeLessThan(
+          largest(play, 0, 2 * tail) / 5,
+        );
         expect(shakeAt(play, end)).toEqual({ x: 0, y: 0 });
       }
     });

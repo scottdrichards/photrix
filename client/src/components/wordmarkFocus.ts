@@ -8,10 +8,10 @@
  * is computed from it. The word and the clouds can never disagree about where
  * focus is, and the clouds, 180 m further back, are never sharp.
  *
- * A consequence worth knowing before retuning: once the lens is near 20 m, the
- * 25 m overshoot and the 18 m correction defocus the word by under 0.3 px, as
- * they would in a real camera at this distance. The visible part of the hunt is
- * the rack in from 3 m.
+ * A consequence worth knowing before retuning: near 20 m, focus errors in
+ * metres barely show. An overshoot to 25 m defocuses the word by only 0.25 px,
+ * so the hunt overshoots hard, to 40 m and back to 13 m, to read as a miss.
+ * Overshooting further would bring the lens too near the clouds' focus.
  *
  * The camera is handheld, too. It starts off-aim and drifts onto the word with
  * a small overshoot, while a hand tremor shakes it. Both die away as focus
@@ -37,8 +37,8 @@ const SHAKE_EM = 0.08;
 /** Where the camera is pointing when it starts, as a multiple of SHAKE_EM. */
 const AIM_START = { x: -1.3, y: 0.8 };
 /** The drift onto the word: a damped swing, with this time constant and rate. */
-const AIM_SETTLE_MS = 420;
-const AIM_SWING_HZ = 0.9;
+const AIM_SETTLE_MS = 200;
+const AIM_SWING_HZ = 2;
 type Wave = readonly [hz: number, phase: number, weight: number];
 /** Hand tremor: a few incommensurate sines, slow sway plus a faster jitter. */
 const TREMOR: { x: readonly Wave[]; y: readonly Wave[] } = {
@@ -57,7 +57,9 @@ const TREMOR: { x: readonly Wave[]; y: readonly Wave[] } = {
 export const SHEEN_MS = 1600;
 export const SHEEN_EASING = "cubic-bezier(0.45, 0, 0.25, 1)";
 const CLOUD_FADE_MS = 600;
-const INTRO_HOLD_MS = 400;
+const INTRO_HOLD_MS = 250;
+/** A replay racks out from the sharp word to 3 m over this long. */
+const REPLAY_LEAD_MS = 250;
 
 type Ease = (p: number) => number;
 const easeInOut: Ease = (p) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2);
@@ -67,16 +69,16 @@ const still: Ease = () => 0;
 type Move = { toM: number; ms: number; ease: Ease } | { holdMs: number };
 
 /**
- * The pull, after the lens starts at 3 m: a fast rack out past the word to
- * 25 m, a pause, a correction back to 18 m, another pause, then a slow settle
- * on 20 m.
+ * The pull, after the lens starts at 3 m, about half a second in all: a fast
+ * rack well past the word to 40 m, a beat, a correction back past it to 13 m,
+ * another beat, then a settle on 20 m.
  */
 export const FOCUS_PULL: readonly Move[] = [
-  { toM: 25, ms: 900, ease: easeInOut },
-  { holdMs: 120 },
-  { toM: 18, ms: 450, ease: easeInOut },
-  { holdMs: 110 },
-  { toM: 20, ms: 380, ease: easeOut },
+  { toM: 40, ms: 200, ease: easeInOut },
+  { holdMs: 40 },
+  { toM: 13, ms: 120, ease: easeInOut },
+  { holdMs: 30 },
+  { toM: 20, ms: 110, ease: easeOut },
 ];
 
 export type FocusPlay = "intro" | "replay";
@@ -91,7 +93,7 @@ const segments = (play: FocusPlay): Segment[] => {
   const lead: Move =
     play === "intro"
       ? { holdMs: INTRO_HOLD_MS }
-      : { toM: START_M, ms: 450, ease: easeInOut };
+      : { toM: START_M, ms: REPLAY_LEAD_MS, ease: easeInOut };
   let at = 1 / (play === "intro" ? START_M : SUBJECT_M);
   return [lead, ...FOCUS_PULL].map((move) => {
     if ("holdMs" in move) return { fromD: at, toD: at, ms: move.holdMs, ease: still };
