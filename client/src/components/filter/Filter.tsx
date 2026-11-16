@@ -218,6 +218,18 @@ export const Filter = () => {
   const isRatingFilterActive = ratingFilter !== undefined;
   const isDateFilterActive = dateRange !== undefined;
   const isMapFilterActive = locationBounds !== undefined;
+  // Feedback #190: with the row collapsed behind the Filters toggle, nothing
+  // said a filter was on. One per lit icon, so the bubble and the row agree.
+  const activeFilterCount = [
+    isFolderFilterActive,
+    isMediaTypeFilterActive,
+    isFaceClusterFilterActive,
+    isPeopleFilterActive,
+    isGearFilterActive,
+    isRatingFilterActive,
+    isDateFilterActive,
+    isMapFilterActive,
+  ].filter(Boolean).length;
 
   const handleRatingClick = (star: number) => {
     if (ratingValue === star) {
@@ -438,10 +450,15 @@ export const Filter = () => {
         className={`btn btn-icon ${css.filterIconButton} ${css.filterCollapseToggle} ${isBarOpen ? "btn-primary" : "btn-subtle"}`}
         onClick={() => setIsBarOpen((current) => !current)}
         aria-expanded={isBarOpen}
-        aria-label="Filters"
-        title="Filters"
+        aria-label={activeFilterCount > 0 ? `Filters, ${activeFilterCount} active` : "Filters"}
+        title={activeFilterCount > 0 ? `Filters (${activeFilterCount} active)` : "Filters"}
       >
         <Filter24Regular fontSize={20} />
+        {activeFilterCount > 0 ? (
+          <span className={css.filterCountBadge} aria-hidden="true">
+            {activeFilterCount}
+          </span>
+        ) : null}
       </button>
       <div className={`${css.iconBarButtons} ${isBarOpen ? css.iconBarButtonsOpen : ""}`}>
       {/* Folders */}

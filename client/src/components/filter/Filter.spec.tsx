@@ -560,4 +560,28 @@ describe("Filter", () => {
     fireEvent.mouseDown(document.body);
     expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
+
+  it("shows how many filters are on in a bubble on the Filters toggle (feedback #190)", async () => {
+    const view = render(
+      <FilterProvider>
+        <Filter />
+        <FilterStateInitializer
+          nextFilter={{
+            ratingFilter: { rating: 4, atLeast: true },
+            dateRange: { start: 1, end: 2 },
+            // Two fields of one filter count once, like its one icon.
+            cameraModelFilter: ["R6"],
+            lensFilter: ["RF 50mm"],
+          }}
+        />
+      </FilterProvider>,
+    );
+
+    const toggle = await screen.findByRole("button", { name: "Filters, 3 active" });
+    expect(toggle).toHaveTextContent("3");
+
+    view.unmount();
+    renderFilter();
+    expect(screen.getByRole("button", { name: "Filters" })).toHaveTextContent("");
+  });
 });
