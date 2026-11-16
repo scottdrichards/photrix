@@ -155,7 +155,10 @@ export const queryHandler = async (
       writeJson(res, 403, { error: "Forbidden" });
       return;
     }
-    const faces = await database.faces.getPeopleFacesForFile(stripLeadingSlash(filePath));
+    // A share is read-only, so faces it could only offer for naming stay out.
+    const faces = await database.faces.getPeopleFacesForFile(stripLeadingSlash(filePath), {
+      includeUnclustered: !shareFilter,
+    });
     writeJson(res, 200, { faces });
     return;
   }

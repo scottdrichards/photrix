@@ -145,6 +145,42 @@ describe("FaceAssignPanel", () => {
     expect(onAssigned).not.toHaveBeenCalled();
   });
 
+  describe("a face in no cluster (feedback #191)", () => {
+    const loneFace: NamedFace = {
+      faceId: 42,
+      box: face.box,
+      personId: "unclustered-42",
+      name: null,
+      unclustered: true,
+    };
+
+    it("names just this face, with no cluster to preview or rename", async () => {
+      const onAssigned = vi.fn();
+      render(<FaceAssignPanel face={loneFace} onClose={vi.fn()} onAssigned={onAssigned} />);
+
+      expect(screen.getByText(/isn.t grouped with any others/)).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText("Person's name"), { target: { value: "Di" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => expect(onAssigned).toHaveBeenCalled());
+      expect(assignFaceToPersonMock).toHaveBeenCalledWith(42, { name: "Di" });
+      expect(fetchClusterFacePreviewMock).not.toHaveBeenCalled();
+      expect(renameClusterMock).not.toHaveBeenCalled();
+    });
+
+    it("adds this face to an existing person without merging anything", async () => {
+      fetchNamedPeopleMock.mockResolvedValue([{ id: "person-3", name: "Ada" }]);
+      const onAssigned = vi.fn();
+      render(<FaceAssignPanel face={loneFace} onClose={vi.fn()} onAssigned={onAssigned} />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Ada" }));
+
+      await waitFor(() => expect(onAssigned).toHaveBeenCalled());
+      expect(assignFaceToPersonMock).toHaveBeenCalledWith(42, { personId: "person-3" });
+      expect(mergeClustersMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("changing a named face (feedback #160)", () => {
     const named: NamedFace = { ...face, personId: "person-3", name: "Ada" };
 

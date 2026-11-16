@@ -52,9 +52,15 @@ const PREVIEW_LIMIT = 6;
  * would rename or move everyone in it. This mode moves only the clicked face,
  * via `assignFaceToPerson`, and skips the sightings preview, which would show
  * the person it is being taken away from.
+ *
+ * A face in no cluster at all (feedback #191) is named the same single-face
+ * way: there is no cluster to rename or merge, and no other sightings to show.
  */
 export function FaceAssignPanel({ face, onClose, onAssigned, subject }: FaceAssignPanelProps) {
   const changing = face.name !== null;
+  const unclustered = face.unclustered === true;
+  // Both act on this one face, by its id, and have no cluster to preview.
+  const singleFace = changing || unclustered;
   const [previewFaces, setPreviewFaces] = useState<ClusterFace[]>([]);
   const [previewLoading, setPreviewLoading] = useState(true);
   const [namedPeople, setNamedPeople] = useState<NamedPersonOption[]>([]);
@@ -64,8 +70,8 @@ export function FaceAssignPanel({ face, onClose, onAssigned, subject }: FaceAssi
 
   useEffect(() => {
     const abortController = new AbortController();
-    setPreviewLoading(!changing);
-    if (!changing) fetchClusterFacePreview({
+    setPreviewLoading(!singleFace);
+    if (!singleFace) fetchClusterFacePreview({
       clusterId: face.personId,
       excludeFaceId: face.faceId,
       limit: PREVIEW_LIMIT,
@@ -85,7 +91,7 @@ export function FaceAssignPanel({ face, onClose, onAssigned, subject }: FaceAssi
 
     return () => abortController.abort();
      
-  }, [face.personId, face.faceId, changing]);
+  }, [face.personId, face.faceId, singleFace]);
 
   const suggestions = useMemo(() => {
     const trimmed = draft.trim().toLowerCase();
@@ -103,14 +109,16 @@ export function FaceAssignPanel({ face, onClose, onAssigned, subject }: FaceAssi
     setSaving(true);
     setError(null);
     try {
-      if (changing) await assignFaceToPerson(face.faceId, { personId: person.id });
+      if (singleFace) await assignFaceToPerson(face.faceId, { personId: person.id });
       else await mergeClusters([face.personId], person.id);
       onAssigned();
     } catch {
       setError(
         changing
           ? `Couldn't move this face to ${person.name} — try again.`
-          : `Couldn't merge into ${person.name} — try again.`,
+          : unclustered
+            ? `Couldn't add this face to ${person.name} — try again.`
+            : `Couldn't merge into ${person.name} — try again.`,
       );
       setSaving(false);
     }
@@ -132,7 +140,7 @@ export function FaceAssignPanel({ face, onClose, onAssigned, subject }: FaceAssi
     setSaving(true);
     setError(null);
     try {
-      if (changing) await assignFaceToPerson(face.faceId, { name: trimmed });
+      if (singleFace) await assignFaceToPerson(face.faceId, { name: trimmed });
       else await renameCluster(face.personId, trimmed);
       onAssigned();
     } catch {
@@ -168,6 +176,10 @@ export function FaceAssignPanel({ face, onClose, onAssigned, subject }: FaceAssi
       {changing ? (
         <p className={css.hint}>
           Only this face moves; {face.name}&apos;s other photos stay as they are.
+        </p>
+      ) : unclustered ? (
+        <p className={css.hint}>
+          This face isn&apos;t grouped with any others. Naming it adds just this one.
         </p>
       ) : previewLoading ? (
         <Spinner size="small" label="Loading other photos of this face..." />

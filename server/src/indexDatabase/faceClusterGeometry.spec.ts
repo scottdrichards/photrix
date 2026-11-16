@@ -221,6 +221,90 @@ describe("cluster geometry", () => {
     });
   });
 
+  describe("a face the confidence gate left unclustered (feedback #191)", () => {
+    const addUnclusteredFace = async (db: IndexDatabase, relativePath: string, angle: number) => {
+      const { folder, fileName } = splitPath(relativePath);
+      await db.addFile({ folder, fileName, mimeType: "image/jpeg" });
+      await db.faces.saveFaceDetectionResult(
+        relativePath,
+        [
+          {
+            box: { x: 0.6, y: 0.6, width: 0.1, height: 0.1 },
+            // Below MIN_FACE_CONFIDENCE_FOR_CLUSTERING: never joins a cluster.
+            confidence: 0.6,
+            embedding: faceAt(angle),
+          },
+        ],
+        new Date("2026-01-01T00:00:00.000Z"),
+      );
+    };
+
+    it("is listed for naming only when asked for", async () => {
+      await withTempDb(async (db) => {
+        await addUnclusteredFace(db, "p/faint.jpg", 0.3);
+        await drain(db);
+        const faceId = await faceIdOf(db, "p/faint.jpg");
+
+        expect(await db.faces.getPeopleFacesForFile("p/faint.jpg")).toEqual([]);
+        expect(
+          await db.faces.getPeopleFacesForFile("p/faint.jpg", { includeUnclustered: true }),
+        ).toEqual([
+          {
+            faceId,
+            // Stored by its centre.
+            box: { x: 0.65, y: 0.65, width: 0.1, height: 0.1 },
+            personId: `unclustered-${faceId}`,
+            name: null,
+            unclustered: true,
+          },
+        ]);
+      });
+    });
+
+    it("becomes a named person of its own", async () => {
+      await withTempDb(async (db) => {
+        await addUnclusteredFace(db, "p/faint.jpg", 0.3);
+        await drain(db);
+        const faceId = await faceIdOf(db, "p/faint.jpg");
+
+        const result = (await db.faceClusters.assignFaceToPerson(faceId, { name: "Di" }))!;
+        expect(result.name).toBe("Di");
+
+        // Now an ordinary named face: listed without asking, no longer flagged.
+        expect(await db.faces.getPeopleFacesForFile("p/faint.jpg")).toEqual([
+          expect.objectContaining({ faceId, personId: result.personId, name: "Di" }),
+        ]);
+        expect((await db.faces.listNamedPeople()).map((p) => p.name)).toEqual(["Di"]);
+      });
+    });
+
+    it("joins an existing person", async () => {
+      await withTempDb(async (db) => {
+        for (let i = 0; i < 5; i += 1) {
+          await addFacePhoto(db, `p/ada-${i}.jpg`, 0.02 * i);
+        }
+        await addUnclusteredFace(db, "p/faint.jpg", 0.3);
+        await drain(db);
+        const ada = (await db.faces.getPeopleFacesForFile("p/ada-0.jpg"))[0].personId;
+        await db.faceClusters.renameCluster(ada, "Ada");
+        const faceId = await faceIdOf(db, "p/faint.jpg");
+
+        expect(await db.faceClusters.assignFaceToPerson(faceId, { personId: ada })).toEqual({
+          personId: ada,
+          name: "Ada",
+        });
+        expect((await db.faces.getPeopleFacesForFile("p/faint.jpg"))[0]).toMatchObject({
+          faceId,
+          personId: ada,
+          name: "Ada",
+        });
+        // It stays hers when verdicts are re-applied after a re-cluster.
+        await db.faceClusters.reapplyFaceVerdicts();
+        expect((await db.faces.getPeopleFacesForFile("p/faint.jpg"))[0].name).toBe("Ada");
+      });
+    });
+  });
+
   it("returns null for an unknown face or person", async () => {
     await withTempDb(async (db) => {
       await addFacePhoto(db, "p/a.jpg", 0);

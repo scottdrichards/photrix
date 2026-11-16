@@ -2,7 +2,11 @@ import { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { type FaceClusterFace } from "./indexDatabase.type.ts";
 import { joinPath, splitPath } from "./utils/pathUtils.ts";
 import { decodeEmbedding, encodeEmbedding } from "./embeddingCodec.ts";
-import { FaceClusterEngine, UNCLUSTERABLE_CLUSTER_ID } from "./faceClusterEngine.ts";
+import {
+  FaceClusterEngine,
+  LOW_CONFIDENCE_CLUSTER_ID,
+  UNCLUSTERABLE_CLUSTER_ID,
+} from "./faceClusterEngine.ts";
 import { getLogger } from "../observability/logger.ts";
 import { FACE_ATTRIBUTE_VERSION } from "../faceDetection/faceAttributes.ts";
 import type { FaceAttributes } from "../faceDetection/faceDetector.type.ts";
@@ -537,13 +541,25 @@ export class FaceStore {
    * merges, via `COALESCE(faceClusters.personId, faces.clusterId)`) and that
    * person's name when the user has named them. Boxes are normalized centre
    * coordinates, matching `faceTableBoxes` on the client.
+   *
+   * `includeUnclustered` (feedback #191) adds a photo's faces that the
+   * confidence gate kept out of clustering. They belong to no person, so they
+   * come back `unclustered` with a placeholder `personId` that names no
+   * cluster; `assignFaceToPerson` can still name one, as a person of its own
+   * or as one more face of an existing person. Faces a person rejected, and
+   * faces with no embedding, cannot be named that way and stay out.
    */
-  async getPeopleFacesForFile(relativePath: string): Promise<
+  async getPeopleFacesForFile(
+    relativePath: string,
+    { includeUnclustered = false }: { includeUnclustered?: boolean } = {},
+  ): Promise<
     Array<{
       faceId: number;
       box: { x: number; y: number; width: number; height: number };
       personId: string;
       name: string | null;
+      /** In no cluster: nameable only as a single face. */
+      unclustered?: true;
       /** Video faces only: the frame the box is on. */
       frameTimeMs?: number;
       /** Video faces only: when this person is on screen, earliest first. */
@@ -551,6 +567,9 @@ export class FaceStore {
     }>
   > {
     const { folder, fileName } = splitPath(relativePath);
+    // Unclustered faces are photos' only (`frameTimeMs IS NULL`): a video's
+    // low-confidence detections are sampled frames of the same few people,
+    // not faces someone is looking at.
     const rows = await this.db.all<{
       id: number;
       boxX: number;
@@ -560,6 +579,7 @@ export class FaceStore {
       personId: number;
       name: string | null;
       frameTimeMs: number | null;
+      clusterId: number;
     }>(
       `SELECT
          faces.id,
@@ -569,15 +589,27 @@ export class FaceStore {
          faces.boxHeight,
          COALESCE(cluster.personId, faces.clusterId) AS personId,
          person.name AS name,
-         faces.frameTimeMs
+         faces.frameTimeMs,
+         faces.clusterId
        FROM faces
        LEFT JOIN faceClusters AS cluster ON cluster.id = faces.clusterId
        LEFT JOIN faceClusters AS person
          ON person.id = COALESCE(cluster.personId, faces.clusterId)
-       WHERE faces.folder = ? AND faces.fileName = ? AND faces.clusterId > 0
+       WHERE faces.folder = ? AND faces.fileName = ?
+         AND (
+           faces.clusterId > 0
+           OR (
+             ? = 1
+             AND faces.clusterId = ?
+             AND faces.frameTimeMs IS NULL
+             AND EXISTS (SELECT 1 FROM faceEmbeddings WHERE faceEmbeddings.faceId = faces.id)
+           )
+         )
        ORDER BY faces.id`,
       folder,
       fileName,
+      includeUnclustered ? 1 : 0,
+      LOW_CONFIDENCE_CLUSTER_ID,
     );
     // Only video faces have appearances, so a photo skips the lookup.
     const appearances = rows.some((row) => typeof row.frameTimeMs === "number")
@@ -592,8 +624,9 @@ export class FaceStore {
         width: row.boxWidth,
         height: row.boxHeight,
       },
-      personId: faceClusterIdToString(row.personId),
-      name: row.name,
+      ...(row.clusterId > 0
+        ? { personId: faceClusterIdToString(row.personId), name: row.name }
+        : { personId: `unclustered-${row.id}`, name: null, unclustered: true as const }),
       ...(typeof row.frameTimeMs === "number" ? { frameTimeMs: row.frameTimeMs } : {}),
       ...(appearances.has(row.id) ? { appearances: appearances.get(row.id) } : {}),
     }));
