@@ -72,6 +72,46 @@ describe("DateHistogram", () => {
     });
   });
 
+  it("narrows the bars by every other active filter, but not the date range (feedback #189)", async () => {
+    const others = {
+      ratingFilter: { rating: 4, atLeast: true },
+      mediaTypeFilter: "photo",
+      locationBounds: { west: -1, east: 1, north: 1, south: -1 },
+      peopleInImageFilter: ["Ana"],
+      faceClusterFilter: ["person-7"],
+      faceClusterMatchMode: "any",
+      faceAttributeFilter: { attributes: ["smiling"] },
+      cameraModelFilter: ["R6"],
+      lensFilter: ["RF 50mm"],
+    };
+    useFilterContextMock.mockReturnValue({
+      filter: {
+        includeSubfolders: true,
+        path: "2024/",
+        dateRange: { start: 1700000000000, end: 1700086400000 },
+        ...others,
+      },
+      setFilter: setFilterMock,
+    });
+    fetchDateHistogramMock.mockResolvedValue({
+      buckets: [{ start: 1700000000000, end: 1700086400000, count: 2 }],
+      bucketSizeMs: 86400000,
+      minDate: 1700000000000,
+      maxDate: 1700086400000,
+      grouping: "day",
+    });
+
+    render(<DateHistogram />);
+
+    await waitFor(() => expect(fetchDateHistogramMock).toHaveBeenCalled());
+    expect(fetchDateHistogramMock.mock.calls[0][0]).toMatchObject({
+      includeSubfolders: true,
+      path: "2024/",
+      dateRange: null,
+      ...others,
+    });
+  });
+
   it("clears active date range via clear button", async () => {
     useFilterContextMock.mockReturnValue({
       filter: {

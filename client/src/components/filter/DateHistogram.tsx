@@ -107,6 +107,11 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
     locationBounds,
     dateRange,
     peopleInImageFilter,
+    faceClusterFilter,
+    faceClusterMatchMode,
+    faceAttributeFilter,
+    cameraModelFilter,
+    lensFilter,
   } = filter;
   const value = dateRange;
   const onChange = useCallback(
@@ -174,8 +179,15 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
           ratingFilter,
           mediaTypeFilter,
           locationBounds,
+          // Every other filter narrows the bars (feedback #189); the date
+          // range alone is left out, since the bars are what it is picked from.
           dateRange: null,
           peopleInImageFilter,
+          faceClusterFilter,
+          faceClusterMatchMode,
+          faceAttributeFilter,
+          cameraModelFilter,
+          lensFilter,
           buckets: desiredBuckets,
           signal: controller.signal,
         });
@@ -232,6 +244,11 @@ export const DateHistogram = ({ label = "Date range" }: DateHistogramProps) => {
     mediaTypeFilter,
     locationBounds,
     peopleInImageFilter,
+    faceClusterFilter,
+    faceClusterMatchMode,
+    faceAttributeFilter,
+    cameraModelFilter,
+    lensFilter,
     desiredBuckets,
     onChange,
   ]);
