@@ -21,6 +21,32 @@
   display: none;
 }
 
+/* Feedback #190: how many filters are on, shown on the toggle that hides them. */
+.filterCollapseToggle {
+  position: relative;
+}
+
+.filterCountBadge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: var(--radius-full);
+  background: var(--brand);
+  color: #fff;
+  /* A ring in the page colour, so the bubble still reads on the toggle's own
+     brand fill when the row is open. */
+  box-shadow: 0 0 0 1.5px var(--bg1);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
 @media (max-width: 1100px) {
   .iconBar,
   .iconBarButtons {
