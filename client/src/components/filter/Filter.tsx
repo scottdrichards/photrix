@@ -4,7 +4,7 @@ import {
   Filmstrip24Regular,
   Filter24Regular,
   Folder24Regular,
-  FolderOpen24Regular,
+  FolderMultiple24Regular,
   Image24Regular,
   Location24Regular,
   Person24Regular,
@@ -855,7 +855,7 @@ export const Filter = () => {
           className={`btn btn-icon ${css.filterIconButton} ${isExpandToFolderActive ? "btn-primary" : "btn-subtle"}`}
           onClick={handleExpandToFolderToggle}
         >
-          <FolderOpen24Regular fontSize={20} />
+          <FolderMultiple24Regular fontSize={20} />
         </button>
       </div>
       </div>
