@@ -324,8 +324,11 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   // navigating to People so the subtitle doesn't show a stale count there.
   const [resultCount, setResultCount] = useState<number | null>(null);
   const { description: viewDescription } = usePageTitle(filter, view === "library" ? resultCount : null);
-  const handleTotalChange = useCallback((total: number | null) => {
+  // Feedback #202: a capped semantic search only knows a floor, shown as "500+".
+  const [resultCountIsLowerBound, setResultCountIsLowerBound] = useState(false);
+  const handleTotalChange = useCallback((total: number | null, isLowerBound = false) => {
     setResultCount(total);
+    setResultCountIsLowerBound(isLowerBound);
   }, []);
   useEffect(() => {
     if (view !== "library") setResultCount(null);
@@ -394,7 +397,7 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
                     {resultCount != null && (
                       <>
                         <span className={css.resultCount}>
-                          {numberFormatter.format(resultCount)}
+                          {numberFormatter.format(resultCount)}{resultCountIsLowerBound ? "+" : ""}
                         </span>{" "}
                         photo{resultCount === 1 ? "" : "s"}{" "}
                       </>
@@ -405,7 +408,7 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
                   <>
                     A better way to view{" "}
                     <span className={css.resultCount}>
-                      {numberFormatter.format(resultCount)}
+                      {numberFormatter.format(resultCount)}{resultCountIsLowerBound ? "+" : ""}
                     </span>{" "}
                     photo{resultCount === 1 ? "" : "s"}.
                   </>
