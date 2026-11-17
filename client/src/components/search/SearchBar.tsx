@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ClosedCaption24Regular,
   Dismiss24Regular,
+  Image24Regular,
+  MusicNote224Regular,
   Search24Regular,
   Sparkle24Filled,
   Sparkle24Regular,
+  Tag24Regular,
 } from "@fluentui/react-icons";
 import {
+  SEARCH_SOURCES,
+  type SearchSource,
   type InterpretedFilterChip,
   type InterpretedPersonAlternative,
   type InterpretedSearchFilter,
@@ -123,6 +129,19 @@ type ActiveInterpretation = {
   previous: InterpretedSearchFilter;
 };
 
+// Feedback #199 (which brought this back after #131 removed it): the owner
+// wants to switch kinds of matching off, e.g. audio, when a search is noisy.
+const SOURCE_TOGGLES: { source: SearchSource; label: string; icon: React.ReactNode }[] = [
+  { source: "image", label: "Image content", icon: <Image24Regular fontSize={18} /> },
+  { source: "audio", label: "Audio content", icon: <MusicNote224Regular fontSize={18} /> },
+  {
+    source: "transcript",
+    label: "Speech transcript",
+    icon: <ClosedCaption24Regular fontSize={18} />,
+  },
+  { source: "metadata", label: "Names and tags", icon: <Tag24Regular fontSize={18} /> },
+];
+
 export const SearchBar = () => {
   const { filter, setFilter } = useFilter();
   const query = filter.semanticQuery ?? "";
@@ -151,6 +170,7 @@ export const SearchBar = () => {
     return () => clearInterval(id);
   }, []);
 
+  const activeSources = filter.searchSources ?? SEARCH_SOURCES;
   const hasActiveQuery = !!query || !!interpretation;
 
   /** The box shows whatever free text is still being searched for. */
@@ -326,6 +346,16 @@ export const SearchBar = () => {
     }
   };
 
+  const toggleSource = (source: SearchSource) => {
+    const isActive = activeSources.includes(source);
+    const next = isActive
+      ? activeSources.filter((s) => s !== source)
+      : SEARCH_SOURCES.filter((s) => activeSources.includes(s) || s === source);
+    // Search needs at least one source; the last one stays on.
+    if (next.length === 0) return;
+    setFilter({ searchSources: next.length === SEARCH_SOURCES.length ? undefined : next });
+  };
+
   const toggleAiSearch = () => {
     const next = !aiSearchEnabled;
     setAiSearchEnabled(next);
@@ -389,15 +419,28 @@ export const SearchBar = () => {
             {aiSearchEnabled ? <Sparkle24Filled /> : <Sparkle24Regular />}
           </button>
         </div>
-        {/* Feedback #131: which modalities (image/audio/transcript vectors)
-            a semantic query matches against used to be a user-facing toggle
-            group here. Surfacing that distinction asked the user to
-            understand an implementation detail of how search works instead
-            of just trusting AI search to pick the right modalities for what
-            they typed — removed rather than hidden-but-still-wired, so a
-            share link's ?sources= (still read/serialized for backward
-            compatibility) can't silently reappear as a stuck filter with no
-            visible control to change it back. */}
+        <div
+          className={css.sourceToggles}
+          role="group"
+          aria-label="Search sources"
+          title="Kinds of matching a search uses"
+        >
+          {SOURCE_TOGGLES.map(({ source, label, icon }) => {
+            const isActive = activeSources.includes(source);
+            return (
+              <button
+                key={source}
+                type="button"
+                className={`${css.sourceToggle} ${isActive ? css.sourceToggleActive : ""}`}
+                onClick={() => toggleSource(source)}
+                aria-pressed={isActive}
+                title={`${label}: ${isActive ? "on" : "off"}`}
+              >
+                {icon}
+              </button>
+            );
+          })}
+        </div>
       </form>
 
       {interpretation && (
