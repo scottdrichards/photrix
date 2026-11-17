@@ -381,6 +381,10 @@ export function FaceOverlay({
                 left: `${face.box.x * 100}%`,
                 top: `${(face.box.y - face.box.height / 2) * 100}%`,
               }}
+              // Like the named labels: without this the photo underneath takes the
+              // press as the start of a tap and zooms instead of opening the
+              // naming panel (feedback #194).
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 onAssignFace?.(face);

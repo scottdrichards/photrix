@@ -64,3 +64,28 @@ describe("FaceOverlay named-face correction (feedback #160)", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });
+
+describe("FaceOverlay unnamed face (feedback #194)", () => {
+  const unnamed: NamedFace = { ...face, faceId: 9, name: null };
+
+  it("opens the naming panel without the press reaching the photo underneath", () => {
+    const onAssignFace = vi.fn();
+    const photoPointerDown = vi.fn();
+    const photoClick = vi.fn();
+    render(
+      // eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events -- stands in for the photo gesture layer
+      <div onPointerDown={photoPointerDown} onClick={photoClick}>
+        <FaceOverlay regionsRaw={null} aspectRatio={1} namedFaces={[unnamed]} onAssignFace={onAssignFace} />
+      </div>,
+    );
+
+    const chip = screen.getByRole("button", { name: "Who is this?" });
+    fireEvent.pointerDown(chip);
+    fireEvent.click(chip);
+
+    expect(onAssignFace).toHaveBeenCalledWith(unnamed);
+    // A press that reaches the photo is read as a tap and zooms in.
+    expect(photoPointerDown).not.toHaveBeenCalled();
+    expect(photoClick).not.toHaveBeenCalled();
+  });
+});
