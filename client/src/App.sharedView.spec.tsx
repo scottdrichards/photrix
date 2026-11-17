@@ -43,6 +43,7 @@ vi.mock("./components/selection/SelectionContext", () => ({
   useSelectionContext: () => ({
     selected: null,
     selectByPath: () => {},
+    checkedPaths: new Set<string>(),
   }),
 }));
 

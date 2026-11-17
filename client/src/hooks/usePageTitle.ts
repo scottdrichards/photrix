@@ -3,6 +3,7 @@ import { getAuthHeaders } from "../auth";
 import { buildFullShareFilter } from "../api/filters";
 import type { FilterState } from "../components/filter/FilterContext";
 import { logFailure } from "../logFailure";
+import { libraryTitle } from "../appChrome";
 
 const DEBOUNCE_MS = 600;
 
@@ -43,7 +44,10 @@ const isEmptyFilter = (filter: FilterState): boolean => {
  * this hook is now the one source for "what does the current view look
  * like", consumed two ways.
  */
-export const usePageTitle = (filter: FilterState): { description: string | null } => {
+export const usePageTitle = (
+  filter: FilterState,
+  resultCount: number | null = null,
+): { description: string | null } => {
   const abortRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [description, setDescription] = useState<string | null>(null);
@@ -100,6 +104,12 @@ export const usePageTitle = (filter: FilterState): { description: string | null 
       abortRef.current?.abort();
     };
   }, [filter]);
+
+  // Feedback #195: with nothing filtered, the title says how big the library
+  // is. Its own effect, so a count arriving later never re-asks for a title.
+  useEffect(() => {
+    if (isEmptyFilter(filter)) document.title = libraryTitle(resultCount);
+  }, [filter, resultCount]);
 
   return { description };
 };
