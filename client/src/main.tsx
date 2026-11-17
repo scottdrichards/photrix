@@ -6,9 +6,11 @@ import { AppUpdateNotice } from "./components/AppUpdateNotice";
 import { applyTheme, getInitialTheme } from "./theme";
 import { initInstall, registerServiceWorker } from "./install";
 import { startClientPerfMonitor } from "./clientPerf";
+import { initWindowControlsOverlay } from "./windowControlsOverlay";
 
 applyTheme(getInitialTheme());
 startClientPerfMonitor();
+initWindowControlsOverlay();
 
 // Installable as an app (PWA). The service worker only runs in production builds:
 // under the Vite dev server it would intercept dev navigations for no benefit.
