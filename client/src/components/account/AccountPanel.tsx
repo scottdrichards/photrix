@@ -21,12 +21,18 @@ import {
 import { clearToken, isPasskeyAvailable, registerPasskey } from "../../auth";
 import { buildShareUrl } from "../../hooks/useShareFilter";
 import css from "./AccountPanel.module.css";
+import type { Theme } from "../../theme";
+import { ThemeToggle } from "./ThemeToggle";
 import { InstallAppSection } from "./InstallAppSection";
 import { syncDialogOpenState } from "../syncDialogOpenState";
 
 type Props = {
   isOpen: boolean;
   onDismiss: () => void;
+  /** Feedback #198: the light/dark switch lives here, not in the header. */
+  theme: Theme;
+  followsSystem: boolean;
+  onThemeToggle: () => void;
 };
 
 const formatDate = (ms: number): string =>
@@ -62,7 +68,7 @@ const mcpConfigSnippet = (token: string): string => {
   );
 };
 
-export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
+export const AccountPanel = ({ isOpen, onDismiss, theme, followsSystem, onThemeToggle }: Props) => {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   const [username, setUsername] = useState<string | null>(null);
@@ -182,6 +188,16 @@ export const AccountPanel = ({ isOpen, onDismiss }: Props) => {
         </header>
 
         {error && <p className={css.error}>{error}</p>}
+
+        <section className={css.section}>
+          <h3 className={css.sectionTitle}>Appearance</h3>
+          <p className={css.hint}>
+            {followsSystem
+              ? "Following your device's light/dark setting. Flip the switch to override it."
+              : "Overriding your device's setting. Flip back to the device's setting to follow it again."}
+          </p>
+          <ThemeToggle theme={theme} followsSystem={followsSystem} onToggle={onThemeToggle} />
+        </section>
 
         <InstallAppSection
           sectionClassName={css.section}

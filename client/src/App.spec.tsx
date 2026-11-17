@@ -202,6 +202,14 @@ describe("App", () => {
     document.documentElement.removeAttribute("data-theme");
   });
 
+  // Feedback #198: the switch lives in the Account panel, not the header.
+  const openAccountAndGetThemeSwitch = () => {
+    if (!screen.queryByRole("switch", { name: "Theme", hidden: true })) {
+      fireEvent.click(screen.getByTitle("Account"));
+    }
+    return screen.getByRole("switch", { name: "Theme", hidden: true });
+  };
+
   it("calls url sync hook", async () => {
     await act(async () => {
       render(<App />);
@@ -322,7 +330,7 @@ describe("App", () => {
     });
 
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
-    expect(screen.getByRole("switch", { name: "Theme" })).toHaveAttribute("aria-checked", "true");
+    expect(openAccountAndGetThemeSwitch()).toHaveAttribute("aria-checked", "true");
     expect(window.localStorage.getItem("photrix_theme")).toBeNull();
   });
 
@@ -334,7 +342,7 @@ describe("App", () => {
     });
 
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
-    expect(screen.getByRole("switch", { name: "Theme" })).toHaveAttribute("aria-checked", "true");
+    expect(openAccountAndGetThemeSwitch()).toHaveAttribute("aria-checked", "true");
   });
 
   it("toggles the theme and only persists an override when needed", async () => {
@@ -342,7 +350,7 @@ describe("App", () => {
       render(<App />);
     });
 
-    const toggle = screen.getByRole("switch", { name: "Theme" });
+    const toggle = openAccountAndGetThemeSwitch();
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(window.localStorage.getItem("photrix_theme")).toBeNull();
@@ -369,7 +377,7 @@ describe("App", () => {
       setSystemDarkMode(true);
     });
 
-    const toggle = screen.getByRole("switch", { name: "Theme" });
+    const toggle = openAccountAndGetThemeSwitch();
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
     expect(toggle).toHaveAttribute("aria-checked", "true");
 

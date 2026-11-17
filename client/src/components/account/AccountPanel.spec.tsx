@@ -30,6 +30,8 @@ vi.mock("../../hooks/useShareFilter", () => ({
   buildShareUrl: (token: string) => `https://photrix.test/?token=${token}`,
 }));
 
+const themeProps = { theme: "light" as const, followsSystem: true, onThemeToggle: vi.fn() };
+
 const resetMocks = () => {
   mocks.fetchAccount.mockResolvedValue({ username: "alice", passkeysAvailable: false });
   mocks.fetchMcpKeys.mockResolvedValue([
@@ -70,7 +72,7 @@ describe("AccountPanel", () => {
   });
 
   it("loads and renders account details when opened", async () => {
-    render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+    render(<AccountPanel isOpen={true} onDismiss={vi.fn()} {...themeProps} />);
 
     expect(await screen.findByText("Signed in as alice")).toBeInTheDocument();
     expect(screen.getByText("Claude")).toBeInTheDocument();
@@ -90,7 +92,7 @@ describe("AccountPanel", () => {
         place: "Portland, Oregon, United States",
       },
     ]);
-    render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+    render(<AccountPanel isOpen={true} onDismiss={vi.fn()} {...themeProps} />);
 
     expect(
       await screen.findByText(/203\.0\.113\.5 \(Internet\) · Portland, Oregon, United States/),
@@ -98,7 +100,7 @@ describe("AccountPanel", () => {
   });
 
   it("reveals a newly generated MCP key exactly once", async () => {
-    render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+    render(<AccountPanel isOpen={true} onDismiss={vi.fn()} {...themeProps} />);
     await screen.findByText("Signed in as alice");
 
     fireEvent.change(
@@ -112,7 +114,7 @@ describe("AccountPanel", () => {
   });
 
   it("revokes an MCP key", async () => {
-    render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+    render(<AccountPanel isOpen={true} onDismiss={vi.fn()} {...themeProps} />);
     await screen.findByText("Signed in as alice");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
@@ -122,7 +124,7 @@ describe("AccountPanel", () => {
 
   it("closes when clicking the dialog backdrop, not when clicking inside it", async () => {
     const onDismiss = vi.fn();
-    render(<AccountPanel isOpen={true} onDismiss={onDismiss} />);
+    render(<AccountPanel isOpen={true} onDismiss={onDismiss} {...themeProps} />);
     await screen.findByText("Signed in as alice");
 
     // A click on a child of the dialog (its content) must not close it.
@@ -138,7 +140,7 @@ describe("AccountPanel", () => {
 
   it("still closes via the explicit Done button", async () => {
     const onDismiss = vi.fn();
-    render(<AccountPanel isOpen={true} onDismiss={onDismiss} />);
+    render(<AccountPanel isOpen={true} onDismiss={onDismiss} {...themeProps} />);
     await screen.findByText("Signed in as alice");
 
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
@@ -153,7 +155,7 @@ describe("AccountPanel", () => {
     });
 
     it("points at the browser menu when there is no install prompt", async () => {
-      render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+      render(<AccountPanel isOpen={true} onDismiss={vi.fn()} {...themeProps} />);
       await screen.findByText("Signed in as alice");
 
       expect(screen.getByRole("heading", { name: "Install app" })).toBeInTheDocument();
@@ -161,7 +163,7 @@ describe("AccountPanel", () => {
     });
 
     it("offers an Install button once the browser provides a prompt", async () => {
-      render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+      render(<AccountPanel isOpen={true} onDismiss={vi.fn()} {...themeProps} />);
       await screen.findByText("Signed in as alice");
 
       const prompt = vi.fn().mockResolvedValue(undefined);
@@ -178,7 +180,7 @@ describe("AccountPanel", () => {
     });
 
     it("disappears once installed", async () => {
-      render(<AccountPanel isOpen={true} onDismiss={vi.fn()} />);
+      render(<AccountPanel isOpen={true} onDismiss={vi.fn()} {...themeProps} />);
       await screen.findByText("Signed in as alice");
 
       act(() => {
@@ -187,5 +189,14 @@ describe("AccountPanel", () => {
 
       expect(screen.queryByRole("heading", { name: "Install app" })).not.toBeInTheDocument();
     });
+  });
+
+  it("hosts the theme switch and calls back when it is flipped (feedback #198)", async () => {
+    const onThemeToggle = vi.fn();
+    await act(async () => {
+      render(<AccountPanel isOpen={true} onDismiss={vi.fn()} {...themeProps} onThemeToggle={onThemeToggle} />);
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Theme" }));
+    expect(onThemeToggle).toHaveBeenCalledTimes(1);
   });
 });
