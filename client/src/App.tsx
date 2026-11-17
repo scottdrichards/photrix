@@ -34,6 +34,7 @@ import {
   type ViewMode,
 } from "./hooks/useSyncUrlWithFilter";
 import { usePageTitle } from "./hooks/usePageTitle";
+import { setSelectionBadge, setViewerThemeColor } from "./appChrome";
 import { buildShareUrl, isSharedView } from "./hooks/useShareFilter";
 import {
   NO_PEOPLE_SELECTION,
@@ -288,9 +289,22 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   const [sortDockHost, setSortDockHost] = useState<HTMLDivElement | null>(null);
   const [nav, setNav] = useState<UrlNavState>(initialNavFromUrl);
   const { view } = nav;
-  const { selected, selectByPath } = useSelectionContext();
+  const { selected, selectByPath, checkedPaths } = useSelectionContext();
 
   useSyncUrlWithFilter(nav, setNav);
+
+  // Feedback #195: the window around the app mirrors its state: a black title
+  // bar while a photo is open, and the selection count on the installed icon.
+  const viewerOpen = selected !== null;
+  useEffect(() => {
+    setViewerThemeColor(viewerOpen);
+    return () => setViewerThemeColor(false);
+  }, [viewerOpen]);
+  const checkedCount = checkedPaths.size;
+  useEffect(() => {
+    setSelectionBadge(checkedCount);
+    return () => setSelectionBadge(0);
+  }, [checkedCount]);
 
   // Feedback #120: mirror the fullscreen viewer's open photo into the URL
   // (nav.previewPath), the same way nav.people already mirrors the People
@@ -340,11 +354,11 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   );
 
   const { filter } = useFilter();
-  const { description: viewDescription } = usePageTitle(filter);
   // Live result count for the header subtitle, reported by ThumbnailGrid so
   // it isn't fetched twice. Only meaningful in the library view — reset when
   // navigating to People so the subtitle doesn't show a stale count there.
   const [resultCount, setResultCount] = useState<number | null>(null);
+  const { description: viewDescription } = usePageTitle(filter, view === "library" ? resultCount : null);
   const handleTotalChange = useCallback((total: number | null) => {
     setResultCount(total);
   }, []);
