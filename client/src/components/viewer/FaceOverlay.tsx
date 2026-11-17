@@ -17,6 +17,8 @@ export type NamedFace = {
   box: { x: number; y: number; width: number; height: number };
   personId: string;
   name: string | null;
+  /** In no cluster: `personId` names no person. See `PhotoPersonFace`. */
+  unclustered?: true;
 };
 
 type FaceOverlayProps = {

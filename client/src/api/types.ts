@@ -136,6 +136,11 @@ export type PhotoPersonFace = {
   box: FaceBox;
   personId: string;
   name: string | null;
+  /**
+   * In no cluster (feedback #191): `personId` is a placeholder that names no
+   * person, and the face can only be named on its own, by its `faceId`.
+   */
+  unclustered?: true;
   /** Video faces only: the frame the box is on. */
   frameTimeMs?: number;
   /** Video faces only: when this person is on screen, earliest first. */
