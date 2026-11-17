@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { act } from "react";
 import type { SearchInterpretation } from "../../../../shared/filter-contract/src";
 import { SearchBar } from "./SearchBar";
@@ -327,16 +327,26 @@ describe("SearchBar natural-language interpretation", () => {
     expect(interpretSearchQuery).not.toHaveBeenCalled();
   });
 
-  // Feedback #131: which vector modalities (image/audio/transcript) a
-  // semantic query matches against is an implementation detail AI search
-  // should own, not something surfaced as a user-facing control.
-  it("does not expose a search-sources modality toggle", () => {
+  // Feedback #199 brought back the toggle that #131 removed.
+  it("lets the user switch search sources off, but never the last one", () => {
     renderSearchBar();
+    const group = screen.getByRole("group", { name: "Search sources" });
+    const audio = within(group).getByTitle("Audio content: on");
 
-    expect(screen.queryByRole("group", { name: "Search sources" })).not.toBeInTheDocument();
-    expect(screen.queryByTitle(/Image vector/)).not.toBeInTheDocument();
-    expect(screen.queryByTitle(/Audio vector/)).not.toBeInTheDocument();
-    expect(screen.queryByTitle(/Transcript/)).not.toBeInTheDocument();
+    fireEvent.click(audio);
+    expect(within(group).getByTitle("Audio content: off")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    fireEvent.click(within(group).getByTitle("Audio content: off"));
+    expect(within(group).getByTitle("Audio content: on")).toBeInTheDocument();
+
+    for (const label of ["Audio content", "Speech transcript", "Names and tags"]) {
+      fireEvent.click(within(group).getByTitle(`${label}: on`));
+    }
+    fireEvent.click(within(group).getByTitle("Image content: on"));
+    expect(within(group).getByTitle("Image content: on")).toBeInTheDocument();
   });
 });
 
