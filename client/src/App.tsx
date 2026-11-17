@@ -15,6 +15,7 @@ import {
 import { lazyPart } from "./lazyPart";
 import { whenNetworkQuiet } from "./whenNetworkQuiet";
 import { AccountPanel } from "./components/account/AccountPanel";
+import { ThemeToggle } from "./components/account/ThemeToggle";
 import { LoginScreen } from "./components/account/LoginScreen";
 import { SearchBar } from "./components/search/SearchBar";
 import { ShareLinkModal } from "./components/share/ShareLinkModal";
@@ -108,42 +109,6 @@ const copyToClipboard = async (text: string): Promise<boolean> => {
 };
 
 type ShareModalState = { url: string; copied: boolean } | null;
-
-type ThemeToggleProps = {
-  theme: Theme;
-  followsSystem: boolean;
-  onToggle: () => void;
-};
-
-const ThemeToggle = ({ theme, followsSystem, onToggle }: ThemeToggleProps) => {
-  const title = followsSystem
-    ? `Following system theme: ${theme}`
-    : `Theme override: ${theme}`;
-
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-label="Theme"
-      aria-checked={theme === "dark"}
-      title={title}
-      className={css.themeToggle}
-      data-theme-toggle
-      data-theme={theme}
-      data-following-system={followsSystem}
-      onClick={onToggle}
-    >
-      <span className={css.themeToggleTrack} aria-hidden="true">
-        <span className={css.themeToggleGlow} />
-        <span className={css.themeToggleStars} />
-        <span className={css.themeToggleSun} />
-        <span className={css.themeToggleMoon} />
-        <span className={css.themeToggleThumb} />
-        {followsSystem && <span className={css.themeToggleModeDot} />}
-      </span>
-    </button>
-  );
-};
 
 const SHARE_FAILED_MESSAGE_MS = 4_000;
 
@@ -437,7 +402,15 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
             </div>
 
             <div className={css.headerActions}>
-              <ThemeToggle theme={theme} followsSystem={followsSystem} onToggle={onThemeToggle} />
+              {/* A shared link has no Account panel, so the toggle stays here. */}
+              {sharedView && (
+                <ThemeToggle
+                  theme={theme}
+                  followsSystem={followsSystem}
+                  onToggle={onThemeToggle}
+                  className={css.headerThemeToggle}
+                />
+              )}
               <ShareButton />
               {/* Global entry point, deliberately rendered in every view
                   including a shared link — the previous entry point was a
@@ -537,6 +510,9 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
             <AccountPanel
               isOpen={isAccountOpen}
               onDismiss={() => setIsAccountOpen(false)}
+              theme={theme}
+              followsSystem={followsSystem}
+              onThemeToggle={onThemeToggle}
             />
           </>
         )}
