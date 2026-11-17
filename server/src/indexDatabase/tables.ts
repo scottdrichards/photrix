@@ -78,6 +78,10 @@ export const tables = {
       { name: "description", type: "TEXT" },
       { name: "aiDescription", type: "TEXT" },
       { name: "aiTags", type: "TEXT" },
+      // Nearest city, state and country of a geotagged file, as words the
+      // names-and-tags search matches (feedback #203). NULL = not looked up
+      // yet, "" = looked up, no city nearby. See places/placeNames.ts.
+      { name: "placeText", type: "TEXT" },
       // Whole-photo quality aggregate, 0..1, derived from this file's *scored*
       // faces' smileScore/eyesOpenScore/focusScore/exposureScore (see
       // faceDetection/photoQuality.ts — worst-face-wins, not an average, so a

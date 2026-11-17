@@ -25,7 +25,9 @@ const modules = {
   // Reaches up to systemStatus for one free-VRAM reading before an encode.
   videoProcessing: ["common", "observability", "taskOrchestrator", "systemStatus"],
   fileHandling: ["common", "videoProcessing"],
-  indexDatabase: ["common", "observability", "fileHandling", "faceDetection"],
+  // Pure lookups, no I/O: GPS to place words.
+  places: ["common"],
+  indexDatabase: ["common", "observability", "fileHandling", "faceDetection", "places"],
   // Pipeline stages and features: each reads and writes the index.
   imageProcessing: ["common", "observability", "python", "taskOrchestrator", "videoProcessing", "indexDatabase"],
   imageAnalysis: ["common", "observability", "python", "accel", "taskOrchestrator", "faceDetection", "indexDatabase"],
@@ -56,6 +58,7 @@ const grandfathered = {
   "indexDatabase/processFaceClustering.ts -> taskOrchestrator": stagesInDatabase,
   "indexDatabase/processFileInfo.ts -> taskOrchestrator": stagesInDatabase,
   "indexDatabase/processMomentClustering.ts -> taskOrchestrator": stagesInDatabase,
+  "indexDatabase/processPlaceNames.ts -> taskOrchestrator": stagesInDatabase,
   "indexDatabase/processMomentClustering.ts -> imageProcessing": stagesInDatabase,
 };
 
