@@ -30,6 +30,7 @@ import { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import { openIndexSqlite } from "./indexDatabase/openIndexSqlite.ts";
 import { FeedbackStore } from "./feedback/feedbackStore.ts";
 import { processFaceClustering } from "./indexDatabase/processFaceClustering.ts";
+import { processPlaceNames } from "./indexDatabase/processPlaceNames.ts";
 import { processMomentClustering } from "./indexDatabase/processMomentClustering.ts";
 import { initAuthService } from "./auth/authService.ts";
 import { initPasskeyService } from "./auth/passkeyService.ts";
@@ -302,6 +303,11 @@ const startServer = async () => {
       // Each file also pays for a small sharp() decode + sharpness pass, not
       // just the in-memory embedding comparison faceClustering does.
       resources: { cpu: 0.5 },
+    },
+    placeNames: {
+      name: "Place names (nearest city, state, country)",
+      start: () => processPlaceNames(database),
+      resources: { cpu: 0.25 },
     },
     audioTranscription: {
       name: "Audio transcription (Whisper)",
