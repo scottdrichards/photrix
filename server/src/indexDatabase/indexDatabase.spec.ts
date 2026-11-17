@@ -1,4 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
+import { placeTextFor } from "../places/placeNames.ts";
 import type { FileRecord } from "./fileRecord.type.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { splitPath } from "./utils/pathUtils.ts";
@@ -1702,6 +1703,49 @@ describe("IndexDatabase", () => {
         expect(one.map((r) => r.fileName).sort()).toEqual(["keyword.jpg", "tagged.jpg"]);
 
         expect(await db.analysis.metadataSearch("nobody", {}, 10)).toEqual([]);
+      });
+    });
+
+    it("finds geotagged files by place once the place backfill has named them (feedback #203)", async () => {
+      await withTempDb(async (db) => {
+        await db.addFile(
+          createRecord("trip/gate.jpg", {
+            mimeType: "image/jpeg",
+            locationLatitude: 37.8199,
+            locationLongitude: -122.4783,
+            exifProcessedAt: new Date(),
+          }),
+        );
+        await db.addFile(
+          createRecord("trip/nowhere.jpg", {
+            mimeType: "image/jpeg",
+            locationLatitude: 0,
+            locationLongitude: -140,
+            exifProcessedAt: new Date(),
+          }),
+        );
+        await db.addFile(
+          createRecord("trip/untagged.jpg", { mimeType: "image/jpeg", exifProcessedAt: new Date() }),
+        );
+
+        expect(await db.analysis.metadataSearch("california", {}, 10)).toEqual([]);
+
+        const batch = await db.places.getPlaceBackfillBatch(10);
+        expect(batch.map((f) => f.fileName).sort()).toEqual(["gate.jpg", "nowhere.jpg"]);
+        await db.places.setPlaceTexts(
+          batch.map(({ folder, fileName, lat, lon }) => ({
+            folder,
+            fileName,
+            placeText: placeTextFor(lat, lon),
+          })),
+        );
+
+        // Looked at once, never offered again, even the one with no city near it.
+        expect(await db.places.getPlaceBackfillBatch(10)).toEqual([]);
+        expect(await db.places.getPlaceProgress()).toEqual({ processed: 2, pending: 0 });
+
+        const found = await db.analysis.metadataSearch("california", {}, 10);
+        expect(found.map((r) => r.fileName)).toEqual(["gate.jpg"]);
       });
     });
 

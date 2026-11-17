@@ -13,6 +13,7 @@ type BackgroundTaskPlan = {
   faceAttributes: Task;
   faceClustering: Task;
   momentClustering: Task;
+  placeNames: Task;
   audioTranscription: Task;
   audioEmbedding: Task;
   thumbnailBackfill: Task;
@@ -80,6 +81,8 @@ export const registerBackgroundTasks = (
   // scored after its cluster already picked a representative keeps that pick
   // until something else re-triggers the cluster (e.g. a manual override).
   const momentClustering = reentrant(tasks.momentClustering);
+  // Needs only the GPS the EXIF stage extracts, so it cascades from there.
+  const placeNames = reentrant(tasks.placeNames);
   const imageAnalysis = reentrant(tasks.imageAnalysis, () => {
     faceClustering.ensure();
     faceAttributes.ensure();
@@ -91,6 +94,7 @@ export const registerBackgroundTasks = (
     faceClustering.ensure();
   });
   const exifMetadata = reentrant(tasks.exifMetadata, () => {
+    placeNames.ensure();
     audioTranscription.ensure();
     audioEmbedding.ensure();
     videoFaceAnalysis.ensure();

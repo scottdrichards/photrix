@@ -643,6 +643,7 @@ export class AnalysisStore {
       LOWER(personInImage) LIKE ? ESCAPE '\\'
       OR LOWER(tags) LIKE ? ESCAPE '\\'
       OR LOWER(aiTags) LIKE ? ESCAPE '\\'
+      OR LOWER(placeText) LIKE ? ESCAPE '\\'
       OR EXISTS (
         SELECT 1 FROM faces
         JOIN faceClusters AS cluster ON cluster.id = faces.clusterId
@@ -653,7 +654,7 @@ export class AnalysisStore {
     )`;
     const termParams = terms.flatMap((term) => {
       const like = `%${escapeLikeLiteral(term)}%`;
-      return [like, like, like, like, like];
+      return [like, like, like, like, like, like];
     });
 
     const rows = await this.db.all<Record<string, unknown>>(

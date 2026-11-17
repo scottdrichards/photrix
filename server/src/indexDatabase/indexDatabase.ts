@@ -20,6 +20,7 @@ import { VectorIndex } from "./vectorIndex/vectorIndex.ts";
 import { FaceStore } from "./faceStore.ts";
 import { FaceClusterStore } from "./faceClusterStore.ts";
 import { MomentStore } from "./momentStore.ts";
+import { PlaceStore } from "./placeStore.ts";
 import { AnalysisStore } from "./analysisStore.ts";
 import { FaceClusterEngine } from "./faceClusterEngine.ts";
 import { migrateFaceVerdicts } from "./migrateFaceVerdicts.ts";
@@ -189,6 +190,7 @@ export class IndexDatabase {
   faces!: FaceStore;
   faceClusters!: FaceClusterStore;
   moments!: MomentStore;
+  places!: PlaceStore;
   analysis!: AnalysisStore;
   // Set when a root file-system scan can't confirm the media root is actually
   // mounted (missing directory, or a scan that found zero files while the
@@ -256,6 +258,7 @@ export class IndexDatabase {
       () => this.faceClusters.invalidateFaceClusterPCACache(),
     );
     this.moments = new MomentStore(this.db);
+    this.places = new PlaceStore(this.db);
 
     // Loads in the background (~2 s for 177k vectors); a search issued before
     // it finishes simply waits for it, since the worker handles requests in order.
