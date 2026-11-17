@@ -132,3 +132,21 @@
 .sourceToggleActive:hover {
   color: var(--brand, #2563eb);
 }
+
+/* Feedback #196: the sparkle pulses while the model works out the filters. */
+.sourceToggle[data-busy] {
+  animation: aiBusyPulse 1s ease-in-out infinite;
+}
+
+@keyframes aiBusyPulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourceToggle[data-busy] {
+    animation: none;
+    opacity: 0.6;
+  }
+}

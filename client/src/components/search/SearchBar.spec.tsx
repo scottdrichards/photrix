@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act } from "react";
 import type { SearchInterpretation } from "../../../../shared/filter-contract/src";
 import { SearchBar } from "./SearchBar";
 import { FilterProvider, useFilter } from "../filter/FilterContext";
@@ -66,17 +67,50 @@ describe("SearchBar natural-language interpretation", () => {
     });
   });
 
-  it("runs the plain search immediately on submit, before any interpretation", () => {
-    // A promise that never settles: the plain search must not wait on the model.
-    interpretSearchQuery.mockReturnValue(new Promise(() => {}));
+  it("holds the filter until the model has answered, then applies only that (feedback #196)", async () => {
+    let answer!: (value: SearchInterpretation) => void;
+    interpretSearchQuery.mockReturnValue(
+      new Promise<SearchInterpretation>((resolve) => {
+        answer = resolve;
+      }),
+    );
     renderSearchBar();
 
     submit("photos of Sarah at the beach last summer");
 
-    expect(currentFilter().semanticQuery).toBe(
-      "photos of Sarah at the beach last summer",
+    // No text search in the meantime: the grid must not change twice.
+    expect(currentFilter().semanticQuery).toBeUndefined();
+    expect(screen.getByRole("search")).toHaveAttribute("aria-busy", "true");
+
+    await act(async () => {
+      answer(interpretation);
+    });
+
+    expect(currentFilter().semanticQuery).toBe("at the beach");
+    expect(currentFilter().faceClusterFilter).toEqual(["person-12"]);
+    expect(screen.getByRole("search")).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("clearing while the model is still working cancels the pending answer", async () => {
+    let answer!: (value: SearchInterpretation) => void;
+    interpretSearchQuery.mockReturnValue(
+      new Promise<SearchInterpretation>((resolve) => {
+        answer = resolve;
+      }),
     );
-    expect(screen.queryByText("AI search")).not.toBeInTheDocument();
+    renderSearchBar();
+    submit("photos of Sarah at the beach last summer");
+
+    fireEvent.change(screen.getByLabelText("Search your photos", { selector: "input" }), {
+      target: { value: "" },
+    });
+    submit("");
+    await act(async () => {
+      answer(interpretation);
+    });
+
+    expect(currentFilter().faceClusterFilter).toBeUndefined();
+    expect(screen.getByRole("search")).toHaveAttribute("aria-busy", "false");
   });
 
   it("leaves the plain search untouched when Ollama is unavailable", async () => {

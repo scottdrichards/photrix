@@ -4,8 +4,8 @@ import { fetchJsonOrThrow } from "./http";
 /**
  * Client-side deadline for the interpretation.
  *
- * The plain search is already running by the time this is called, so the only
- * thing waiting on this request is the chip row. Deliberately longer than the
+ * The search bar waits for this answer before it changes the filter at all
+ * (feedback #196), so a slow model is a slow search. Deliberately longer than the
  * server's own model deadline (PHOTRIX_NL_SEARCH_TIMEOUT_MS, 12s) so a slow
  * model still returns a usable "no interpretation" answer we can cache, rather
  * than being cut off client-side and re-requested on every submit.
@@ -27,8 +27,8 @@ export const clearSearchInterpretationCache = () => cache.clear();
  * Ask the server to translate a natural-language query into structured filters.
  *
  * Never rejects: every failure (offline, 4xx/5xx, timeout, no local model) turns
- * into `interpreted: false`, because the caller's fallback is to leave the plain
- * search it already started exactly as it is.
+ * into `interpreted: false`, because the caller's fallback is to search the
+ * typed text as plain semantic text.
  */
 export const interpretSearchQuery = async (
   query: string,
