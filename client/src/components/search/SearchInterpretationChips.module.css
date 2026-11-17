@@ -60,6 +60,14 @@
   text-overflow: ellipsis;
 }
 
+/* Feedback #188: the icon of the filter the chip set. */
+.chipIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-right: 2px;
+  color: var(--text2, #555);
+}
+
 .chipRemove {
   display: inline-flex;
   align-items: center;
