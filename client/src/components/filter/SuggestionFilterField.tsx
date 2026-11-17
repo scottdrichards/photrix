@@ -9,6 +9,8 @@ import {
 import type {
   ApiFilterOptions,
   DateRangeFilter,
+  FaceAttributeFilter,
+  FaceClusterMatchMode,
   GeoBoundsLike as GeoBounds,
   MediaTypeFilter,
   RatingFilter,
@@ -32,6 +34,9 @@ type SuggestionFilterFieldProps = {
   peopleInImageFilter?: Exclude<ApiFilterOptions["peopleInImageFilter"], string | null>;
   cameraModelFilter?: Exclude<ApiFilterOptions["cameraModelFilter"], string | null>;
   lensFilter?: Exclude<ApiFilterOptions["lensFilter"], string | null>;
+  faceClusterFilter?: ApiFilterOptions["faceClusterFilter"];
+  faceClusterMatchMode?: FaceClusterMatchMode;
+  faceAttributeFilter?: FaceAttributeFilter | null;
 };
 
 export const SuggestionFilterField = ({
@@ -51,6 +56,9 @@ export const SuggestionFilterField = ({
   peopleInImageFilter,
   cameraModelFilter,
   lensFilter,
+  faceClusterFilter,
+  faceClusterMatchMode,
+  faceAttributeFilter,
 }: SuggestionFilterFieldProps) => {
   const [searchText, setSearchText] = useState("");
   const [suggestions, setSuggestions] = useState<SuggestionWithCount[]>([]);
@@ -97,6 +105,10 @@ export const SuggestionFilterField = ({
           peopleInImageFilter: stablePeopleInImageFilter,
           cameraModelFilter: stableCameraModelFilter,
           lensFilter: stableLensFilter,
+          // Feedback #200: the options are what is left under every other filter.
+          faceClusterFilter,
+          faceClusterMatchMode,
+          faceAttributeFilter,
           signal: abortController.signal,
         });
 
@@ -134,6 +146,9 @@ export const SuggestionFilterField = ({
     stablePeopleInImageFilter,
     stableCameraModelFilter,
     stableLensFilter,
+    faceClusterFilter,
+    faceClusterMatchMode,
+    faceAttributeFilter,
     selectedLookup,
   ]);
 

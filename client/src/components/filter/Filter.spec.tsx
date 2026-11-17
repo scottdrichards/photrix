@@ -267,6 +267,38 @@ describe("Filter", () => {
     );
   });
 
+  it("narrows the option lists by the face filter too (feedback #200)", async () => {
+    fetchSuggestionsWithCountsMock.mockResolvedValue([{ value: "Canon EOS R6", count: 3 }]);
+    render(
+      <FilterProvider>
+        <Filter />
+        <FilterStateInitializer
+          nextFilter={{
+            faceClusterFilter: ["person-3"],
+            faceAttributeFilter: { attributes: ["eyesOpen"] },
+          } as Partial<FilterState>}
+        />
+      </FilterProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Camera and lens filter" }));
+
+    await waitFor(() => {
+      expect(fetchSuggestionsWithCountsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          field: "cameraModel",
+          faceClusterFilter: ["person-3"],
+          faceAttributeFilter: { attributes: ["eyesOpen"] },
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(fetchFoldersMock).toHaveBeenCalledWith(
+        expect.objectContaining({ faceAttributeFilter: { attributes: ["eyesOpen"] } }),
+      );
+    });
+  });
+
   it("picks photos and videos from a checkbox panel (feedback #181)", async () => {
     renderFilter();
 
