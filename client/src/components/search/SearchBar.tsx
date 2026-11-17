@@ -132,6 +132,8 @@ export const SearchBar = () => {
   const [isFocused, setIsFocused] = useState(false);
   const [interpretation, setInterpretation] = useState<ActiveInterpretation | null>(null);
   const [aiSearchEnabled, setAiSearchEnabled] = useState(readAiSearchPreference);
+  // True from submit until the model has answered (feedback #196).
+  const [isInterpreting, setIsInterpreting] = useState(false);
   // Only the newest submit may apply an interpretation; an older, slower one
   // must never reach in and re-filter results the user has moved on from.
   const submitSeq = useRef(0);
@@ -139,6 +141,8 @@ export const SearchBar = () => {
   // reverts to has to be the filter as it is *then*, not as it was at submit.
   const filterRef = useRef(filter);
   filterRef.current = filter;
+  const interpretationRef = useRef(interpretation);
+  interpretationRef.current = interpretation;
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -187,27 +191,47 @@ export const SearchBar = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const value = inputRef.current?.value.trim() ?? "";
-
-    // The plain search runs immediately and unconditionally — exactly as it did
-    // before this feature. Interpretation is a later, optional refinement.
-    if (interpretation) revertInterpretation(interpretation, { semanticQuery: value });
-    else setFilter({ semanticQuery: value || undefined });
-
     const seq = ++submitSeq.current;
-    if (!value || !aiSearchEnabled) return;
 
+    if (!value || !aiSearchEnabled) {
+      // Nothing for the model to do: search as typed, straight away.
+      setIsInterpreting(false);
+      if (interpretation) revertInterpretation(interpretation, { semanticQuery: value });
+      else setFilter({ semanticQuery: value || undefined });
+      return;
+    }
+
+    // Feedback #196: wait for the model before touching the filter. Running the
+    // plain text search first and then swapping in the interpreted one made the
+    // grid change twice, and the first answer was the wrong one. Whatever was on
+    // screen stays until the one answer is ready.
+    setIsInterpreting(true);
     void interpretSearchQuery(value).then((result) => {
-      // Discard a response the user has already moved past, and never apply one
-      // that failed schema validation server-side (`interpreted: false`).
-      if (seq !== submitSeq.current || !result.interpreted) return;
+      // A newer submit or a clear owns the filter now.
+      if (seq !== submitSeq.current) return;
+      setIsInterpreting(false);
+      const active = interpretationRef.current;
+
+      // Never apply one that failed schema validation server-side
+      // (`interpreted: false`): search the typed text, as without AI.
+      if (!result.interpreted) {
+        if (active) revertInterpretation(active, { semanticQuery: value });
+        else setFilter({ semanticQuery: value });
+        return;
+      }
+
+      // The newest interpretation replaces the previous one outright, so the
+      // fields to snapshot and to revert to are those from before the first.
+      const base = active ? { ...filterRef.current, ...active.previous } : filterRef.current;
       setInterpretation({
         query: value,
         chips: result.chips,
         ignored: result.ignored,
-        previous: snapshotInterpretedFields(filterRef.current),
+        previous: snapshotInterpretedFields(base),
       });
       setFilter((prev) => ({
         ...prev,
+        ...(active ? active.previous : {}),
         ...result.filter,
         // Absent in the payload means "no free text left over"; spreading alone
         // would leave the whole sentence as the CLIP query.
@@ -219,6 +243,7 @@ export const SearchBar = () => {
   const handleClear = () => {
     if (inputRef.current) inputRef.current.value = "";
     submitSeq.current += 1;
+    setIsInterpreting(false);
     if (interpretation)
       revertInterpretation(interpretation, { semanticQuery: undefined });
     else setFilter({ semanticQuery: undefined });
@@ -330,6 +355,10 @@ export const SearchBar = () => {
     const next = !aiSearchEnabled;
     setAiSearchEnabled(next);
     writeAiSearchPreference(next);
+    if (!next) {
+      submitSeq.current += 1;
+      setIsInterpreting(false);
+    }
     // Turning AI off mid-search shouldn't leave a stale AI-derived filter
     // behind — fall back to the originally-typed query exactly like "Undo"
     // does (not filter.semanticQuery, which by now holds only the leftover
@@ -344,7 +373,12 @@ export const SearchBar = () => {
     // Always a visible field: on phones it gets a full-width row of its own
     // in the header, so there is no collapsed icon-only mode to manage.
     <div className={css.searchWrapper}>
-      <form className={css.searchBar} onSubmit={handleSubmit} role="search">
+      <form
+        className={css.searchBar}
+        onSubmit={handleSubmit}
+        role="search"
+        aria-busy={isInterpreting}
+      >
         <Search24Regular className={css.searchIcon} />
         <div className={css.inputWrap}>
           <input
@@ -384,7 +418,12 @@ export const SearchBar = () => {
             className={`${css.sourceToggle} ${aiSearchEnabled ? css.sourceToggleActive : ""}`}
             onClick={toggleAiSearch}
             aria-pressed={aiSearchEnabled}
-            title={`AI search: ${aiSearchEnabled ? "on" : "off"}`}
+            title={
+              isInterpreting
+                ? "AI search: working out your filters…"
+                : `AI search: ${aiSearchEnabled ? "on" : "off"}`
+            }
+            data-busy={isInterpreting || undefined}
           >
             {aiSearchEnabled ? <Sparkle24Filled /> : <Sparkle24Regular />}
           </button>
