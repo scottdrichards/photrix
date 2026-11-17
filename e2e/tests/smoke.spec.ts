@@ -9,7 +9,8 @@ test.describe("app shell", () => {
     await page.goto("/");
 
     // Auth is disabled for the test instance, so the app shell renders directly.
-    // The theme control is part of that shell (App.tsx: role="switch"/aria-label).
+    // The theme control lives in the Account panel (feedback #198).
+    await page.getByTitle("Account").click();
     await expect(page.getByRole("switch", { name: "Theme" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Password" })).toHaveCount(0);
   });
