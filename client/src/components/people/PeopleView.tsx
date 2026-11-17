@@ -90,6 +90,14 @@ const PeopleViewComponent = ({
   loadedClusterIdRef.current = personDetail?.id ?? null;
   const onNavigateRef = useRef(onNavigate);
   onNavigateRef.current = onNavigate;
+  // The filter as of this render. A request reads it when it starts and again
+  // when it lands: if the two differ, the answer describes a filter the user
+  // has already moved on from and must not reach the screen.
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
+  // The person the URL names, for the same check on a person's detail.
+  const personIdRef = useRef(personId);
+  personIdRef.current = personId;
 
   useEffect(() => {
     const abortOnDisposed = "disposed";
@@ -102,17 +110,30 @@ const PeopleViewComponent = ({
         ...filter,
       })
         .then((result) => {
+          if (abortController.signal.aborted) return;
           setData(result);
-          if (result.pendingFaces > 0 && !abortController.signal.aborted) {
+          if (initial) {
+            // A person picked for merging who is not in the new list can no
+            // longer be seen or unpicked, so they must not stay in the count.
+            const listed = new Set(result.clusters.map((cluster) => cluster.id));
+            setSelected((prev) => {
+              const kept = [...prev].filter((id) => listed.has(id));
+              return kept.length === prev.size ? prev : new Set(kept);
+            });
+          }
+          if (result.pendingFaces > 0) {
             refreshTimer = setTimeout(() => load(false), 10_000);
           }
         })
         .catch((err) => {
-          if (err === abortOnDisposed || err.name === "AbortError") return;
+          if (abortController.signal.aborted || err?.name === "AbortError") return;
           setError("Failed to fetch people clusters");
         })
         .finally(() => {
-          if (initial) setLoading(false);
+          // A request the next filter replaced settles after that filter's own
+          // request has started. Letting it clear the spinner left the old
+          // filter's people on screen looking final.
+          if (initial && !abortController.signal.aborted) setLoading(false);
         });
       if (initial) {
         setLoading(true);
@@ -134,18 +155,23 @@ const PeopleViewComponent = ({
   // reflects the same filter; if the person has no matching faces, fall back to
   // the grid. Skip the first run: the loader above already fetched with the
   // current filter, and a freshly opened detail is fetched with it too.
+  //
+  // A person whose first load is still in flight counts as open: that load was
+  // asked under the previous filter and its answer is discarded (see
+  // loadClusterDetail), so without a fresh request here the page would wait
+  // forever on faces that never arrive.
   const skipFilterReloadRef = useRef(true);
   useEffect(() => {
     if (skipFilterReloadRef.current) {
       skipFilterReloadRef.current = false;
       return;
     }
-    const openClusterId = loadedClusterIdRef.current;
+    const openClusterId = loadedClusterIdRef.current ?? personIdRef.current;
     if (!openClusterId) return;
     const abortController = new AbortController();
     loadClusterDetail(openClusterId, abortController.signal, { showSpinner: false })
       .then((cluster) => {
-        if (abortController.signal.aborted || cluster) return;
+        if (abortController.signal.aborted || cluster !== null) return;
         // Person has no faces under the new filter — return to the grid. The
         // user didn't ask for this, so it replaces rather than adds history.
         onNavigateRef.current({ personId: null, groupId: null }, { replace: true });
@@ -155,7 +181,6 @@ const PeopleViewComponent = ({
         console.error("Failed to reload cluster detail after filter change:", err);
       });
     return () => abortController.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
   useEffect(() => () => {
@@ -188,7 +213,7 @@ const PeopleViewComponent = ({
     const abortController = new AbortController();
     loadClusterDetail(personId, abortController.signal)
       .then((cluster) => {
-        if (abortController.signal.aborted || cluster) return;
+        if (abortController.signal.aborted || cluster !== null) return;
         // Unknown or filtered-out person id — drop back to the grid.
         onNavigateRef.current({ personId: null, groupId: null }, { replace: true });
       })
@@ -197,7 +222,6 @@ const PeopleViewComponent = ({
         console.error("Failed to load cluster detail:", err);
       });
     return () => abortController.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [personId, setItems]);
 
   // Load the match group named by the URL. Re-runs on filter changes so the
@@ -258,8 +282,12 @@ const PeopleViewComponent = ({
   }, [groupId, personDetail]);
 
   const refreshPeopleClusters = async (signal?: AbortSignal) => {
-    const result = await fetchPeopleClusters({ ...filter, signal });
-    setData(result);
+    const requestFilter = filterRef.current;
+    const result = await fetchPeopleClusters({ ...requestFilter, signal });
+    // A refresh after a merge or a review is not tied to the filter effect, so
+    // nothing aborts it when the filter changes. Applied late, it would put
+    // the previous filter's people back over the current filter's.
+    if (filterRef.current === requestFilter) setData(result);
     return result;
   };
 
@@ -269,13 +297,21 @@ const PeopleViewComponent = ({
     options: { showSpinner?: boolean } = {},
   ) => {
     const { showSpinner = true } = options;
+    const requestFilter = filterRef.current;
     if (showSpinner) setDetailLoading(true);
     try {
-      const result = await fetchClusterDetail({ clusterId, signal, ...filter });
+      const result = await fetchClusterDetail({ clusterId, signal, ...requestFilter });
+      // Superseded: the filter changed, or the user left for the grid, while
+      // this was in flight. `undefined` tells callers the answer says nothing
+      // about the current view, unlike `null` (no such person under it).
+      if (filterRef.current !== requestFilter || personIdRef.current === null) {
+        return undefined;
+      }
       if (result.cluster) setPersonDetail(result.cluster);
       return result.cluster;
     } finally {
-      if (showSpinner) setDetailLoading(false);
+      // An aborted load was replaced by another that owns the spinner now.
+      if (showSpinner && !signal?.aborted) setDetailLoading(false);
     }
   };
 
