@@ -345,6 +345,7 @@ export const fetchSemanticSearch = async ({
       matchTimeMs?: number;
     })[];
     total: number;
+    totalIsLowerBound?: boolean;
     query: string;
     sourceStatus?: SearchSourceStatus;
   };
@@ -373,6 +374,7 @@ export const fetchSemanticSearch = async ({
       ...(typeof item.matchTimeMs === "number" ? { searchMatchMs: item.matchTimeMs } : {}),
     })),
     total: payload.total,
+    totalIsLowerBound: payload.totalIsLowerBound === true,
     page: 1,
     pageSize: limit,
     query: payload.query,
