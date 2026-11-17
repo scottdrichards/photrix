@@ -504,6 +504,15 @@ export const searchRequestHandler = async (
   // is a meaningfully larger, truer number than `items.length` without
   // costing much more than the scan the search was doing anyway.
   const total = fused.size;
+  // Feedback #202: every source returns at most CANDIDATE_LIMIT rows, so a
+  // source that came back full was cut off and `total` is a floor, not a
+  // count. Say so, so the UI can show "500+" instead of a number that looks
+  // exact. Counting the rest would mean a full scan per source, which this
+  // search deliberately avoids.
+  const rawCounts = [clipResult, clapResult, transcriptResult, metadataResult].map((r) =>
+    r.status === "fulfilled" && Array.isArray(r.value) ? r.value.length : 0,
+  );
+  const totalIsLowerBound = rawCounts.some((n) => n >= CANDIDATE_LIMIT);
   // Sort the full set, then page it. Slicing first would only order each page
   // within itself, so infinite scroll restarted the date order every page.
   const ranked = [...fused.values()].sort((a, b) => b.similarity - a.similarity);
@@ -545,6 +554,7 @@ export const searchRequestHandler = async (
   writeJson(res, 200, {
     items,
     total,
+    totalIsLowerBound,
     query: q,
     sourceStatus,
     ...(debug ? { _diagnostics: diagnostics } : {}),

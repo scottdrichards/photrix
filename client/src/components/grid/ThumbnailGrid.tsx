@@ -48,7 +48,7 @@ type ThumbnailGridProps = {
   onViewChange: (view: "library" | "people") => void;
   /** Reports the current result total (null while nothing has loaded yet) so
    * the header subtitle can show it without duplicating this fetch. */
-  onTotalChange?: (total: number | null) => void;
+  onTotalChange?: (total: number | null, isLowerBound?: boolean) => void;
 };
 
 const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: ThumbnailGridProps) => {
@@ -58,6 +58,7 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
   const [data, setData] = useState<{
     items: PhotoItem[];
     total: number;
+    totalIsLowerBound?: boolean;
     filterUsed: typeof filter;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -254,8 +255,8 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
   }, [data, setItems]);
 
   useEffect(() => {
-    onTotalChange?.(data?.total ?? null);
-  }, [data?.total, onTotalChange]);
+    onTotalChange?.(data?.total ?? null, data?.totalIsLowerBound === true);
+  }, [data?.total, data?.totalIsLowerBound, onTotalChange]);
 
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
@@ -327,7 +328,7 @@ const ThumbnailGridComponent = ({ view, onViewChange, onTotalChange }: Thumbnail
   // redundant.
   const resultCountLabel =
     data && filter.semanticQuery && data.items.length < data.total
-      ? `Showing ${numberFormatter.format(data.items.length)} of ${numberFormatter.format(data.total)} results`
+      ? `Showing ${numberFormatter.format(data.items.length)} of ${numberFormatter.format(data.total)}${data.totalIsLowerBound ? "+" : ""} results`
       : null;
   const showInitialLoading = loading && !data;
 

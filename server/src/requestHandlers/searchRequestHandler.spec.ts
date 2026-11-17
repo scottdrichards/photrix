@@ -616,6 +616,34 @@ describe("searchRequestHandler resilience", () => {
     expect(requestedLimit).toBeGreaterThan(2);
   });
 
+  it("flags `total` as a lower bound when a source filled its candidate window (feedback #202)", async () => {
+    const handler = await loadHandler({});
+    const makeHits = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        folder: "/photos/",
+        fileName: `beach${i}.jpg`,
+        mimeType: "image/jpeg",
+        similarity: 0.5,
+      }));
+    const run = async (n: number) => {
+      const database = {
+        analysis: {
+          semanticSearch: jest.fn(async () => makeHits(n)),
+          audioSemanticSearch: jest.fn(async () => []),
+          audioTranscriptSearch: jest.fn(async () => []),
+          metadataSearch: jest.fn(async () => []),
+        },
+      } as unknown as IndexDatabase;
+      const { res, getJson } = createJsonResponse();
+      await handler(makeReq("beach", 2), res, { database });
+      return getJson();
+    };
+    expect((await run(3)).totalIsLowerBound).toBe(false);
+    const capped = await run(500);
+    expect(capped.totalIsLowerBound).toBe(true);
+    expect(capped.total).toBe(500);
+  });
+
   // Feedback #141: search was hard-capped at `limit` (default 50) with no
   // way to see more -- offset pages into the same ranked candidate set
   // CANDIDATE_LIMIT already computes, rather than re-selecting a new top-N.

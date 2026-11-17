@@ -299,6 +299,8 @@ export type FetchSuggestionsOptions = {
 export interface FetchPhotosResult {
   items: PhotoItem[];
   total: number;
+  /** True when `total` is a floor (a capped search), so show "500+". */
+  totalIsLowerBound?: boolean;
   page: number;
   pageSize: number;
 }
