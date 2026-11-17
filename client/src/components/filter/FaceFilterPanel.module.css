@@ -22,6 +22,12 @@
   margin: 0;
 }
 
+/* Feedback #192 */
+.nameSearch {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .faceGrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));

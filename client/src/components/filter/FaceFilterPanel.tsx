@@ -57,6 +57,8 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
   const [clusters, setClusters] = useState<PersonCluster[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Feedback #192: typed text that narrows the grid to matching names.
+  const [nameQuery, setNameQuery] = useState("");
   // How many faces the "photo ready" backfill still has left to score, or
   // `null` once we know there is no backlog (or haven't checked yet). The
   // backfill task only appears in /api/status while it actually has unscored
@@ -170,6 +172,18 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
     };
   }, [isActive, showUnknownControl]);
 
+  // Every typed word must appear in the name, in any order, so "rich sco"
+  // finds "Scott Richards". Unnamed faces have nothing to match and drop out
+  // while a search is typed.
+  const queryWords = nameQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  const visibleClusters =
+    queryWords.length === 0
+      ? clusters
+      : clusters.filter((cluster) => {
+          const name = cluster.name?.toLowerCase();
+          return name !== undefined && queryWords.every((word) => name.includes(word));
+        });
+
   const toggleCluster = (clusterId: string) => {
     const next = selected.includes(clusterId)
       ? selected.filter((id) => id !== clusterId)
@@ -233,8 +247,23 @@ export const FaceFilterPanel = ({ isActive }: FaceFilterPanelProps) => {
       ) : null}
 
       {clusters.length > 0 ? (
+        <input
+          type="search"
+          className={`input ${css.nameSearch}`}
+          value={nameQuery}
+          onChange={(event) => setNameQuery(event.target.value)}
+          placeholder="Search names"
+          aria-label="Search faces by name"
+        />
+      ) : null}
+
+      {clusters.length > 0 && visibleClusters.length === 0 ? (
+        <small>No named face matches “{nameQuery.trim()}”.</small>
+      ) : null}
+
+      {visibleClusters.length > 0 ? (
         <div className={css.faceGrid}>
-          {clusters.map((cluster) => {
+          {visibleClusters.map((cluster) => {
             const isSelected = selected.includes(cluster.id);
             const label = getClusterLabel(cluster);
             const description = cluster.name ? `${cluster.name}, ${cluster.count} faces` : label;
