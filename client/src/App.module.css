@@ -228,6 +228,23 @@
   }
 }
 
+/* Feedback #197: on a wide window the search field and filter icons fit on
+   the wordmark's line, so they stop taking a row of their own. The tagline
+   truncates, the search row takes the slack. Below this width the two-row
+   layout above is what fits without the icons wrapping. */
+@media (min-width: 1480px) {
+  .header {
+    grid-template-columns: minmax(150px, 18%) minmax(0, 1fr) auto;
+    grid-template-areas: "title search actions";
+  }
+
+  .header .title {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
+}
+
 /* Smallest phones: the wordmark and five controls only just share a line. */
 @media (max-width: 360px) {
   .header .title h2 {
