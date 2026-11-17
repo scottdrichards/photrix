@@ -22,6 +22,13 @@ describe("queryMentions", () => {
     expect(queryMentions("Photos of SARAH", "Sarah")).toBe(true);
   });
 
+  it("matches a name made only of short words", () => {
+    expect(queryMentions("ana at the lake", "Ana Lee", { matchAnyWord: true })).toBe(true);
+    expect(queryMentions("sunset at the lake", "Ana Lee", { matchAnyWord: true })).toBe(false);
+    // A folder still needs all of its words, short or not.
+    expect(queryMentions("my dog", "My Pix")).toBe(false);
+  });
+
   it("tolerates possessives and plurals", () => {
     expect(queryMentions("sarah's birthday", "Sarah")).toBe(true);
     expect(queryMentions("the Portland trip", "Trips")).toBe(true);

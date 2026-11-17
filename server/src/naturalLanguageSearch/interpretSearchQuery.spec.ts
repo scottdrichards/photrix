@@ -695,4 +695,96 @@ describe("interpretSearchQuery", () => {
       result.interpreted && (result.filter.faceClusterFilter as string[]),
     ).toHaveLength(2);
   });
+
+  describe("two people joined in the query (feedback #193)", () => {
+    const family: SearchVocabulary = {
+      // The prompt's short list holds only the first person.
+      people: [{ name: "Ana Lee", clusterId: "person-1" }],
+      knownPeople: [
+        { name: "Ana Lee", clusterId: "person-1" },
+        { name: "Bo Park", clusterId: "person-2" },
+        { name: "Cy Park", clusterId: "person-3" },
+        { name: "Dee", clusterId: "person-4" },
+        { name: "Rose", clusterId: "person-5" },
+        { name: "Dee Dee Ramone" },
+      ],
+      folders: [],
+    };
+    const interpretFamily = (query: string, answer: unknown) =>
+      interpretSearchQuery({
+        query,
+        vocabulary: family,
+        now: NOW,
+        generate: respondWith(answer),
+      });
+    const faces = (result: Awaited<ReturnType<typeof interpretFamily>>) =>
+      result.interpreted ? result.filter.faceClusterFilter : undefined;
+
+    it("adds the second person when the model returned only the first", async () => {
+      const result = await interpretFamily("ana and bo at the lake", {
+        people: ["Ana Lee"],
+        visual: "at the lake",
+      });
+      expect(faces(result)).toEqual(["person-1", "person-2"]);
+      expect(result).toMatchObject({ filter: { semanticQuery: "at the lake" }, ignored: [] });
+    });
+
+    it("accepts a name the model copied from the query though the prompt never listed it", async () => {
+      const result = await interpretFamily("photos of Ana with Bo", {
+        people: ["Ana", "Bo"],
+        visual: "with",
+      });
+      expect(faces(result)).toEqual(["person-1", "person-2"]);
+      // Nothing is left to describe the picture once the names are filters.
+      expect(result.interpreted && result.filter.semanticQuery).toBeUndefined();
+      expect(result).toMatchObject({ ignored: [] });
+    });
+
+    it("finds both when the model named nobody", async () => {
+      const result = await interpretFamily("Bo & Cy", {});
+      expect(faces(result)).toEqual(["person-2", "person-3"]);
+    });
+
+    it("handles a list of three and a full name", async () => {
+      const result = await interpretFamily("Ana Lee, Bo and Cy Park skiing", {
+        people: ["Ana Lee"],
+        visual: "Bo and Cy Park skiing",
+      });
+      expect(faces(result)).toEqual(["person-1", "person-2", "person-3"]);
+      expect(result).toMatchObject({ filter: { semanticQuery: "skiing" } });
+    });
+
+    it("records the typed words behind the added person", async () => {
+      const result = await interpretFamily("Ana and Bo", { people: ["Ana Lee"] });
+      expect(result.interpreted && result.chips).toMatchObject([
+        { label: "Ana Lee", sourceText: "Ana" },
+        { label: "Bo Park", sourceText: "Bo" },
+      ]);
+    });
+
+    it("takes a bare name to mean the person called exactly that", async () => {
+      const result = await interpretFamily("Dee and Bo", { people: [] });
+      expect(faces(result)).toEqual(["person-4", "person-2"]);
+    });
+
+    it("does not guess between two people a joined name could mean", async () => {
+      const result = await interpretFamily("Ana and Park", { people: ["Ana Lee"] });
+      expect(faces(result)).toEqual(["person-1"]);
+      expect(result).toMatchObject({ ignored: ["park"] });
+    });
+
+    it("leaves a name-like word alone when the other side is not a person", async () => {
+      // "Rose" is a person in this library, but nothing here says she is meant.
+      expect(await interpretFamily("sunset and rose garden", {})).toEqual({
+        interpreted: false,
+        reason: "no-filters",
+      });
+      const result = await interpretFamily("Ana with a rose", {
+        people: ["Ana Lee"],
+        visual: "with a rose",
+      });
+      expect(faces(result)).toEqual(["person-1"]);
+      expect(result).toMatchObject({ filter: { semanticQuery: "a rose" } });
+    });
+  });
 });

@@ -18,7 +18,15 @@ export type VocabularyPerson = {
 };
 
 export type SearchVocabulary = {
+  /** The most-seen people, short enough to list in the prompt. */
   people: VocabularyPerson[];
+  /**
+   * Everyone a query may name, most seen first: `people` plus those the prompt
+   * had no room for. The model is never shown these, but a name it copies out
+   * of the query, or that the query plainly joins to another name, is checked
+   * against them (feedback #193). Defaults to `people`.
+   */
+  knownPeople?: VocabularyPerson[];
   /**
    * Folder names, most populated first — a bare top-level name ("Trips") or
    * a one-level-deep relative path ("Trips/Beach Trip 2024"), see
@@ -33,6 +41,10 @@ export type SearchVocabulary = {
 // prompt, so it stays small enough to keep the 3B model's attention (and the
 // request fast) rather than exhaustive.
 const MAX_PEOPLE = 40;
+// Names are only matched against, never sent to the model, so this cap is
+// about memory rather than prompt size.
+const MAX_KNOWN_PEOPLE = 5000;
+const MAX_KNOWN_TAGGED_PEOPLE = 500;
 const MAX_FOLDERS = 60;
 // How many of the most-populated top-level folders to look inside for a
 // second level of vocabulary. Bounded because each one is its own SQL round
@@ -55,18 +67,20 @@ export const clearSearchVocabularyCache = () => {
   inflight = undefined;
 };
 
-const loadPeople = async (database: IndexDatabase): Promise<VocabularyPerson[]> => {
-  const people: VocabularyPerson[] = [];
+const loadPeople = async (
+  database: IndexDatabase,
+): Promise<{ people: VocabularyPerson[]; knownPeople: VocabularyPerson[] }> => {
+  const knownPeople: VocabularyPerson[] = [];
   const seen = new Set<string>();
 
   // Named face clusters first: a name the user has actually assigned in the
   // People tab is the strongest signal, and gives an exact cluster filter.
   try {
-    for (const person of await database.faces.listMostSeenNamedPeople(MAX_PEOPLE)) {
+    for (const person of await database.faces.listMostSeenNamedPeople(MAX_KNOWN_PEOPLE)) {
       const name = person.name.trim();
       if (seen.has(name.toLowerCase())) continue;
       seen.add(name.toLowerCase());
-      people.push({ name, clusterId: person.id });
+      knownPeople.push({ name, clusterId: person.id });
     }
   } catch (error) {
     // A library with face clustering disabled has no such table/rows; the
@@ -74,27 +88,26 @@ const loadPeople = async (database: IndexDatabase): Promise<VocabularyPerson[]> 
     log.debug({ err: error }, "no named face clusters available");
   }
 
-  if (people.length < MAX_PEOPLE) {
-    try {
-      const tagged = await database.queryFieldSuggestions({
-        field: "personInImage",
-        search: "",
-        filter: {},
-        limit: MAX_PEOPLE,
-      });
-      for (const name of tagged) {
-        const trimmed = name.trim();
-        if (!trimmed || seen.has(trimmed.toLowerCase())) continue;
-        if (people.length >= MAX_PEOPLE) break;
-        seen.add(trimmed.toLowerCase());
-        people.push({ name: trimmed });
-      }
-    } catch (error) {
-      log.debug({ err: error }, "no personInImage tags available");
+  // Tagged names come after every named face, so the prompt's share of the
+  // list (its first MAX_PEOPLE) only reaches them when faces leave room.
+  try {
+    const tagged = await database.queryFieldSuggestions({
+      field: "personInImage",
+      search: "",
+      filter: {},
+      limit: MAX_KNOWN_TAGGED_PEOPLE,
+    });
+    for (const name of tagged) {
+      const trimmed = name.trim();
+      if (!trimmed || seen.has(trimmed.toLowerCase())) continue;
+      seen.add(trimmed.toLowerCase());
+      knownPeople.push({ name: trimmed });
     }
+  } catch (error) {
+    log.debug({ err: error }, "no personInImage tags available");
   }
 
-  return people;
+  return { people: knownPeople.slice(0, MAX_PEOPLE), knownPeople };
 };
 
 /**
@@ -154,11 +167,11 @@ export const loadSearchVocabulary = async (
   if (inflight) return inflight;
 
   inflight = (async () => {
-    const [people, folders] = await Promise.all([
+    const [{ people, knownPeople }, folders] = await Promise.all([
       loadPeople(database),
       loadFolders(database),
     ]);
-    const value = { people, folders };
+    const value = { people, knownPeople, folders };
     cache = { value, at: Date.now() };
     return value;
   })().finally(() => {
