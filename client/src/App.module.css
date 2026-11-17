@@ -460,3 +460,29 @@
   backdrop-filter: blur(12px);
   box-shadow: var(--shadow-sm);
 }
+
+/* Window Controls Overlay: the installed desktop window has no title bar of its
+   own, so this header is it. Clear the window buttons (the env() insets are the
+   free strip; the rest is the buttons, on whichever side the OS puts them),
+   match the title bar's height, and let the empty parts drag the window. */
+:global(:root[data-wco]) .header {
+  padding-block-start: 0;
+  padding-inline-start: max(var(--space-m), env(titlebar-area-x, 0px));
+  padding-inline-end: max(
+    var(--space-m),
+    calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))
+  );
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+:global(:root[data-wco]) .header .title,
+:global(:root[data-wco]) .header .headerActions {
+  min-height: env(titlebar-area-height, 0px);
+  align-items: center;
+}
+
+:global(:root[data-wco]) .header :is(a, button, input, select, textarea, form, [role="switch"], [role="dialog"], :global(.popover-surface)) {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
