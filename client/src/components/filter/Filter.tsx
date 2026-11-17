@@ -319,6 +319,7 @@ export const Filter = () => {
           peopleInImageFilter: selectedPeople,
           faceClusterFilter,
           faceClusterMatchMode,
+          faceAttributeFilter,
           cameraModelFilter: selectedCameraModels,
           lensFilter: selectedLensModels,
         });
@@ -343,6 +344,7 @@ export const Filter = () => {
     selectedPeople,
     faceClusterFilter,
     faceClusterMatchMode,
+    faceAttributeFilter,
     selectedCameraModels,
     selectedLensModels,
   ]);
@@ -369,6 +371,9 @@ export const Filter = () => {
           locationBounds,
           dateRange,
           peopleInImageFilter: selectedPeople,
+          faceClusterFilter,
+          faceClusterMatchMode,
+          faceAttributeFilter,
           cameraModelFilter: selectedCameraModels,
           lensFilter: selectedLensModels,
           signal: abortController.signal,
@@ -406,6 +411,9 @@ export const Filter = () => {
     locationBounds,
     dateRange,
     selectedPeople,
+    faceClusterFilter,
+    faceClusterMatchMode,
+    faceAttributeFilter,
     selectedCameraModels,
     selectedLensModels,
   ]);
@@ -675,6 +683,9 @@ export const Filter = () => {
               peopleInImageFilter={selectedPeople}
               cameraModelFilter={selectedCameraModels}
               lensFilter={selectedLensModels}
+              faceClusterFilter={faceClusterFilter}
+              faceClusterMatchMode={faceClusterMatchMode}
+              faceAttributeFilter={faceAttributeFilter}
             />
           </div>
         )}
@@ -713,6 +724,9 @@ export const Filter = () => {
               peopleInImageFilter={selectedPeople}
               cameraModelFilter={selectedCameraModels}
               lensFilter={selectedLensModels}
+              faceClusterFilter={faceClusterFilter}
+              faceClusterMatchMode={faceClusterMatchMode}
+              faceAttributeFilter={faceAttributeFilter}
             />
 
             <SuggestionFilterField
@@ -732,6 +746,9 @@ export const Filter = () => {
               peopleInImageFilter={selectedPeople}
               cameraModelFilter={selectedCameraModels}
               lensFilter={selectedLensModels}
+              faceClusterFilter={faceClusterFilter}
+              faceClusterMatchMode={faceClusterMatchMode}
+              faceAttributeFilter={faceAttributeFilter}
             />
           </div>
         )}
