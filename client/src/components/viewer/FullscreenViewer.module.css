@@ -4,8 +4,13 @@
   background-color: transparent;
   max-width: 100vw;
   max-height: 100vh;
+  /* dvh, not vh: on Android browsers 100vh is the height with the address bar
+     hidden, so a 100vh dialog runs off the bottom while the bar shows and the
+     centred video sits low with its controls cut off. Desktop never shows it. */
+  max-height: 100dvh;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   margin: 0;
   position: fixed;
   inset: 0;
@@ -85,7 +90,7 @@
   position: relative;
   /* --people-h makes room below the video for the people timeline, so it
      never covers the player's own controls. */
-  width: min(100%, 90vw, calc((90vh - var(--people-h, 0px)) * var(--video-ar, 1.7778)));
+  width: min(100%, 90vw, calc((90dvh - var(--people-h, 0px)) * var(--video-ar, 1.7778)));
   max-width: min(100%, 90vw);
   max-height: calc(100% - var(--people-h, 0px));
   margin-bottom: var(--people-h, 0px);
@@ -108,7 +113,7 @@
   /* Fit an aspect-ratio box within the 90vw × 90vh viewport window. Sizing the
      frame from --photo-ar (metadata, then the loaded image) lets the thumbnail
      placeholder occupy the exact box the full image will fill. */
-  width: min(90vw, calc(90vh * var(--photo-ar, 1)));
+  width: min(90vw, calc(90dvh * var(--photo-ar, 1)));
   aspect-ratio: var(--photo-ar, 1);
 }
 
