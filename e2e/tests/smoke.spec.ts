@@ -9,8 +9,15 @@ test.describe("app shell", () => {
     await page.goto("/");
 
     // Auth is disabled for the test instance, so the app shell renders directly.
-    // The theme control lives in the Account panel (feedback #198).
+    // The theme control lives in the Account panel (feedback #198). Opening it
+    // fetches /api/account; wait for that answer before asserting, because a
+    // 401 there swaps the app for the login screen. Asserting earlier let the
+    // test pass or fail on timing instead of on the app's behaviour.
+    const accountLoaded = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/account",
+    );
     await page.getByTitle("Account").click();
+    await accountLoaded;
     await expect(page.getByRole("switch", { name: "Theme" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Password" })).toHaveCount(0);
   });

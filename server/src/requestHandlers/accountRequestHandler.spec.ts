@@ -81,13 +81,28 @@ const load = async () => {
 
 describe("accountRequestHandler", () => {
   it("rejects requests without a login session", async () => {
-    const { accountRequestHandler, authService } = await load();
-    const apiToken = authService.issueApiToken("alice", "k").token;
+    process.env.PHOTRIX_ACCOUNTS = JSON.stringify([{ username: "alice", password: "pw" }]);
+    try {
+      const { accountRequestHandler, authService } = await load();
+      const apiToken = authService.issueApiToken("alice", "k").token;
+      const { res, getStatus } = createJsonResponse();
+
+      // An API token is not an interactive session, so it must be rejected.
+      await accountRequestHandler(makeReq("/api/account", "GET", apiToken), res);
+      expect(getStatus()).toBe(401);
+    } finally {
+      delete process.env.PHOTRIX_ACCOUNTS;
+    }
+  });
+
+  it("does not answer 401 when auth is disabled, so the client is not bounced to a login screen", async () => {
+    const { accountRequestHandler } = await load();
     const { res, getStatus } = createJsonResponse();
 
-    // An API token is not an interactive session, so it must be rejected.
-    await accountRequestHandler(makeReq("/api/account", "GET", apiToken), res);
-    expect(getStatus()).toBe(401);
+    // The client treats any 401 as "signed out". With auth off there is
+    // nothing to sign in to, so opening the Account panel must not log out.
+    await accountRequestHandler(makeReq("/api/account", "GET", null), res);
+    expect(getStatus()).toBe(404);
   });
 
   it("returns the current username for a session token", async () => {

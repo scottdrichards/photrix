@@ -3,6 +3,7 @@ import type http from "node:http";
 import {
   extractToken,
   getSessionUsername,
+  isAuthEnabled,
   issueApiToken,
   listApiTokens,
   listSessions,
@@ -43,6 +44,13 @@ const resolveSession = (
   );
   const username = token ? getSessionUsername(token) : null;
   if (!token || !username) {
+    // With auth off there is no session to sign in to, so a 401 would be a lie:
+    // the client treats any 401 as "signed out" and swaps the whole app for the
+    // login screen the moment the Account panel opens.
+    if (!isAuthEnabled()) {
+      writeJson(res, 404, { error: "Accounts are not enabled on this server" });
+      return null;
+    }
     writeJson(res, 401, { error: "Unauthorized" });
     return null;
   }
