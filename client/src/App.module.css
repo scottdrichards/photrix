@@ -168,7 +168,17 @@
   align-items: center;
   justify-content: flex-end;
   flex-wrap: nowrap;
-  gap: var(--space-xs);
+  /* Same gap and 36px control size as the filter icon row below
+     (Filter.module.css), so the two rows read as one grid. */
+  gap: var(--space-s);
+}
+
+.headerActions > :global(.btn) {
+  box-sizing: border-box;
+  min-width: 36px;
+  height: 36px;
+  padding-block: 0;
+  justify-content: center;
 }
 
 .searchRow {
@@ -177,6 +187,7 @@
   align-items: center;
   gap: var(--space-m);
   min-width: 0;
+  /* Filter icons right-align under the utility buttons (see .iconBar). */
 }
 
 /* Transparent wrapper so the Filter icon bar is a direct flex child of
@@ -189,6 +200,11 @@
 @media (max-width: 1100px) {
   .btnLabel {
     display: none;
+  }
+
+  .headerActions > :global(.btn) {
+    width: 36px;
+    padding: 0;
   }
 }
 
@@ -210,11 +226,7 @@
   }
 
   .headerActions {
-    gap: 0;
-  }
-
-  .headerActions > :global(.btn) {
-    padding: 7px;
+    gap: var(--space-xs);
   }
 
   .headerActions .headerThemeToggle {
@@ -251,8 +263,14 @@
     font-size: 1.25rem;
   }
 
+  .headerActions {
+    gap: 2px;
+  }
+
   .headerActions > :global(.btn) {
-    padding: 5px;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
   }
 }
 
