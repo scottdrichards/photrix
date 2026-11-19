@@ -292,6 +292,19 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Installed (standalone) app: there is no browser toolbar above the page, so
+   the header needs its own top breathing room. Android standalone reports a
+   0 safe-area inset, so keep a minimum; iOS / notched devices report the real
+   inset (viewport-fit=cover in index.html). Browser tabs are untouched, and
+   the WCO rule below (more specific) still wins on desktop. */
+@media (display-mode: standalone), (display-mode: fullscreen), (display-mode: minimal-ui) {
+  .header {
+    padding-block-start: max(var(--space-l, 16px), env(safe-area-inset-top, 0px));
+    padding-inline-start: max(var(--space-m), env(safe-area-inset-left, 0px));
+    padding-inline-end: max(var(--space-m), env(safe-area-inset-right, 0px));
+  }
+}
+
 /* Window Controls Overlay: the installed desktop window has no title bar of its
    own, so this header is it. Clear the window buttons (the env() insets are the
    free strip; the rest is the buttons, on whichever side the OS puts them),
