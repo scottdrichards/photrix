@@ -49,6 +49,7 @@ import { getLogger } from "../../observability/logger.ts";
 
 const hlsLog = getLogger("HLS");
 const storyboardLog = getLogger("storyboard");
+const filesLog = getLogger("filesRequest");
 import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
 import {
   getCachedVideoDuration,
@@ -98,11 +99,8 @@ export const filesEndpointRequestHandler = async (
       shareFilter,
     );
   } catch (error) {
-    if (!res.headersSent)
-      writeJson(res, 500, {
-        error: "Internal server error",
-        message: error instanceof Error ? error.message : String(error),
-      });
+    filesLog.error({ err: error }, "files request failed");
+    if (!res.headersSent) writeJson(res, 500, { error: "Internal server error" });
   }
 };
 
@@ -681,10 +679,8 @@ const tryHLSStream = async (
     writeHlsPlaylistResponse(res, masterContent, "no-store", knownDuration);
     return true;
   } catch (error) {
-    writeJson(res, 500, {
-      error: "HLS generation failed",
-      message: error instanceof Error ? error.message : String(error),
-    });
+    hlsLog.error({ err: error }, "HLS generation failed");
+    writeJson(res, 500, { error: "HLS generation failed" });
     return true;
   }
 };
@@ -699,10 +695,8 @@ const tryVideoFrameCrop = async (ctx: FileHandlingContext) => {
     streamCachedFile(res, cachedPath, { contentType: "image/jpeg", size: cachedStats.size });
   } catch (error) {
     // Includes a `t` past the end, where ffmpeg succeeds but writes nothing.
-    writeJson(res, 422, {
-      error: "Could not crop video frame",
-      message: error instanceof Error ? error.message : String(error),
-    });
+    filesLog.warn({ err: error }, "could not crop video frame");
+    writeJson(res, 422, { error: "Could not crop video frame" });
   }
   return true;
 };
@@ -987,10 +981,8 @@ const fileHandler = async (
       });
       return;
     } catch (error) {
-      return writeJson(res, 500, {
-        error: "Failed to generate scrub frame",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      filesLog.error({ err: error }, "scrub frame generation failed");
+      return writeJson(res, 500, { error: "Failed to generate scrub frame" });
     }
   }
 
@@ -1011,10 +1003,7 @@ const fileHandler = async (
     const built = await attempt(generateVideoStoryboard(normalizedPath, duration));
     if (!built.ok) {
       storyboardLog.warn({ err: built.error, path: subPath }, "Storyboard generation failed");
-      return writeJson(res, 500, {
-        error: "Failed to generate storyboard",
-        message: built.error.message,
-      });
+      return writeJson(res, 500, { error: "Failed to generate storyboard" });
     }
     if (!built.value) {
       return writeJson(res, 404, { error: "Could not generate storyboard" });
@@ -1048,10 +1037,8 @@ const fileHandler = async (
       });
       return;
     } catch (error) {
-      return writeJson(res, 500, {
-        error: "Failed to prepare video for sharing",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      filesLog.error({ err: error }, "video share preparation failed");
+      return writeJson(res, 500, { error: "Failed to prepare video for sharing" });
     }
   }
 
