@@ -10,6 +10,8 @@ export type FeedbackItem = {
   claimedBy: string | null;
   completedAt: number | null;
   status: FeedbackStatus;
+  /** True for share-link rows; `text` is then wrapped in <untrusted_comment> by the server. */
+  untrusted?: boolean;
 };
 
 export const fetchFeedbackItems = async (): Promise<FeedbackItem[]> => {

@@ -28,10 +28,13 @@ export class FeedbackStore {
 
   /** The session snapshot saved with a suggestion, or null when it has none. */
   async getDiagnostics(id: number): Promise<unknown> {
-    const row = await this.db.get<{ diagnostics: string | null }>(
-      "SELECT diagnostics FROM feedback WHERE id = ?",
+    const row = await this.db.get<{ diagnostics: string | null; source?: string | null }>(
+      "SELECT diagnostics, source FROM feedback WHERE id = ?",
       [id],
     );
+    // External rows never expose diagnostics (older rows may hold another
+    // client's session data chosen by the submitter).
+    if (row?.source === "external") return null;
     return row?.diagnostics ? (JSON.parse(row.diagnostics) as unknown) : null;
   }
 

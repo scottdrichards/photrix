@@ -3,6 +3,17 @@ import type { FeedbackStore } from "../feedback/feedbackStore.ts";
 import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
+/**
+ * Share-link submitters are outside people, and AI agents read this queue, so
+ * their text is presented as quoted untrusted data. Wrapping happens at response
+ * time so rows stored before this existed are covered too. `<` and `>` are
+ * escaped so the submitter cannot close the wrapper early.
+ */
+export const presentFeedbackText = (text: string, source: string | null): string =>
+  source === "external"
+    ? `<untrusted_comment source="share-link">${text.replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</untrusted_comment>`
+    : text;
+
 export const feedbackHandler = async (
   req: http.IncomingMessage & { url: string },
   res: http.ServerResponse,
@@ -35,7 +46,17 @@ export const feedbackHandler = async (
     const statusFilter = url.searchParams.get("status");
     const rows = await feedback.list(Date.now());
     writeJson(res, 200, {
-      feedback: rows.filter((row) => !statusFilter || row.status === statusFilter),
+      feedback: rows
+        .filter((row) => !statusFilter || row.status === statusFilter)
+        .map((row) => {
+          if (row.source !== "external") return row;
+          return {
+            ...row,
+            text: presentFeedbackText(row.text, row.source),
+            untrusted: true,
+            hasDiagnostics: false,
+          };
+        }),
     });
     return;
   }
@@ -55,8 +76,12 @@ export const feedbackHandler = async (
 
     const text = body.text.trim().slice(0, 2000);
     const source = options.markExternal ? "external" : null;
+    // Never attach a report for an external caller: clientSessionId is
+    // caller-supplied and would pull other clients' diagnostics into the row.
     const diagnostics =
-      typeof body.clientSessionId === "string" && options.buildDiagnosticsReport
+      !options.markExternal &&
+      typeof body.clientSessionId === "string" &&
+      options.buildDiagnosticsReport
         ? JSON.stringify(await options.buildDiagnosticsReport(body.clientSessionId))
         : null;
     await feedback.add({ text, createdAt: Date.now(), source, diagnostics });
