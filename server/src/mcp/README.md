@@ -31,7 +31,7 @@ Configuration (env vars, e.g. in `server/.env`):
 | `MCP_PORT`               | `3100`                   | Port the MCP server listens on.                                                      |
 | `PHOTRIX_BASE_URL`       | `http://localhost:3000`  | Base URL of the Photrix HTTP server to proxy.                                        |
 | `PHOTRIX_PUBLIC_URL`     | `PHOTRIX_BASE_URL`       | Origin used for the `view:` links in tool results. Set it to the address people open Photrix at; the default is usually a loopback address that only works on the server. |
-| `PHOTRIX_TOKEN`          | _(none)_                 | Default Photrix bearer used when a caller sends no key of their own.                 |
+| `PHOTRIX_TOKEN`          | _(none)_                 | Photrix bearer used in legacy shared-secret mode (`MCP_AUTH_TOKEN` set) only.                 |
 | `MCP_AUTH_TOKEN`         | _(none)_                 | Legacy shared-secret gate (see Authentication below).                                |
 | `PHOTRIX_MCP_TIMEOUT_MS` | `30000`                  | Per-request timeout when calling Photrix.                                            |
 
@@ -43,8 +43,8 @@ There are two modes, chosen by whether `MCP_AUTH_TOKEN` is set:
   `Authorization: Bearer <mcp-key>` and the MCP server **forwards that key to
   Photrix**, so every agent authenticates as a specific user. Generate a key
   from the Photrix web app → account panel → **MCP keys**, or via the API. A
-  revoked key immediately stops working (Photrix returns 401). If a caller sends
-  no bearer, the server falls back to the env `PHOTRIX_TOKEN`.
+  revoked key immediately stops working (Photrix returns 401). A caller that
+  sends no bearer gets a 401; the env `PHOTRIX_TOKEN` is never used in this mode.
 
   The key is checked with Photrix before a request is served, so a wrong or
   revoked key gets an HTTP 401 at connect time rather than a client that

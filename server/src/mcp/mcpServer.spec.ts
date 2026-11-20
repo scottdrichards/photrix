@@ -100,6 +100,39 @@ describe("startMcpServer", () => {
     expect(response.status).toBe(401);
   });
 
+  it("accepts the legacy gate token and rejects near-misses of any length", async () => {
+    const photrixUrl = await startFakePhotrix("service-token");
+    const { startMcpServer } = await loadServer({
+      MCP_PORT: "0",
+      MCP_AUTH_TOKEN: "secret-gate-token",
+      PHOTRIX_TOKEN: "service-token",
+      PHOTRIX_BASE_URL: photrixUrl,
+    });
+    server = await startMcpServer();
+    const port = listeningPort(server);
+
+    expect((await listTools(port, "secret-gate-token")).status).toBe(200);
+    expect((await listTools(port, "secret-gate-tokeX")).status).toBe(401);
+    expect((await listTools(port, "short")).status).toBe(401);
+    expect((await listTools(port, "secret-gate-token-and-more")).status).toBe(401);
+    delete process.env.PHOTRIX_TOKEN;
+  });
+
+  it("per-user mode never falls back to PHOTRIX_TOKEN when no bearer is sent", async () => {
+    const photrixUrl = await startFakePhotrix("service-token");
+    const { startMcpServer } = await loadServer({
+      MCP_PORT: "0",
+      PHOTRIX_TOKEN: "service-token",
+      PHOTRIX_BASE_URL: photrixUrl,
+    });
+    server = await startMcpServer();
+
+    const response = await listTools(listeningPort(server));
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toMatch(/^Bearer/);
+    delete process.env.PHOTRIX_TOKEN;
+  });
+
   it("rejects a second bind on the same port instead of crashing the process", async () => {
     const first = await loadServer({ MCP_PORT: "0" });
     server = await first.startMcpServer();
