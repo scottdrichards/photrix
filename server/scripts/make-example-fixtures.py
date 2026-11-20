@@ -24,6 +24,10 @@ Each replacement preserves the structural properties the test suite asserts on:
   subFolder/soundboard.heic
       portrait 3000x4000 HEIC with EXIF + GPS
 
+It also draws the story fixtures (STORY_FIXTURES below): procedural postcard
+scenes with invented EXIF and public-landmark GPS that give the trip detector
+in server/src/stories a home base and two trips to find.
+
 Keep new fixtures synthetic: this folder ships in a public repository, so
 fixture EXIF should never come from a real device.
 
@@ -275,6 +279,153 @@ def build_heic(path, size, dt, gps_ll, alt, desc, seed, iso):
     im.save(path, format="HEIF", quality=55, exif=exif_bytes)
 
 
+# --------------------------------------------------------------------------
+# story fixtures: a home base plus two trips, for server/src/stories
+# --------------------------------------------------------------------------
+# Palettes per scene kind: sky top, sky horizon, sun, then three silhouette
+# layers from far to near.
+SCENE_PALETTES = {
+    "dusk": ((38, 44, 92), (246, 160, 112), (255, 226, 170),
+             (120, 86, 120), (78, 56, 96), (36, 28, 52)),
+    "day": ((86, 148, 214), (198, 226, 240), (255, 250, 228),
+            (128, 158, 140), (84, 120, 92), (46, 76, 54)),
+    "gold": ((112, 120, 168), (250, 204, 128), (255, 240, 196),
+             (176, 128, 98), (128, 88, 70), (72, 48, 44)),
+    "night": ((10, 14, 36), (52, 62, 110), (236, 236, 214),
+              (40, 46, 78), (26, 30, 56), (12, 14, 30)),
+}
+
+
+def ridge(w, h, base, amp, seed, layer):
+    """A deterministic silhouette line: a few summed sines, no RNG."""
+    pts = []
+    for x in range(0, w + 8, 8):
+        t = x / w
+        y = base
+        for k in range(1, 4):
+            y += amp / k * math.sin(t * math.pi * (k * 2.3 + layer) + seed * 1.7 + k * layer)
+        pts.append((x, int(y)))
+    return pts + [(w, h), (0, h)]
+
+
+def scenic(w, h, kind, seed, city=False, water=False):
+    """A postcard-like landscape: sky, sun, three ridges, optional skyline or
+    sea. Deterministic and smooth, so it compresses small, but it has a real
+    horizon and structure for thumbnails, CLIP and the Ken Burns pan."""
+    sky0, sky1, sun, *layers = SCENE_PALETTES[kind]
+    small = Image.new("RGB", (8, 64))
+    sp = small.load()
+    for y in range(64):
+        t = (y / 63) ** 1.4
+        for x in range(8):
+            sp[x, y] = tuple(int(sky0[i] + (sky1[i] - sky0[i]) * t) for i in range(3))
+    im = small.resize((w, h), Image.BICUBIC)
+
+    glow = Image.new("L", (w, h), 0)
+    sx = int(w * (0.2 + 0.6 * ((seed * 37) % 100) / 100))
+    sy = int(h * (0.28 + 0.12 * ((seed * 17) % 10) / 10))
+    r = int(min(w, h) * 0.07)
+    ImageDraw.Draw(glow).ellipse([sx - 3 * r, sy - 3 * r, sx + 3 * r, sy + 3 * r], fill=90)
+    glow = glow.filter(ImageFilter.GaussianBlur(r))
+    im = Image.composite(Image.new("RGB", (w, h), sun), im, glow)
+    d = ImageDraw.Draw(im)
+    d.ellipse([sx - r, sy - r, sx + r, sy + r], fill=sun)
+
+    horizon = h * (0.62 if water else 0.56)
+    for i, colour in enumerate(layers):
+        base = horizon + i * h * 0.09
+        d.polygon(ridge(w, h, base, h * (0.07 - i * 0.015), seed, i), fill=colour)
+        if city and i == 1:
+            x = int(w * 0.08)
+            k = 0
+            while x < w * 0.92:
+                bw = int(w * (0.03 + 0.02 * ((seed + k * 7) % 5) / 4))
+                bh = int(h * (0.08 + 0.16 * ((seed * 3 + k * 11) % 9) / 8))
+                top = int(base) - bh
+                d.rectangle([x, top, x + bw, int(base) + 4], fill=colour)
+                if (seed + k) % 4 == 0:  # a dome or a spire
+                    d.ellipse([x, top - bw // 2, x + bw, top + bw // 2], fill=colour)
+                x += bw + int(w * 0.006)
+                k += 1
+    if water:
+        top = int(h * 0.74)
+        d.rectangle([0, top, w, h], fill=tuple(int(c * 0.8) for c in sky1))
+        for j in range(14):
+            y = top + 6 + j * (h - top) // 14
+            x0 = int(w * ((seed * 13 + j * 29) % 100) / 100 * 0.6)
+            d.line([(x0, y), (x0 + int(w * 0.25), y)], fill=tuple(min(255, c + 30) for c in sky1), width=2)
+    return im.filter(ImageFilter.GaussianBlur(0.8))
+
+
+def build_story_jpeg(path, dt, lat, lon, desc, kind, seed, portrait=False, city=False, water=False):
+    w, h = (800, 1200) if portrait else (1200, 800)
+    im = scenic(w, h, kind, seed, city=city, water=water)
+    zeroth = {
+        piexif.ImageIFD.Make: b"Fabrikam",
+        piexif.ImageIFD.Model: b"Fabrikam Pulse X4",
+        piexif.ImageIFD.Orientation: 1,
+        piexif.ImageIFD.XResolution: (72, 1),
+        piexif.ImageIFD.YResolution: (72, 1),
+        piexif.ImageIFD.ResolutionUnit: 2,
+        piexif.ImageIFD.DateTime: dt.encode(),
+        piexif.ImageIFD.ImageDescription: desc.encode(),
+    }
+    exif = {
+        piexif.ExifIFD.ExposureTime: (1, 250),
+        piexif.ExifIFD.FNumber: (18, 10),
+        piexif.ExifIFD.ISOSpeedRatings: 64,
+        piexif.ExifIFD.ExifVersion: b"0232",
+        piexif.ExifIFD.DateTimeOriginal: dt.encode(),
+        piexif.ExifIFD.DateTimeDigitized: dt.encode(),
+        piexif.ExifIFD.FocalLength: (52, 10),
+        piexif.ExifIFD.ColorSpace: 1,
+        piexif.ExifIFD.PixelXDimension: w,
+        piexif.ExifIFD.PixelYDimension: h,
+    }
+    exif_bytes = piexif.dump({"0th": zeroth, "Exif": exif, "GPS": gps_ifd(lat, lon, 20.0)})
+    im.save(path, format="JPEG", quality=72, optimize=True, exif=exif_bytes)
+
+
+# (relative path, DateTimeOriginal, lat, lon, description, scene kind, options)
+# Public landmarks only. Home is a Seattle base on six separate days, enough
+# for the detector to call it home; the Italy set is a four-day trip with a
+# day in Florence; the three Trip/ stills join the existing Grand Canyon and
+# Malibu files into a June 2024 road trip.
+STORY_FIXTURES = [
+    ("Home/2023-03-11_kerry_park.jpg", "2023:03:11 17:42:10", 47.6295, -122.3599, "Kerry Park view", "dusk", {"city": True}),
+    ("Home/2023-04-16_pike_place.jpg", "2023:04:16 11:05:33", 47.6097, -122.3422, "Pike Place morning", "day", {"city": True, "water": True}),
+    ("Home/2023-06-18_space_needle.jpg", "2023:06:18 20:31:02", 47.6205, -122.3493, "Space Needle at sunset", "gold", {"city": True, "portrait": True}),
+    ("Home/2023-07-04_gas_works.jpg", "2023:07:04 21:48:45", 47.6456, -122.3344, "Fireworks over the lake", "night", {"water": True}),
+    ("Trip/Italy/IMG_5101.jpg", "2023:05:03 14:10:12", 41.8902, 12.4922, "Colosseum", "day", {"city": True}),
+    ("Trip/Italy/IMG_5108.jpg", "2023:05:03 15:31:40", 41.8925, 12.4853, "Roman Forum", "gold", {}),
+    ("Trip/Italy/IMG_5116.jpg", "2023:05:03 19:45:03", 41.9009, 12.4833, "Trevi Fountain at dusk", "dusk", {"city": True, "portrait": True}),
+    ("Trip/Italy/IMG_5140.jpg", "2023:05:04 09:20:55", 41.9022, 12.4539, "St. Peter's Square", "day", {"city": True}),
+    ("Trip/Italy/IMG_5152.jpg", "2023:05:04 12:05:18", 41.9031, 12.4663, "Castel Sant'Angelo from the river", "day", {"city": True, "water": True}),
+    ("Trip/Italy/IMG_5170.jpg", "2023:05:04 17:10:44", 41.8986, 12.4769, "Pantheon", "gold", {"city": True, "portrait": True}),
+    ("Trip/Italy/IMG_5181.jpg", "2023:05:04 20:15:09", 41.8992, 12.4731, "Piazza Navona at night", "night", {"city": True}),
+    ("Trip/Italy/IMG_5203.jpg", "2023:05:05 11:30:27", 43.7731, 11.2560, "Florence Duomo", "day", {"city": True}),
+    ("Trip/Italy/IMG_5219.jpg", "2023:05:05 14:40:51", 43.7680, 11.2531, "Ponte Vecchio", "gold", {"city": True, "water": True}),
+    ("Trip/Italy/IMG_5236.jpg", "2023:05:05 19:05:36", 43.7629, 11.2650, "Piazzale Michelangelo sunset", "dusk", {}),
+    ("Trip/Italy/IMG_5250.jpg", "2023:05:06 10:15:02", 41.9060, 12.4828, "Spanish Steps", "day", {"city": True, "portrait": True}),
+    ("Trip/Italy/IMG_5262.jpg", "2023:05:06 13:30:19", 41.8897, 12.4695, "Lunch in Trastevere", "gold", {"city": True}),
+    ("Trip/HooverDam_2024-06-13.jpg", "2024:06:13 10:20:00", 36.0161, -114.7377, "Hoover Dam", "day", {"water": True}),
+    ("Trip/JoshuaTree_2024-06-13.jpg", "2024:06:13 18:40:00", 33.8734, -115.9010, "Joshua Tree at golden hour", "gold", {}),
+    ("Trip/SantaMonica_2024-06-14.jpg", "2024:06:14 09:30:00", 34.0094, -118.4973, "Santa Monica Pier", "day", {"water": True}),
+    ("Home/2023-08-19_alki_beach.jpg", "2023:08:19 19:55:41", 47.5763, -122.4096, "Alki Beach sunset", "dusk", {"water": True}),
+    ("Home/2023-10-07_discovery_park.jpg", "2023:10:07 15:12:08", 47.6573, -122.4055, "Discovery Park bluff", "day", {"water": True}),
+]
+
+
+def story_targets(ex):
+    targets = []
+    for seed, (rel, dt, lat, lon, desc, kind, opts) in enumerate(STORY_FIXTURES, start=11):
+        def build(p, dt=dt, lat=lat, lon=lon, desc=desc, kind=kind, seed=seed, opts=opts):
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            build_story_jpeg(p, dt, lat, lon, f"Synthetic fixture: {desc}", kind, seed, **opts)
+        targets.append((os.path.join(ex, rel), build))
+    return targets
+
+
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else "."
     ex = os.path.join(root, "server", "exampleFolder")
@@ -297,6 +448,7 @@ def main():
                               b"Synthetic fixture: audio mixing desk faders",
                               seed=4, iso=400)),
     ]
+    targets += story_targets(ex)
 
     for path, build in targets:
         before = os.path.getsize(path) if os.path.exists(path) else 0

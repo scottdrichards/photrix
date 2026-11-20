@@ -26,6 +26,7 @@ const modules = {
   "components/status": ["(root)", "components", "featureFlags"],
   "components/account": ["(root)", "api", "hooks", "components"],
   "components/map": ["(root)"],
+  "components/stories": ["(root)", "api", "components"],
   "components/people": ["(root)", "api", "hooks", "components", "components/selection"],
   "components/filter": ["(root)", "components/map", "components/people"],
   "components/search": ["(root)", "api", "components/filter"],

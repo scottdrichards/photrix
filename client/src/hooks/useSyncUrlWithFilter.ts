@@ -19,6 +19,8 @@ export type UrlNavState = {
    * `preview` in filterUrlState.ts. Feedback #120.
    */
   previewPath: string | null;
+  /** The story playing in the Stories tab, or `null` — see `story` in filterUrlState.ts. */
+  story: string | null;
   /**
    * Forces `replaceState` for the write this state triggers. Used for
    * corrections the user did not ask for (a person that vanished under a new
@@ -42,7 +44,7 @@ export const useSyncUrlWithFilter = (
   onNavigate: (next: UrlNavState) => void,
 ): void => {
   const { filter, setFilter } = useFilter();
-  const { view, replace, previewPath } = nav;
+  const { view, replace, previewPath, story } = nav;
   const { personId, groupId } = nav.people;
 
   // The URL this hook last put in the address bar. `null` until the first write,
@@ -53,7 +55,7 @@ export const useSyncUrlWithFilter = (
 
   useEffect(() => {
     const nextUrl = buildAppUrl(
-      { view, filter, people: { personId, groupId }, preview: previewPath },
+      { view, filter, people: { personId, groupId }, preview: previewPath, story },
       window.location.search,
     );
     if (currentUrl() === nextUrl) {
@@ -76,7 +78,7 @@ export const useSyncUrlWithFilter = (
     } else {
       window.history.replaceState(null, "", nextUrl);
     }
-  }, [filter, view, personId, groupId, previewPath, replace]);
+  }, [filter, view, personId, groupId, previewPath, story, replace]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -89,6 +91,7 @@ export const useSyncUrlWithFilter = (
         view: state.view,
         people: state.people,
         previewPath: state.preview,
+        story: state.story,
         replace: true,
       });
     };

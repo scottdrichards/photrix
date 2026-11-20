@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { QuestionCircle20Filled, QuestionCircle20Regular } from "@fluentui/react-icons";
+import type { ViewMode } from "../../filterUrlState";
 import type { MomentClusterMember, PhotoItem, SearchSource, SearchSourceStatus } from "../../api";
 import {
   fetchMomentClusterDetail,
@@ -44,8 +45,8 @@ const numberFormatter = new Intl.NumberFormat();
 const ALL_SEARCH_SOURCES: readonly SearchSource[] = ["image", "audio", "transcript", "metadata"];
 
 type ThumbnailGridProps = {
-  view: "library" | "people";
-  onViewChange: (view: "library" | "people") => void;
+  view: ViewMode;
+  onViewChange: (view: ViewMode) => void;
   /** Reports the current result total (null while nothing has loaded yet) so
    * the header subtitle can show it without duplicating this fetch. */
   onTotalChange?: (total: number | null, isLowerBound?: boolean) => void;

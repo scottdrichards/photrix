@@ -52,7 +52,7 @@ import {
  * deserializes as `undefined` — the two mean the same thing to every consumer.
  */
 
-export type ViewMode = "library" | "people";
+export type ViewMode = "library" | "people" | "stories";
 
 /** Which person / match group the People tab has open. */
 export type PeopleSelection = {
@@ -76,6 +76,8 @@ export type AppUrlState = {
    * selection.
    */
   preview: string | null;
+  /** The story playing in the Stories tab (only with view=stories), or `null`. */
+  story: string | null;
 };
 
 /**
@@ -265,8 +267,15 @@ const parseMediaType = (raw: string | null): MediaTypeFilter =>
 // Deserialize
 // ---------------------------------------------------------------------------
 
-const readViewModeFromSearch = (search: string): ViewMode =>
-  new URLSearchParams(search).get("view") === "people" ? "people" : "library";
+const readViewModeFromSearch = (search: string): ViewMode => {
+  const view = new URLSearchParams(search).get("view");
+  return view === "people" || view === "stories" ? view : "library";
+};
+
+const readStoryFromSearch = (search: string): string | null => {
+  const params = new URLSearchParams(search);
+  return params.get("view") === "stories" ? params.get("story") || null : null;
+};
 
 /**
  * A person is only meaningful inside the People tab, and a match group is only
@@ -324,6 +333,7 @@ export const parseAppUrlState = (location: {
   filter: createFilterStateFromUrl(location),
   people: readPeopleSelectionFromSearch(location.search),
   preview: readPreviewFromSearch(location.search),
+  story: readStoryFromSearch(location.search),
 });
 
 // ---------------------------------------------------------------------------
@@ -338,7 +348,7 @@ const buildAppSearchParams = (
   state: AppUrlState,
   currentSearch = "",
 ): URLSearchParams => {
-  const { filter, view, people, preview } = state;
+  const { filter, view, people, preview, story } = state;
   const params = new URLSearchParams();
   const token = new URLSearchParams(currentSearch).get("token");
 
@@ -349,6 +359,7 @@ const buildAppSearchParams = (
     if (people.groupId) params.set("group", people.groupId);
   }
   if (preview) params.set("preview", preview);
+  if (view === "stories" && story) params.set("story", story);
 
   // Only persist non-defaults so ordinary library URLs stay clean.
   if (!isDefaultSort(filter.sortBy)) {
@@ -413,5 +424,6 @@ export const navigationKey = (url: string): string => {
     params.get("cluster") ?? "",
     params.get("group") ?? "",
     params.get("preview") ?? "",
+    params.get("story") ?? "",
   ].join("|");
 };
