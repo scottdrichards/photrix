@@ -78,3 +78,68 @@ describe("share token secret", () => {
     await expect(initAuthService({} as never)).rejects.toThrow("PHOTRIX_SHARE_TOKEN_SECRET");
   });
 });
+
+describe("canonical usernames", () => {
+  afterEach(() => {
+    delete process.env.PHOTRIX_ACCOUNTS;
+  });
+
+  it("issues a session under the canonical account key whatever case was typed", async () => {
+    process.env.PHOTRIX_ACCOUNTS = JSON.stringify([{ username: "Admin", password: "pw" }]);
+    const { validateCredentials, getSessionUsername, listSessions } = await import(
+      "./authService.ts"
+    );
+    const token = await validateCredentials("ADMIN", "pw");
+    expect(token).not.toBeNull();
+    expect(getSessionUsername(token!)).toBe("admin");
+    expect(listSessions("admin")).toHaveLength(1);
+  });
+
+  it("resolves the owner of a session and of an API key, but not of a share token", async () => {
+    process.env.AUTH_PASSWORD = "test-password";
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    const { issueToken, issueApiToken, issueShareToken, getTokenOwner } = await import(
+      "./authService.ts"
+    );
+    expect(getTokenOwner(issueToken("alice"))).toBe("alice");
+    expect(getTokenOwner(issueApiToken("alice", "k").token)).toBe("alice");
+    expect(getTokenOwner(issueShareToken({ filter: { rating: 5 } }))).toBeNull();
+    expect(getTokenOwner("nope")).toBeNull();
+    delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+  });
+
+  it("rewrites mixed-case usernames at startup so hidden rows reach their owner", async () => {
+    const { default: Database } = await import("better-sqlite3");
+    const raw = new Database(":memory:");
+    raw.exec("CREATE TABLE auth_sessions (token TEXT PRIMARY KEY, username TEXT, createdAt INTEGER, ip TEXT, lastSeenAt INTEGER)");
+    raw.exec("CREATE TABLE api_tokens (token TEXT PRIMARY KEY, username TEXT, name TEXT, createdAt INTEGER, lastUsedAt INTEGER)");
+    raw.exec("CREATE TABLE share_links (token TEXT PRIMARY KEY, username TEXT, label TEXT, createdAt INTEGER, revokedAt INTEGER)");
+    raw.exec("CREATE TABLE webauthn_credentials (credentialId TEXT PRIMARY KEY, username TEXT, publicKey TEXT, counter INTEGER, transports TEXT, name TEXT, createdAt INTEGER)");
+    const now = Date.now();
+    raw.prepare("INSERT INTO auth_sessions VALUES ('s1','Admin',?,NULL,?)").run(now, now);
+    raw.prepare("INSERT INTO api_tokens VALUES ('k1','ADMIN','n',?,NULL)").run(now);
+    raw.prepare("INSERT INTO share_links VALUES ('l1','Admin','x',?,NULL)").run(now);
+    raw.prepare("INSERT INTO webauthn_credentials VALUES ('c1','Admin','pk',0,NULL,NULL,?)").run(now);
+    const db = {
+      all: async (sql: string, params: unknown[] = []) => raw.prepare(sql).all(...params),
+      run: async (sql: string, params: unknown[] = []) => raw.prepare(sql).run(...params),
+      get: async (sql: string, params: unknown[] = []) => raw.prepare(sql).get(...params),
+    } as unknown as import("../common/asyncSqlite.ts").AsyncSqlite;
+
+    process.env.AUTH_PASSWORD = "test-password";
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    const { initAuthService, listSessions, listApiTokens, listShareLinks, revokeSessionsForUser } =
+      await import("./authService.ts");
+    await initAuthService(db);
+
+    expect(listSessions("admin").map((s) => s.token)).toEqual(["s1"]);
+    expect((await listApiTokens("admin")).map((k) => k.token)).toEqual(["k1"]);
+    expect((await listShareLinks("admin")).map((l) => l.token)).toEqual(["l1"]);
+    expect(raw.prepare("SELECT username FROM webauthn_credentials").get()).toEqual({
+      username: "admin",
+    });
+    await revokeSessionsForUser("admin");
+    expect(listSessions("admin")).toHaveLength(0);
+    delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+  });
+});

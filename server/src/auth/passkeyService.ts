@@ -78,8 +78,17 @@ const cleanExpiredChallenges = () => {
   }
 };
 
+// authentication-options is unauthenticated, so the map is capped: past the cap
+// the oldest entries (a Map iterates in insertion order) are evicted.
+const MAX_PENDING_CHALLENGES = 1000;
+
 const storeChallenge = (challenge: string, username?: string): string => {
   cleanExpiredChallenges();
+  while (pendingChallenges.size >= MAX_PENDING_CHALLENGES) {
+    const oldest = pendingChallenges.keys().next();
+    if (oldest.done) break;
+    pendingChallenges.delete(oldest.value);
+  }
   const sessionId = randomBytes(16).toString("hex");
   pendingChallenges.set(sessionId, {
     challenge,
@@ -175,6 +184,11 @@ export const verifyPasskeyRegistration = async (
 
   const transports =
     (response.response.transports) ?? [];
+
+  // A credential id belongs to one account; never let a registration replace
+  // another account's credential.
+  const existing = await getCredentialById(credential.id);
+  if (existing && existing.username !== entry.username) return false;
 
   await db!.run(
     `INSERT OR REPLACE INTO webauthn_credentials
@@ -278,5 +292,5 @@ export const verifyPasskeyAuthentication = async (
     credRow.credentialId,
   ]);
 
-  return credRow.username;
+  return credRow.username.toLowerCase();
 };

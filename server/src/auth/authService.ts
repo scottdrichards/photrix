@@ -78,6 +78,12 @@ const loadAccounts = (): Map<string, Buffer> => {
 
 const accounts = loadAccounts();
 
+// Accounts are looked up case-insensitively, so every stored username (session,
+// API key, share link, passkey) must use one canonical form or a login typed as
+// "Admin" would create rows the "admin" account never sees. The canonical key is
+// the lower-cased account name.
+export const canonicalUsername = (username: string): string => username.toLowerCase();
+
 // Sessions expire after this many ms of inactivity. Configurable so a home
 // server that restarts infrequently can pick a longer window without forking
 // the code; 30 days is the default.
@@ -93,10 +99,39 @@ const SHARE_TOKEN_PREFIX = "photrix-share-v1";
 
 let db: AsyncSqlite | null = null;
 
+const USERNAME_TABLES = [
+  "auth_sessions",
+  "api_tokens",
+  "share_links",
+  "webauthn_credentials",
+] as const;
+
+// Earlier versions stored the username as typed at login. Rewrite those rows to
+// the canonical key so sessions, keys and links that were hidden from their
+// owner become visible and revocable. Idempotent: a no-op once everything is
+// canonical.
+const normalizeStoredUsernames = async (database: AsyncSqlite): Promise<void> => {
+  for (const table of USERNAME_TABLES) {
+    const rows = await database.all<{ username: string | null }>(
+      `SELECT DISTINCT username FROM ${table}`,
+    );
+    for (const { username } of rows) {
+      if (typeof username !== "string") continue;
+      const canonical = canonicalUsername(username);
+      if (canonical === username) continue;
+      await database.run(`UPDATE ${table} SET username = ? WHERE username = ?`, [
+        canonical,
+        username,
+      ]);
+    }
+  }
+};
+
 export const initAuthService = async (database: AsyncSqlite): Promise<void> => {
   // Fail at startup, not on the first share link.
   if (isAuthEnabled()) getShareTokenKey();
   db = database;
+  await normalizeStoredUsernames(database);
   const cutoff = Date.now() - SESSION_EXPIRY_MS;
   // Hard-delete expired sessions so the DB doesn't grow unboundedly.
   await db.run("DELETE FROM auth_sessions WHERE lastSeenAt < ?", [cutoff]);
@@ -203,6 +238,7 @@ export const isAuthEnabled = () =>
   !!(process.env.PHOTRIX_ACCOUNTS || process.env.AUTH_PASSWORD);
 
 export const issueToken = (username = "_test_", ip: string | null = null): string => {
+  username = canonicalUsername(username);
   const token = randomBytes(32).toString("hex");
   const createdAt = Date.now();
   tokens.set(token, { createdAt, username, ip, lastSeenAt: createdAt });
@@ -241,7 +277,7 @@ export const validateCredentials = async (
   if (!storedHash) return null;
   const inputHash = await hashPasswordAsync(password);
   if (!timingSafeEqual(storedHash, inputHash)) return null;
-  return issueToken(username, ip);
+  return issueToken(canonicalUsername(username), ip);
 };
 
 // Throttle lastUsedAt writes so a chatty agent doesn't cause a DB write per call.
@@ -305,6 +341,12 @@ export const validateToken = (token: string): boolean => {
 // require a real logged-in session.
 export const getSessionUsername = (token: string): string | null =>
   tokens.get(token)?.username ?? null;
+
+// Resolves the account that owns a session OR an API key. Share tokens carry no
+// owner. Used where a credential acts for its owner (minting share links) but
+// must not reach account management, which stays session-only.
+export const getTokenOwner = (token: string): string | null =>
+  tokens.get(token)?.username ?? apiTokens.get(token)?.username ?? null;
 
 // --- API tokens ("MCP keys") ---
 

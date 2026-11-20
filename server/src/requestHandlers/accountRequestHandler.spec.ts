@@ -12,8 +12,7 @@ process.env.PHOTRIX_IP_LOCATION = "off";
 // enough of the surface (all/run/get with the "sql, ...params" calling
 // convention used throughout authService.ts) to exercise real SQL — needed for
 // listShareLinks, whose revoked-link filtering lives in the query itself.
-const makeTestDb = (): AsyncSqlite => {
-  const raw = new Database(":memory:");
+const makeTestDb = (raw = new Database(":memory:")): AsyncSqlite => {
   raw.exec(
     "CREATE TABLE share_links (token TEXT PRIMARY KEY, username TEXT, label TEXT, createdAt INTEGER, revokedAt INTEGER)",
   );
@@ -23,9 +22,13 @@ const makeTestDb = (): AsyncSqlite => {
   raw.exec(
     "CREATE TABLE api_tokens (token TEXT PRIMARY KEY, username TEXT, name TEXT, createdAt INTEGER, lastUsedAt INTEGER)",
   );
+  raw.exec(
+    "CREATE TABLE webauthn_credentials (credentialId TEXT PRIMARY KEY, username TEXT, publicKey TEXT, counter INTEGER, transports TEXT, name TEXT, createdAt INTEGER)",
+  );
   return {
     all: async (sql: string, ...params: unknown[]) => raw.prepare(sql).all(...params),
     run: async (sql: string, ...params: unknown[]) => raw.prepare(sql).run(...params),
+    runBookkeeping: async (sql: string, ...params: unknown[]) => raw.prepare(sql).run(...params),
     get: async (sql: string, ...params: unknown[]) => raw.prepare(sql).get(...params),
     exec: async (sql: string) => {
       raw.exec(sql);
@@ -321,6 +324,45 @@ describe("accountRequestHandler", () => {
     expect(links.map((l) => l.label)).toEqual(["Trip B"]);
 
     await authService.revokeToken(token);
+  });
+
+  it("lists and revokes a share link minted with an MCP key", async () => {
+    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    try {
+      const { accountRequestHandler, authService } = await load();
+      const { authShareTokenHandler } = await import("./authRequestHandler.ts");
+      await authService.initAuthService(makeTestDb());
+      const session = authService.issueToken("ivy");
+      const key = authService.issueApiToken("ivy", "agent").token;
+
+      const minted = createJsonResponse();
+      await authShareTokenHandler(
+        makeReq("/api/auth/share-token", "POST", key, {
+          filter: { rating: { min: 4 } },
+          label: "From key",
+        }),
+        minted.res,
+        {} as never,
+      );
+      expect(minted.getStatus()).toBe(200);
+      const shareToken = minted.getJson<{ token: string }>().token;
+      await new Promise((r) => setTimeout(r, 0));
+
+      const listed = createJsonResponse();
+      await accountRequestHandler(makeReq("/api/account/share-links", "GET", session), listed.res);
+      const { links } = listed.getJson<{ links: Array<{ token: string; label: string }> }>();
+      expect(links.map((l) => l.label)).toEqual(["From key"]);
+
+      const revoked = createJsonResponse();
+      await accountRequestHandler(
+        makeReq("/api/account/share-links/revoke", "POST", session, { token: links[0].token }),
+        revoked.res,
+      );
+      expect(revoked.getStatus()).toBe(200);
+      expect(authService.validateToken(shareToken)).toBe(false);
+    } finally {
+      delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+    }
   });
 
   it("only reports passkeysAvailable once a public RP origin is configured", async () => {

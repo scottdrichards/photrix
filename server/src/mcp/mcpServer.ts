@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { buildPhotrixMcpServer } from "./buildServer.ts";
@@ -39,6 +39,13 @@ const verifiedKeys = new Map<string, number>();
 const keyId = (bearer: string | undefined) =>
   createHash("sha256").update(bearer ?? "").digest("hex");
 
+// Length-safe constant-time comparison of the presented header to the gate token
+// (both are hashed first so the buffers are always the same length).
+const matchesGateToken = (header: string | undefined, secret: string): boolean => {
+  const digest = (value: string) => createHash("sha256").update(value).digest();
+  return timingSafeEqual(digest(header ?? ""), digest(`Bearer ${secret}`));
+};
+
 const jsonRpcError = (
   res: http.ServerResponse,
   status: number,
@@ -74,7 +81,7 @@ const handleRequest = async (
       return;
     }
 
-    if (MCP_AUTH_TOKEN && req.headers["authorization"] !== `Bearer ${MCP_AUTH_TOKEN}`) {
+    if (MCP_AUTH_TOKEN && !matchesGateToken(req.headers["authorization"], MCP_AUTH_TOKEN)) {
       jsonRpcError(res, 401, "Unauthorized");
       return;
     }
@@ -96,6 +103,13 @@ const handleRequest = async (
       typeof authHeader === "string" && authHeader.startsWith("Bearer ")
         ? authHeader.slice(7)
         : undefined;
+    // Per-user mode never falls back to the service token: no bearer, no access.
+    if (!MCP_AUTH_TOKEN && !callerBearer) {
+      jsonRpcError(res, 401, "Unauthorized: send your Photrix MCP key as a Bearer token.", {
+        "www-authenticate": 'Bearer realm="photrix"',
+      });
+      return;
+    }
     const photrixToken = MCP_AUTH_TOKEN ? undefined : callerBearer;
     const api = createPhotrixApi(photrixToken);
 
