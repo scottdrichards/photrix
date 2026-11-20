@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { mkdir, rm, stat, writeFile } from "fs/promises";
 import { tmpdir, userInfo } from "os";
 import { basename, dirname, extname, join, parse, resolve } from "path";
+import { assertStrictlyInside, resolveInside } from "./pathContainment.ts";
 
 export const CACHE_DIR = process.env.CACHE_DIR || join(process.cwd(), ".cache");
 export const MEDIA_CACHE_DIR = join(CACHE_DIR, "media");
@@ -77,31 +78,41 @@ const getMirroredSourceParts = (
   return {
     rootKey: getRootKey(root),
     relativeDirectory: rawRelativeDirectory === "." ? "" : rawRelativeDirectory,
-    sourceName: basename(absolutePath, extname(absolutePath)),
+    sourceName: toCacheDirectoryName(basename(absolutePath, extname(absolutePath))),
   };
 };
 
+/**
+ * A file named `..jpg` or `...jpg` has the stem `.` or `..`, which `join` would
+ * read as "this folder" or "the parent", landing its derivatives in another
+ * file's cache directory (and serving that file's thumbnails for it). Only
+ * those stems change; every ordinary name maps to itself, so existing caches
+ * stay valid.
+ */
+const toCacheDirectoryName = (stem: string): string =>
+  stem === "" || stem === "." || stem === ".." ? `${stem}%stem` : stem;
+
 export const getMirroredCacheBaseDirectory = (filePath: string): string => {
   const { rootKey, relativeDirectory, sourceName } = getMirroredSourceParts(filePath);
-  return join(MEDIA_CACHE_DIR, rootKey, relativeDirectory, sourceName);
+  return assertStrictlyInside(
+    MEDIA_CACHE_DIR,
+    join(MEDIA_CACHE_DIR, rootKey, relativeDirectory, sourceName),
+  );
 };
 
 export const getMirroredCachedFilePath = (
   filePath: string,
   suffix: string | number,
   extension: string,
-): string => join(getMirroredCacheBaseDirectory(filePath), `${suffix}.${extension}`);
+): string => resolveInside(getMirroredCacheBaseDirectory(filePath), `${suffix}.${extension}`);
 
 export const getMirroredHLSDirectory = (
   filePath: string,
   ...subdirectories: string[]
 ): string => {
   const { rootKey, relativeDirectory, sourceName } = getMirroredSourceParts(filePath);
-  return join(
-    HLS_CACHE_DIR,
-    rootKey,
-    relativeDirectory,
-    sourceName,
+  return resolveInside(
+    assertStrictlyInside(HLS_CACHE_DIR, join(HLS_CACHE_DIR, rootKey, relativeDirectory, sourceName)),
     "hls",
     ...subdirectories,
   );
