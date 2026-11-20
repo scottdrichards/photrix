@@ -1,6 +1,8 @@
 import type * as http from "http";
 import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
+import { getLogger } from "../observability/logger.ts";
+import { FilterCompileError } from "../indexDatabase/filterToSQL.ts";
 import { writeJson } from "../common/writeJson.ts";
 
 type SuggestionsField =
@@ -100,9 +102,13 @@ export const suggestionsRequestHandler = async (
 
     writeJson(res, 200, { suggestions });
   } catch (error) {
+    getLogger("suggestionsRequest").warn({ err: error }, "suggestions query failed");
+    // Only a malformed filter is the caller's to read; anything else (a failing
+    // query, say) can carry SQL or paths and stays in the log.
+    const userFacing = error instanceof SyntaxError || error instanceof FilterCompileError;
     writeJson(res, 400, {
       error: "Invalid suggestions query",
-      message: error instanceof Error ? error.message : String(error),
+      ...(userFacing ? { message: error.message } : {}),
     });
   }
 };

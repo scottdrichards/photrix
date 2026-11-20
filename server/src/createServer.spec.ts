@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
+import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -142,6 +142,32 @@ describe("createServer", () => {
       expect(response.body).toHaveLength(64 * 1024);
     });
 
+    it("answers an unexpected failure with a generic 500 that quotes the request id, not the error", async () => {
+      jest
+        .spyOn(database, "getFolders")
+        .mockRejectedValue(new Error("SQLITE_ERROR near /srv/secret/path"));
+      const response = await request("/api/folders/");
+      expect(response.status).toBe(500);
+      expect(response.body).not.toContain("secret");
+      expect(JSON.parse(response.body).error).toBe("Internal server error");
+    });
+
+    it("quotes the request id in the top-level 500 body", async () => {
+      jest
+        .spyOn(database.faces, "getFaceClusterNames")
+        .mockRejectedValue(new Error("SQLITE_ERROR near /srv/secret/path"));
+      const response = await request("/api/page-title", {
+        method: "POST",
+        body: { filter: { faceCluster: [7] } },
+      });
+      expect(response.status).toBe(500);
+      expect(response.body).not.toContain("secret");
+      expect(JSON.parse(response.body)).toEqual({
+        error: "Internal server error",
+        requestId: response.headers["x-request-id"],
+      });
+    });
+
     it("lists the subfolders of a folder, with a count, narrowed by a filter", async () => {
       const root = await request("/api/folders/");
       const nested = await request("/api/folders/subFolder/");
@@ -217,6 +243,18 @@ describe("createServer", () => {
         (item: { fileName: string }) => item.fileName,
       );
       expect(fileNames).toEqual(["child.jpg"]);
+    });
+
+    it("caps a share link bandwidth probe far below the owner limit", async () => {
+      const shared = await request("/api/network-probe?bytes=20971520", {
+        token: issueShareToken(shareScope),
+      });
+      const owner = await request("/api/network-probe?bytes=3145728", {
+        token: issueToken(),
+      });
+      expect(shared.status).toBe(200);
+      expect(shared.body).toHaveLength(2 * 1024 * 1024);
+      expect(owner.body).toHaveLength(3 * 1024 * 1024);
     });
 
     it("lets a share link submit feedback and report its own diagnostics", async () => {
