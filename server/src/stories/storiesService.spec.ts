@@ -13,14 +13,14 @@ const EXAMPLE_ROOT = path.resolve(
   "../../exampleFolder",
 );
 
-/** Indexes exampleFolder's real EXIF (dates, GPS) into `db`, the way the pipeline's EXIF stage would. */
+/**
+ * Indexes exampleFolder's real image EXIF (dates, GPS) into `db`, the way the
+ * pipeline's EXIF stage would. Videos need ffprobe, which the CI unit job
+ * lacks, so the one video a story uses is recorded with its known date.
+ */
 const indexExampleFolder = async (db: IndexDatabase) => {
-  for (const fullPath of walkFiles(EXAMPLE_ROOT)) {
-    const mimeType = mimeTypeForFilename(fullPath);
-    if (!mimeType?.startsWith("image/") && !mimeType?.startsWith("video/")) continue;
-    const relative = `/${path.relative(EXAMPLE_ROOT, fullPath).split(path.sep).join("/")}`;
+  const add = async (relative: string, mimeType: string, exif: object) => {
     const { folder, fileName } = splitPath(relative);
-    const exif = await getExifMetadataFromFile(fullPath);
     await db.addFile({
       folder,
       fileName,
@@ -28,7 +28,17 @@ const indexExampleFolder = async (db: IndexDatabase) => {
       ...exif,
       exifProcessedAt: new Date(),
     } as Parameters<IndexDatabase["addFile"]>[0]);
+  };
+  for (const fullPath of walkFiles(EXAMPLE_ROOT)) {
+    const mimeType = mimeTypeForFilename(fullPath);
+    if (!mimeType?.startsWith("image/")) continue;
+    const relative = `/${path.relative(EXAMPLE_ROOT, fullPath).split(path.sep).join("/")}`;
+    await add(relative, mimeType, await getExifMetadataFromFile(fullPath));
   }
+  // Trip/Malibu_2024-06-14.mov: dated, no GPS.
+  await add("/Trip/Malibu_2024-06-14.mov", "video/quicktime", {
+    dateTaken: new Date(2024, 5, 14, 19, 5),
+  });
 };
 
 // Each test indexes the whole fixture folder into a fresh database: seconds, not milliseconds.
