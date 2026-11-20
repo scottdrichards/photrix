@@ -6,6 +6,7 @@ import {
 import {
   extractToken,
   getSessionUsername,
+  getTokenOwner,
   isShareToken,
   issueShareToken,
   issueToken,
@@ -91,6 +92,14 @@ export const authShareTokenHandler = async (
 
   // Share tokens may not mint new tokens — only full-auth sessions may.
   if (isShareToken(token)) {
+    writeJson(res, 403, { error: "Forbidden" });
+    return;
+  }
+
+  // Every link is recorded under its owner so it can be listed, expired and
+  // revoked. A credential with no resolvable owner may not mint one.
+  const owner = getTokenOwner(token);
+  if (!owner) {
     writeJson(res, 403, { error: "Forbidden" });
     return;
   }
@@ -199,10 +208,7 @@ export const authShareTokenHandler = async (
   const shareToken = issueShareToken({ ...scope, description: label });
 
   // Track the link so the owner can list and revoke it from the account panel.
-  const username = getSessionUsername(token);
-  if (username) {
-    recordShareLink(username, shareToken, label);
-  }
+  recordShareLink(owner, shareToken, label);
 
   writeJson(res, 200, { token: shareToken });
 };
