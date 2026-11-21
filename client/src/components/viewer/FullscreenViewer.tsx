@@ -1244,6 +1244,13 @@ export function FullscreenViewer() {
                 photo={photo}
                 aiDescription={aiDescription}
                 onOpenFolder={openFolder}
+                transcript={{
+                  segments: transcriptSegments,
+                  onSeek: (seconds) => {
+                    setShowCaptions(true);
+                    seekVideo(seconds * 1000);
+                  },
+                }}
                 onSaveDescription={(next) =>
                   persistTagging({ description: next.length > 0 ? next : null })
                 }
