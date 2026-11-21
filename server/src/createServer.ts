@@ -240,9 +240,16 @@ export const createServer = (
             return;
           }
           if (!res.headersSent) {
+            // The raw message can carry filesystem paths or SQL, so it stays in
+            // the server log; the caller gets the request id to quote instead.
+            const failedRequestId = getCurrentRequestId();
+            log.error(
+              { err: error, requestId: failedRequestId },
+              "unhandled request error",
+            );
             writeJson(res, 500, {
               error: "Internal server error",
-              message: error instanceof Error ? error.message : String(error),
+              ...(failedRequestId ? { requestId: failedRequestId } : {}),
             });
             return;
           }

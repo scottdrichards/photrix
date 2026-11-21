@@ -4,6 +4,9 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { buildPhotrixMcpServer } from "./buildServer.ts";
 import { createPhotrixApi, photrixBaseUrl } from "./photrixApi.ts";
 import { readJsonBody } from "../common/readBody.ts";
+import { getLogger } from "../observability/logger.ts";
+
+const log = getLogger("mcpServer");
 
 // Streamable-HTTP MCP server that lets remote AI agents query the Photrix photo
 // library. It proxies every request to the Photrix REST API, so it can live on
@@ -145,7 +148,8 @@ const handleRequest = async (
     await transport.handleRequest(req, res, body);
   } catch (err) {
     if (!res.headersSent) {
-      jsonRpcError(res, 500, err instanceof Error ? err.message : String(err));
+      log.error({ err }, "MCP request failed");
+      jsonRpcError(res, 500, "Internal server error");
     }
   }
 };

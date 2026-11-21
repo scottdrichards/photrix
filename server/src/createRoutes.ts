@@ -261,7 +261,8 @@ export const createRoutes = ({
       method: "GET",
       path: "/api/network-probe*",
       shareLink: "allowed",
-      handle: ({ req, res }) => networkProbeRequestHandler(req, res),
+      handle: ({ req, res, shareScope }) =>
+        networkProbeRequestHandler(req, res, { shareLink: !!shareScope }),
     },
 
     // --- Browsing the library ---

@@ -7,6 +7,7 @@ import {
   isFolderWithinShareScope,
   type ShareFolderRoot,
 } from "../shareScope/shareFolderScope.ts";
+import { getLogger } from "../observability/logger.ts";
 import { combineFilters } from "../shareScope/shareScope.ts";
 
 type Options = {
@@ -57,11 +58,11 @@ export const foldersRequestHandler = async (
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ folders }));
   } catch (error) {
+    getLogger("foldersRequest").error({ err: error }, "folders request failed");
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
         error: "Internal server error",
-        message: error instanceof Error ? error.message : String(error),
       }),
     );
   }
