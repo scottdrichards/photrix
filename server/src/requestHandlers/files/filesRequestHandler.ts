@@ -46,9 +46,18 @@ import {
   touchVariant,
 } from "../../videoProcessing/hlsSession.ts";
 import { getLogger } from "../../observability/logger.ts";
+import { getCurrentRequestId } from "../../observability/requestTrace.ts";
 
 const hlsLog = getLogger("HLS");
 const storyboardLog = getLogger("storyboard");
+const imageLog = getLogger("image");
+
+/** 422 for an undecodable image. The decoder's message can name paths, so it is logged, not sent. */
+const writeInvalidImage = (res: http.ServerResponse, error: ImageConversionError) => {
+  const requestId = getCurrentRequestId();
+  imageLog.warn({ err: error, requestId }, "image conversion failed");
+  writeJson(res, 422, { error: "Invalid image", ...(requestId ? { requestId } : {}) });
+};
 import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
 import {
   getCachedVideoDuration,
@@ -752,7 +761,7 @@ const tryImageCrop = async (ctx: FileHandlingContext) => {
     return true;
   } catch (error) {
     if (error instanceof ImageConversionError) {
-      writeJson(res, 422, { error: "Invalid image", message: error.message });
+      writeInvalidImage(res, error);
       return true;
     }
     return false;
@@ -795,7 +804,7 @@ const tryMicroThumbnail = async (ctx: FileHandlingContext) => {
     return true;
   } catch (error) {
     if (error instanceof ImageConversionError) {
-      writeJson(res, 422, { error: "Invalid image", message: error.message });
+      writeInvalidImage(res, error);
       return true;
     }
     return false;
@@ -820,7 +829,7 @@ const tryImageVariant = async (ctx: FileHandlingContext) => {
     return true;
   } catch (error) {
     if (error instanceof ImageConversionError) {
-      writeJson(res, 422, { error: "Invalid image", message: error.message });
+      writeInvalidImage(res, error);
       return true;
     }
     return false;

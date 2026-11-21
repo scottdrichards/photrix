@@ -27,6 +27,7 @@ import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../common/writeJson.ts";
 import { logFailure } from "../common/logFailure.ts";
+import { getCurrentRequestId } from "../observability/requestTrace.ts";
 
 const log = getLogger("faceIdentify");
 
@@ -594,8 +595,8 @@ export const faceIdentifyRequestHandler = async (
         }
         // One unreadable frame out of several is not a failed request — a
         // recording segment may not have flushed yet. Note it and keep going.
-        const message = error instanceof Error ? error.message : String(error);
-        frameReports.push({ frame: index, faces: 0, error: message });
+        log.warn({ err: error, frame: index, requestId: getCurrentRequestId() }, "face identify frame failed");
+        frameReports.push({ frame: index, faces: 0, error: "Frame could not be analyzed" });
         continue;
       }
 
@@ -661,9 +662,14 @@ export const faceIdentifyRequestHandler = async (
       writeJson(res, 400, { error: error.message });
       return;
     }
-    const message = error instanceof Error ? error.message : String(error);
-    log.error({ err: message }, "face identify failed");
-    if (!res.writableEnded) writeJson(res, 500, { error: message });
+    const requestId = getCurrentRequestId();
+    log.error({ err: error, requestId }, "face identify failed");
+    if (!res.writableEnded) {
+      writeJson(res, 500, {
+        error: "Face identification failed",
+        ...(requestId ? { requestId } : {}),
+      });
+    }
   } finally {
     active -= 1;
   }

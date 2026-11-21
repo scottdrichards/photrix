@@ -157,12 +157,15 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         throw new Error(
-          `Photrix request timed out after ${REQUEST_TIMEOUT_MS}ms (${pathWithQuery}). Is the server running at ${BASE_URL}?`,
+          `Photrix request timed out after ${REQUEST_TIMEOUT_MS}ms (${pathWithQuery}). Is the server running?`,
         );
       }
-      throw new Error(
+      // The cause (and BASE_URL, which names an internal host) stays in this
+      // process's stderr; the MCP client only learns the server is unreachable.
+      console.error(
         `Could not reach Photrix at ${BASE_URL}${pathWithQuery}: ${err instanceof Error ? err.message : String(err)}`,
       );
+      throw new Error(`Could not reach Photrix (${pathWithQuery}).`);
     }
     if (!res.ok) {
       const detail = await res.text().catch(() => "");

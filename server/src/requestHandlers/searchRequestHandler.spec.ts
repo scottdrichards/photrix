@@ -764,6 +764,72 @@ describe("searchRequestHandler source status", () => {
     expect(getJson().sourceStatus.image.reason).toBe("loading");
     expect(getJson().sourceStatus.audio.reason).toBe("loading");
   });
+
+  it("never puts a source error text in the response, with debug or on a 503", async () => {
+    const handler = await loadHandler({
+      embedText: async () => {
+        throw new Error("clip failed reading /srv/library/index.db");
+      },
+      embedTextWithClap: async () => {
+        throw new Error("clap failed: connect ECONNREFUSED 10.0.0.5:9000");
+      },
+    });
+    const failing = {
+      analysis: {
+        semanticSearch: jest.fn(async () => []),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => {
+          throw new Error("transcript: SQLITE_ERROR near FROM");
+        }),
+        metadataSearch: jest.fn(async () => {
+          throw new Error("metadata: /srv/library secret path");
+        }),
+      },
+    } as unknown as IndexDatabase;
+    const req = {
+      url: `/api/search?q=${encodeURIComponent("beach")}&debug=1`,
+      headers: { host: "localhost" },
+    } as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(req, res, { database: failing });
+
+    expect(getStatus()).toBe(503);
+    const body = JSON.stringify(getJson());
+    for (const leak of ["/srv/library", "ECONNREFUSED", "10.0.0.5", "SQLITE", "index.db"]) {
+      expect(body).not.toContain(leak);
+    }
+    expect(getJson().sourceStatus.image.reason).toBe("error");
+  });
+
+  it("keeps a coarse reason in the debug diagnostics", async () => {
+    const handler = await loadHandler({
+      embedText: async () => {
+        throw new Error("embed timed out after 5000ms");
+      },
+      embedTextWithClap: async () => new Float32Array([1]),
+    });
+    const database = {
+      analysis: {
+        semanticSearch: jest.fn(async () => []),
+        audioSemanticSearch: jest.fn(async () => []),
+        audioTranscriptSearch: jest.fn(async () => []),
+        metadataSearch: jest.fn(async () => {
+          throw new Error("metadata: /srv/library secret path");
+        }),
+      },
+    } as unknown as IndexDatabase;
+    const req = {
+      url: `/api/search?q=${encodeURIComponent("beach")}&debug=1`,
+      headers: { host: "localhost" },
+    } as unknown as http.IncomingMessage & Required<Pick<http.IncomingMessage, "url">>;
+    const { res, getStatus, getJson } = createJsonResponse();
+    await handler(req, res, { database });
+
+    expect(getStatus()).toBe(200);
+    expect(getJson()._diagnostics.clip.reason).toBe("timeout");
+    expect(getJson()._diagnostics.metadata.reason).toBe("error");
+    expect(JSON.stringify(getJson())).not.toContain("/srv/library");
+  });
 });
 
 describe("searchStatusRequestHandler", () => {
