@@ -1,3 +1,7 @@
+import {
+  FACE_CROP_HEIGHT,
+  faceCropRegion as sharedFaceCropRegion,
+} from "../../../shared/face-crop/src";
 import { buildFilters, filtersToParam } from "./filters";
 import { fetchWithDiagnostics, fetchJsonOrThrow } from "./http";
 import { buildFileUrl, buildFilesQueryUrl, createPhotoItem } from "./photoItem";
@@ -313,23 +317,14 @@ export const fetchFaceClustersPCA = async ({
   }));
 };
 
-// How much context to include around the detected face, as a fraction of the
-// face's own size added on every side. 0.6 → the crop is ~2.2× the face box, so
-// there's headroom for hair/chin without shrinking the face too far.
-const FACE_CROP_PADDING = 0.6;
+/**
+ * The padded face region, as fractions of the photo, that a face crop shows.
+ * The server makes the People list's crops ahead of time from the same
+ * function: they are cached under this region.
+ */
+export const faceCropRegion = (face: ClusterFace) => sharedFaceCropRegion(face.box);
 
-/** The padded face region, as fractions of the photo, that a face crop shows. */
-export const faceCropRegion = (face: ClusterFace) => {
-  const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
-  const grow = 1 + 2 * FACE_CROP_PADDING;
-  const w = clamp01(face.box.width * grow);
-  const h = clamp01(face.box.height * grow);
-  const x = clamp01(Math.min(Math.max(face.box.x - w / 2, 0), 1 - w));
-  const y = clamp01(Math.min(Math.max(face.box.y - h / 2, 0), 1 - h));
-  return { x, y, w, h };
-};
-
-export const buildFaceCropUrl = (face: ClusterFace, size = 320): string => {
+export const buildFaceCropUrl = (face: ClusterFace, size = FACE_CROP_HEIGHT): string => {
   const { x, y, w, h } = faceCropRegion(face);
   return buildFileUrl(face.photo.path, {
     crop: `${x},${y},${w},${h}`,

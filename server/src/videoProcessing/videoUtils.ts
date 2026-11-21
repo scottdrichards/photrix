@@ -340,6 +340,21 @@ const cropFilter = ({ x, y, width, height }: VideoFrameCrop): string => {
   return `crop=w=iw*${f(w)}:h=ih*${f(h)}:x=iw*${f(x)}:y=ih*${f(y)}`;
 };
 
+/** Where `generateVideoFrameCrop` keeps its result for this file, frame, crop and height. */
+export const getVideoFrameCropCachePath = (
+  filePath: string,
+  timeMs: number,
+  crop: VideoFrameCrop,
+  height: StandardHeight,
+): string => {
+  const q = (n: number) => Math.round(Math.min(1, Math.max(0, n)) * 1e5);
+  return getMirroredCachedFilePath(
+    filePath,
+    `frame.${Math.round(timeMs)}.${height}.crop_${q(crop.x)}_${q(crop.y)}_${q(crop.width)}_${q(crop.height)}`,
+    "jpg",
+  );
+};
+
 /**
  * A crop of one frame of a video: the face crop for a face found in a video
  * (`faces.frameTimeMs`). Cached per frame, box and height, so each People tile
@@ -356,12 +371,7 @@ export const generateVideoFrameCrop = async (
   height: StandardHeight,
 ): Promise<string> => {
   await stat(filePath);
-  const q = (n: number) => Math.round(Math.min(1, Math.max(0, n)) * 1e5);
-  const cachedPath = getMirroredCachedFilePath(
-    filePath,
-    `frame.${Math.round(timeMs)}.${height}.crop_${q(crop.x)}_${q(crop.y)}_${q(crop.width)}_${q(crop.height)}`,
-    "jpg",
-  );
+  const cachedPath = getVideoFrameCropCachePath(filePath, timeMs, crop, height);
   const exists = () =>
     access(cachedPath).then(
       () => true,

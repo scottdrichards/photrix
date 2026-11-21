@@ -616,6 +616,14 @@ const cropToken = (crop: CropBox): string => {
   return `crop_${q(crop.x)}_${q(crop.y)}_${q(crop.width)}_${q(crop.height)}`;
 };
 
+/** Where `convertImageCrop` keeps its result for this file, crop and height. */
+export const getImageCropCachePath = (
+  filePath: string,
+  crop: CropBox,
+  height: StandardHeight,
+): string =>
+  getMirroredCachedFilePath(filePath, `${height}.${cropToken(crop)}`, IMAGE_OUTPUT_EXTENSION);
+
 /**
  * Creates a converted image cropped to `crop` (normalized top-left fractions of
  * the EXIF-oriented image) and resized so its longest side is at most `height`,
@@ -631,11 +639,7 @@ export const convertImageCrop = async (
   _opts?: { priority?: ConversionPriority },
 ): Promise<string> => {
   await stat(filePath);
-  const cachedPath = getMirroredCachedFilePath(
-    filePath,
-    `${height}.${cropToken(crop)}`,
-    IMAGE_OUTPUT_EXTENSION,
-  );
+  const cachedPath = getImageCropCachePath(filePath, crop, height);
 
   const cachedExists = await access(cachedPath).then(
     () => true,

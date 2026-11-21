@@ -192,6 +192,62 @@ describe("processThumbnailBackfill", () => {
     expect(await runner.getStatus?.()).toMatchObject({ itemsProcessed: 3, total: 3 });
   });
 
+  it("starts each pass with the People list's face crops, and survives the list failing", async () => {
+    const { planFaceCropWork } = await import("./faceCropBackfill.ts");
+    const { getImageCropCachePath } = await import("./convertImage.ts");
+    const { faceCropRegion } = await import("../../../shared/face-crop/src/index.ts");
+    const face = (name: string, faceId: number) => ({
+      path: `/${name}`,
+      fileName: name,
+      box: { x: 0.5, y: 0.4, width: 0.1, height: 0.2 },
+      mimeType: "image/jpeg",
+      dimensionWidth: null,
+      dimensionHeight: null,
+      regions: null,
+      faceId,
+    });
+    const cached = face("cached-face.jpg", 1);
+    const { x, y, w, h } = faceCropRegion(cached.box);
+    await touch(
+      getImageCropCachePath(
+        join(tempRoot, "library", "cached-face.jpg"),
+        { x, y, width: w, height: h },
+        320,
+      ),
+    );
+    // A cached crop needs nothing; an uncached one would decode the original.
+    expect(await planFaceCropWork(join(tempRoot, "library"), cached)).toBeNull();
+    expect(
+      await planFaceCropWork(join(tempRoot, "library"), face("missing-face.jpg", 2)),
+    ).toMatchObject({ readBytes: 5 * 1024 * 1024 });
+
+    const clock = fakeClock();
+    const { database } = fakeDatabase([[await cachedVideo("after-faces.mp4")]]);
+    const listed = { count: 0 };
+    const runner = mod.processThumbnailBackfill(
+      database,
+      {
+        ...config,
+        listPeopleFaces: async () => {
+          listed.count += 1;
+          return [cached];
+        },
+      },
+      { ...clock, getLoad: () => 0 },
+    );
+    await runner.onComplete();
+    expect(listed.count).toBe(1);
+    expect((await runner.getStatus()).description).toBe("Up to date (0 made)");
+
+    const failing = mod.processThumbnailBackfill(
+      fakeDatabase([[await cachedVideo("after-failure.mp4")]]).database,
+      { ...config, listPeopleFaces: () => Promise.reject(new Error("index is busy")) },
+      { ...clock, getLoad: () => 0 },
+    );
+    await failing.onComplete();
+    expect((await failing.getStatus()).itemsProcessed).toBe(1);
+  });
+
   it("waits while its feature flag is off, and carries on once it is switched on", async () => {
     const clock = fakeClock();
     let enabled = false;
