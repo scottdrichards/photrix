@@ -17,12 +17,26 @@ const baseState = (overrides: Partial<AppUrlState> = {}): AppUrlState => ({
   filter: { includeSubfolders: true, path: "" },
   people: { personId: null, groupId: null },
   preview: null,
+  story: null,
   ...overrides,
 });
 
 describe("app URL state", () => {
   it("keeps a default library view clean", () => {
     expect(buildAppUrl(baseState())).not.toContain("view=");
+  });
+
+  it("restores the story playing across a refresh, and only in the Stories tab", () => {
+    const restored = roundTrip(baseState({ view: "stories", story: "trip-2023-05-03-2023-05-06" }));
+    expect(restored.view).toBe("stories");
+    expect(restored.story).toBe("trip-2023-05-03-2023-05-06");
+    expect(buildAppUrl(baseState({ view: "library", story: "trip-2023-05-03-2023-05-06" }))).not.toContain("story=");
+  });
+
+  it("makes opening a story a step the back button can undo", () => {
+    expect(navigationKey(buildAppUrl(baseState({ view: "stories" })))).not.toBe(
+      navigationKey(buildAppUrl(baseState({ view: "stories", story: "trip-2023-05-03-2023-05-06" }))),
+    );
   });
 
   it("restores the open person across a refresh", () => {

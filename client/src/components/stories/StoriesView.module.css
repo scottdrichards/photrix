@@ -1,0 +1,308 @@
+.view {
+  --story-serif:
+    "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-l);
+  padding-bottom: 96px;
+}
+
+.header h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+  margin: 0;
+  font-family: var(--story-serif);
+  font-weight: 500;
+  font-size: 2rem;
+}
+
+.header p {
+  margin: var(--space-xs) 0 0;
+  color: var(--fg2);
+  max-width: 60ch;
+}
+
+.message {
+  padding: var(--space-xl) var(--space-l);
+  border-radius: var(--radius-lg);
+  background: var(--bg2);
+  color: var(--fg2);
+  text-align: center;
+}
+
+.year {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-m);
+}
+
+.yearHeading {
+  margin: 0;
+  font-family: var(--story-serif);
+  font-weight: 500;
+  font-size: 1.5rem;
+  color: var(--fg2);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-l);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg1);
+  border: 1px solid var(--stroke2);
+  color: inherit;
+  text-decoration: none;
+  box-shadow: var(--shadow-sm);
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.card:hover,
+.card:focus-visible {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lg);
+}
+
+.media {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  background: #111;
+}
+
+.cover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 6s cubic-bezier(0.2, 0.6, 0.2, 1);
+}
+
+.card:hover .cover {
+  transform: scale(1.08);
+}
+
+.collage {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 6px;
+}
+
+.collage img {
+  width: 54px;
+  height: 54px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.play {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 9px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+}
+
+.card:hover .play,
+.card:focus-visible .play {
+  opacity: 1;
+  transform: none;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-m);
+}
+
+.kicker {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+.title {
+  margin: 2px 0 2px;
+  font-family: var(--story-serif);
+  font-weight: 500;
+  font-size: 1.45rem;
+  line-height: 1.15;
+}
+
+.dates,
+.stats {
+  margin: 0;
+  color: var(--fg2);
+  font-size: 0.9rem;
+}
+
+.stats {
+  color: var(--fg3);
+}
+
+.people {
+  display: flex;
+  align-items: center;
+  gap: var(--space-s);
+  margin-top: var(--space-s);
+}
+
+.faces {
+  display: flex;
+}
+
+.face {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--bg1);
+  margin-left: -8px;
+}
+
+.face:first-child {
+  margin-left: 0;
+}
+
+.names {
+  font-size: 0.85rem;
+  color: var(--fg2);
+}
+
+/* The newest story: a wide hero with its words over the picture. */
+.featured {
+  position: relative;
+  border: none;
+}
+
+.featured .media {
+  aspect-ratio: 21 / 9;
+  min-height: 300px;
+}
+
+.featured .media::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    rgba(0, 0, 0, 0.72) 0%,
+    rgba(0, 0, 0, 0.3) 50%,
+    transparent 75%
+  );
+}
+
+.featured .body {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  max-width: min(620px, 80%);
+  padding: var(--space-xl);
+  color: #fff;
+  z-index: 1;
+}
+
+.featured .kicker {
+  color: #ffd59a;
+}
+
+.featured .title {
+  font-size: clamp(2rem, 4.4vw, 3.4rem);
+}
+
+.featured .dates,
+.featured .stats,
+.featured .names {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.featured .face {
+  border-color: rgba(255, 255, 255, 0.9);
+}
+
+.featured .collage {
+  right: 18px;
+  bottom: 18px;
+  z-index: 1;
+}
+
+.featured .collage img {
+  width: 84px;
+  height: 84px;
+  border-radius: 12px;
+}
+
+.featured .play {
+  left: auto;
+  right: 18px;
+  top: 18px;
+  bottom: auto;
+  z-index: 1;
+  opacity: 1;
+  transform: none;
+  padding: 8px 16px 8px 12px;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 720px) {
+  .featured .media {
+    aspect-ratio: 4 / 5;
+    min-height: 0;
+  }
+  .featured .media::after {
+    background: linear-gradient(
+      to top,
+      rgba(0, 0, 0, 0.8) 0%,
+      rgba(0, 0, 0, 0.2) 55%,
+      transparent 80%
+    );
+  }
+  .featured .body {
+    max-width: none;
+    padding: var(--space-l);
+  }
+  .featured .collage {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .cover,
+  .play {
+    transition: none;
+  }
+  .card:hover .cover {
+    transform: none;
+  }
+}

@@ -45,6 +45,8 @@ import {
 import { faceIdentifyRequestHandler } from "./requestHandlers/faceIdentifyRequestHandler.ts";
 import { peopleRequestHandler } from "./requestHandlers/peopleRequestHandler.ts";
 import { settingsRequestHandler } from "./requestHandlers/settingsRequestHandler.ts";
+import { storiesRequestHandler } from "./requestHandlers/storiesRequestHandler.ts";
+import { StoriesService } from "./stories/storiesService.ts";
 import { momentClustersRequestHandler } from "./requestHandlers/momentClustersRequestHandler.ts";
 import { updateFileMetadataHandler } from "./requestHandlers/files/updateMetadataHandler.ts";
 import { filesEndpointRequestHandler } from "./requestHandlers/files/filesRequestHandler.ts";
@@ -114,6 +116,7 @@ export const createRoutes = ({
   feedback,
 }: RouteDeps): Route[] => {
   const getCoverage = createCoverageReporter(database.analysis);
+  const stories = new StoriesService(database);
 
   return [
     // --- Sign-in. These bypass the auth gate. ---
@@ -279,6 +282,13 @@ export const createRoutes = ({
       path: "/api/screensaver*",
       shareLink: "forbidden",
       handle: ({ req, res }) => screensaverRequestHandler(req, res),
+    },
+    // Trips and big days found across the whole library, so outside every share.
+    {
+      method: "GET",
+      path: "/api/stories*",
+      shareLink: "forbidden",
+      handle: ({ req, res }) => storiesRequestHandler(req, res, stories),
     },
     // A share link browses its own subtree: the listing is ANDed with the share
     // filter and the requested path is clamped to the shared root.

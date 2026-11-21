@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
  * (feedback #203). Nothing leaves the machine.
  */
 
-type City = { name: string; country: string; adminCode: string; lat: number; lon: number };
+type City = { name: string; country: string; adminCode: string; population: number; lat: number; lon: number };
 
 const US_STATES: Record<string, string> = {
   AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California",
@@ -27,6 +27,9 @@ const US_STATES: Record<string, string> = {
 /** Farther than this from every known city counts as "no place" (open ocean, wilderness). */
 export const MAX_PLACE_DISTANCE_KM = 100;
 
+/** How far notablePlaceTextFor looks for a bigger city than the nearest one. */
+const NOTABLE_CITY_KM = 20;
+
 let grid: Map<number, City[]> | null = null;
 let regionNames: Intl.DisplayNames | null = null;
 
@@ -41,6 +44,7 @@ const loadGrid = () => {
     name: string;
     country: string;
     adminCode: string;
+    population: number;
     loc: { coordinates: [number, number] };
   }>;
   const next = new Map<number, City[]>();
@@ -51,6 +55,7 @@ const loadGrid = () => {
       name: entry.name,
       country: entry.country,
       adminCode: entry.adminCode,
+      population: entry.population,
       lat,
       lon,
     };
@@ -81,10 +86,19 @@ const countryName = (iso2: string) => {
   }
 };
 
-/** Place text for a coordinate, or "" when no known city is within MAX_PLACE_DISTANCE_KM. */
-export const placeTextFor = (lat: number, lon: number): string => {
+const formatPlace = (city: City) => {
+  const parts = [city.name];
+  const state = city.country === "US" ? US_STATES[city.adminCode] : undefined;
+  if (state) parts.push(state);
+  parts.push(countryName(city.country));
+  if (city.country === "US") parts.push("USA");
+  return parts.join(", ");
+};
+
+/** Every known city within MAX_PLACE_DISTANCE_KM of a coordinate, with its distance. */
+const citiesNear = (lat: number, lon: number): Array<{ city: City; km: number }> => {
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
-    return "";
+    return [];
   }
   const cities = loadGrid();
   const latCell = Math.floor(lat);
@@ -92,8 +106,7 @@ export const placeTextFor = (lat: number, lon: number): string => {
   // A degree of latitude is ~111 km, so 1 ring covers the radius at the equator;
   // longitude cells shrink toward the poles, so widen the search there.
   const lonReach = Math.min(180, Math.ceil(1 / Math.max(0.1, Math.cos((lat * Math.PI) / 180))));
-  let best: City | null = null;
-  let bestKm = Infinity;
+  const near: Array<{ city: City; km: number }> = [];
   for (let dLat = -1; dLat <= 1; dLat++) {
     for (let dLon = -lonReach; dLon <= lonReach; dLon++) {
       let lonIndex = lonCell + dLon;
@@ -101,19 +114,33 @@ export const placeTextFor = (lat: number, lon: number): string => {
       if (lonIndex >= 180) lonIndex -= 360;
       for (const city of cities.get(cellKey(latCell + dLat, lonIndex)) ?? []) {
         const km = haversineKm(lat, lon, city.lat, city.lon);
-        if (km < bestKm) {
-          best = city;
-          bestKm = km;
-        }
+        if (km <= MAX_PLACE_DISTANCE_KM) near.push({ city, km });
       }
     }
   }
-  if (!best || bestKm > MAX_PLACE_DISTANCE_KM) return "";
+  return near;
+};
 
-  const parts = [best.name];
-  const state = best.country === "US" ? US_STATES[best.adminCode] : undefined;
-  if (state) parts.push(state);
-  parts.push(countryName(best.country));
-  if (best.country === "US") parts.push("USA");
-  return parts.join(", ");
+/** Place text for a coordinate, or "" when no known city is within MAX_PLACE_DISTANCE_KM. */
+export const placeTextFor = (lat: number, lon: number): string => {
+  const nearest = citiesNear(lat, lon).reduce<{ city: City; km: number } | null>(
+    (best, next) => (!best || next.km < best.km ? next : best),
+    null,
+  );
+  return nearest ? formatPlace(nearest.city) : "";
+};
+
+/**
+ * Place text naming the city a person would say they were in: within
+ * NOTABLE_CITY_KM, the city with the most population for its distance
+ * (population / (1 + km/5)^2), else the nearest. The nearest city to the
+ * Pantheon is Vatican City; this says Rome. Santa Monica Pier stays Santa
+ * Monica rather than becoming Los Angeles across town.
+ */
+export const notablePlaceTextFor = (lat: number, lon: number): string => {
+  const weight = ({ city, km }: { city: City; km: number }) => city.population / (1 + km / 5) ** 2;
+  const notable = citiesNear(lat, lon)
+    .filter(({ km }) => km <= NOTABLE_CITY_KM)
+    .reduce<{ city: City; km: number } | null>((best, next) => (!best || weight(next) > weight(best) ? next : best), null);
+  return notable ? formatPlace(notable.city) : placeTextFor(lat, lon);
 };

@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { PeopleSelection } from "../../filterUrlState";
+import type { PeopleSelection, ViewMode } from "../../filterUrlState";
 import type { FaceClusterPCAPoint, PersonCluster, PersonCentroid, PersonClusterWithFaces, PeopleClustersResult } from "../../api";
 import { fetchClusterDetail, fetchFaceClustersPCA, fetchPeopleClusters, mergeClusters, renameCluster, separateCluster, setPersonTags, fetchDefaultExclusionFilter, setDefaultExclusionFilter } from "../../api";
 import { Spinner } from "../../Spinner";
@@ -26,8 +26,8 @@ const READ_ONLY = isSharedView();
  * a refresh or a back button lands exactly where the user was.
  */
 type PeopleViewProps = {
-  view: "library" | "people";
-  onViewChange: (view: "library" | "people") => void;
+  view: ViewMode;
+  onViewChange: (view: ViewMode) => void;
   personId: string | null;
   groupId: string | null;
   onNavigate: (next: PeopleSelection, options?: { replace?: boolean }) => void;

@@ -23,6 +23,7 @@ filter), so that file is also the share-link access policy.
 | `POST /api/search/interpret`             | `searchInterpretHandler.ts`                         | `naturalLanguageSearch/interpretSearchQuery.ts`                                                          |
 | `POST /api/page-title`                   | `pageTitleHandler.ts`                               | describes the current filter for the header                                                              |
 | `GET /api/suggestions`                   | `suggestionsRequestHandler.ts`                      | `indexDatabase.ts`                                                                                       |
+| `GET /api/stories[/<id>]`                | `storiesRequestHandler.ts`                          | `stories/` (trip and event detection, highlights), `indexDatabase/storyStore.ts`                         |
 | `GET /api/video/negotiate`               | `video/videoNegotiation.ts`                         | direct vs live GPU HLS decision                                                                          |
 | `/api/faces/…`                           | `faceIdentifyRequestHandler.ts`                     | `faceDetection/`, `indexDatabase/faceReview.ts`                                                          |
 | `/api/people/…`                          | `peopleRequestHandler.ts`                           | `indexDatabase/faceClusterEngine.ts`                                                                     |
@@ -107,6 +108,7 @@ and `fileSystemRescanRecent.ts` re-queue the entry stages.
 | Photo/video viewer, editor      | `components/viewer/` (`FullscreenViewer.tsx`, `photoEdit/`)       |
 | Filters / search                | `components/filter/`, `components/search/`                        |
 | People                          | `components/people/`                                              |
+| Stories (recaps and player)     | `components/stories/` (`StoriesView.tsx`, `StoryPlayer.tsx`)      |
 | Map                             | `components/map/`                                                 |
 | Status, share, account          | `components/status/`, `components/share/`, `components/account/`  |
 | API calls                       | `api/*.ts` (all through `api/http.ts` `fetchWithDiagnostics`)     |

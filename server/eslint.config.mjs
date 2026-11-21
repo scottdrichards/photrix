@@ -40,10 +40,12 @@ const modules = {
   shareDescription: ["observability", "indexDatabase"],
   naturalLanguageSearch: ["observability", "indexDatabase", "shareDescription"],
   photoCaption: ["common", "observability", "shareDescription"],
+  // Trips and big days, detected from the index and told as recaps.
+  stories: ["common", "indexDatabase", "places"],
   requestHandlers: [
     "common", "observability", "featureFlags", "taskOrchestrator", "auth", "videoProcessing", "fileHandling",
     "faceDetection", "indexDatabase", "imageProcessing", "imageAnalysis", "audioProcessing", "shareDescription",
-    "naturalLanguageSearch", "photoCaption", "systemStatus", "shareScope", "feedback",
+    "naturalLanguageSearch", "photoCaption", "systemStatus", "shareScope", "feedback", "stories",
   ],
   // main.ts, createServer.ts, createRoutes.ts: the composition root.
   "(root)": ["*"],

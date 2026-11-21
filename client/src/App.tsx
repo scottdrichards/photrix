@@ -52,6 +52,7 @@ import {
   type ThemeOverride,
 } from "./theme";
 import { probeVideoPlaybackProfile } from "./videoPlaybackProfile";
+import type { StorySummary } from "./api/stories";
 import {
   extractUrlToken,
   getAuthHeaders,
@@ -65,6 +66,9 @@ import { FeatureFlagsProvider } from "./featureFlags/FeatureFlagsContext";
 
 const { Part: PeopleView } = lazyPart("people", () =>
   import("./components/people/PeopleView").then((module) => module.PeopleView),
+);
+const { Part: StoriesView } = lazyPart("stories", () =>
+  import("./components/stories/StoriesView").then((module) => module.StoriesView),
 );
 
 // Extract a token from the URL immediately (before auth check) so share links self-authenticate.
@@ -83,10 +87,10 @@ const ownsAccountSession = hasAccountSession();
 
 const initialNavFromUrl = (): UrlNavState => {
   if (typeof window === "undefined") {
-    return { view: "library", people: NO_PEOPLE_SELECTION, previewPath: null };
+    return { view: "library", people: NO_PEOPLE_SELECTION, previewPath: null, story: null };
   }
-  const { view, people, preview } = parseAppUrlState(window.location);
-  return { view, people, previewPath: preview };
+  const { view, people, preview, story } = parseAppUrlState(window.location);
+  return { view, people, previewPath: preview, story };
 };
 
 const copyToClipboard = async (text: string): Promise<boolean> => {
@@ -303,8 +307,23 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
       view: nextView,
       people: nextView === "people" ? prev.people : NO_PEOPLE_SELECTION,
       previewPath: null,
+      story: null,
     }));
   }, []);
+
+  const handleOpenStory = useCallback((story: string | null) => {
+    setNav((prev) => ({ ...prev, replace: undefined, view: "stories", story }));
+  }, []);
+
+  // "See all" at the end of a story: the library, narrowed to the story's dates.
+  const { setFilter } = useFilter();
+  const handleShowStoryInLibrary = useCallback(
+    (story: StorySummary) => {
+      setFilter({ dateRange: { start: story.startTime, end: story.endTime } });
+      setNav({ view: "library", people: NO_PEOPLE_SELECTION, previewPath: null, story: null });
+    },
+    [setFilter],
+  );
 
   const handlePeopleNavigate = useCallback(
     (people: PeopleSelection, options?: { replace?: boolean }) => {
@@ -312,6 +331,7 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
         view: prev.view,
         people,
         previewPath: prev.previewPath,
+        story: null,
         replace: options?.replace,
       }));
     },
@@ -543,6 +563,16 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
             onViewChange={handleViewChange}
             onTotalChange={handleTotalChange}
           />
+        ) : view === "stories" ? (
+          <Suspense fallback={null}>
+            <StoriesView
+              view={view}
+              onViewChange={handleViewChange}
+              storyId={nav.story}
+              onOpenStory={handleOpenStory}
+              onShowInLibrary={handleShowStoryInLibrary}
+            />
+          </Suspense>
         ) : (
           <Suspense fallback={null}>
             <PeopleView

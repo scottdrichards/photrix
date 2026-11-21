@@ -1,11 +1,12 @@
+import { vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ViewToggle } from "./ViewToggle";
 import { SelectionProvider } from "./selection/SelectionContext";
 
-const renderViewToggle = (view: "library" | "people" = "library") =>
+const renderViewToggle = (view: "library" | "people" | "stories" = "library", onViewChange = () => {}) =>
   render(
     <SelectionProvider>
-      <ViewToggle view={view} onViewChange={() => {}} />
+      <ViewToggle view={view} onViewChange={onViewChange} />
     </SelectionProvider>,
   );
 
@@ -33,6 +34,15 @@ describe("ViewToggle", () => {
   // SelectionActionBar's own count and exit action. It now just keeps
   // showing the ordinary view toggle; selection actions live in exactly one
   // place (see SelectionActionBar.spec.tsx).
+  it("offers a Stories tab next to Thumbnails and People", () => {
+    const onViewChange = vi.fn();
+    renderViewToggle("stories", onViewChange);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Thumbnails", "People", "Stories"]);
+    expect(screen.getByRole("tab", { name: "Stories" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "People" }));
+    expect(onViewChange).toHaveBeenCalledWith("people");
+  });
+
   it("keeps showing the plain view toggle in selection mode", () => {
     renderViewToggle();
 

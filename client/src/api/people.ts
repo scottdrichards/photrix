@@ -319,7 +319,7 @@ export const fetchFaceClustersPCA = async ({
 const FACE_CROP_PADDING = 0.6;
 
 /** The padded face region, as fractions of the photo, that a face crop shows. */
-export const faceCropRegion = (face: ClusterFace) => {
+export const faceCropRegion = (face: Pick<ClusterFace, "box">) => {
   const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
   const grow = 1 + 2 * FACE_CROP_PADDING;
   const w = clamp01(face.box.width * grow);
@@ -329,7 +329,10 @@ export const faceCropRegion = (face: ClusterFace) => {
   return { x, y, w, h };
 };
 
-export const buildFaceCropUrl = (face: ClusterFace, size = 320): string => {
+export const buildFaceCropUrl = (
+  face: Pick<ClusterFace, "box" | "frameTimeMs"> & { photo: { path: string } },
+  size = 320,
+): string => {
   const { x, y, w, h } = faceCropRegion(face);
   return buildFileUrl(face.photo.path, {
     crop: `${x},${y},${w},${h}`,

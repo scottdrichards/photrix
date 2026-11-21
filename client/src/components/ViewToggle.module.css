@@ -35,23 +35,21 @@
   top: var(--space-xs);
   left: var(--space-xs);
   bottom: var(--space-xs);
-  width: calc(50% - var(--space-xs));
+  /* One tab wide, slid to the selected tab: the track is padded by space-xs on each side. */
+  width: calc((100% - 2 * var(--space-xs)) / var(--tab-count));
   background-color: var(--bg0);
   border-radius: 9999px;
+  left: calc(var(--space-xs) + var(--tab-index) * (100% - 2 * var(--space-xs)) / var(--tab-count));
   transition: left 0.25s ease-in-out;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
   z-index: 0;
-
-  &[data-active="people"] {
-    left: calc(50% + var(--space-xs));
-  }
 }
 
 .toggleButton {
   position: relative;
   z-index: 1;
   flex: 1;
-  min-width: 100px;
+  min-width: 92px;
   padding: var(--space-xs) var(--space-m);
   border: none;
   background: transparent;
