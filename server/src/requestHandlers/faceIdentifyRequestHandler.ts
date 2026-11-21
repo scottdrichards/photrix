@@ -27,6 +27,7 @@ import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../common/writeJson.ts";
 import { logFailure } from "../common/logFailure.ts";
+import { getCurrentRequestId } from "../observability/requestTrace.ts";
 
 const log = getLogger("faceIdentify");
 
@@ -164,7 +165,11 @@ const fetchFrame = async (rawUrl: string): Promise<Buffer> => {
     throw new BadRequest("Frame URLs must point at a private/LAN address");
   }
 
-  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  // A redirect would be followed to wherever it points, past the host check.
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    redirect: "manual",
+  });
   if (!response.ok) throw new BadRequest(`Frame fetch returned HTTP ${response.status}`);
   const buffer = Buffer.from(await response.arrayBuffer());
   if (buffer.length === 0) throw new BadRequest("Frame fetch returned an empty body");
@@ -197,13 +202,23 @@ const framesFromFrigateEvent = async (spec: Record<string, unknown>) => {
   if (!host || !id) {
     throw new BadRequest("frigateEvent needs both host and id");
   }
-  const hostname = host.split(":")[0];
-  if (!isPrivateHost(hostname)) {
+  // Check the host the request will actually go to, not a split of the raw
+  // string: `127.0.0.1:80@example.com` splits to a private address but is a URL
+  // whose host is example.com.
+  let url: URL;
+  try {
+    url = new URL(`http://${host}/api/events/${encodeURIComponent(id)}`);
+  } catch {
+    throw new BadRequest("frigateEvent host is not a valid host[:port]");
+  }
+  if (url.username !== "" || url.password !== "" || !isPrivateHost(url.hostname)) {
     throw new BadRequest("frigateEvent host must be a private/LAN address");
   }
 
-  const url = `http://${host}/api/events/${encodeURIComponent(id)}`;
-  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    redirect: "manual",
+  });
   if (!response.ok) {
     throw new BadRequest(`Frigate event lookup returned HTTP ${response.status}`);
   }
@@ -580,8 +595,8 @@ export const faceIdentifyRequestHandler = async (
         }
         // One unreadable frame out of several is not a failed request — a
         // recording segment may not have flushed yet. Note it and keep going.
-        const message = error instanceof Error ? error.message : String(error);
-        frameReports.push({ frame: index, faces: 0, error: message });
+        log.warn({ err: error, frame: index, requestId: getCurrentRequestId() }, "face identify frame failed");
+        frameReports.push({ frame: index, faces: 0, error: "Frame could not be analyzed" });
         continue;
       }
 
@@ -647,9 +662,14 @@ export const faceIdentifyRequestHandler = async (
       writeJson(res, 400, { error: error.message });
       return;
     }
-    const message = error instanceof Error ? error.message : String(error);
-    log.error({ err: message }, "face identify failed");
-    if (!res.writableEnded) writeJson(res, 500, { error: message });
+    const requestId = getCurrentRequestId();
+    log.error({ err: error, requestId }, "face identify failed");
+    if (!res.writableEnded) {
+      writeJson(res, 500, {
+        error: "Face identification failed",
+        ...(requestId ? { requestId } : {}),
+      });
+    }
   } finally {
     active -= 1;
   }

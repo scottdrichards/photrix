@@ -21,8 +21,19 @@ import {
 import type { ModelLoadProgress } from "../common/modelLoadTimer.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../common/writeJson.ts";
+import { getCurrentRequestId } from "../observability/requestTrace.ts";
 
 const log = getLogger("searchRequestHandler");
+
+const reasonText = (reason: unknown): string =>
+  reason instanceof Error ? reason.message : String(reason);
+
+/**
+ * What a client may be told about a failed source: never the error text, which
+ * can carry paths, addresses or SQL. The full error goes to the log.
+ */
+const coarseReason = (reason: unknown): "timeout" | "error" =>
+  reasonText(reason).includes("timed out") ? "timeout" : "error";
 
 // Each embedding source ranks the *whole* library and returns its top-N, so a
 // source always contributes results even when nothing genuinely matches the
@@ -367,13 +378,16 @@ export const searchRequestHandler = async (
       return [];
     }
     if (result.status !== "fulfilled") {
-      const reason =
-        result.reason instanceof Error ? result.reason.message : String(result.reason);
-      diagnostics[label] = { status: "rejected", ms: timings[label], reason };
+      diagnostics[label] = {
+        status: "rejected",
+        ms: timings[label],
+        reason: coarseReason(result.reason),
+      };
       log.warn(
         {
           source: label,
-          reason,
+          requestId: getCurrentRequestId(),
+          reason: reasonText(result.reason),
           embedMs: stageTimings[`${label}Embed`],
           scanMs: stageTimings[`${label}Scan`],
         },
@@ -434,6 +448,17 @@ export const searchRequestHandler = async (
       : [];
   const metadataHits =
     useMetadata && metadataResult.status === "fulfilled" ? metadataResult.value : [];
+  for (const [source, outcome] of [
+    ["metadata", metadataResult],
+    ["transcript", transcriptResult],
+  ] as const) {
+    if (outcome.status === "rejected") {
+      log.warn(
+        { source, requestId: getCurrentRequestId(), reason: reasonText(outcome.reason) },
+        "search source failed",
+      );
+    }
+  }
   diagnostics.metadata = !useMetadata
     ? { status: "skipped" }
     : metadataResult.status === "fulfilled"
@@ -441,10 +466,7 @@ export const searchRequestHandler = async (
       : {
           status: "rejected",
           ms: timings.metadata,
-          reason:
-            metadataResult.reason instanceof Error
-              ? metadataResult.reason.message
-              : String(metadataResult.reason),
+          reason: coarseReason(metadataResult.reason),
         };
   diagnostics.transcript = !useTranscript
     ? { status: "skipped" }
@@ -453,10 +475,7 @@ export const searchRequestHandler = async (
       : {
           status: "rejected",
           ms: timings.transcript,
-          reason:
-            transcriptResult.reason instanceof Error
-              ? transcriptResult.reason.message
-              : String(transcriptResult.reason),
+          reason: coarseReason(transcriptResult.reason),
         };
 
   // Fuse the three rankings by reciprocal rank rather than raw score. The
@@ -532,13 +551,12 @@ export const searchRequestHandler = async (
     useAudio &&
     clapResult.status === "rejected"
   ) {
-    const message =
-      clipResult.reason instanceof Error
-        ? clipResult.reason.message
-        : String(clipResult.reason);
+    log.error(
+      { requestId: getCurrentRequestId(), reason: reasonText(clipResult.reason) },
+      "search workers unavailable",
+    );
     return writeJson(res, 503, {
       error: "Search workers unavailable",
-      message,
       sourceStatus,
       hint: "Run: bun run --filter server python:install",
     });

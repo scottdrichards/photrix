@@ -1,18 +1,13 @@
 import type http from "node:http";
-import path from "node:path";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { decodeRequestPath } from "../common/decodeRequestPath.ts";
+import { resolveMediaPath } from "../common/pathContainment.ts";
 import { suggestRotation } from "../imageProcessing/suggestRotation.ts";
 import { writeJson } from "../common/writeJson.ts";
 
 type Options = {
   database: IndexDatabase;
   storageRoot: string;
-};
-
-const isPathInsideStorage = (storageRoot: string, targetPath: string): boolean => {
-  const relativeToStorage = path.relative(storageRoot, targetPath);
-  return !relativeToStorage.startsWith("..") && !path.isAbsolute(relativeToStorage);
 };
 
 /**
@@ -33,12 +28,15 @@ export const suggestRotationRequestHandler = async (
     writeJson(res, 400, { error: "Missing path parameter" });
     return;
   }
-  const subPath = decodeRequestPath(rawPath);
-  const normalizedPath = path.join(storageRoot, subPath);
-  if (!isPathInsideStorage(storageRoot, normalizedPath)) {
-    writeJson(res, 403, { error: "Access denied" });
+  // `searchParams` has already decoded once; the second decode is historical,
+  // and containment is checked on the fully decoded result.
+  const resolved = await resolveMediaPath(storageRoot, decodeRequestPath(rawPath));
+  if (!resolved.ok) {
+    writeJson(res, resolved.status, { error: resolved.error });
     return;
   }
+  const subPath = resolved.relativePath;
+  const normalizedPath = resolved.absolutePath;
 
   const fileRecord = await database.getFileRecord(subPath);
   if (fileRecord?.mimeType && !fileRecord.mimeType.startsWith("image/")) {

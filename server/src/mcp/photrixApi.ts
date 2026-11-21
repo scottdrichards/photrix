@@ -25,8 +25,15 @@ const peopleCache = new Map<string, { at: number; value: Promise<PeopleResponse>
 // Photrix serves files at /api/files/<relativePath>. Folder paths start with a
 // leading "/", which the route does not want, and each segment must be
 // percent-encoded so spaces/unicode in file names survive the fetch.
-const encodeRelativePath = (relativePath: string): string =>
-  relativePath.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
+// `.` and `..` are refused rather than encoded: `fetch` resolves them (and their
+// `%2e` spellings) before sending, so `/a/../../api/x` would reach another route.
+export const encodeRelativePath = (relativePath: string): string => {
+  const segments = relativePath.replace(/^\/+/, "").split("/");
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`Not a library path: ${relativePath}`);
+  }
+  return segments.map(encodeURIComponent).join("/");
+};
 
 // A human-openable URL for a result (auth may still be required in the browser).
 export const viewUrl = (relativePath: string, height = 1080): string =>
@@ -150,12 +157,15 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         throw new Error(
-          `Photrix request timed out after ${REQUEST_TIMEOUT_MS}ms (${pathWithQuery}). Is the server running at ${BASE_URL}?`,
+          `Photrix request timed out after ${REQUEST_TIMEOUT_MS}ms (${pathWithQuery}). Is the server running?`,
         );
       }
-      throw new Error(
+      // The cause (and BASE_URL, which names an internal host) stays in this
+      // process's stderr; the MCP client only learns the server is unreachable.
+      console.error(
         `Could not reach Photrix at ${BASE_URL}${pathWithQuery}: ${err instanceof Error ? err.message : String(err)}`,
       );
+      throw new Error(`Could not reach Photrix (${pathWithQuery}).`);
     }
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
