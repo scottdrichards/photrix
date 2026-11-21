@@ -14,6 +14,7 @@ import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import { writeJson } from "../../common/writeJson.ts";
 import path from "path";
+import { joinLibraryPath, verifyRealPathInside } from "../../common/pathContainment.ts";
 import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
 import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";
 import { getLogger } from "../../observability/logger.ts";
@@ -309,20 +310,25 @@ export const videoNegotiationRequestHandler = async (
     return writeJson(res, 400, { error: "Missing 'path' query parameter" });
   }
 
-  const normalizedPath = path.join(storageRoot, videoPath);
-  const relativeToStorage = path.relative(storageRoot, normalizedPath);
-  if (relativeToStorage.startsWith("..") || path.isAbsolute(relativeToStorage)) {
-    return writeJson(res, 403, { error: "Access denied" });
-  }
+  const joined = joinLibraryPath(storageRoot, videoPath);
+  if (!joined.ok) return writeJson(res, joined.status, { error: joined.error });
 
   if (shareFilter) {
     const allowed = await database.fileMatchesFilter(
-      videoPath,
+      joined.relativePath,
       shareFilter,
     );
     if (!allowed) {
       return writeJson(res, 403, { error: "Access denied" });
     }
+  }
+
+  // Resolves symlinks: one inside the library pointing out of it must not
+  // even be probed (negotiation stats the file and reads its HLS cache).
+  // A missing file is left to negotiation, which answers it in its own shape.
+  const contained = await verifyRealPathInside(storageRoot, joined.absolutePath);
+  if (!contained.ok && contained.status !== 404) {
+    return writeJson(res, contained.status, { error: contained.error });
   }
 
   const bandwidthParam = url.searchParams.get("bandwidthMbps");

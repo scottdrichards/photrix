@@ -60,6 +60,12 @@ import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../common/writeJson.ts";
 import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
 import { decodeRequestPath } from "../../common/decodeRequestPath.ts";
+import { stripLeadingSlash } from "../../common/stripLeadingSlash.ts";
+import {
+  isPathInside,
+  joinLibraryPath,
+  verifyRealPathInside,
+} from "../../common/pathContainment.ts";
 import { attempt, attemptSync } from "../../common/result.ts";
 import { generateVideoStoryboard } from "../../videoProcessing/videoStoryboard.ts";
 // Let the player tell a slow encoder from a slow network (feedback #178).
@@ -160,11 +166,6 @@ const streamFile = (
     res.destroy(error);
   });
   fileStream.pipe(res);
-};
-
-const isPathInsideStorage = (storageRoot: string, targetPath: string) => {
-  const relativeToStorage = path.relative(storageRoot, targetPath);
-  return !relativeToStorage.startsWith("..") && !path.isAbsolute(relativeToStorage);
 };
 
 const streamStaticFile = (
@@ -287,9 +288,29 @@ const waitForSegment = async (opts: {
   }
 };
 
+/**
+ * The only `segment=` values ever served: exactly what ffmpeg writes and what
+ * the playlists link to. Anything else (`../../etc/hostname`, an absolute
+ * path, an encoded slash) is refused before it gets near the filesystem.
+ */
+const SEGMENT_NAME = /^segment_(\d{1,9})\.ts$/;
+
+/**
+ * `segment` is joined into a path and `variant` into a directory name, so both
+ * are checked before anything else, the requested video included, touches the
+ * filesystem. Returns the error to send, or null when both are well formed.
+ */
+const invalidHlsParams = (url: URL): string | null => {
+  const segment = url.searchParams.get("segment");
+  if (segment !== null && !SEGMENT_NAME.test(segment)) return "Invalid HLS segment name";
+  const variant = url.searchParams.get("variant");
+  if (variant !== null && !/^\d{1,5}$/.test(variant)) return "Invalid HLS variant";
+  return null;
+};
+
 /** Extracts the integer index N from an HLS segment name `segment_NNN.ts`. */
 const parseSegmentIndex = (segment: string): number | null => {
-  const match = segment.match(/segment_(\d+)\.ts$/);
+  const match = segment.match(SEGMENT_NAME);
   return match ? Number(match[1]) : null;
 };
 
@@ -377,6 +398,7 @@ const tryHLSStream = async (
   const { isVideo, representation, normalizedPath, subPath, res, url, database } = ctx;
   if (!isVideo || representation !== "hls") return false;
 
+  // Both already validated by invalidHlsParams before any filesystem access.
   const segment = url.searchParams.get("segment");
   const variant = url.searchParams.get("variant"); // e.g., "360" or "720"
   // Propagate the auth token through rewritten playlist/segment URLs so that
@@ -500,6 +522,13 @@ const tryHLSStream = async (
     if (segment && variant) {
       const variantHeight = clampToSupportedHeight(parseInt(variant, 10), sourceSize);
       const segmentPath = getVariantSegmentPath(hlsDir, variantHeight, segment);
+      // Belt and braces behind SEGMENT_NAME: the file served must be a direct
+      // child of this variant's own directory.
+      const variantDir = path.join(hlsDir, `${variantHeight}p`);
+      if (!isPathInside(variantDir, segmentPath) || path.dirname(segmentPath) !== variantDir) {
+        writeJson(res, 400, { error: "Invalid HLS segment name" });
+        return true;
+      }
       const segmentIndex = parseSegmentIndex(segment);
       touchVariant(hlsDir, variantHeight, segmentIndex ?? undefined);
 
@@ -587,7 +616,7 @@ const tryHLSStream = async (
     if (variant) {
       const variantHeight = clampToSupportedHeight(parseInt(variant, 10), sourceSize);
       touchVariant(hlsDir, variantHeight);
-      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}${tokenSuffix}&segment=`;
+      const baseUrl = `/api/files/${encodeURIComponent(stripLeadingSlash(subPath))}?representation=hls&variant=${encodeURIComponent(variant)}${tokenSuffix}&segment=`;
 
       // When the total duration is known, synthesize a complete VOD playlist that
       // lists every segment up front and ends with #EXT-X-ENDLIST. This gives the
@@ -672,7 +701,7 @@ const tryHLSStream = async (
     let masterContent = await readFile(multibitrateInfo.masterPlaylistPath, "utf-8");
 
     // Rewrite variant playlist paths to use API endpoint
-    const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls${tokenSuffix}&variant=`;
+    const baseVariantUrl = `/api/files/${encodeURIComponent(stripLeadingSlash(subPath))}?representation=hls${tokenSuffix}&variant=`;
     masterContent = masterContent.replace(
       /^(\d+)p\/playlist\.m3u8$/gm,
       (_, variantHeight) => `${baseVariantUrl}${variantHeight}`,
@@ -801,22 +830,31 @@ const tryImageVariant = async (ctx: FileHandlingContext) => {
 const fileHandler = async (
   req: http.IncomingMessage,
   url: URL,
-  subPath: string,
+  requestedPath: string,
   storageRoot: string,
   res: http.ServerResponse,
   database: IndexDatabase,
   taskOrchestrator: TaskOrchestrator,
   shareFilter: unknown = null,
 ) => {
-  if (!subPath) {
+  if (!requestedPath) {
     return writeJson(res, 400, { error: "Missing file path" });
   }
 
-  const normalizedPath = path.join(storageRoot, subPath);
-
-  if (!isPathInsideStorage(storageRoot, normalizedPath)) {
-    return writeJson(res, 403, { error: "Access denied" });
+  if (url.searchParams.get("representation") === "hls") {
+    const hlsError = invalidHlsParams(url);
+    if (hlsError) return writeJson(res, 400, { error: hlsError });
   }
+
+  // Lexical checks first (no filesystem access), then the share, then the
+  // symlink-resolved containment check: a path outside a share is refused with
+  // the same 403 whether or not it exists, so a share can't probe the library.
+  const joined = joinLibraryPath(storageRoot, requestedPath);
+  if (!joined.ok) return writeJson(res, joined.status, { error: joined.error });
+  // The canonical path from here on, so the share check, the index lookups and
+  // the bytes served all name the same file.
+  const subPath = joined.relativePath;
+  const normalizedPath = joined.absolutePath;
 
   if (shareFilter) {
     const allowed = await database.fileMatchesFilter(
@@ -826,6 +864,18 @@ const fileHandler = async (
     if (!allowed) {
       return writeJson(res, 403, { error: "Access denied" });
     }
+  }
+
+  const contained = await verifyRealPathInside(storageRoot, normalizedPath);
+  if (!contained.ok) return writeJson(res, contained.status, { error: contained.error });
+  // A symlink inside the share that points elsewhere in the library would serve
+  // that other file's bytes: the file reached must be in the share too.
+  if (shareFilter && contained.realRelativePath !== subPath) {
+    const targetAllowed = await database.fileMatchesFilter(
+      contained.realRelativePath,
+      shareFilter,
+    );
+    if (!targetAllowed) return writeJson(res, 403, { error: "Access denied" });
   }
 
   let fileStats: Stats | null = null;
