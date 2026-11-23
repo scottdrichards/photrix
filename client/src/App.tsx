@@ -4,10 +4,10 @@ import {
   Person24Regular,
   Share24Regular,
 } from "@fluentui/react-icons";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
-import { buildShareScope, fetchShareScopeCount, LARGE_SHARE_THRESHOLD } from "./api";
+import { buildShareScope, fetchPhotoByPath, fetchShareScopeCount, LARGE_SHARE_THRESHOLD } from "./api";
 import {
   LazyFullscreenViewer,
   preloadFullscreenViewer,
@@ -254,7 +254,7 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   const [sortDockHost, setSortDockHost] = useState<HTMLDivElement | null>(null);
   const [nav, setNav] = useState<UrlNavState>(initialNavFromUrl);
   const { view } = nav;
-  const { selected, selectByPath, checkedPaths } = useSelectionContext();
+  const { items, selected, selectedPath, selectByPath, checkedPaths } = useSelectionContext();
 
   useSyncUrlWithFilter(nav, setNav);
 
@@ -275,21 +275,34 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   // (nav.previewPath), the same way nav.people already mirrors the People
   // tab's selection — a refresh, a shared link, or the back button should
   // all be able to reopen (or close) it, not just drop back to the bare grid.
+  // Keyed on the selected *path*, and only when it changes: on a cold load the
+  // path is still null while the URL names a photo, and writing that null back
+  // would erase the deep link before it opens.
+  const lastSelectedPathRef = useRef(selectedPath);
   useEffect(() => {
-    const openPath = selected?.path ?? null;
-    setNav((prev) => (prev.previewPath === openPath ? prev : { ...prev, previewPath: openPath }));
-  }, [selected]);
+    if (lastSelectedPathRef.current === selectedPath) return;
+    lastSelectedPathRef.current = selectedPath;
+    setNav((prev) => (prev.previewPath === selectedPath ? prev : { ...prev, previewPath: selectedPath }));
+  }, [selectedPath]);
 
+  // The URL side: initial load and back/forward. No view-transition morph
+  // (setSelected's), since there is no origin tile to animate from. A photo
+  // the loaded items don't have (a deep link from the Home Assistant wall, a
+  // refresh deep in a long day, a burst member hidden in its stack) is fetched
+  // on its own, so the viewer opens without waiting for the grid to find it.
   useEffect(() => {
-    if (nav.previewPath === (selected?.path ?? null)) return;
-    // Not wrapped in the view-transition morph setSelected uses — there is no
-    // origin tile to animate from on a URL-driven change (initial load,
-    // back/forward). selectByPath resolves against whatever items the
-    // current view has already loaded, so it's a no-op until that catches up.
-    selectByPath(nav.previewPath);
-    // Only react to the URL side of this; the effect above already handles
-    // the reverse direction, and depending on `selected` here too would
-    // re-run this on every selection change for no reason.
+    const path = nav.previewPath;
+    if (path === selectedPath) return;
+    selectByPath(path);
+    if (!path || items.some((item) => item.path === path)) return;
+    const controller = new AbortController();
+    fetchPhotoByPath(path, controller.signal)
+      .then((item) => {
+        if (item) selectByPath(path, item);
+      })
+      .catch(logFailure("viewer.deepLink.failed", "Could not load the linked photo"));
+    return () => controller.abort();
+    // Only react to the URL side; the effect above handles the reverse.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nav.previewPath]);
 

@@ -57,6 +57,7 @@ export { subscribeStatusStream, fetchStatus, setBackgroundTasksEnabled, clearHls
 export {
   fetchFolders,
   fetchPhotos,
+  fetchPhotoByPath,
   fetchGeotaggedPhotos,
   buildGeoPointThumbnailUrl,
   fetchDateRange,

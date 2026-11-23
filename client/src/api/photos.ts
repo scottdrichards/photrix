@@ -14,6 +14,7 @@ import type {
   FolderSummary,
   DateHistogramResult,
   GeoPoint,
+  PhotoItem,
 } from "./types";
 
 export const fetchFolders = async ({
@@ -110,6 +111,35 @@ export const fetchPhotos = async ({
     page: payload.page,
     pageSize: payload.pageSize,
   };
+};
+
+/**
+ * One photo by its relativePath (`/2024/trip/a.jpg`), with the metadata the
+ * viewer needs. A deep link (`?preview=`, e.g. from the Home Assistant wall)
+ * opens from this instead of waiting for the grid, where the photo may sit
+ * past the first page or inside a collapsed burst stack. Stacks and the default
+ * exclusion are off so the exact file always resolves; a share's scope is still
+ * enforced by the server. `null` when the index has no such file.
+ */
+export const fetchPhotoByPath = async (
+  relativePath: string,
+  signal?: AbortSignal,
+): Promise<PhotoItem | null> => {
+  const slash = relativePath.lastIndexOf("/");
+  const folder = relativePath.slice(0, slash + 1).replace(/^\/+/, "");
+  const params = new URLSearchParams();
+  params.set("metadata", DEFAULT_METADATA_KEYS.join(","));
+  params.set("pageSize", "1");
+  params.set("filter", JSON.stringify({ fileName: relativePath.slice(slash + 1) }));
+  params.set("collapseMomentClusters", "false");
+  params.set("includeExcluded", "true");
+  const payload = await fetchJsonOrThrow<ApiPhotoResponse>(
+    buildFilesQueryUrl(folder, params),
+    "fetch photo",
+    { signal },
+  );
+  const item = payload.items[0];
+  return item ? createPhotoItem(item) : null;
 };
 
 /**
