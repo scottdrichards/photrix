@@ -40,6 +40,9 @@ const SelectionHarness = () => {
       <button type="button" onClick={() => selectByPath("a/2.jpg")}>
         select-by-path-second
       </button>
+      <button type="button" onClick={() => selectByPath("b/deep.jpg", createPhoto("b/deep.jpg"))}>
+        select-by-path-standalone
+      </button>
       <button type="button" onClick={() => selectByPath("does/not/exist.jpg")}>
         select-by-path-missing
       </button>
@@ -105,5 +108,25 @@ describe("SelectionContext", () => {
     fireEvent.click(screen.getByRole("button", { name: "load-items" }));
     fireEvent.click(screen.getByRole("button", { name: "select-by-path-second" }));
     expect(screen.getByTestId("selected-name")).toHaveTextContent("2.jpg");
+  });
+
+  // A deep link names a photo the grid hasn't loaded (past its first page,
+  // or inside a burst stack). The item fetched on its own opens the viewer
+  // and survives the grid pushing an item list without it.
+  it("shows a standalone item for a path the loaded items do not contain", () => {
+    render(
+      <SelectionProvider>
+        <SelectionHarness />
+      </SelectionProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "select-by-path-standalone" }));
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("deep.jpg");
+
+    fireEvent.click(screen.getByRole("button", { name: "load-items" }));
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("deep.jpg");
+
+    fireEvent.click(screen.getByRole("button", { name: "set-first" }));
+    expect(screen.getByTestId("selected-name")).toHaveTextContent("1.jpg");
   });
 });

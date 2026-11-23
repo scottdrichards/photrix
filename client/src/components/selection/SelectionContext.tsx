@@ -17,6 +17,8 @@ export type PhotoMetadataOverride = {
 
 type SelectionContextValue = {
   items: PhotoItem[];
+  /** The open photo's path, even while it can't be resolved to an item yet. */
+  selectedPath: string | null;
   selected: PhotoItem | null;
   setSelected: (photo: PhotoItem | null) => void;
   /**
@@ -25,8 +27,12 @@ type SelectionContextValue = {
    * is no origin tile to animate from when the URL itself is the trigger
    * (initial load with `?preview=`, or browser back/forward). See
    * useSyncUrlWithFilter's `previewPath` (feedback #120).
+   *
+   * `item` is that photo fetched on its own, for a path the loaded items
+   * don't contain (a deep link): the viewer shows it until, and unless, the
+   * grid's own copy arrives.
    */
-  selectByPath: (path: string | null) => void;
+  selectByPath: (path: string | null, item?: PhotoItem) => void;
   setItems: (items: PhotoItem[]) => void;
   selectNext: () => void;
   selectPrevious: () => void;
@@ -57,6 +63,7 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
   const [rawItems, setRawItems] = useState<PhotoItem[]>([]);
   const [overrides, setOverrides] = useState<Record<string, PhotoMetadataOverride>>({});
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [standalone, setStandalone] = useState<PhotoItem | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [checkedPaths, setCheckedPaths] = useState<Set<string>>(new Set());
 
@@ -91,8 +98,12 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
 
   const selected = useMemo(() => {
     if (!selectedPath) return null;
-    return items.find((item) => item.path === selectedPath) ?? null;
-  }, [items, selectedPath]);
+    const fromItems = items.find((item) => item.path === selectedPath);
+    if (fromItems) return fromItems;
+    if (standalone?.path !== selectedPath) return null;
+    const override = overrides[standalone.path];
+    return override ? { ...standalone, metadata: { ...standalone.metadata, ...override } } : standalone;
+  }, [items, selectedPath, standalone, overrides]);
 
   // Wrapped in a View Transition so opening a photo/video (a tile becoming
   // the fullscreen viewer's media) or closing it (the reverse) animates the
@@ -103,8 +114,9 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
     runWithViewTransition(() => setSelectedPath(photo?.path ?? null));
   }, []);
 
-  const selectByPath = useCallback((path: string | null) => {
+  const selectByPath = useCallback((path: string | null, item?: PhotoItem) => {
     setSelectedPath(path);
+    if (item) setStandalone(item);
   }, []);
 
   const selectNext = useCallback(() => {
@@ -145,6 +157,7 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
   const value = useMemo(
     () => ({
       items,
+      selectedPath,
       selected,
       setSelected,
       selectByPath,
@@ -160,6 +173,7 @@ export const SelectionProvider = ({ children }: { children: ReactNode }) => {
     }),
     [
       items,
+      selectedPath,
       selected,
       setSelected,
       selectByPath,
