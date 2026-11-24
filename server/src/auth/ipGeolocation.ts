@@ -24,7 +24,7 @@ import { attempt, attemptSync, type Result } from "../common/result.ts";
 
 const log = getLogger("ipGeolocation");
 
-export const LIST_WAIT_MS = 1_500;
+const LIST_WAIT_MS = 1_500;
 const LOOKUP_TIMEOUT_MS = 4_000;
 const FOUND_TTL_MS = 7 * 24 * 60 * 60_000;
 const FAILED_TTL_MS = 60 * 60_000;
@@ -70,7 +70,7 @@ export const formatPlace = (
 const field = (body: unknown, key: string): unknown =>
   body && typeof body === "object" ? (body as Record<string, unknown>)[key] : undefined;
 
-export const PROVIDERS: readonly Provider[] = [
+const PROVIDERS: readonly Provider[] = [
   {
     name: "ipapi.co",
     url: (ip) => `https://ipapi.co/${encodeURIComponent(ip)}/json/`,
@@ -87,7 +87,7 @@ export const PROVIDERS: readonly Provider[] = [
 
 type CacheEntry = { place: string | null; expiresAt: number };
 
-export const isIpLocationEnabled = (): boolean =>
+const isIpLocationEnabled = (): boolean =>
   (process.env.PHOTRIX_IP_LOCATION ?? "").trim().toLowerCase() !== "off";
 
 type Options = {

@@ -266,12 +266,12 @@ const startServer = async () => {
     fileMetadata: {
       name: "File metadata processing",
       start: () => processFileInfoMetadata(database),
-      type: "mediaMedatadata",
+      type: "mediaMetadata",
     },
     exifMetadata: {
       name: "EXIF metadata processing",
       start: () => processExifMetadata(database),
-      type: "mediaMedatadata",
+      type: "mediaMetadata",
     },
     imageAnalysis: {
       name: "Image analysis (faces + CLIP)",

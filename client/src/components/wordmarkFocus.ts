@@ -24,7 +24,7 @@ export const CLOUDS_M = 200;
 export const START_M = 3;
 
 /** On-screen blur per dioptre of defocus: the lens's aperture, in effect. */
-export const BLUR_PX_PER_DIOPTRE = 25;
+const BLUR_PX_PER_DIOPTRE = 25;
 /** Clouds have soft edges even when in focus. */
 const CLOUD_SOFTNESS_PX = 1.5;
 /** Focus breathing: the image grows slightly as the lens racks closer. */
@@ -73,7 +73,7 @@ type Move = { toM: number; ms: number; ease: Ease } | { holdMs: number };
  * rack well past the word to 40 m, a beat, a correction back past it to 13 m,
  * another beat, then a settle on 20 m.
  */
-export const FOCUS_PULL: readonly Move[] = [
+const FOCUS_PULL: readonly Move[] = [
   { toM: 40, ms: 200, ease: easeInOut },
   { holdMs: 40 },
   { toM: 13, ms: 120, ease: easeInOut },

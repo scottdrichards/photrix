@@ -35,7 +35,7 @@ type Resources = "gpu" | "cpu" | "disk" | "network" | "memoryMB";
 
 type TaskType =
   | "videoConversion"
-  | "mediaMedatadata"
+  | "mediaMetadata"
   | "diskInfo"
   | "imageAnalysis"
   | "audioTranscription"
@@ -51,7 +51,7 @@ type TaskType =
 // GPU/CPU split depends on CUDA availability, decided at runtime in main.ts), and
 // video encodes run on the blocking queue, which bypasses the budget entirely.
 const RESOURCE_BUDGETS: Partial<Record<TaskType, Partial<Record<Resources, number>>>> = {
-  mediaMedatadata: { disk: 0.5 },
+  mediaMetadata: { disk: 0.5 },
   diskInfo: { disk: 0.5 },
   // Heavy combined pass (decode + face detection + CLIP). The dominant
   // background CPU consumer; leaves only a sliver so a single user-triggered

@@ -14,7 +14,7 @@ jest.unstable_mockModule("../auth/authService.ts", () => ({
   getShareLinkLabel: () => Promise.resolve(null),
 }));
 
-const { sharePreviewHandler } = await import("./sharePreviewHandler.ts");
+const { sharePreviewRequestHandler } = await import("./sharePreviewRequestHandler.ts");
 
 type PreviewFile = {
   folder: string;
@@ -48,7 +48,7 @@ const renderPreviewPage = async (
     },
   } as unknown as IndexDatabase;
 
-  await sharePreviewHandler(req, res, database);
+  await sharePreviewRequestHandler(req, res, database);
   return { body, database };
 };
 
@@ -67,7 +67,7 @@ const photo = (fileName: string, rating?: number): PreviewFile => ({
   ...(rating === undefined ? {} : { rating }),
 });
 
-describe("sharePreviewHandler preview ranking", () => {
+describe("sharePreviewRequestHandler preview ranking", () => {
   it("leads with the highest-rated photo", async () => {
     const order = await renderPreview(
       [photo("low.jpg", 2), photo("best.jpg", 5), photo("mid.jpg", 4)],
@@ -108,7 +108,7 @@ describe("sharePreviewHandler preview ranking", () => {
   });
 });
 
-describe("sharePreviewHandler scope", () => {
+describe("sharePreviewRequestHandler scope", () => {
   it("queries with the share's own filter", async () => {
     currentScope = tripScope;
     const { database } = await renderPreviewPage([photo("a.jpg", 5)], {});

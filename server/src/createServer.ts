@@ -19,7 +19,7 @@ import {
 import { resolveShareFilter, ShareScopeError } from "./shareScope/shareScope.ts";
 import { FilterCompileError } from "./indexDatabase/filterToSQL.ts";
 import { bindRequestAbortSignal, isAbortError } from "./common/requestAbort.ts";
-import { sharePreviewHandler } from "./requestHandlers/sharePreviewHandler.ts";
+import { sharePreviewRequestHandler } from "./requestHandlers/sharePreviewRequestHandler.ts";
 import type { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
 import type { FeedbackStore } from "./feedback/feedbackStore.ts";
 import { createRoutes, matchesRoute, type ApiRequest } from "./createRoutes.ts";
@@ -118,7 +118,7 @@ export const createServer = (
     // The link-preview page for a shared link. It validates the share token
     // itself, so it runs before the auth gate.
     if (req.method === "GET" && pathname === "/share") {
-      await sharePreviewHandler(req, res, database);
+      await sharePreviewRequestHandler(req, res, database);
       return;
     }
 

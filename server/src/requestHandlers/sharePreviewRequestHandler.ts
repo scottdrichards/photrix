@@ -27,7 +27,7 @@ const VIDEO_EXTENSIONS = /\.(mp4|mov|m4v|mkv|webm|avi|wmv)$/i;
 /** Pool the mosaic's 4 images are picked from — see the ranking in the handler. */
 const PREVIEW_CANDIDATE_COUNT = 24;
 
-export const sharePreviewHandler = async (
+export const sharePreviewRequestHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
   database: IndexDatabase,

@@ -7,7 +7,7 @@ import {
   mergeClusters,
   renameCluster,
 } from "../../api";
-import type { ClusterFace } from "../../api/types";
+import type { ClusterFace } from "../../api/api.type";
 import type { NamedFace } from "./FaceOverlay";
 import { Spinner } from "../../Spinner";
 import css from "./FaceAssignPanel.module.css";

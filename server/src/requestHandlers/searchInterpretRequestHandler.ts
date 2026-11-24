@@ -35,7 +35,7 @@ const cacheKey = (query: string, now: number) =>
  * answer), because the client's fallback for all of them is the same — run the
  * query as the plain semantic search it already started.
  */
-export const searchInterpretHandler = async (
+export const searchInterpretRequestHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
   { database }: { database: IndexDatabase },

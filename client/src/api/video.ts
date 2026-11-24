@@ -1,6 +1,6 @@
 import { fetchWithDiagnostics, fetchJsonOrThrow } from "./http";
 import { buildFileUrl } from "./photoItem";
-import type { TranscriptSegment, VideoNegotiationResult } from "./types";
+import type { TranscriptSegment, VideoNegotiationResult } from "./api.type";
 
 export const negotiateVideoPlayback = async (options: {
   path: string;

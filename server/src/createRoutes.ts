@@ -31,13 +31,13 @@ import { networkProbeRequestHandler } from "./requestHandlers/networkProbeReques
 import { dayPhotoRequestHandler } from "./requestHandlers/dayPhotoRequestHandler.ts";
 import { screensaverRequestHandler } from "./requestHandlers/screensaverRequestHandler.ts";
 import { foldersRequestHandler } from "./requestHandlers/foldersRequestHandler.ts";
-import { pageTitleHandler } from "./requestHandlers/pageTitleHandler.ts";
+import { pageTitleRequestHandler } from "./requestHandlers/pageTitleRequestHandler.ts";
 import { photoCaptionRequestHandler } from "./requestHandlers/photoCaptionRequestHandler.ts";
 import { suggestRotationRequestHandler } from "./requestHandlers/suggestRotationRequestHandler.ts";
-import { feedbackHandler } from "./requestHandlers/feedbackHandler.ts";
+import { feedbackRequestHandler } from "./requestHandlers/feedbackRequestHandler.ts";
 import { suggestionsRequestHandler } from "./requestHandlers/suggestionsRequestHandler.ts";
 import { videoNegotiationRequestHandler } from "./requestHandlers/video/videoNegotiation.ts";
-import { searchInterpretHandler } from "./requestHandlers/searchInterpretHandler.ts";
+import { searchInterpretRequestHandler } from "./requestHandlers/searchInterpretRequestHandler.ts";
 import {
   searchRequestHandler,
   searchStatusRequestHandler,
@@ -300,7 +300,7 @@ export const createRoutes = ({
       path: "/api/page-title",
       shareLink: "scoped",
       handle: ({ req, res, shareFilter }) =>
-        pageTitleHandler(req, res, database, shareFilter),
+        pageTitleRequestHandler(req, res, database, shareFilter),
     },
     // Calls a local vision model and reveals who and when is in the library.
     {
@@ -341,7 +341,7 @@ export const createRoutes = ({
       method: "POST",
       path: "/api/search/interpret",
       shareLink: "forbidden",
-      handle: ({ req, res }) => searchInterpretHandler(req, res, { database }),
+      handle: ({ req, res }) => searchInterpretRequestHandler(req, res, { database }),
     },
     {
       method: "GET",
@@ -391,7 +391,7 @@ export const createRoutes = ({
       path: "/api/feedback",
       shareLink: "allowed",
       handle: ({ req, res, shareScope }) =>
-        feedbackHandler(req, res, feedback, {
+        feedbackRequestHandler(req, res, feedback, {
           markExternal: Boolean(shareScope),
           buildDiagnosticsReport: (clientSessionId) =>
             buildDiagnosticsReport(clientSessionId, taskOrchestrator),
@@ -401,7 +401,7 @@ export const createRoutes = ({
       path: "/api/feedback*",
       shareLink: "forbidden",
       handle: ({ req, res }) =>
-        feedbackHandler(req, res, feedback, {
+        feedbackRequestHandler(req, res, feedback, {
           markExternal: false,
           buildDiagnosticsReport: (clientSessionId) =>
             buildDiagnosticsReport(clientSessionId, taskOrchestrator),

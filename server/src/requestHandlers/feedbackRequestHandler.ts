@@ -9,12 +9,12 @@ import { readJsonRequest } from "../common/readBody.ts";
  * time so rows stored before this existed are covered too. `<` and `>` are
  * escaped so the submitter cannot close the wrapper early.
  */
-export const presentFeedbackText = (text: string, source: string | null): string =>
+const presentFeedbackText = (text: string, source: string | null): string =>
   source === "external"
     ? `<untrusted_comment source="share-link">${text.replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</untrusted_comment>`
     : text;
 
-export const feedbackHandler = async (
+export const feedbackRequestHandler = async (
   req: http.IncomingMessage & { url: string },
   res: http.ServerResponse,
   feedback: FeedbackStore,

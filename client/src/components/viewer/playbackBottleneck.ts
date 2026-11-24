@@ -103,8 +103,8 @@ export const bufferedAheadS = (video: HTMLMediaElement): number => {
 };
 
 /** Below this much buffer a known bottleneck is shown; above the second it is hidden. */
-export const SHOW_BELOW_BUFFER_S = 3;
-export const HIDE_ABOVE_BUFFER_S = 6;
+const SHOW_BELOW_BUFFER_S = 3;
+const HIDE_ABOVE_BUFFER_S = 6;
 
 /**
  * Whether the indicator should show: only while the cause is actually hurting

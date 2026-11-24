@@ -25,7 +25,7 @@ const US_STATES: Record<string, string> = {
 };
 
 /** Farther than this from every known city counts as "no place" (open ocean, wilderness). */
-export const MAX_PLACE_DISTANCE_KM = 100;
+const MAX_PLACE_DISTANCE_KM = 100;
 
 let grid: Map<number, City[]> | null = null;
 let regionNames: Intl.DisplayNames | null = null;

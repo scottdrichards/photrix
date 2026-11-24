@@ -65,8 +65,8 @@ Whisper uses the GPU on CUDA only. Any setting can be forced in `server/.env`:
 
 Copy the template and edit values for your deployment:
 
-```powershell
-Copy-Item server/.env.example server/.env
+```bash
+cp server/.env.example server/.env
 ```
 
 Use `server/.env.example` as the source of truth for required settings.

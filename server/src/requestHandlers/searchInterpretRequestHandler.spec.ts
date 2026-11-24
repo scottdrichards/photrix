@@ -23,8 +23,8 @@ jest.unstable_mockModule("../naturalLanguageSearch/searchVocabulary.ts", () => (
   loadSearchVocabulary,
 }));
 
-const { searchInterpretHandler, clearSearchInterpretationCache } = await import(
-  "./searchInterpretHandler.ts"
+const { searchInterpretRequestHandler, clearSearchInterpretationCache } = await import(
+  "./searchInterpretRequestHandler.ts"
 );
 
 const database = {} as IndexDatabase;
@@ -49,7 +49,7 @@ const post = async (body: string) => {
     }),
   } as unknown as http.ServerResponse;
 
-  const pending = searchInterpretHandler(req, res, { database });
+  const pending = searchInterpretRequestHandler(req, res, { database });
   req.emit("data", Buffer.from(body));
   req.emit("end");
   await pending;
@@ -65,7 +65,7 @@ const interpretation: SearchInterpretation = {
   ignored: [],
 };
 
-describe("searchInterpretHandler", () => {
+describe("searchInterpretRequestHandler", () => {
   beforeEach(() => {
     clearSearchInterpretationCache();
     interpretSearchQuery.mockReset();

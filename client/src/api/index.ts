@@ -47,9 +47,9 @@ export type {
   MomentClusterDetail,
   TaskHoldup,
   FaceAppearance,
-} from "./types";
+} from "./api.type";
 
-export { buildFullShareFilter, buildShareScope } from "./filters";
+export { buildShareScope } from "./filters";
 export { fetchShareScopeCount, LARGE_SHARE_THRESHOLD } from "./share";
 
 export { subscribeStatusStream, fetchStatus, setBackgroundTasksEnabled, clearHlsSessions } from "./status";
@@ -60,7 +60,6 @@ export {
   fetchPhotoByPath,
   fetchGeotaggedPhotos,
   buildGeoPointThumbnailUrl,
-  fetchDateRange,
   fetchDateHistogram,
   fetchSemanticSearch,
   updatePhotoMetadata,
@@ -80,22 +79,17 @@ export {
   fetchNamedPeople,
   fetchClusterFacePreview,
   buildFaceCropUrl,
-  faceCropRegion,
   renameCluster,
   mergeClusters,
   assignFaceToPerson,
   separateCluster,
   setPersonTags,
-  fetchAllPersonTags,
   excludeFaceFromCluster,
   fetchPersonReview,
   applyPersonCutoff,
   setFaceVerdicts,
-  fetchOptimizePlan,
   refitCluster,
   shrinkToExcludeFace,
-  growToIncludeFace,
-  startClusterForFace,
 } from "./people";
 
 export {
@@ -107,8 +101,6 @@ export {
 export { fetchSuggestions, fetchSuggestionsWithCounts } from "./suggestions";
 
 export { negotiateVideoPlayback, fetchTranscriptSegments } from "./video";
-
-export { interpretSearchQuery } from "./naturalLanguageSearch";
 
 export type {
   SearchModelLoad,

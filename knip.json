@@ -1,0 +1,52 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.mjs",
+        "eslint.*.mjs",
+        "prettier.config.mjs"
+      ],
+      "project": [
+        "scripts/**/*.mjs",
+        "shared/*/src/**/*.ts"
+      ]
+    },
+    "client": {
+      "entry": [
+        "public/sw.js"
+      ]
+    },
+    "server": {
+      "entry": [
+        "src/**/*WorkerEntry.mjs",
+        "src/common/sqliteWorker.ts",
+        "src/indexDatabase/vectorIndex/vectorIndexWorker.ts",
+        "scripts/**/*.mjs"
+      ],
+      "ignoreDependencies": [
+        "pino-pretty"
+      ]
+    },
+    "e2e": {
+      "entry": [
+        "playback-lab/*.lab.ts"
+      ]
+    }
+  },
+  "ignoreDependencies": [
+    "@jest/globals",
+    "better-sqlite3"
+  ],
+  "ignoreBinaries": [
+    "ffmpeg",
+    "ffprobe",
+    "nvidia-smi",
+    "rocminfo"
+  ],
+  "rules": {
+    "types": "off",
+    "enumMembers": "off",
+    "duplicates": "off"
+  }
+}

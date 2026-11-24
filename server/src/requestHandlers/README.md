@@ -1,6 +1,24 @@
 # requestHandlers
 
-HTTP request handlers wired up in `createServer.ts`. Each handler owns one route group.
+HTTP request handlers. Each handler owns one route group and is wired into the
+route table in `../createRoutes.ts`, which also declares what a share link may
+do on it (`shareLink: "forbidden" | "allowed" | "scoped"`). `createServer.ts`
+owns what runs before that table: the request trace, the auth gate, and the
+`/share` link-preview page (`sharePreviewRequestHandler.ts`), which checks the
+share token itself.
+
+Name a handler file `<thing>RequestHandler.ts`, exporting `<thing>RequestHandler`.
+`authRequestHandler.ts` exports several (`authLoginHandler`, …) because they
+share one module's state; `files/` and `video/` hold the file-serving helpers.
+
+## Adding a route
+
+1. Write the handler here (read a body with `readJsonRequest` from `common/readBody.ts`).
+2. Add a `Route` entry in `createRoutes.ts` with the narrowest `shareLink`
+   that works, and a case in `createServer.spec.ts` if share links may reach it
+   (`createRoutes.spec.ts` checks every route is under `/api/` and reachable).
+3. Add a row to the route table in `/documentation/ARCHITECTURE.md` and the
+   endpoint to `server/API.md`.
 
 ## Route map
 

@@ -1,6 +1,6 @@
 import { buildFaceCropUrl } from "./people";
 import { createPhotoItem } from "./photoItem";
-import type { ClusterFace } from "./types";
+import type { ClusterFace } from "./api.type";
 
 const faceIn = (
   fileName: string,

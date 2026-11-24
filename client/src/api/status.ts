@@ -1,6 +1,6 @@
 import { getToken } from "../auth";
 import { fetchJsonOrThrow } from "./http";
-import type { ServerStatus } from "./types";
+import type { ServerStatus } from "./api.type";
 
 export const subscribeStatusStream = (
   onUpdate: (status: ServerStatus) => void,

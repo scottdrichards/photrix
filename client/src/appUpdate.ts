@@ -34,7 +34,7 @@ export const entryScriptFromHtml = (html: string): string | null =>
   ENTRY_SCRIPT.exec(html)?.[1] ?? null;
 
 /** The entry script this page was loaded with. */
-export const runningEntryScript = (doc: Document = document): string | null =>
+const runningEntryScript = (doc: Document = document): string | null =>
   doc.querySelector('script[type="module"][src]')?.getAttribute("src") ?? null;
 
 /**
@@ -42,7 +42,7 @@ export const runningEntryScript = (doc: Document = document): string | null =>
  * Failing is expected (offline, or the server mid-restart) and harmless: the
  * next check tries again, so the failure is not worth logging.
  */
-export const fetchLatestEntryScript = async (): Promise<string | null> => {
+const fetchLatestEntryScript = async (): Promise<string | null> => {
   const response = await attempt(
     fetch("/", { cache: "no-store", headers: { accept: "text/html" } }),
   );

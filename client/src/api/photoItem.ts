@@ -1,5 +1,5 @@
 import { getToken } from "../auth";
-import type { ApiPhotoItem, PhotoItem } from "./types";
+import type { ApiPhotoItem, PhotoItem } from "./api.type";
 
 export const DEFAULT_METADATA_KEYS = [
   "mimeType",

@@ -141,7 +141,7 @@ export const resolveShareFilter = async (
 };
 
 /** Only a plain share can be whole-library; a semantic share is scoped by its query. */
-export const isWholeLibraryShare = (shareScope: ShareScope<unknown>): boolean =>
+const isWholeLibraryShare = (shareScope: ShareScope<unknown>): boolean =>
   shareScope.wholeLibrary === true && !shareScope.semanticQuery?.trim();
 
 const resolveUncheckedShareFilter = async (

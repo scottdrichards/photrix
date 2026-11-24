@@ -122,9 +122,10 @@ describe("SearchBar natural-language interpretation", () => {
 
     submit("photos of Sarah at the beach last summer");
 
-    await waitFor(() => expect(interpretSearchQuery).toHaveBeenCalled());
-    expect(currentFilter().semanticQuery).toBe(
-      "photos of Sarah at the beach last summer",
+    expect(interpretSearchQuery).toHaveBeenCalled();
+    // The filter is set when the model's answer resolves, a render after the call.
+    await waitFor(() =>
+      expect(currentFilter().semanticQuery).toBe("photos of Sarah at the beach last summer"),
     );
     expect(screen.queryByText("AI search")).not.toBeInTheDocument();
     expect(currentFilter().faceClusterFilter).toBeUndefined();
@@ -268,9 +269,8 @@ describe("SearchBar natural-language interpretation", () => {
     submit("sunset over water");
 
     resolveFirst(interpretation);
-    await waitFor(() => expect(interpretSearchQuery).toHaveBeenCalledTimes(2));
-
-    expect(currentFilter().semanticQuery).toBe("sunset over water");
+    expect(interpretSearchQuery).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(currentFilter().semanticQuery).toBe("sunset over water"));
     expect(currentFilter().faceClusterFilter).toBeUndefined();
     expect(screen.queryByText("AI search")).not.toBeInTheDocument();
   });

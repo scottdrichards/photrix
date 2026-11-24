@@ -2,7 +2,7 @@
 // replace wholesale with a mock.
 import { faceCropRegion } from "../../api/people";
 import { buildFileUrl } from "../../api/photoItem";
-import type { ClusterFace } from "../../api/types";
+import type { ClusterFace } from "../../api/api.type";
 
 // Feedback #154: a face crop is cut from the original photo on first view,
 // a full HEIC/RAW decode (median ~0.5 s, several seconds for some, measured on
