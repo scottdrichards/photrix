@@ -17,6 +17,7 @@ analysis queues, and the `IndexDatabase` that composes every store.
 | `maintenanceStore.ts`                                 | WAL checkpoint timer, VACUUM, on-disk size, the `settings` rows               |
 | `exifBackfills.ts`                                    | One-time `user_version`-gated EXIF re-queues run at startup                   |
 | `momentStore.ts`, `analysisStore.ts`, `placeStore.ts` | Moment, analysis-queue and place queries (`database.moments`, …)              |
+| `analysisSearch.ts`                                   | Semantic / transcript / metadata search behind `analysisStore`'s search methods |
 | `tables.ts`                                           | Schema DDL (`CREATE TABLE`, `CREATE INDEX`), face tables included             |
 | `prepareTables.ts`                                    | Reconciles the live schema with `tables.ts` at startup (adds, drops, indexes) |
 | `migrate*.ts`                                         | Data migrations that must run before `prepareTables` (see Migrations)         |
