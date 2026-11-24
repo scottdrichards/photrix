@@ -1,19 +1,8 @@
-import { stat } from "node:fs/promises";
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
 import type { IndexSqlite } from "./openIndexSqlite.ts";
-import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
-import { queryCacheKey, WriteInvalidatedCache } from "../common/writeInvalidatedCache.ts";
-import { mimeTypeForFilename } from "../fileHandling/mimeTypes.ts";
-import { MetadataGroups, type FileRecord } from "./fileRecord.type.ts";
-import { filterToSQL } from "./filterToSQL.ts";
-import { type DateHistogramResult, type DateHistogramGrouping, type FilterElement, type GeoClusterResult, type QueryOptions, type QueryResult, type SortOption } from "./indexDatabase.type.ts";
-import {
-  fileRecordToColumnNamesAndValues,
-  rowToFileRecord,
-} from "./rowFileRecordConversionFunctions.ts";
-import { joinPath, normalizeFolderPath, splitPath } from "./utils/pathUtils.ts";
-import { escapeLikeLiteral } from "./utils/sqlUtils.ts";
-import { folderSubtreeSQL } from "./utils/folderSubtreeSQL.ts";
+import { WriteInvalidatedCache } from "../common/writeInvalidatedCache.ts";
+import type { FileRecord } from "./fileRecord.type.ts";
+import type { QueryOptions, QueryResult } from "./indexDatabase.type.ts";
 import { prepareTables } from "./prepareTables.ts";
 import { migrateEmbeddingStorage } from "./migrateEmbeddingStorage.ts";
 import { VectorIndex } from "./vectorIndex/vectorIndex.ts";
@@ -24,170 +13,55 @@ import { PlaceStore } from "./placeStore.ts";
 import { AnalysisStore } from "./analysisStore.ts";
 import { FaceClusterEngine } from "../people/store/faceClusterEngine.ts";
 import { migrateFaceVerdicts } from "../people/store/migrateFaceVerdicts.ts";
-import { tables } from "./tables.ts";
 import { getLogger } from "../observability/logger.ts";
-import { attemptSync } from "../common/result.ts";
-import { deleteFacesStatements } from "../people/store/deleteFacesStatements.ts";
-import { config } from "../config/config.ts";
+import { ExifBackfills } from "./exifBackfills.ts";
+import { FileQueryStore } from "./fileQueryStore.ts";
+import { FileStore } from "./fileStore.ts";
+import { GeoStore } from "./geoStore.ts";
+import { MaintenanceStore } from "./maintenanceStore.ts";
+import { StatsStore } from "./statsStore.ts";
+import { SuggestionStore } from "./suggestionStore.ts";
+import { TaskQueueStore } from "./taskQueueStore.ts";
 
 const log = getLogger("IndexDatabase");
 
-
-// PRAGMA user_version marking that the one-time EXIF re-extraction pass for the
-// new human-authored `description` column has been queued. Bumps the monotonic
-// scheme above MERGED_SIMILARITY_RESCORE_VERSION. Clears exifProcessedAt on
-// already-processed images so processExifMetadata re-reads their headers and
-// fills in `description` (and any other fields added since they were scanned).
-const EXIF_DESCRIPTION_BACKFILL_VERSION = 3;
-
-// PRAGMA user_version marking that HEIC/HEIF files have been re-queued for
-// EXIF re-scan so the new embeddedVideoLength column (Samsung motion photos)
-// gets populated for existing files.
-const HEIC_EMBEDDED_VIDEO_BACKFILL_VERSION = 5;
-
-// PRAGMA user_version marking that all images have been re-queued for EXIF
-// re-scan so the `tags` column (XMP dc:subject / IPTC Keywords /
-// lr:hierarchicalSubject — human-authored keyword/person tags, e.g. "Jeffrey
-// Goodsell; Timothy Goodsell") gets backfilled. The `tags` field mapping in
-// fileUtils.ts's exifFieldMapping has existed since before
-// EXIF_DESCRIPTION_BACKFILL_VERSION (3) ran, but as of 2026-08-31 zero of
-// ~195k indexed files had a non-null `tags` value even though exifr
-// correctly extracts it from real library files on demand — the one full
-// library re-scan that would have populated it (v3, for `description`) ran
-// before the extraction path worked end-to-end (and separately, IPTC segment
-// parsing was never enabled — see the `iptc: true` fix alongside this
-// migration). Re-queuing is required, not just fixing the extractor, because
-// nothing else invalidates exifProcessedAt on ordinary code changes.
-const TAGS_BACKFILL_VERSION = 6;
-
-// Columns to read for file queries. This used to exclude the embedding BLOBs
-// explicitly — each row carried a ~2 KB imageEmbedding (and audioEmbedding) that
-// no read path consumes, so `SELECT *` dragged megabytes of vector data off disk
-// per page. The vectors now live in `fileEmbeddings`, so there is nothing left on
-// `files` to exclude; the list stays explicit so a future BLOB column added here
-// has to be a deliberate choice rather than something `SELECT *` picks up.
-const FILE_QUERY_COLUMNS = tables.files.columns
-  .map((column) => column.name)
-  .join(", ");
-
-// Effective capture date used for date sorting: prefer the EXIF date, fall back
-// to filesystem timestamps. Shared by the ORDER BY builder below.
-const SORT_DATE_EXPR = "COALESCE(dateTaken, created, modified)";
-
-// Ceiling on map pins returned by one queryGeoClusters call. The caller picks a
-// bucket size for the current viewport, so a well-behaved request lands far
-// under this; the limit exists so a pathological bucket size cannot serialize an
-// unbounded result set. Buckets are ordered by count, so the densest — the ones
-// worth seeing — survive the cut, and the response's `total` still reflects
-// every matching item so the client can say the view is limited.
-const GEO_CLUSTER_LIMIT = 10_000;
-
-// Separator joining folder and fileName inside queryGeoClusters' MIN() sample
-// key. Must sort below every character a path can contain and never appear in
-// one; see the query for why both properties matter.
-const SAMPLE_KEY_SEPARATOR = "\u0001";
-
 /**
- * Build the ORDER BY clause for `queryFiles`.
- *
- * The default (date, descending) is intentionally byte-for-byte identical to the
- * previous hard-coded ordering so it stays covered end-to-end by
- * idx_files_sort_date — SQLite walks the index for the top N instead of scanning
- * and temp-sorting the whole table. Other orderings fall back to a temp-sort,
- * which is acceptable for the less common cases.
- *
- * `relevance` is a semantic-search concept with no meaning for a plain library
- * query, so it degrades to the date ordering here.
+ * The index database: one SQLite file behind a facade over focused stores.
+ * Each query lives in the store that owns its table or concern (see
+ * indexDatabase/README.md); the methods below only delegate, so callers keep
+ * writing `database.addFile(...)`. The stores are public for callers that want
+ * the namespaced form, as `faces`, `faceClusters`, `moments`, `places` and
+ * `analysis` always have been.
  */
-const buildQueryOrderBy = (sort?: SortOption): string => {
-  const dir = sort?.direction === "asc" ? "ASC" : "DESC";
-  const tiebreak = "folder ASC, fileName ASC";
-
-  if (sort?.field === "rating") {
-    // Unrated files (NULL) always sink to the bottom regardless of direction;
-    // among rated files, order by the requested direction, then newest-first.
-    return `rating IS NULL, rating ${dir}, ${SORT_DATE_EXPR} DESC, ${tiebreak}`;
-  }
-
-  if (sort?.field === "quality") {
-    // Same NULL-always-last treatment as rating: a photo with no scored faces
-    // has no quality signal at all, which is not the same as "bad quality", so
-    // it must not win an ascending ("worst first") sort either.
-    return `photoQualityScore IS NULL, photoQualityScore ${dir}, ${SORT_DATE_EXPR} DESC, ${tiebreak}`;
-  }
-
-  if (dir === "ASC") {
-    // Ascending needs an explicit NULL guard: a plain ASC sorts NULL dates first,
-    // but files with no known date belong at the end in either direction.
-    return `${SORT_DATE_EXPR} IS NULL, ${SORT_DATE_EXPR} ASC, ${tiebreak}`;
-  }
-
-  // Newest first. A DESC ordering already sorts NULL effective-dates last, so no
-  // separate IS NULL term is needed — and this exact shape is index-covered.
-  return `${SORT_DATE_EXPR} DESC, ${tiebreak}`;
-};
-
-const filesNeedingMetadataUpdateFilter = (
-  metadataGroupName: keyof typeof MetadataGroups,
-) => {
-  const base = `${metadataGroupName}ProcessedAt IS NULL OR ${metadataGroupName}ProcessedAt < modified`;
-  // Face detection only applies to images. Other metadata groups still cover
-  // both images and videos.
-  if (metadataGroupName === "faces") {
-    return `(${base}) AND mimeType LIKE 'image/%'`;
-  }
-  return base;
-};
-
-type StatusCounts = {
-  allEntries: number;
-  imageEntries: number;
-  videoEntries: number;
-  missingFileMetadata: number;
-  missingMediaMetadata: number;
-  missingThumbnails: number;
-  missingFaceDetection: number;
-};
-
 export class IndexDatabase {
   public readonly storagePath: string;
   private readonly db: AsyncSqlite;
   private readonly dbFilePath: string;
-  private walCheckpointTimer?: ReturnType<typeof setInterval>;
   // In-memory copy of every CLIP/CLAP vector, so semantic search is one pass
   // over packed memory instead of a full-table SQL scan. Every write to
-  // `fileEmbeddings` below is mirrored into it after the write commits.
+  // `fileEmbeddings` is mirrored into it after the write commits.
   private vectorIndex!: VectorIndex;
-  // The status counts come from a full-table-scan aggregate. Every active
-  // background task asks for them on each status poll, and the status SSE stream
-  // polls a few times a second, so without coordination the same heavy scan runs
-  // repeatedly while the DB is already busy indexing. De-duplicate concurrent
-  // callers onto a single scan, and briefly cache the result. All callers are
-  // progress-display getStatus() methods where sub-second staleness is invisible,
-  // so a short TTL bounds the load without any user-visible effect.
-  private statusCountsInflight?: Promise<StatusCounts>;
-  private statusCountsCache?: { value: StatusCounts; at: number };
-  private static readonly STATUS_COUNTS_TTL_MS = 1_000;
   // Off-critical-path startup work kicked off by init() (one-time face-cluster
   // migrations + PCA warm). init() resolves without awaiting it so the HTTP
   // server binds immediately; tests can await this to observe the settled state.
   startupMaintenance: Promise<void> = Promise.resolve();
-  // Cached decode of the `settings` row for the default exclusion filter
-  // (feedback #95) — read on nearly every /api/files request, so this avoids
-  // a DB round trip + JSON.parse per request. `undefined` means "not loaded
-  // yet"; `null` means "loaded, no filter set". Invalidated by
-  // setDefaultExclusionFilter.
-  private defaultExclusionFilterCache: QueryOptions["filter"] | null | undefined =
-    undefined;
   // Small aggregates over the whole filtered library, kept until the next
   // write: the grid's total, folder lists, the date histogram and date range.
   // The grid asks for the same total with every page it loads, and counting is
   // the expensive half of that query (a pass over every file, against an
   // index-ordered read of 200). Cached results are shared: read-only.
   private aggregateCache!: WriteInvalidatedCache;
+  private exifBackfills!: ExifBackfills;
+  files!: FileStore;
+  fileQueries!: FileQueryStore;
+  stats!: StatsStore;
+  suggestions!: SuggestionStore;
+  geo!: GeoStore;
+  tasks!: TaskQueueStore;
+  maintenance!: MaintenanceStore;
   // Incremental face clustering: assignments are persisted on the faces rows
   // and centroids in the faceClusters table, so People queries are plain
-  // indexed reads. See faceClusterEngine.ts.
+  // indexed reads. See people/store/faceClusterEngine.ts.
   faces!: FaceStore;
   faceClusters!: FaceClusterStore;
   moments!: MomentStore;
@@ -243,19 +117,22 @@ export class IndexDatabase {
     // Must run on the critical path (before tasks start) so the EXIF task
     // sees the re-queued HEIC files on its first iteration rather than
     // completing with 0 items before this migration fires off-path.
-    await this.backfillHeicEmbeddedVideoDetection();
-    await this.backfillTags();
-
     this.aggregateCache = new WriteInvalidatedCache(() => this.db.writeGeneration, 256);
+    this.stats = new StatsStore(this.db, this.aggregateCache);
+    this.exifBackfills = new ExifBackfills(this.db, () =>
+      this.stats.invalidateStatusCountsCache(),
+    );
+    await this.exifBackfills.backfillHeicEmbeddedVideoDetection();
+    await this.exifBackfills.backfillTags();
 
     const faceClusterEngine = new FaceClusterEngine(this.db);
     this.faceClusters = new FaceClusterStore(this.db, faceClusterEngine, () =>
-      this.invalidateStatusCountsCache(),
+      this.stats.invalidateStatusCountsCache(),
     );
     this.faces = new FaceStore(
       this.db,
       faceClusterEngine,
-      () => this.invalidateStatusCountsCache(),
+      () => this.stats.invalidateStatusCountsCache(),
       () => this.faceClusters.invalidateFaceClusterPCACache(),
     );
     this.moments = new MomentStore(this.db);
@@ -265,6 +142,17 @@ export class IndexDatabase {
     // it finishes simply waits for it, since the worker handles requests in order.
     this.vectorIndex = new VectorIndex(this.dbFilePath);
     this.analysis = new AnalysisStore(this.db, this.vectorIndex);
+    this.files = new FileStore(
+      this.db,
+      this.vectorIndex,
+      () => this.stats.invalidateStatusCountsCache(),
+      () => this.faceClusters.invalidateFaceClusterPCACache(),
+    );
+    this.fileQueries = new FileQueryStore(this.db, this.aggregateCache);
+    this.suggestions = new SuggestionStore(this.db);
+    this.geo = new GeoStore(this.db);
+    this.tasks = new TaskQueueStore(this.db);
+    this.maintenance = new MaintenanceStore(this.db, this.dbFilePath);
     const loadStarted = Date.now();
     void this.vectorIndex.loaded.then(
       (counts) => log.info({ ...counts, ms: Date.now() - loadStarted }, "Vector index loaded"),
@@ -275,8 +163,8 @@ export class IndexDatabase {
 
     // Clean up any leftover zombie WAL from the previous run before starting
     // the periodic maintenance timer.
-    await this.checkpointWal();
-    this.startWalMaintenance();
+    await this.maintenance.checkpointWal();
+    this.maintenance.startWalMaintenance();
 
     // Everything below is startup *maintenance*, not a precondition for serving
     // requests, so it runs off the critical path: init() resolves as soon as the
@@ -298,7 +186,7 @@ export class IndexDatabase {
       await this.faceClusters.rescoreMergedClusterSimilarities();
       // Queue an EXIF re-scan of already-processed images so the new
       // human-authored `description` column gets backfilled from their headers.
-      await this.backfillExifDescriptions();
+      await this.exifBackfills.backfillExifDescriptions();
       // Return faces scored by a superseded attribute derivation to the
       // backfill queue. No-op unless FACE_ATTRIBUTE_VERSION moved.
       await this.faces.resetStaleFaceAttributes();
@@ -310,20 +198,6 @@ export class IndexDatabase {
     });
   }
 
-  // Passive autocheckpoints (wal_autocheckpoint) abort whenever a reader holds a
-  // snapshot. The dedicated read connection services a near-constant stream of
-  // background queries, so passive checkpoints get starved and the WAL grows
-  // without bound (observed at ~1 GB). A periodic TRUNCATE checkpoint on the
-  // write connection writes committed frames back into the main DB and resets
-  // the WAL file during the gaps between readers.
-  private startWalMaintenance(): void {
-    const intervalMs = config().db.walCheckpointIntervalMs;
-    if (intervalMs === 0) return;
-    this.walCheckpointTimer = setInterval(() => {
-      void this.checkpointWal();
-    }, intervalMs);
-    this.walCheckpointTimer.unref?.();
-  }
 
   /**
    * Stop the WAL timer and the worker threads. The server never calls this (it
@@ -332,8 +206,7 @@ export class IndexDatabase {
    * after the work is done. A single jest file runs in-process and hangs that way.
    */
   async close(): Promise<void> {
-    if (this.walCheckpointTimer) clearInterval(this.walCheckpointTimer);
-    this.walCheckpointTimer = undefined;
+    this.maintenance?.stopWalMaintenance();
     // Maintenance still running would fail mid-query once the workers are gone.
     // It never rejects: it logs its own failure.
     await this.startupMaintenance;
@@ -341,1209 +214,6 @@ export class IndexDatabase {
     await (this.vectorIndex as VectorIndex | undefined)?.close();
     await this.db.close();
   }
-
-  /**
-   * Write back reclaimable WAL frames and physically truncate the WAL file.
-   *
-   * TRUNCATE mode checkpoints all frames AND resets the WAL write position to
-   * frame 0, but only if no reader holds a WAL snapshot at that moment. The
-   * long-lived read worker holds an SHM lock for the lifetime of its
-   * connection, so TRUNCATE is blocked whenever the read worker is mid-query.
-   * Retrying with short gaps gives the checkpoint a window between read-query
-   * batches (which last milliseconds) to grab the lock and physically shrink
-   * the file. Without physical truncation, SQLite keeps the WAL at its peak
-   * high-water mark even after all frames are checkpointed.
-   */
-  async checkpointWal(): Promise<void> {
-    const maxAttempts = 5;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const result = await this.db.getFromWriteWorker<{
-          busy: number;
-          log: number;
-          checkpointed: number;
-        }>("PRAGMA wal_checkpoint(TRUNCATE)");
-        if (result && result.busy === 0) return;
-      } catch (err) {
-        log.warn({ err }, "WAL checkpoint failed");
-        return;
-      }
-      if (attempt < maxAttempts - 1) {
-        await new Promise<void>((r) => setTimeout(r, 50));
-      }
-    }
-  }
-
-  private async runInsert(
-    columns: { names: string[]; values: unknown[] },
-    options: { mode: "insert" | "replace"; errorContext: string },
-  ): Promise<void> {
-    const { mode, errorContext } = options;
-    if (columns.names.length !== columns.values.length) {
-      throw new Error(
-        `SQL parameter mismatch for ${errorContext}: ${columns.names.length} column names but ${columns.values.length} values. ` +
-          `Columns: ${columns.names.join(", ")}. Values: ${JSON.stringify(columns.values)}`,
-      );
-    }
-
-    const placeholders = columns.values.map(() => "?").join(", ");
-    let sql: string;
-    if (mode === "replace") {
-      // Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE.
-      // INSERT OR REPLACE is DELETE + INSERT, which fragments the B-tree badly
-      // on repeated updates (observed: 14 GB for ~650 MB of actual data).
-      // ON CONFLICT DO UPDATE is an in-place update — no rowid change, no dead pages.
-      const updateCols = columns.names
-        .filter((n) => n !== "folder" && n !== "fileName")
-        .map((n) => `${n} = excluded.${n}`)
-        .join(", ");
-      const conflictAction = updateCols ? `DO UPDATE SET ${updateCols}` : `DO NOTHING`;
-      sql = `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders}) ON CONFLICT(folder, fileName) ${conflictAction}`;
-    } else {
-      sql = `INSERT INTO files (${columns.names.join(", ")}) VALUES (${placeholders})`;
-    }
-    await this.db.run(sql, ...columns.values);
-    this.invalidateStatusCountsCache();
-  }
-
-  private async countEntries(whereClause?: string): Promise<number> {
-    const sql = whereClause
-      ? `SELECT COUNT(*) as count FROM files WHERE ${whereClause}`
-      : "SELECT COUNT(*) as count FROM files";
-    const row = await this.db.get<{ count: number }>(sql);
-    return row?.count ?? 0;
-  }
-
-  async addFile(fileData: FileRecord): Promise<void> {
-    const columns = fileRecordToColumnNamesAndValues(fileData);
-    await this.runInsert(columns, {
-      mode: "replace",
-      errorContext: `${fileData.folder}${fileData.fileName}`,
-    });
-  }
-
-  /** Moves a file record (and all related rows) to a new path. Returns false if the source is not in the database. */
-  async moveFile(oldRelativePath: string, newRelativePath: string): Promise<boolean> {
-    const { folder: oldFolder, fileName: oldFile } = splitPath(oldRelativePath);
-    const { folder: newFolder, fileName: newFile } = splitPath(newRelativePath);
-
-    const result = await this.db.run(
-      "UPDATE files SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
-      [newFolder, newFile, oldFolder, oldFile],
-    );
-    if (result.changes === 0) return false;
-
-    await this.db.transaction([
-      {
-        sql: "UPDATE faces SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
-        params: [newFolder, newFile, oldFolder, oldFile],
-      },
-      {
-        sql: "UPDATE audioSegments SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
-        params: [newFolder, newFile, oldFolder, oldFile],
-      },
-      {
-        // fileEmbeddings is keyed by (folder, fileName), so a move has to carry
-        // the row across or the file silently loses its CLIP vectors and drops
-        // out of semantic search. faceEmbeddings is keyed by faceId and needs no
-        // update — the `faces` rename above is enough.
-        sql: "UPDATE fileEmbeddings SET folder = ?, fileName = ? WHERE folder = ? AND fileName = ?",
-        params: [newFolder, newFile, oldFolder, oldFile],
-      },
-    ]);
-    await this.vectorIndex.move(
-      { folder: oldFolder, fileName: oldFile },
-      { folder: newFolder, fileName: newFile },
-    );
-    return true;
-  }
-
-  async addOrUpdateFileData(
-    relativePath: string,
-    fileData: Partial<FileRecord> & { facesLastErrorAt?: string | null },
-  ): Promise<void> {
-    const { folder, fileName } = splitPath(relativePath);
-    const execute = async () => {
-      const row = await this.db.get<Record<string, string | number | null>>(
-        "SELECT * FROM files WHERE folder = ? AND fileName = ?",
-        folder,
-        fileName,
-      );
-      // The raw row stores JSON columns (tags, personInImage, regions, aiTags) as
-      // strings. They must be parsed back into values before merging, otherwise
-      // fileRecordToColumnNamesAndValues re-stringifies the existing string and
-      // double-encodes it — which, repeated across every face/embedding write,
-      // grows these columns exponentially (escaped-quote blobs into the MBs).
-      const existing: FileRecord = row
-        ? rowToFileRecord(row)
-        : { folder, fileName, mimeType: mimeTypeForFilename(relativePath) };
-      const updatedEntry = {
-        ...existing,
-        ...fileData,
-      };
-      const columns = fileRecordToColumnNamesAndValues(updatedEntry);
-      await this.runInsert(columns, {
-        mode: "replace",
-        errorContext: relativePath,
-      });
-    };
-
-    await this.runWithRetry(execute);
-  }
-
-  /**
-   * Updates only the user-editable tagging columns (`rating`, `tags`,
-   * `description`) on an existing file row. Written as a targeted UPDATE of just
-   * the provided columns — not through fileRecordToColumnNamesAndValues — so it
-   * never touches (and therefore never clobbers) the EXIF/AI/face columns, and
-   * doesn't depend on exifProcessedAt being set. Returns false if no matching
-   * row exists.
-   *
-   * `description` is dual-purpose like `rating`/`tags`: EXIF processing seeds it
-   * from the file's embedded caption (if any) on first scan, and an in-app edit
-   * here simply overlays/replaces that value going forward (marked dirty for a
-   * future writeback task, same as rating/tags). The file itself is never
-   * touched — this is a DB-only edit.
-   */
-  /**
-   * Stores a generated AI description (feedback #148). A single-column UPDATE,
-   * like updateUserMetadata, so a slow generation landing late can never
-   * clobber columns another writer changed meanwhile. Not a user edit, so it
-   * leaves userMetadataDirtyAt alone.
-   */
-  async setAiDescription(relativePath: string, aiDescription: string): Promise<boolean> {
-    const { folder, fileName } = splitPath(relativePath);
-    const result = await this.runWithRetry(() =>
-      this.db.run("UPDATE files SET aiDescription = ? WHERE folder = ? AND fileName = ?", [
-        aiDescription,
-        folder,
-        fileName,
-      ]),
-    );
-    return result.changes > 0;
-  }
-
-  async updateUserMetadata(
-    relativePath: string,
-    patch: {
-      rating?: number | null;
-      tags?: string[];
-      editAdj?: string | null;
-      description?: string | null;
-    },
-  ): Promise<boolean> {
-    const { folder, fileName } = splitPath(relativePath);
-    const sets: string[] = [];
-    const params: (string | number | null)[] = [];
-
-    if ("rating" in patch) {
-      const r = patch.rating;
-      // Ratings are 1–5; 0/null/negative all mean "unrated" and store as NULL so
-      // the rating filter and MIN/MAX aggregates treat them consistently.
-      const normalized =
-        typeof r === "number" && Number.isFinite(r) && r > 0
-          ? Math.min(5, Math.round(r))
-          : null;
-      sets.push("rating = ?");
-      params.push(normalized);
-    }
-
-    if ("tags" in patch) {
-      const tags = Array.isArray(patch.tags)
-        ? [...new Set(patch.tags.map((t) => String(t).trim()).filter(Boolean))]
-        : [];
-      sets.push("tags = ?");
-      params.push(tags.length > 0 ? JSON.stringify(tags) : null);
-    }
-
-    if ("editAdj" in patch) {
-      sets.push("editAdj = ?");
-      params.push(patch.editAdj ?? null);
-    }
-
-    if ("description" in patch) {
-      const d = patch.description;
-      const normalized = typeof d === "string" ? d.trim() : "";
-      sets.push("description = ?");
-      params.push(normalized.length > 0 ? normalized : null);
-    }
-
-    if (sets.length === 0) return false;
-
-    // Mark the row as carrying in-app edits so a future writeback task can find
-    // it. The files themselves stay read-only; this is purely a DB-side marker.
-    sets.push("userMetadataDirtyAt = ?");
-    params.push(Date.now());
-
-    const result = await this.runWithRetry(() =>
-      this.db.run(
-        `UPDATE files SET ${sets.join(", ")} WHERE folder = ? AND fileName = ?`,
-        [...params, folder, fileName],
-      ),
-    );
-    return result.changes > 0;
-  }
-
-  /**
-   * Lists rows carrying in-app rating/tag edits not yet written back to their
-   * files (userMetadataDirtyAt IS NOT NULL). Intended for a future writeback
-   * task; the files are never modified today.
-   */
-  async getFilesPendingMetadataWriteback(
-    limit = 500,
-  ): Promise<
-    Array<{
-      path: string;
-      rating: number | null;
-      tags: string[];
-      description: string | null;
-      dirtyAt: number;
-    }>
-  > {
-    const rows = await this.db.all<{
-      folder: string;
-      fileName: string;
-      rating: number | null;
-      tags: string | null;
-      description: string | null;
-      userMetadataDirtyAt: number;
-    }>(
-      `SELECT folder, fileName, rating, tags, description, userMetadataDirtyAt
-       FROM files
-       WHERE userMetadataDirtyAt IS NOT NULL
-       ORDER BY userMetadataDirtyAt ASC
-       LIMIT ?`,
-      limit,
-    );
-    return rows.map((row) => {
-      const parsed = row.tags ? attemptSync((): unknown => JSON.parse(row.tags as string)) : null;
-      if (parsed && !parsed.ok) {
-        log.warn({ err: parsed.error, folder: row.folder, fileName: row.fileName }, "Unreadable tags; writing back none");
-      }
-      const tags =
-        parsed?.ok && Array.isArray(parsed.value)
-          ? parsed.value.filter((t): t is string => typeof t === "string")
-          : [];
-      return {
-        path: `${row.folder}${row.fileName}`,
-        rating: row.rating,
-        tags,
-        description: row.description,
-        dirtyAt: row.userMetadataDirtyAt,
-      };
-    });
-  }
-
-  /** Clears the writeback marker after a file's metadata has been persisted. */
-  async clearMetadataWriteback(relativePath: string): Promise<boolean> {
-    const { folder, fileName } = splitPath(relativePath);
-    const result = await this.runWithRetry(() =>
-      this.db.run(
-        "UPDATE files SET userMetadataDirtyAt = NULL WHERE folder = ? AND fileName = ?",
-        [folder, fileName],
-      ),
-    );
-    return result.changes > 0;
-  }
-
-  async getFileRecord(
-    relativePath: string,
-    _fields?: string[],
-  ): Promise<FileRecord | undefined> {
-    const { folder, fileName } = splitPath(relativePath);
-    const row = await this.db.get<Record<string, string | number>>(
-      "SELECT * FROM files WHERE folder = ? AND fileName = ?",
-      folder,
-      fileName,
-    );
-    if (!row) {
-      return undefined;
-    }
-
-    return rowToFileRecord(row);
-  }
-
-  async fileMatchesFilter(subPath: string, filter: FilterElement): Promise<boolean> {
-    const { folder, fileName } = splitPath(subPath);
-    const combined: FilterElement = {
-      operation: "and",
-      conditions: [filter, { folder, fileName }],
-    };
-    const { where, params } = filterToSQL(combined);
-    const result = await this.db.get<{ count: number }>(
-      `SELECT COUNT(*) as count FROM files${where ? ` WHERE ${where}` : ""}`,
-      ...params,
-    );
-    return (result?.count ?? 0) > 0;
-  }
-
-  async countMissingInfo(): Promise<number> {
-    return this.countEntries(
-      "sizeInBytes IS NULL OR created IS NULL OR modified IS NULL",
-    );
-  }
-
-  async countMissingDateTaken(): Promise<number> {
-    return this.countEntries(
-      "(mimeType LIKE 'image/%' OR mimeType LIKE 'video/%') AND dateTaken IS NULL AND exifProcessedAt IS NULL",
-    );
-  }
-
-  async countMediaEntries(): Promise<number> {
-    return this.countEntries("mimeType LIKE 'image/%' OR mimeType LIKE 'video/%'");
-  }
-
-  async countImageEntries(): Promise<number> {
-    return this.countEntries("mimeType LIKE 'image/%'");
-  }
-
-  async countAllEntries(): Promise<number> {
-    return this.countEntries();
-  }
-
-  async getStatusCounts(): Promise<StatusCounts> {
-    const cached = this.statusCountsCache;
-    if (cached && Date.now() - cached.at < IndexDatabase.STATUS_COUNTS_TTL_MS) {
-      return cached.value;
-    }
-    if (this.statusCountsInflight) {
-      return this.statusCountsInflight;
-    }
-
-    // Shared across concurrent callers: don't let the first caller's request
-    // abort reject the promise everyone else is awaiting.
-    this.statusCountsInflight = runWithoutRequestAbortSignal(() =>
-      this.computeStatusCounts(),
-    )
-      .then((value) => {
-        this.statusCountsCache = { value, at: Date.now() };
-        return value;
-      })
-      .finally(() => {
-        this.statusCountsInflight = undefined;
-      });
-
-    return this.statusCountsInflight;
-  }
-
-  /**
-   * Drops the memoized status counts so the next read recomputes. Called from
-   * writes that change a counted column (file add/remove, exif/variants/face
-   * processing stamps); without it a save made inside the 1s TTL window returns
-   * a stale count.
-   */
-  private invalidateStatusCountsCache(): void {
-    this.statusCountsCache = undefined;
-  }
-
-  private async computeStatusCounts(): Promise<StatusCounts> {
-    const row = await this.db.get<{
-      allEntries: number | null;
-      imageEntries: number | null;
-      videoEntries: number | null;
-      missingFileMetadata: number | null;
-      missingMediaMetadata: number | null;
-      missingThumbnails: number | null;
-      missingFaceDetection: number | null;
-    }>(
-      `SELECT
-         COUNT(*) AS allEntries,
-         SUM(CASE WHEN mimeType LIKE 'image/%' THEN 1 ELSE 0 END) AS imageEntries,
-         SUM(CASE WHEN mimeType LIKE 'video/%' THEN 1 ELSE 0 END) AS videoEntries,
-         SUM(CASE WHEN sizeInBytes IS NULL OR created IS NULL OR modified IS NULL THEN 1 ELSE 0 END) AS missingFileMetadata,
-         SUM(CASE WHEN (mimeType LIKE 'image/%' OR mimeType LIKE 'video/%') AND exifProcessedAt IS NULL THEN 1 ELSE 0 END) AS missingMediaMetadata,
-         SUM(CASE WHEN mimeType LIKE 'image/%' AND imageVariantsGeneratedAt IS NULL THEN 1 ELSE 0 END) AS missingThumbnails,
-         SUM(CASE WHEN mimeType LIKE 'image/%' AND facesProcessedAt IS NULL THEN 1 ELSE 0 END) AS missingFaceDetection
-       FROM files`,
-    );
-
-    return {
-      allEntries: row?.allEntries ?? 0,
-      imageEntries: row?.imageEntries ?? 0,
-      videoEntries: row?.videoEntries ?? 0,
-      missingFileMetadata: row?.missingFileMetadata ?? 0,
-      missingMediaMetadata: row?.missingMediaMetadata ?? 0,
-      missingThumbnails: row?.missingThumbnails ?? 0,
-      missingFaceDetection: row?.missingFaceDetection ?? 0,
-    };
-  }
-
-  async getMostRecentExifProcessedEntry(): Promise<{
-    folder: string;
-    fileName: string;
-    completedAt: string;
-  } | null> {
-    const row = await this.db.get<{
-      folder: string;
-      fileName: string;
-      exifProcessedAt: number | null;
-    }>(
-      `SELECT folder, fileName, exifProcessedAt
-       FROM files
-       WHERE exifProcessedAt IS NOT NULL
-       ORDER BY exifProcessedAt DESC
-       LIMIT 1`,
-    );
-
-    if (!row) {
-      return null;
-    }
-
-    return {
-      folder: row.folder,
-      fileName: row.fileName,
-      completedAt: new Date(row.exifProcessedAt as unknown as number).toISOString(),
-    };
-  }
-
-  async getRatingStats(): Promise<{
-    total: number;
-    rated: number;
-    unrated: number;
-    distribution: Record<string, number>;
-  }> {
-    const rows = await this.db.all<{ rating: number | null; count: number }>(
-      `SELECT rating, COUNT(*) as count
-       FROM files
-       WHERE mimeType LIKE 'image/%' OR mimeType LIKE 'video/%'
-       GROUP BY rating`,
-    );
-
-    const distribution: Record<string, number> = {};
-    let rated = 0;
-    let total = 0;
-
-    for (const row of rows) {
-      const key = row.rating === null ? "null" : String(row.rating);
-      distribution[key] = row.count;
-      total += row.count;
-      if (row.rating !== null) {
-        rated += row.count;
-      }
-    }
-
-    return {
-      total,
-      rated,
-      unrated: total - rated,
-      distribution,
-    };
-  }
-
-  async addPaths(paths: string[]): Promise<void> {
-    if (!paths.length) return;
-    const pathStatements = paths.map((relativePath) => {
-      const { folder, fileName } = splitPath(relativePath);
-      const mimeType = mimeTypeForFilename(relativePath);
-      return {
-        sql: "INSERT OR IGNORE INTO files (folder, fileName, mimeType) VALUES (?, ?, ?)",
-        params: [folder, fileName, mimeType] as unknown[],
-      };
-    });
-    await this.db.transaction(pathStatements);
-    this.invalidateStatusCountsCache();
-  }
-
-  /** Removes a file and returns success status. */
-  async removeFile(relativePath: string): Promise<boolean> {
-    const { folder, fileName } = splitPath(relativePath);
-    const result = await this.db.run(
-      "DELETE FROM files WHERE folder = ? AND fileName = ?",
-      [folder, fileName],
-    );
-    await this.db.transaction(
-      deleteFacesStatements("folder = ? AND fileName = ?", [folder, fileName]),
-    );
-    await this.db.run("DELETE FROM fileEmbeddings WHERE folder = ? AND fileName = ?", [
-      folder,
-      fileName,
-    ]);
-    await this.removeFromVectorIndex(folder, fileName);
-    await this.db.run("DELETE FROM audioSegments WHERE folder = ? AND fileName = ?", [
-      folder,
-      fileName,
-    ]);
-    this.invalidateStatusCountsCache();
-    return result.changes === 1;
-  }
-
-  /**
-   * Marks an already-indexed file as needing a full re-sync after its content
-   * changed on disk. Clears every "processed at" marker and derived artifact so
-   * the background pipeline re-derives all metadata, embeddings, and faces from
-   * scratch. Value columns (dateTaken, dimensions, etc.) are left in place so the
-   * UI keeps showing the previous data until the reprocessing overwrites it.
-   *
-   * Returns whether a matching file row existed.
-   */
-  async markFileForResync(relativePath: string): Promise<boolean> {
-    const { folder, fileName } = splitPath(relativePath);
-    // The vectors themselves live in fileEmbeddings; dropping that row is the
-    // equivalent of the old "imageEmbedding = NULL, audioEmbedding = NULL".
-    await this.db.run(
-      "DELETE FROM fileEmbeddings WHERE folder = ? AND fileName = ?",
-      folder,
-      fileName,
-    );
-    await this.removeFromVectorIndex(folder, fileName);
-    const result = await this.db.run(
-      `UPDATE files SET
-         infoProcessedAt = NULL,
-         exifProcessedAt = NULL,
-         imageVariantsGeneratedAt = NULL,
-         hlsGeneratedAt = NULL,
-         facesProcessedAt = NULL,
-         facesLastErrorAt = NULL,
-         embeddingProcessedAt = NULL,
-         embeddingErrorAt = NULL,
-         analysisDecodeErrorAt = NULL,
-         audioTranscript = NULL,
-         audioTranscribedAt = NULL,
-         audioTranscribeErrorAt = NULL,
-         audioEmbeddingProcessedAt = NULL,
-         audioEmbeddingErrorAt = NULL
-       WHERE folder = ? AND fileName = ?`,
-      [folder, fileName],
-    );
-    if (result.changes === 0) return false;
-
-    // Face/audio detections are keyed by path and describe the old content, so
-    // drop them; the analysis pass regenerates them from the new bytes.
-    await this.db.transaction(
-      deleteFacesStatements("folder = ? AND fileName = ?", [folder, fileName]),
-    );
-    await this.db.run("DELETE FROM audioSegments WHERE folder = ? AND fileName = ?", [
-      folder,
-      fileName,
-    ]);
-    this.faceClusters.invalidateFaceClusterPCACache();
-    this.invalidateStatusCountsCache();
-    return true;
-  }
-
-  async removePaths(paths: string[]): Promise<void> {
-    if (!paths.length) return;
-
-    const statements = paths.flatMap((relativePath) => {
-      const { folder, fileName } = splitPath(relativePath);
-      return [
-        {
-          sql: "DELETE FROM files WHERE folder = ? AND fileName = ?",
-          params: [folder, fileName] as unknown[],
-        },
-        ...deleteFacesStatements("folder = ? AND fileName = ?", [folder, fileName]),
-        {
-          sql: "DELETE FROM fileEmbeddings WHERE folder = ? AND fileName = ?",
-          params: [folder, fileName] as unknown[],
-        },
-        {
-          sql: "DELETE FROM audioSegments WHERE folder = ? AND fileName = ?",
-          params: [folder, fileName] as unknown[],
-        },
-      ];
-    });
-
-    await this.db.transaction(statements);
-    for (const relativePath of paths) {
-      const { folder, fileName } = splitPath(relativePath);
-      await this.removeFromVectorIndex(folder, fileName);
-    }
-    this.invalidateStatusCountsCache();
-  }
-
-  private async removeFromVectorIndex(folder: string, fileName: string): Promise<void> {
-    await this.vectorIndex.remove({ folder, fileName }, ["image", "audio", "videoFrames"]);
-  }
-
-  async removeFolder(relativePath: string): Promise<void> {
-    const base = normalizeFolderPath(relativePath);
-    const { where, params } = folderSubtreeSQL("folder", base);
-    const statements = [
-      { sql: `DELETE FROM files WHERE ${where}`, params },
-      ...deleteFacesStatements(where, params),
-      { sql: `DELETE FROM fileEmbeddings WHERE ${where}`, params },
-      { sql: `DELETE FROM audioSegments WHERE ${where}`, params },
-    ];
-    await this.db.transaction(statements);
-    await this.vectorIndex.removeFolder(base);
-    this.invalidateStatusCountsCache();
-  }
-
-  async countFilesNeedingMetadataUpdate(
-    metadataGroupName: keyof typeof MetadataGroups,
-  ): Promise<number> {
-    const row = await this.db.get<{ count: number }>(
-      `SELECT COUNT(*) as count FROM files WHERE ${filesNeedingMetadataUpdateFilter(metadataGroupName)}`,
-    );
-    return row?.count ?? 0;
-  }
-
-  async getFilesNeedingMetadataUpdate(
-    metadataGroupName: keyof typeof MetadataGroups,
-    limit = 200,
-  ): Promise<
-    Array<
-      {
-        relativePath: string;
-        mimeType: string | null;
-        sizeInBytes?: number;
-      } & { [key in `${keyof typeof MetadataGroups}ProcessedAt`]?: string | null }
-    >
-  > {
-    // Only the NULL-first branch is index-friendly. Cross-column comparison
-    // (`exifProcessedAt < modified`) requires a full table scan that freezes the
-    // synchronous read worker for many seconds on large libraries. Stale-mtime
-    // detection is handled by the rescan path instead of this hot polling loop.
-    const mimeFilter =
-      metadataGroupName === "faces"
-        ? " AND mimeType LIKE 'image/%' AND exifProcessedAt IS NOT NULL"
-        : "";
-    const orderBy =
-      metadataGroupName === "faces"
-        ? " ORDER BY facesLastErrorAt IS NOT NULL, facesLastErrorAt, folder, fileName"
-        : "";
-    const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT folder, fileName, mimeType, sizeInBytes, ${metadataGroupName}ProcessedAt FROM files
-       WHERE ${metadataGroupName}ProcessedAt IS NULL${mimeFilter}${orderBy}
-       LIMIT ?`,
-      limit,
-    );
-
-    return rows.map((row) => {
-      const relativePath = joinPath(row.folder as string, row.fileName as string);
-      const mimeType =
-        (row.mimeType as string | null) ?? mimeTypeForFilename(relativePath) ?? null;
-      const processedAt = row[metadataGroupName + "ProcessedAt"];
-
-      return {
-        relativePath,
-        mimeType,
-        sizeInBytes: typeof row.sizeInBytes === "number" ? row.sizeInBytes : undefined,
-        [metadataGroupName + "ProcessedAt"]:
-          typeof processedAt === "string" || processedAt === null
-            ? processedAt
-            : undefined,
-      };
-    });
-  }
-
-  async getImagesMissingDimensions(
-    limit = 200,
-  ): Promise<Array<{ relativePath: string }>> {
-    const rows = await this.db.all<{ folder: string; fileName: string }>(
-      `SELECT folder, fileName FROM files
-       WHERE mimeType LIKE 'image/%'
-         AND exifProcessedAt IS NOT NULL
-         AND dimensionsWidth IS NULL
-       LIMIT ?`,
-      limit,
-    );
-    return rows.map((row) => ({
-      relativePath: joinPath(row.folder, row.fileName),
-    }));
-  }
-
-  /**
-   * Returns the canonical relativePaths of every indexed file, optionally
-   * scoped to a subfolder. Used to reconcile the index against the filesystem
-   * so entries for moved/deleted files can be pruned.
-   */
-  async getIndexedPaths(subFolder?: string): Promise<string[]> {
-    const { where, params } = folderSubtreeSQL("folder", subFolder ?? "/");
-    const rows = await this.db.all<{ folder: string; fileName: string }>(
-      `SELECT folder, fileName FROM files WHERE ${where}`,
-      ...params,
-    );
-    return rows.map((row) => joinPath(row.folder, row.fileName));
-  }
-
-  async getFolders(
-    relativePath: string,
-    filter: FilterElement = {},
-  ): Promise<Array<{ name: string; count: number }>> {
-    const base = normalizeFolderPath(relativePath);
-    const { where, params } = filterToSQL(filter);
-    return this.aggregateCache.get(queryCacheKey(`folders\u0000${base}\u0000${where}`, params), () =>
-      this.computeFolders(base, where, params),
-    );
-  }
-
-  private async computeFolders(
-    base: string,
-    whereClause: string,
-    whereParams: ReturnType<typeof filterToSQL>["params"],
-  ): Promise<Array<{ name: string; count: number }>> {
-    const whereFragment = whereClause ? `AND (${whereClause})` : "";
-
-    if (base === "/") {
-      const rows = await this.db.all<{ folderName: string | null; count: number }>(
-        `SELECT
-          CASE 
-          WHEN instr(substr(folder, 2), '/') > 0 
-          THEN substr(folder, 2, instr(substr(folder, 2), '/') - 1)
-          ELSE substr(folder, 2)
-          END AS folderName,
-          COUNT(*) AS count
-        FROM files
-        WHERE folder LIKE '/%' AND length(folder) > 1
-          ${whereFragment}
-        GROUP BY folderName
-        ORDER BY folderName COLLATE NOCASE ASC`,
-        ...whereParams,
-      );
-      return rows
-        .filter(
-          (row): row is { folderName: string; count: number } =>
-            Boolean(row.folderName) && Number.isFinite(row.count),
-        )
-        .map((row) => ({ name: row.folderName, count: row.count }));
-    }
-
-    const subtree = folderSubtreeSQL("folder", base);
-    const prefixLen = base.length;
-    const rows = await this.db.all<{ folderName: string | null; count: number }>(
-      `SELECT
-         substr(folder, ?, instr(substr(folder, ?), '/') - 1) AS folderName,
-         COUNT(*) AS count
-       FROM files
-       WHERE ${subtree.where}
-          AND length(folder) > ?
-          AND instr(substr(folder, ?), '/') > 0
-          ${whereFragment}
-       GROUP BY folderName
-       ORDER BY folderName COLLATE NOCASE ASC`,
-      prefixLen + 1,
-      prefixLen + 1,
-      ...subtree.params,
-      prefixLen,
-      prefixLen + 1,
-      ...whereParams,
-    );
-    return rows
-      .filter(
-        (row): row is { folderName: string; count: number } =>
-          Boolean(row.folderName) && Number.isFinite(row.count),
-      )
-      .map((row) => ({ name: row.folderName, count: row.count }));
-  }
-
-  async queryFieldSuggestions(options: {
-    field:
-      | "personInImage"
-      | "tags"
-      | "aiTags"
-      | "cameraMake"
-      | "cameraModel"
-      | "lens"
-      | "rating";
-    search: string;
-    filter: FilterElement;
-    limit?: number;
-  }): Promise<string[]> {
-    const { field, search, filter } = options;
-    const limit = Math.max(1, Math.min(100, options.limit ?? 8));
-    const normalizedSearch = search.trim();
-
-    const { where: whereClause, params: whereParams } = filterToSQL(filter);
-    const likeQuery =
-      normalizedSearch.length === 0 ? "%" : `%${escapeLikeLiteral(normalizedSearch)}%`;
-    const whereFragment = whereClause ? `AND (${whereClause})` : "";
-
-    if (field === "personInImage" || field === "tags" || field === "aiTags") {
-      const rows = await this.db.all<{ suggestion: string }>(
-        `SELECT DISTINCT json_each.value AS suggestion
-         FROM files, json_each(${field})
-         WHERE files.${field} IS NOT NULL
-           AND json_each.value IS NOT NULL
-           AND json_each.value != ''
-           AND json_each.value LIKE ? ESCAPE '\\'
-           ${whereFragment}
-         ORDER BY suggestion COLLATE NOCASE ASC
-         LIMIT ?`,
-        likeQuery,
-        ...whereParams,
-        limit,
-      );
-
-      return rows
-        .map((row) => row.suggestion)
-        .filter((value) => typeof value === "string" && value.length > 0);
-    }
-
-    if (field === "rating") {
-      const rows = await this.db.all<{ suggestion: string }>(
-        `SELECT DISTINCT CAST(rating AS TEXT) AS suggestion
-         FROM files
-         WHERE rating IS NOT NULL
-           AND CAST(rating AS TEXT) LIKE ? ESCAPE '\\'
-           ${whereFragment}
-         ORDER BY CAST(suggestion AS INTEGER) DESC
-         LIMIT ?`,
-        likeQuery,
-        ...whereParams,
-        limit,
-      );
-
-      return rows
-        .map((row) => row.suggestion)
-        .filter((value) => typeof value === "string" && value.length > 0);
-    }
-
-    const rows = await this.db.all<{ suggestion: string }>(
-      `SELECT DISTINCT ${field} AS suggestion
-       FROM files
-       WHERE ${field} IS NOT NULL
-         AND ${field} != ''
-         AND ${field} LIKE ? ESCAPE '\\'
-         ${whereFragment}
-       ORDER BY suggestion COLLATE NOCASE ASC
-       LIMIT ?`,
-      likeQuery,
-      ...whereParams,
-      limit,
-    );
-
-    return rows
-      .map((row) => row.suggestion)
-      .filter((value) => typeof value === "string" && value.length > 0);
-  }
-
-  async queryFieldSuggestionsWithCounts(options: {
-    field:
-      | "personInImage"
-      | "tags"
-      | "aiTags"
-      | "cameraMake"
-      | "cameraModel"
-      | "lens"
-      | "rating";
-    search: string;
-    filter: FilterElement;
-    limit?: number;
-  }): Promise<Array<{ value: string; count: number }>> {
-    const { field, search, filter } = options;
-    const limit = Math.max(1, Math.min(100, options.limit ?? 8));
-    const normalizedSearch = search.trim();
-
-    const { where: whereClause, params: whereParams } = filterToSQL(filter);
-    const likeQuery =
-      normalizedSearch.length === 0 ? "%" : `%${escapeLikeLiteral(normalizedSearch)}%`;
-    const whereFragment = whereClause ? `AND (${whereClause})` : "";
-
-    if (field === "personInImage" || field === "tags" || field === "aiTags") {
-      const rows = await this.db.all<{
-        suggestion: string;
-        count: number;
-      }>(
-        `SELECT
-             json_each.value AS suggestion,
-             COUNT(DISTINCT files.folder || files.fileName) AS count
-           FROM files, json_each(${field})
-           WHERE files.${field} IS NOT NULL
-             AND json_each.value IS NOT NULL
-             AND json_each.value != ''
-             AND json_each.value LIKE ? ESCAPE '\\'
-             ${whereFragment}
-           GROUP BY json_each.value
-           ORDER BY count DESC, suggestion COLLATE NOCASE ASC
-           LIMIT ?`,
-        likeQuery,
-        ...whereParams,
-        limit,
-      );
-
-      return rows
-        .filter(
-          (row) =>
-            typeof row.suggestion === "string" &&
-            row.suggestion.length > 0 &&
-            Number.isFinite(row.count),
-        )
-        .map((row) => ({ value: row.suggestion, count: row.count }));
-    }
-
-    if (field === "rating") {
-      const rows = await this.db.all<{ suggestion: string; count: number }>(
-        `SELECT
-             CAST(rating AS TEXT) AS suggestion,
-             COUNT(*) AS count
-           FROM files
-           WHERE rating IS NOT NULL
-             AND CAST(rating AS TEXT) LIKE ? ESCAPE '\\'
-             ${whereFragment}
-           GROUP BY rating
-           ORDER BY CAST(suggestion AS INTEGER) DESC
-           LIMIT ?`,
-        likeQuery,
-        ...whereParams,
-        limit,
-      );
-
-      return rows
-        .filter(
-          (row) =>
-            typeof row.suggestion === "string" &&
-            row.suggestion.length > 0 &&
-            Number.isFinite(row.count),
-        )
-        .map((row) => ({ value: row.suggestion, count: row.count }));
-    }
-
-    const rows = await this.db.all<{ suggestion: string; count: number }>(
-      `SELECT
-           ${field} AS suggestion,
-           COUNT(*) AS count
-         FROM files
-         WHERE ${field} IS NOT NULL
-           AND ${field} != ''
-           AND ${field} LIKE ? ESCAPE '\\'
-           ${whereFragment}
-         GROUP BY ${field}
-         ORDER BY count DESC, suggestion COLLATE NOCASE ASC
-         LIMIT ?`,
-      likeQuery,
-      ...whereParams,
-      limit,
-    );
-
-    return rows
-      .filter(
-        (row) =>
-          typeof row.suggestion === "string" &&
-          row.suggestion.length > 0 &&
-          Number.isFinite(row.count),
-      )
-      .map((row) => ({ value: row.suggestion, count: row.count }));
-  }
-
-  async queryGeoClusters(options: {
-    filter: QueryOptions["filter"];
-    clusterSize: number;
-    bounds?: { west: number; east: number; north: number; south: number } | null;
-    limit?: number;
-  }): Promise<GeoClusterResult> {
-    const { filter, clusterSize, bounds, limit = GEO_CLUSTER_LIMIT } = options;
-    const { where: whereClause, params: whereParams } = filterToSQL(filter);
-    const bucket = Math.max(clusterSize, 0.00000001);
-    const latOrigin = Math.floor((bounds?.south ?? 0) / bucket) * bucket;
-    const lonOrigin = Math.floor((bounds?.west ?? 0) / bucket) * bucket;
-
-    const rows = await this.db.all<{
-      latitude: number;
-      longitude: number;
-      count: number;
-      sampleKey: string | null;
-      minDate: number | null;
-      maxDate: number | null;
-      totalCount: number | null;
-    }>(
-      // One pass: bucket, aggregate, done. An earlier version added a second
-      // ROW_NUMBER() pass over every geotagged row and joined it back just to
-      // pick each bucket's sample file; a MIN() over the joined columns picks
-      // the same row directly, for half the time on the 191k-row library.
-      //
-      // The CHAR(1) separator is what makes that substitution exact. Plain
-      // `folder || fileName` compares the two as one string, which disagrees
-      // with ORDER BY folder, fileName whenever one folder is a prefix of
-      // another ("/IMG.JPG" vs "/2014/.../x.jpg"). CHAR(1) sorts below every
-      // character that can appear in a path, so the concatenation orders exactly
-      // as the column pair did — and since no path contains it, splitting on it
-      // recovers folder and fileName unambiguously. They are split here rather
-      // than selected as bare columns because SQLite only pins bare columns to
-      // the min/max row when the query has exactly one min()/max() aggregate;
-      // this one has three.
-      //
-      // `sortDate` mirrors the library's default ordering (dateTaken, falling
-      // back to created/modified). The typeof(...) = 'integer' guards keep rows
-      // whose date was ingested as a TEXT/ISO string out of MIN/MAX — SQLite
-      // sorts TEXT above every INTEGER, so one stray string poisons the max
-      // (same hazard getDateRange guards against).
-      //
-      // totalCount is a window function, so it sums every bucket's count before
-      // LIMIT trims the result — that is what lets the caller tell a complete
-      // answer from a truncated one.
-      `SELECT
-         (latBucket + 0.5) * ? + ? AS latitude,
-         (lonBucket + 0.5) * ? + ? AS longitude,
-         count,
-         minDate,
-         maxDate,
-         sampleKey,
-         SUM(count) OVER () AS totalCount
-       FROM (
-         SELECT
-           CAST(FLOOR((locationLatitude - ?) / ?) AS INTEGER) AS latBucket,
-           CAST(FLOOR((locationLongitude - ?) / ?) AS INTEGER) AS lonBucket,
-           COUNT(*) AS count,
-           MIN(CASE
-             WHEN typeof(dateTaken) = 'integer' THEN dateTaken
-             WHEN typeof(created) = 'integer' THEN created
-             WHEN typeof(modified) = 'integer' THEN modified
-           END) AS minDate,
-           MAX(CASE
-             WHEN typeof(dateTaken) = 'integer' THEN dateTaken
-             WHEN typeof(created) = 'integer' THEN created
-             WHEN typeof(modified) = 'integer' THEN modified
-           END) AS maxDate,
-           MIN(folder || CHAR(1) || fileName) AS sampleKey
-         FROM files
-         WHERE locationLatitude IS NOT NULL
-           AND locationLongitude IS NOT NULL
-           ${whereClause ? `AND ${whereClause}` : ""}
-         GROUP BY latBucket, lonBucket
-       )
-       ORDER BY count DESC
-       LIMIT ?`,
-      bucket,
-      latOrigin,
-      bucket,
-      lonOrigin,
-      latOrigin,
-      bucket,
-      lonOrigin,
-      bucket,
-      ...whereParams,
-      limit,
-    );
-
-    // Every row carries the same window-function total; with no rows there is
-    // nothing to count.
-    const total = rows[0]?.totalCount ?? 0;
-
-    return {
-      clusters: rows.map(({ totalCount: _totalCount, sampleKey, ...row }) => {
-        const separator = sampleKey?.indexOf(SAMPLE_KEY_SEPARATOR) ?? -1;
-        return {
-          ...row,
-          samplePath:
-            separator === -1 ? null : sampleKey!.replace(SAMPLE_KEY_SEPARATOR, ""),
-          sampleName: separator === -1 ? null : sampleKey!.slice(separator + 1),
-        };
-      }),
-      total,
-    };
-  }
-
-  /**
-   * One-time migration (gated by PRAGMA user_version) that re-queues images for
-   * EXIF extraction so the newly-added human-authored `description` column is
-   * backfilled from their file headers. Images scanned before the column existed
-   * carry a non-null exifProcessedAt, so processExifMetadata would otherwise skip
-   * them forever. Clearing exifProcessedAt (only for already-processed images)
-   * puts them back on the "needs EXIF" queue; the re-read is header-only and the
-   * extraction is idempotent for every other field. New files are unaffected.
-   */
-  private async backfillExifDescriptions(): Promise<void> {
-    const versionRow = await this.db.get<{ user_version: number }>(
-      "PRAGMA user_version",
-    );
-    if ((versionRow?.user_version ?? 0) >= EXIF_DESCRIPTION_BACKFILL_VERSION) return;
-
-    const result = await this.db.run(
-      `UPDATE files SET exifProcessedAt = NULL
-       WHERE exifProcessedAt IS NOT NULL
-         AND mimeType LIKE 'image/%'
-         AND description IS NULL`,
-    );
-
-    await this.db.exec(`PRAGMA user_version = ${EXIF_DESCRIPTION_BACKFILL_VERSION}`);
-    this.invalidateStatusCountsCache();
-    log.info(
-      { requeued: result?.changes ?? 0 },
-      "Re-queued images for EXIF re-scan to backfill human descriptions",
-    );
-  }
-
-  /**
-   * One-time migration (gated by PRAGMA user_version) that re-queues every
-   * already-processed image for EXIF re-scan so the `tags` column (see
-   * TAGS_BACKFILL_VERSION above) gets backfilled from XMP dc:subject / IPTC
-   * Keywords / lr:hierarchicalSubject. Scoped to `tags IS NULL` so it never
-   * re-queues (and thus never clobbers) a file whose tags were already
-   * extracted or user-edited in-app.
-   */
-  private async backfillTags(): Promise<void> {
-    const versionRow = await this.db.get<{ user_version: number }>(
-      "PRAGMA user_version",
-    );
-    if ((versionRow?.user_version ?? 0) >= TAGS_BACKFILL_VERSION) return;
-
-    const result = await this.db.run(
-      `UPDATE files SET exifProcessedAt = NULL
-       WHERE exifProcessedAt IS NOT NULL
-         AND mimeType LIKE 'image/%'
-         AND tags IS NULL`,
-    );
-
-    await this.db.exec(`PRAGMA user_version = ${TAGS_BACKFILL_VERSION}`);
-    this.invalidateStatusCountsCache();
-    log.info(
-      { requeued: result?.changes ?? 0 },
-      "Re-queued images for EXIF re-scan to backfill human-authored tags/keywords",
-    );
-  }
-
-  private async backfillHeicEmbeddedVideoDetection(): Promise<void> {
-    const versionRow = await this.db.get<{ user_version: number }>(
-      "PRAGMA user_version",
-    );
-    if ((versionRow?.user_version ?? 0) >= HEIC_EMBEDDED_VIDEO_BACKFILL_VERSION) return;
-
-    const result = await this.db.run(
-      `UPDATE files SET exifProcessedAt = NULL
-       WHERE exifProcessedAt IS NOT NULL
-         AND mimeType IN ('image/heic', 'image/heif')`,
-    );
-
-    await this.db.exec(`PRAGMA user_version = ${HEIC_EMBEDDED_VIDEO_BACKFILL_VERSION}`);
-    this.invalidateStatusCountsCache();
-    log.info(
-      { requeued: result?.changes ?? 0 },
-      "Re-queued HEIC/HEIF files for EXIF re-scan to detect embedded Samsung motion photos",
-    );
-  }
-
-  /**
-   * The user's standing "hide these by default" filter (feedback #95) —
-   * e.g. a specific face cluster or folder they want excluded from the main
-   * gallery/grid/map/people views unless explicitly overridden per-request.
-   * Cached in memory (see `defaultExclusionFilterCache`) so the common path
-   * — every /api/files request — costs no DB round trip; only
-   * `setDefaultExclusionFilter` invalidates it.
-   */
-  async getDefaultExclusionFilter(): Promise<QueryOptions["filter"] | null> {
-    if (this.defaultExclusionFilterCache !== undefined) {
-      return this.defaultExclusionFilterCache;
-    }
-    const row = await this.db.get<{ value: string }>(
-      "SELECT value FROM settings WHERE key = 'defaultExclusionFilter'",
-    );
-    let parsed: QueryOptions["filter"] | null = null;
-    if (row?.value) {
-      try {
-        parsed = JSON.parse(row.value) as QueryOptions["filter"];
-      } catch {
-        parsed = null;
-      }
-    }
-    this.defaultExclusionFilterCache = parsed;
-    return parsed;
-  }
-
-  /** Sets (or, with `null`, clears) the default exclusion filter and drops the cache. */
-  async setDefaultExclusionFilter(filter: QueryOptions["filter"] | null): Promise<void> {
-    if (filter === null) {
-      await this.db.run("DELETE FROM settings WHERE key = 'defaultExclusionFilter'");
-    } else {
-      await this.db.run(
-        "INSERT INTO settings (key, value) VALUES ('defaultExclusionFilter', ?) " +
-          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        JSON.stringify(filter),
-      );
-    }
-    this.defaultExclusionFilterCache = filter;
-  }
-
   /** Settles once the in-memory vector index has loaded (or failed to). */
   get vectorIndexLoaded(): Promise<unknown> {
     return this.vectorIndex.loaded;
@@ -1552,463 +222,140 @@ export class IndexDatabase {
   async queryFiles<TMetadata extends Array<keyof FileRecord>>(
     options: QueryOptions,
   ): Promise<QueryResult<TMetadata>> {
-    const {
-      filter,
-      metadata,
-      pageSize = 1_000,
-      page: rawPage = 1,
-      expandToFolder,
-      scope,
-      sort,
-      collapseMomentClusters = true,
-    } = options;
-    const page = Math.max(1, rawPage);
-
-    const { where: whereClause, params: whereParams } = filterToSQL(filter);
-    const { where: scopeWhere, params: scopeParams } = filterToSQL(scope ?? {});
-
-    // When expandToFolder is enabled, wrap the filter in a folder-IN-subquery so
-    // all files in a matched folder are returned, not just the matched files.
-    // The scope is ANDed outside it, so expansion never reaches past a share.
-    const folderExpandedWhere =
-      expandToFolder && whereClause
-        ? `folder IN (SELECT DISTINCT folder FROM files WHERE ${whereClause})`
-        : whereClause;
-    const scopedWhere = [folderExpandedWhere, scopeWhere]
-      .filter(Boolean)
-      .map((part) => `(${part})`)
-      .join(" AND ");
-
-    // Moment cluster members are read from `members`: the whole table, or with a
-    // scope only the members inside it, so a stack's size, preview paths and
-    // standing representative never reveal a file outside a share. Inlined (NOT
-    // MATERIALIZED) so each correlated lookup stays a momentClusterId index probe.
-    const members = scopeWhere ? "scopedMembers" : "files";
-    const withMembers = scopeWhere
-      ? `WITH scopedMembers AS NOT MATERIALIZED (SELECT * FROM files WHERE ${scopeWhere}) `
-      : "";
-    const withParams = scopeWhere ? scopeParams : [];
-
-    // Default gallery behavior: a moment cluster (burst/near-duplicate group)
-    // collapses to just its representative row. Files with no cluster
-    // (momentClusterId IS NULL) are unaffected. Callers expanding a stack (or
-    // fetching a specific cluster's members) pass collapseMomentClusters: false.
-    // With a scope that excludes the representative, the stack stands on its
-    // best member inside the scope instead of vanishing.
-    const collapseWhere = scopeWhere
-      ? `(momentClusterId IS NULL OR momentClusterRepresentative = 1 OR (folder, fileName) = (
-           SELECT best.folder, best.fileName FROM scopedMembers AS best
-           WHERE best.momentClusterId = files.momentClusterId
-           ORDER BY best.momentClusterRepresentative DESC, COALESCE(best.photoQualityScore, 0) DESC,
-                    COALESCE(best.sharpnessScore, 0) DESC, best.folder, best.fileName
-           LIMIT 1))`
-      : "(momentClusterId IS NULL OR momentClusterRepresentative = 1)";
-    const effectiveWhere = [scopedWhere, collapseMomentClusters ? collapseWhere : ""]
-      .filter(Boolean)
-      .join(" AND ");
-    const effectiveParams = [...withParams, ...whereParams, ...scopeParams];
-
-    const countSQL = `${withMembers}SELECT COUNT(*) as count FROM files ${effectiveWhere ? `WHERE ${effectiveWhere}` : ""}`;
-    // Not awaited here: it runs beside the page query below, on another read
-    // connection, instead of in front of it.
-    const counting = this.aggregateCache.get(
-      queryCacheKey(countSQL, effectiveParams),
-      async () =>
-        (await this.db.get<{ count: number }>(countSQL, ...effectiveParams))?.count ?? 0,
-    );
-
-    // The stack badge needs a member count alongside the representative row;
-    // only joined in when asked for, so the common case (no metadata request
-    // for it) pays nothing extra.
-    const extraColumns: string[] = [];
-    if (metadata?.includes("momentClusterSize")) {
-      extraColumns.push(`(CASE WHEN files.momentClusterId IS NULL THEN NULL ELSE
-             (SELECT COUNT(*) FROM ${members} momentMember WHERE momentMember.momentClusterId = files.momentClusterId)
-           END) AS momentClusterSize`);
-    }
-    // A handful of the *other* members' paths (the shown row excluded), so
-    // the collapsed tile can render a couple of real thumbnails peeking out
-    // behind the representative — a genuine "stack of photos" look — instead
-    // of an abstract count badge alone. Same opt-in shape as
-    // momentClusterSize (a correlated subquery, not a per-tile extra round
-    // trip, since a gallery page can show many stacks at once), and same
-    // "no signal for a non-clustered row" NULL convention. Capped at 2 and
-    // ranked by the same quality signal the representative pick itself uses
-    // (see momentClusterEngine.pickRepresentative) — the peeking photos are
-    // realistically the ones a user would pick, not arbitrary members.
-    // json_group_array over a LIMIT'd derived table (rather than a bare
-    // GROUP_CONCAT) sidesteps any need to worry about a folder/fileName
-    // containing whatever separator character a naive string join would pick.
-    if (metadata?.includes("momentClusterPreviewPaths")) {
-      extraColumns.push(`(CASE WHEN files.momentClusterId IS NULL THEN NULL ELSE
-             (SELECT json_group_array(preview.path) FROM (
-               SELECT (other.folder || other.fileName) AS path
-               FROM ${members} AS other
-               WHERE other.momentClusterId = files.momentClusterId
-                 AND NOT (other.folder = files.folder AND other.fileName = files.fileName)
-               ORDER BY COALESCE(other.photoQualityScore, 0) DESC, COALESCE(other.sharpnessScore, 0) DESC
-               LIMIT 2
-             ) AS preview)
-           END) AS momentClusterPreviewPaths`);
-    }
-    const columns =
-      extraColumns.length > 0 ? `${FILE_QUERY_COLUMNS}, ${extraColumns.join(", ")}` : FILE_QUERY_COLUMNS;
-
-    const offset = (page - 1) * pageSize;
-    const mainSQL = `
-      ${withMembers}SELECT ${columns} FROM files
-      ${effectiveWhere ? `WHERE ${effectiveWhere}` : ""}
-      ORDER BY ${buildQueryOrderBy(sort)}
-      LIMIT ? OFFSET ?
-    `;
-
-    const [counted, rows] = await Promise.all([
-      counting,
-      this.db.all<Record<string, unknown>>(mainSQL, ...effectiveParams, pageSize, offset),
-    ]);
-    // A page that comes back short is the last one, so where it ends is the
-    // total. The two queries read separate snapshots; taking the total from the
-    // rows keeps them agreeing at the end of the list, where a total that ran
-    // ahead of the rows would have the grid asking for a page that isn't there.
-    const isLastPage = rows.length < pageSize && (rows.length > 0 || offset === 0);
-    const total = isLastPage ? offset + rows.length : counted;
-
-    const matchedFiles = rows.map((v) =>
-      rowToFileRecord(v as Record<string, string | number>, metadata),
-    );
-
-    return {
-      items: matchedFiles as Array<
-        { folder: string; fileName: string } & Pick<FileRecord, TMetadata[number]>
-      >,
-      page,
-      pageSize,
-      total,
-    } as QueryResult<TMetadata>;
+    return this.fileQueries.queryFiles<TMetadata>(options);
   }
 
-  async getDateRange(
-    filter: FilterElement,
-  ): Promise<{ minDate: Date | null; maxDate: Date | null }> {
-    const { where, params } = filterToSQL(filter);
-    return this.aggregateCache.get(queryCacheKey(`dateRange\u0000${where}`, params), () =>
-      this.computeDateRange(where, params),
-    );
+  // --- files: see fileStore.ts
+  addFile(...args: Parameters<FileStore["addFile"]>) {
+    return this.files.addFile(...args);
   }
-
-  private async computeDateRange(
-    whereClause: string,
-    params: ReturnType<typeof filterToSQL>["params"],
-  ): Promise<{ minDate: Date | null; maxDate: Date | null }> {
-    // typeof(dateTaken) = 'integer' guards against rows where dateTaken was
-    // written as a TEXT/ISO string. SQLite sorts TEXT above every INTEGER, so a
-    // single stray string poisons MAX(dateTaken) with garbage.
-    const sql = `
-      SELECT
-        MIN(dateTaken) AS minDate,
-        MAX(dateTaken) AS maxDate
-      FROM files
-      WHERE dateTaken IS NOT NULL
-      AND typeof(dateTaken) = 'integer'
-      ${whereClause ? `AND ${whereClause}` : ""}
-    `;
-
-    const result = await this.db.get<{
-      minDate: number | null;
-      maxDate: number | null;
-    }>(sql, ...params);
-
-    return {
-      minDate:
-        result?.minDate !== null && result?.minDate !== undefined
-          ? new Date(result.minDate)
-          : null,
-      maxDate:
-        result?.maxDate !== null && result?.maxDate !== undefined
-          ? new Date(result.maxDate)
-          : null,
-    };
+  moveFile(...args: Parameters<FileStore["moveFile"]>) {
+    return this.files.moveFile(...args);
   }
-
-  async getDateHistogram(
-    filter: FilterElement,
-    bucketCount = 40,
-  ): Promise<DateHistogramResult> {
-    const { where, params } = filterToSQL(filter);
-    return this.aggregateCache.get(
-      queryCacheKey(`dateHistogram\u0000${bucketCount}\u0000${where}`, params),
-      () => this.computeDateHistogram(where, params, bucketCount),
-    );
+  addOrUpdateFileData(...args: Parameters<FileStore["addOrUpdateFileData"]>) {
+    return this.files.addOrUpdateFileData(...args);
   }
-
-  private async computeDateHistogram(
-    whereClause: string,
-    params: ReturnType<typeof filterToSQL>["params"],
-    bucketCount: number,
-  ): Promise<DateHistogramResult> {
-    // Only integer timestamps take part: guards against TEXT dateTaken values
-    // that would poison MIN/MAX and the bucket math (see getDateRange).
-    const baseWhere = `dateTaken IS NOT NULL AND typeof(dateTaken) = 'integer'${
-      whereClause ? ` AND ${whereClause}` : ""
-    }`;
-
-    const stats = await this.db.get<{
-      total: number;
-      minDate: number | null;
-      maxDate: number | null;
-    }>(
-      `SELECT COUNT(*) AS total, MIN(dateTaken) AS minDate, MAX(dateTaken) AS maxDate
-         FROM files WHERE ${baseWhere}`,
-      ...params,
-    );
-
-    const total = stats?.total ?? 0;
-    const trueMin = stats?.minDate ?? null;
-    const trueMax = stats?.maxDate ?? null;
-
-    if (total === 0 || trueMin === null || trueMax === null || trueMin === trueMax) {
-      return {
-        buckets: [],
-        bucketSizeMs: 0,
-        minDate: trueMin,
-        maxDate: trueMax,
-        grouping: "day",
-      };
-    }
-
-    // Trim sparse early outliers (e.g. one photo stamped 1899) that would
-    // otherwise stretch the axis and squash the meaningful range. We drop the
-    // lowest ~1% by clamping the domain start to that percentile, but keep the
-    // true max so recent photos are never hidden.
-    const nthValue = async (offset: number): Promise<number | null> => {
-      const clamped = Math.min(Math.max(offset, 0), total - 1);
-      const row = await this.db.get<{ dateTaken: number }>(
-        `SELECT dateTaken FROM files WHERE ${baseWhere}
-           ORDER BY dateTaken LIMIT 1 OFFSET ?`,
-        ...params,
-        clamped,
-      );
-      return row?.dateTaken ?? null;
-    };
-
-    const trimmedMin =
-      total >= 50 ? ((await nthValue(Math.floor(total * 0.01))) ?? trueMin) : trueMin;
-
-    const minDate = trimmedMin;
-    const maxDate = trueMax;
-    const spanMs = maxDate - minDate;
-
-    if (spanMs <= 0) {
-      return { buckets: [], bucketSizeMs: 0, minDate, maxDate, grouping: "day" };
-    }
-
-    // Equal-width buckets across the (trimmed) domain give a stable number of
-    // readable bars regardless of how many years the library spans.
-    const count = Math.min(Math.max(Math.round(bucketCount), 12), 80);
-    const bucketSizeMs = spanMs / count;
-
-    const rows = await this.db.all<{ idx: number; count: number }>(
-      `SELECT
-            MIN(CAST((dateTaken - ?) / ? AS INTEGER), ?) AS idx,
-            COUNT(*) AS count
-          FROM files
-          WHERE ${baseWhere}
-            AND dateTaken >= ?
-          GROUP BY idx
-          ORDER BY idx`,
-      minDate,
-      bucketSizeMs,
-      count - 1,
-      ...params,
-      minDate,
-    );
-
-    const counts = new Array<number>(count).fill(0);
-    for (const { idx, count: c } of rows) {
-      if (idx >= 0 && idx < count) counts[idx] += c;
-    }
-
-    const buckets = counts.map((c, idx) => ({
-      start: Math.round(minDate + idx * bucketSizeMs),
-      end: Math.round(minDate + (idx + 1) * bucketSizeMs),
-      count: c,
-    }));
-
-    const dayMs = 24 * 60 * 60 * 1000;
-    const spanDays = spanMs / dayMs;
-    const grouping: DateHistogramGrouping =
-      spanDays <= 90 ? "day" : spanDays <= 3 * 365 ? "month" : "year";
-
-    return { buckets, bucketSizeMs, minDate, maxDate, grouping };
+  setAiDescription(...args: Parameters<FileStore["setAiDescription"]>) {
+    return this.files.setAiDescription(...args);
   }
-
-  async getSize(): Promise<number> {
-    const result = await this.db.get<{ count: number }>(
-      "SELECT COUNT(*) as count FROM files",
-    );
-    return result?.count ?? 0;
+  updateUserMetadata(...args: Parameters<FileStore["updateUserMetadata"]>) {
+    return this.files.updateUserMetadata(...args);
   }
-
-  async optimize(): Promise<void> {
-    await this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    await this.db.exec("PRAGMA optimize");
-    await this.db.exec("VACUUM");
+  getFilesPendingMetadataWriteback(...args: Parameters<FileStore["getFilesPendingMetadataWriteback"]>) {
+    return this.files.getFilesPendingMetadataWriteback(...args);
   }
-
-  async getOnDiskSize(): Promise<{
-    mainDb: number;
-    walFile: number;
-    shmFile: number;
-    total: number;
-  }> {
-    const getFileSize = async (filePath: string): Promise<number> => {
-      try {
-        const fileStat = await stat(filePath);
-        return fileStat.size;
-      } catch {
-        return 0;
-      }
-    };
-
-    const [mainDb, walFile, shmFile] = await Promise.all([
-      getFileSize(this.dbFilePath),
-      getFileSize(`${this.dbFilePath}-wal`),
-      getFileSize(`${this.dbFilePath}-shm`),
-    ]);
-
-    return { mainDb, walFile, shmFile, total: mainDb + walFile + shmFile };
+  clearMetadataWriteback(...args: Parameters<FileStore["clearMetadataWriteback"]>) {
+    return this.files.clearMetadataWriteback(...args);
   }
-
-  /**
-   * Every photo and video for the grid-thumbnail backfill
-   * (imageProcessing/thumbnailBackfill.ts), in the grid's default order (newest
-   * first, by the same sort date and index), so the tiles people scroll to
-   * first are made first. Which ones still need work
-   * is decided against the cache on disk, not a column here, so a dropped cache
-   * entry is regenerated on the next pass.
-   */
-  async getThumbnailBackfillCandidates(): Promise<
-    Array<{ relativePath: string; mimeType: string; sizeInBytes: number | null }>
-  > {
-    const rows = await this.db.all<{
-      folder: string;
-      fileName: string;
-      mimeType: string;
-      sizeInBytes: number | null;
-    }>(
-      `SELECT folder, fileName, mimeType, sizeInBytes
-       FROM files
-       WHERE mimeType LIKE 'image/%' OR mimeType LIKE 'video/%'
-       ORDER BY ${SORT_DATE_EXPR} DESC, folder, fileName`,
-    );
-    return rows.map((row) => ({
-      relativePath: joinPath(row.folder, row.fileName),
-      mimeType: row.mimeType,
-      sizeInBytes: row.sizeInBytes,
-    }));
+  getFileRecord(...args: Parameters<FileStore["getFileRecord"]>) {
+    return this.files.getFileRecord(...args);
   }
-
-  /**
-   * Returns the next background task (image variants or HLS) that needs to be generated.
-   * Prioritizes images, then videos. Returns null if nothing needs conversion.
-   */
-  async getNextBackgroundTask(): Promise<{
-    type: "imageVariants" | "hls";
-    relativePath: string;
-    mimeType: string;
-    duration?: number;
-  } | null> {
-    // Try to find an image that needs variants generated
-    const imageTask = await this.db.get<{
-      folder: string;
-      fileName: string;
-      mimeType: string;
-    }>(
-      `SELECT folder, fileName, mimeType
-       FROM files
-       WHERE mimeType LIKE 'image/%'
-         AND imageVariantsGeneratedAt IS NULL
-         AND infoProcessedAt IS NOT NULL
-       LIMIT 1`,
-    );
-
-    if (imageTask) {
-      return {
-        type: "imageVariants",
-        relativePath: joinPath(imageTask.folder, imageTask.fileName),
-        mimeType: imageTask.mimeType,
-      };
-    }
-
-    // Try to find a video that needs HLS generated
-    const hlsTask = await this.db.get<{
-      folder: string;
-      fileName: string;
-      mimeType: string;
-      duration: number | null;
-    }>(
-      `SELECT folder, fileName, mimeType, duration
-       FROM files
-       WHERE mimeType LIKE 'video/%'
-         AND hlsGeneratedAt IS NULL
-         AND exifProcessedAt IS NOT NULL
-       LIMIT 1`,
-    );
-
-    if (hlsTask) {
-      return {
-        type: "hls",
-        relativePath: joinPath(hlsTask.folder, hlsTask.fileName),
-        mimeType: hlsTask.mimeType,
-        duration: hlsTask.duration ?? undefined,
-      };
-    }
-
-    return null;
+  addPaths(...args: Parameters<FileStore["addPaths"]>) {
+    return this.files.addPaths(...args);
   }
-
-  /**
-   * Marks that image variants have been generated for a file.
-   */
-  async markImageVariantsGenerated(relativePath: string): Promise<void> {
-    const { folder, fileName } = splitPath(relativePath);
-    await this.db.run(
-      `UPDATE files
-       SET imageVariantsGeneratedAt = datetime('now')
-       WHERE folder = ? AND fileName = ?`,
-      folder,
-      fileName,
-    );
+  removeFile(...args: Parameters<FileStore["removeFile"]>) {
+    return this.files.removeFile(...args);
   }
-
-  /**
-   * Marks that HLS has been generated for a file.
-   */
-  async markHLSGenerated(relativePath: string): Promise<void> {
-    const { folder, fileName } = splitPath(relativePath);
-    await this.db.run(
-      `UPDATE files
-       SET hlsGeneratedAt = datetime('now')
-       WHERE folder = ? AND fileName = ?`,
-      folder,
-      fileName,
-    );
+  markFileForResync(...args: Parameters<FileStore["markFileForResync"]>) {
+    return this.files.markFileForResync(...args);
   }
-
-  private async runWithRetry<T>(fn: () => T | Promise<T>, attempts = 5): Promise<T> {
-    let lastError: unknown;
-    for (let i = 0; i < attempts; i++) {
-      try {
-        return await fn();
-      } catch (error) {
-        lastError = error;
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.toLowerCase().includes("busy")) {
-          throw error;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10 * (i + 1)));
-      }
-    }
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  removePaths(...args: Parameters<FileStore["removePaths"]>) {
+    return this.files.removePaths(...args);
+  }
+  removeFolder(...args: Parameters<FileStore["removeFolder"]>) {
+    return this.files.removeFolder(...args);
+  }
+  getIndexedPaths(...args: Parameters<FileStore["getIndexedPaths"]>) {
+    return this.files.getIndexedPaths(...args);
+  }
+  markImageVariantsGenerated(...args: Parameters<FileStore["markImageVariantsGenerated"]>) {
+    return this.files.markImageVariantsGenerated(...args);
+  }
+  markHLSGenerated(...args: Parameters<FileStore["markHLSGenerated"]>) {
+    return this.files.markHLSGenerated(...args);
+  }
+  // --- stats: see statsStore.ts
+  countMissingInfo(...args: Parameters<StatsStore["countMissingInfo"]>) {
+    return this.stats.countMissingInfo(...args);
+  }
+  countMissingDateTaken(...args: Parameters<StatsStore["countMissingDateTaken"]>) {
+    return this.stats.countMissingDateTaken(...args);
+  }
+  countMediaEntries(...args: Parameters<StatsStore["countMediaEntries"]>) {
+    return this.stats.countMediaEntries(...args);
+  }
+  countImageEntries(...args: Parameters<StatsStore["countImageEntries"]>) {
+    return this.stats.countImageEntries(...args);
+  }
+  countAllEntries(...args: Parameters<StatsStore["countAllEntries"]>) {
+    return this.stats.countAllEntries(...args);
+  }
+  getStatusCounts(...args: Parameters<StatsStore["getStatusCounts"]>) {
+    return this.stats.getStatusCounts(...args);
+  }
+  getMostRecentExifProcessedEntry(...args: Parameters<StatsStore["getMostRecentExifProcessedEntry"]>) {
+    return this.stats.getMostRecentExifProcessedEntry(...args);
+  }
+  getRatingStats(...args: Parameters<StatsStore["getRatingStats"]>) {
+    return this.stats.getRatingStats(...args);
+  }
+  getSize(...args: Parameters<StatsStore["getSize"]>) {
+    return this.stats.getSize(...args);
+  }
+  getFolders(...args: Parameters<StatsStore["getFolders"]>) {
+    return this.stats.getFolders(...args);
+  }
+  getDateRange(...args: Parameters<StatsStore["getDateRange"]>) {
+    return this.stats.getDateRange(...args);
+  }
+  getDateHistogram(...args: Parameters<StatsStore["getDateHistogram"]>) {
+    return this.stats.getDateHistogram(...args);
+  }
+  // --- fileQueries: see fileQueryStore.ts
+  fileMatchesFilter(...args: Parameters<FileQueryStore["fileMatchesFilter"]>) {
+    return this.fileQueries.fileMatchesFilter(...args);
+  }
+  // --- suggestions: see suggestionStore.ts
+  queryFieldSuggestions(...args: Parameters<SuggestionStore["queryFieldSuggestions"]>) {
+    return this.suggestions.queryFieldSuggestions(...args);
+  }
+  queryFieldSuggestionsWithCounts(...args: Parameters<SuggestionStore["queryFieldSuggestionsWithCounts"]>) {
+    return this.suggestions.queryFieldSuggestionsWithCounts(...args);
+  }
+  // --- geo: see geoStore.ts
+  queryGeoClusters(...args: Parameters<GeoStore["queryGeoClusters"]>) {
+    return this.geo.queryGeoClusters(...args);
+  }
+  // --- tasks: see taskQueueStore.ts
+  countFilesNeedingMetadataUpdate(...args: Parameters<TaskQueueStore["countFilesNeedingMetadataUpdate"]>) {
+    return this.tasks.countFilesNeedingMetadataUpdate(...args);
+  }
+  getFilesNeedingMetadataUpdate(...args: Parameters<TaskQueueStore["getFilesNeedingMetadataUpdate"]>) {
+    return this.tasks.getFilesNeedingMetadataUpdate(...args);
+  }
+  getImagesMissingDimensions(...args: Parameters<TaskQueueStore["getImagesMissingDimensions"]>) {
+    return this.tasks.getImagesMissingDimensions(...args);
+  }
+  getThumbnailBackfillCandidates(...args: Parameters<TaskQueueStore["getThumbnailBackfillCandidates"]>) {
+    return this.tasks.getThumbnailBackfillCandidates(...args);
+  }
+  getNextBackgroundTask(...args: Parameters<TaskQueueStore["getNextBackgroundTask"]>) {
+    return this.tasks.getNextBackgroundTask(...args);
+  }
+  // --- maintenance: see maintenanceStore.ts
+  checkpointWal(...args: Parameters<MaintenanceStore["checkpointWal"]>) {
+    return this.maintenance.checkpointWal(...args);
+  }
+  optimize(...args: Parameters<MaintenanceStore["optimize"]>) {
+    return this.maintenance.optimize(...args);
+  }
+  getOnDiskSize(...args: Parameters<MaintenanceStore["getOnDiskSize"]>) {
+    return this.maintenance.getOnDiskSize(...args);
+  }
+  getDefaultExclusionFilter(...args: Parameters<MaintenanceStore["getDefaultExclusionFilter"]>) {
+    return this.maintenance.getDefaultExclusionFilter(...args);
+  }
+  setDefaultExclusionFilter(...args: Parameters<MaintenanceStore["setDefaultExclusionFilter"]>) {
+    return this.maintenance.setDefaultExclusionFilter(...args);
   }
 }
