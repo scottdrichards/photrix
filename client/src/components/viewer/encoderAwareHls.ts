@@ -25,7 +25,10 @@ import type { HlsConfig, LoaderStats } from "hls.js";
 
 type HlsClass = typeof Hls;
 
-/** The viewer's buffer and timeout settings. */
+/**
+ * The viewer's buffer and timeout settings.
+ * @public The playback lab (e2e/playback-lab/player.ts) reads it by name from the transpiled file.
+ */
 export const ON_THE_FLY_HLS_CONFIG = {
   enableWorker: true,
   lowLatencyMode: false,

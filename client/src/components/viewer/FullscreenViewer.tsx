@@ -17,7 +17,7 @@ import {
 } from "@fluentui/react-icons";
 import { consumeLiveOpenIntent } from "../grid/tileMedia/liveOpenIntent";
 import { fetchPeopleFacesForFile, fetchPhotoCaption, fetchTranscriptSegments, setFaceVerdicts } from "../../api";
-import type { PhotoPersonFace } from "../../api/types";
+import type { PhotoPersonFace } from "../../api/api.type";
 import { StarRating } from "../StarRating";
 import { TagEditor } from "../TagEditor";
 import { createClientOperationId, logClientEvent } from "../../diagnostics";
@@ -58,7 +58,7 @@ import { useVideoPlayback } from "./useVideoPlayback";
 import { useAiDescription } from "./useAiDescription";
 import { FileInfoPanel } from "./FileInfoPanel";
 import { TranscriptSearch } from "./TranscriptSearch";
-import type { TranscriptSegment } from "../../api/types";
+import type { TranscriptSegment } from "../../api/api.type";
 import { useOptionalFilter } from "../filter/FilterContext";
 import { segmentsToWebVTT } from "./segmentsToWebVTT";
 import { playVideo } from "../playVideo";

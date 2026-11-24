@@ -1,5 +1,5 @@
 import { fetchJsonOrThrow } from "./http";
-import type { SearchSource } from "./types";
+import type { SearchSource } from "./api.type";
 
 /**
  * How ready the model behind a search source is:

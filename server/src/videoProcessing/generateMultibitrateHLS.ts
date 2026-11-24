@@ -94,7 +94,7 @@ const HLS_VARIANTS: readonly Variant[] = [
  * the client never climbs to it by itself: it is a choice in the quality
  * menu (see the client's hlsAbrGuard).
  */
-export const UHD_VARIANT: Variant = {
+const UHD_VARIANT: Variant = {
   height: 2160,
   bitrate: 16_000_000,
   maxrate: "24M",
@@ -109,13 +109,13 @@ const UHD_MIN_SHORT_SIDE = 2160;
 type SourceSize = { width?: number | null; height?: number | null };
 
 /** True when the source is big enough for the 4K rung. Unknown size counts as no. */
-export const isUhdSource = ({ width, height }: SourceSize): boolean =>
+const isUhdSource = ({ width, height }: SourceSize): boolean =>
   typeof width === "number" &&
   typeof height === "number" &&
   Math.min(width, height) >= UHD_MIN_SHORT_SIDE;
 
 /** The variants a source of this size is offered, lowest first. */
-export const variantsForSource = (size: SourceSize): readonly Variant[] =>
+const variantsForSource = (size: SourceSize): readonly Variant[] =>
   isUhdSource(size) ? [...HLS_VARIANTS, UHD_VARIANT] : HLS_VARIANTS;
 
 const VARIANT_BY_HEIGHT = new Map(
@@ -542,7 +542,7 @@ const scrubEncodePaths = (text: string, filePath: string, hlsDir: string): strin
  * commonly aren't). An earlier seek-start used it, and the mismatch at every
  * splice between the two encodes' segments was a visible stutter.
  */
-export const seekStartArgs = (
+const seekStartArgs = (
   startSegment: number,
 ): { input: string[]; output: string[] } => {
   if (startSegment <= 0) return { input: [], output: ["-start_number", "0"] };

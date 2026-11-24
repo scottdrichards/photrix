@@ -8,13 +8,12 @@ import type {
   FaceVerdict,
   FetchPeopleClustersOptions,
   NamedPerson,
-  OptimizeProposal,
   PeopleClustersResult,
   PersonClusterDetailResult,
   PersonReview,
   PhotoPersonFace,
   ReviewFace,
-} from "./types";
+} from "./api.type";
 
 type ApiFaceRep = {
   path: string;
@@ -401,16 +400,6 @@ export const setPersonTags = async (clusterId: string, tags: string[]): Promise<
   if (!response.ok) throw new Error(`Failed to set person tags (status ${response.status})`);
 };
 
-/** Distinct tags across every person, for a tag-input's autocomplete. */
-export const fetchAllPersonTags = async (): Promise<string[]> => {
-  const response = await fetchWithDiagnostics("/api/people/tags", "list person tags", {
-    method: "GET",
-  });
-  if (!response.ok) return [];
-  const data = (await response.json()) as { tags?: string[] };
-  return data.tags ?? [];
-};
-
 /** Removes one outlier detection from its cluster (feedback #90). */
 export const excludeFaceFromCluster = async (faceId: number): Promise<void> => {
   const response = await fetchWithDiagnostics(
@@ -529,18 +518,6 @@ export const setFaceVerdicts = async (
   return data.applied ?? 0;
 };
 
-/** A dry-run library-wide repair plan. Nothing is applied until the user acts on a row. */
-export const fetchOptimizePlan = async (
-  signal?: AbortSignal,
-): Promise<OptimizeProposal[]> => {
-  const payload = await fetchJsonOrThrow<{ proposals?: OptimizeProposal[] }>(
-    "/api/people/optimize",
-    "fetch optimize plan",
-    { signal },
-  );
-  return payload.proposals ?? [];
-};
-
 
 /**
  * Re-derives a cluster's centre and radius from its current members, splitting
@@ -607,54 +584,3 @@ export const shrinkToExcludeFace = async ({
   return toCapChange(await response.json());
 };
 
-/** Widens a cluster towards `faceId`. `dryRun` lists who else the cap would cover. */
-export const growToIncludeFace = async ({
-  clusterId,
-  faceId,
-  dryRun,
-  includeCollateral,
-}: {
-  clusterId: string;
-  faceId: number;
-  dryRun?: boolean;
-  includeCollateral?: boolean;
-}): Promise<CapChange> => {
-  const response = await fetchWithDiagnostics(
-    "/api/people/grow-include",
-    "grow to include face",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        clusterId,
-        faceId,
-        ...(dryRun ? { dryRun } : {}),
-        ...(includeCollateral ? { includeCollateral } : {}),
-      }),
-    },
-  );
-  if (!response.ok) throw new Error(`Failed to include face (status ${response.status})`);
-  return toCapChange(await response.json());
-};
-
-/** Gives a face its own cluster under the same person. */
-export const startClusterForFace = async ({
-  clusterId,
-  faceId,
-}: {
-  clusterId: string;
-  faceId: number;
-}): Promise<{ clusterId: string }> => {
-  const response = await fetchWithDiagnostics(
-    "/api/people/new-cluster",
-    "start cluster for face",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clusterId, faceId }),
-    },
-  );
-  if (!response.ok) throw new Error(`Failed to start cluster (status ${response.status})`);
-  const data = (await response.json()) as { clusterId: string };
-  return { clusterId: data.clusterId };
-};

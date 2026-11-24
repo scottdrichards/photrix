@@ -65,7 +65,7 @@ const MANUALLY_EXCLUDED_CLUSTER_ID = -2;
  * replaced. Three is the point where the anchor starts averaging out pose and
  * lighting rather than encoding one photo.
  */
-export const FACE_ANCHOR_MIN_CONFIRMED = 3;
+const FACE_ANCHOR_MIN_CONFIRMED = 3;
 
 /** The two values `faceVerdicts.verdict` can hold. */
 export type FaceVerdict = "confirmed" | "rejected";

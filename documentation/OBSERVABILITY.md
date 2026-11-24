@@ -4,13 +4,13 @@ Photrix can export request traces with nested spans for database work, file I/O,
 
 ## Local Jaeger
 
-Start Jaeger locally:
+Start Jaeger all-in-one locally (Docker):
 
-```powershell
-bun run trace:jaeger
+```bash
+docker run --rm -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:2.16.0
 ```
 
-This starts Jaeger all-in-one with:
+This gives:
 
 - Jaeger UI: `http://localhost:16686`
 - OTLP HTTP ingest: `http://localhost:4318/v1/traces`
@@ -19,14 +19,14 @@ This starts Jaeger all-in-one with:
 
 Add these to `server/.env`:
 
-```powershell
+```bash
 PHOTRIX_OTEL_ENABLED=true
 PHOTRIX_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces
 ```
 
 Optional tuning:
 
-```powershell
+```bash
 PHOTRIX_TRACE_SPAN_MIN_MS=25
 ```
 

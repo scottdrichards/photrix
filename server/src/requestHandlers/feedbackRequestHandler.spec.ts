@@ -3,7 +3,7 @@ import type http from "node:http";
 import { EventEmitter } from "node:events";
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { FeedbackStore } from "../feedback/feedbackStore.ts";
-import { feedbackHandler } from "./feedbackHandler.ts";
+import { feedbackRequestHandler } from "./feedbackRequestHandler.ts";
 
 const createMockReq = (
   method: string,
@@ -44,13 +44,13 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-describe("feedbackHandler", () => {
+describe("feedbackRequestHandler", () => {
   it("inserts a plain (non-external) submission when not marked external", async () => {
     const run = jest.fn(async () => ({ changes: 1 }));
     const database = new FeedbackStore({ run, all: jest.fn() } as unknown as AsyncSqlite);
     const { res, getStatus, getJson } = createMockRes();
 
-    await feedbackHandler(
+    await feedbackRequestHandler(
       createMockReq("POST", "/api/feedback", { text: "make it faster" }),
       res,
       database,
@@ -70,7 +70,7 @@ describe("feedbackHandler", () => {
     const database = new FeedbackStore({ run, all: jest.fn() } as unknown as AsyncSqlite);
     const { res, getStatus } = createMockRes();
 
-    await feedbackHandler(
+    await feedbackRequestHandler(
       createMockReq("POST", "/api/feedback", { text: "found via a shared link" }),
       res,
       database,
@@ -92,7 +92,7 @@ describe("feedbackHandler", () => {
     const database = new FeedbackStore({ run, all: jest.fn() } as unknown as AsyncSqlite);
     const { res, getStatus } = createMockRes();
 
-    await feedbackHandler(
+    await feedbackRequestHandler(
       createMockReq("POST", "/api/feedback", { text: "   " }),
       res,
       database,
@@ -118,7 +118,7 @@ describe("feedbackHandler", () => {
     const database = new FeedbackStore({ run: jest.fn(), all } as unknown as AsyncSqlite);
     const { res, getJson } = createMockRes();
 
-    await feedbackHandler(createMockReq("GET", "/api/feedback"), res, database);
+    await feedbackRequestHandler(createMockReq("GET", "/api/feedback"), res, database);
 
     expect((all.mock.calls[0] as [string])[0]).toContain("source");
     expect(getJson()).toEqual({
@@ -147,7 +147,7 @@ describe("feedbackHandler", () => {
       events: [{ event: "video.playback.summary" }],
     }));
 
-    await feedbackHandler(
+    await feedbackRequestHandler(
       createMockReq("POST", "/api/feedback", {
         text: "video froze",
         clientSessionId: "s-1",
@@ -170,7 +170,7 @@ describe("feedbackHandler", () => {
     const database = new FeedbackStore({ run: jest.fn(), all: jest.fn(), get } as unknown as AsyncSqlite);
     const { res, getStatus, getJson } = createMockRes();
 
-    await feedbackHandler(
+    await feedbackRequestHandler(
       createMockReq("GET", "/api/feedback/7/diagnostics"),
       res,
       database,
@@ -186,7 +186,7 @@ describe("feedbackHandler", () => {
     const database = new FeedbackStore({ run: jest.fn(), all: jest.fn(), get } as unknown as AsyncSqlite);
     const { res, getStatus } = createMockRes();
 
-    await feedbackHandler(
+    await feedbackRequestHandler(
       createMockReq("GET", "/api/feedback/7/diagnostics"),
       res,
       database,
@@ -213,7 +213,7 @@ describe("feedbackHandler", () => {
     const database = new FeedbackStore({ run: jest.fn(), all } as unknown as AsyncSqlite);
     const { res, getJson } = createMockRes();
 
-    await feedbackHandler(createMockReq("GET", "/api/feedback"), res, database);
+    await feedbackRequestHandler(createMockReq("GET", "/api/feedback"), res, database);
 
     const [row] = (getJson() as { feedback: Record<string, unknown>[] }).feedback;
     expect(row.untrusted).toBe(true);
@@ -229,7 +229,7 @@ describe("feedbackHandler", () => {
     const database = new FeedbackStore({ run: jest.fn(), all } as unknown as AsyncSqlite);
     const { res, getJson } = createMockRes();
 
-    await feedbackHandler(createMockReq("GET", "/api/feedback"), res, database);
+    await feedbackRequestHandler(createMockReq("GET", "/api/feedback"), res, database);
 
     const [row] = (getJson() as { feedback: Record<string, unknown>[] }).feedback;
     expect(row.text).toBe("a <b> c");
@@ -241,7 +241,7 @@ describe("feedbackHandler", () => {
     const database = new FeedbackStore({ run, all: jest.fn() } as unknown as AsyncSqlite);
     const buildDiagnosticsReport = jest.fn(async () => ({ secret: true }));
 
-    await feedbackHandler(
+    await feedbackRequestHandler(
       createMockReq("POST", "/api/feedback", { text: "x", clientSessionId: "victim" }),
       createMockRes().res,
       database,
@@ -258,7 +258,7 @@ describe("feedbackHandler", () => {
     const database = new FeedbackStore({ run: jest.fn(), all: jest.fn(), get } as unknown as AsyncSqlite);
     const { res, getStatus } = createMockRes();
 
-    await feedbackHandler(createMockReq("GET", "/api/feedback/2/diagnostics"), res, database);
+    await feedbackRequestHandler(createMockReq("GET", "/api/feedback/2/diagnostics"), res, database);
 
     expect(getStatus()).toBe(404);
   });

@@ -1,6 +1,6 @@
 import { fetchWithDiagnostics, fetchJsonOrThrow } from "./http";
 import { createPhotoItem } from "./photoItem";
-import type { ApiPhotoItem, MomentClusterDetail } from "./types";
+import type { ApiPhotoItem, MomentClusterDetail } from "./api.type";
 
 type ApiMomentClusterMember = {
   path: string;

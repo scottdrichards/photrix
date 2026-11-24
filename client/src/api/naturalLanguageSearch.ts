@@ -20,9 +20,6 @@ const NOT_INTERPRETED: SearchInterpretation = { interpreted: false, reason: "err
 const cache = new Map<string, Promise<SearchInterpretation>>();
 const CACHE_MAX_ENTRIES = 50;
 
-/** Test seam. */
-export const clearSearchInterpretationCache = () => cache.clear();
-
 /**
  * Ask the server to translate a natural-language query into structured filters.
  *

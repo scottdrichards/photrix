@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClusterFace } from "../../api/types";
+import type { ClusterFace } from "../../api/api.type";
 
 vi.mock("./faceCropPlaceholder", () => ({
   peekFaceCropPlaceholder: () => null,

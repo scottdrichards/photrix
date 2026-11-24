@@ -14,7 +14,7 @@ import type {
   SearchSource,
   ShareScope,
   SortOption,
-} from "./types";
+} from "./api.type";
 
 const clampNumber = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);

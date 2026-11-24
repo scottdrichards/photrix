@@ -13,21 +13,21 @@ import { sharedIgnores, sharedRules, sharedTestRules } from "../eslint.shared.mj
 // src/components/. A new cross-module import that is not listed here fails
 // lint. "(root)" is the loose files in src/, which today mix the app shell
 // (App.tsx) with foundations everything uses (auth.ts, result.ts), so every
-// module may import them.
+// module may import them. "api" is api/index.ts, the client's one API barrel.
 const modules = {
   "(root)": ["*"],
   api: ["(root)"],
-  featureFlags: ["(root)"],
+  featureFlags: ["(root)", "api"],
   hooks: ["(root)", "api", "components/filter"],
   components: ["(root)"],
-  "components/selection": ["(root)", "components"],
+  "components/selection": ["(root)", "api", "components"],
   "components/share": ["(root)", "api"],
   "components/feedback": ["(root)", "api"],
-  "components/status": ["(root)", "components", "featureFlags"],
+  "components/status": ["(root)", "api", "components", "featureFlags"],
   "components/account": ["(root)", "api", "hooks", "components"],
-  "components/map": ["(root)"],
+  "components/map": ["(root)", "api"],
   "components/people": ["(root)", "api", "hooks", "components", "components/selection"],
-  "components/filter": ["(root)", "components/map", "components/people"],
+  "components/filter": ["(root)", "api", "components/map", "components/people"],
   "components/search": ["(root)", "api", "components/filter"],
   "components/grid": [
     "(root)", "api", "hooks", "components", "components/selection", "components/search",

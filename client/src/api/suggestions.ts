@@ -3,7 +3,7 @@ import { fetchJsonOrThrow } from "./http";
 import type {
   FetchSuggestionsOptions,
   SuggestionWithCount,
-} from "./types";
+} from "./api.type";
 
 const buildSuggestionParams = ({
   field,

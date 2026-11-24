@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatClock, UNNAMED_ROW_ID, videoPeople, videoTimelineRows } from "./videoPeople";
-import type { PhotoPersonFace } from "../../api/types";
+import type { PhotoPersonFace } from "../../api/api.type";
 
 const face = (
   personId: string,

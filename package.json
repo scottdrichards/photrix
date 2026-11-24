@@ -2,7 +2,6 @@
   "name": "photrix",
   "version": "1.0.0",
   "description": "A new way to enjoy your memories",
-  "main": "index.js",
   "private": true,
   "workspaces": [
     "client",
@@ -24,9 +23,8 @@
     "test:playback-lab": "bun run --filter photrix-e2e test:playback-lab",
     "test:e2e:install": "bun run --filter photrix-e2e install:browsers",
     "typecheck": "bun run --filter '*' typecheck",
-    "lint": "bun run --filter '*' lint",
-    "trace:jaeger": "powershell -ExecutionPolicy Bypass -File ./scripts/start-jaeger.ps1",
-    "tunnel:test": "powershell -ExecutionPolicy Bypass -File ./scripts/start-test-tunnels.ps1"
+    "lint": "bun run --filter '*' lint && knip",
+    "knip": "knip"
   },
   "repository": {
     "type": "git",
@@ -37,5 +35,8 @@
   "bugs": {
     "url": "https://github.com/scottdrichards/photrix/issues"
   },
-  "homepage": "https://github.com/scottdrichards/photrix#readme"
+  "homepage": "https://github.com/scottdrichards/photrix#readme",
+  "devDependencies": {
+    "knip": "^6.48.0"
+  }
 }

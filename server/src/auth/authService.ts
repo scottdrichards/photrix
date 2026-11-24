@@ -82,7 +82,7 @@ const accounts = loadAccounts();
 // API key, share link, passkey) must use one canonical form or a login typed as
 // "Admin" would create rows the "admin" account never sees. The canonical key is
 // the lower-cased account name.
-export const canonicalUsername = (username: string): string => username.toLowerCase();
+const canonicalUsername = (username: string): string => username.toLowerCase();
 
 // Sessions expire after this many ms of inactivity. Configurable so a home
 // server that restarts infrequently can pick a longer window without forking

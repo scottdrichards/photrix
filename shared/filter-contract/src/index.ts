@@ -184,7 +184,7 @@ export type SortField = "date" | "rating" | "quality" | "relevance";
 type SortDirection = "asc" | "desc";
 export type SortOption = { field: SortField; direction: SortDirection };
 
-export const SORT_FIELDS: readonly SortField[] = [
+const SORT_FIELDS: readonly SortField[] = [
   "date",
   "rating",
   "quality",

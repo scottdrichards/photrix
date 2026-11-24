@@ -1,4 +1,4 @@
-import type { ClusterFace } from "../../api/types";
+import type { ClusterFace } from "../../api/api.type";
 
 /**
  * Orders for a person's face grid (feedback #144). The server returns faces

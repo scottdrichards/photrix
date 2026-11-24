@@ -1,5 +1,5 @@
 import type { PhotoItem } from "../../api";
-import type { PhotoPersonFace } from "../../api/types";
+import type { PhotoPersonFace } from "../../api/api.type";
 import { FaceCropImage } from "../people/FaceCropImage";
 import type { NamedFace } from "./FaceOverlay";
 import css from "./VideoFaceStrip.module.css";
@@ -12,7 +12,7 @@ const firstSeenMs = (face: PhotoPersonFace): number =>
  * one face per person per video, but a person it split into several tracks
  * (later merged by clustering) has several; the first one seen stands for them.
  */
-export const videoFaceTiles = (faces: readonly PhotoPersonFace[]): PhotoPersonFace[] => {
+const videoFaceTiles = (faces: readonly PhotoPersonFace[]): PhotoPersonFace[] => {
   const byPerson = new Map<string, PhotoPersonFace>();
   for (const face of [...faces].sort((a, b) => firstSeenMs(a) - firstSeenMs(b))) {
     if (!byPerson.has(face.personId)) byPerson.set(face.personId, face);

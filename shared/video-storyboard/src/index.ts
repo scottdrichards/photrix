@@ -4,11 +4,11 @@
  */
 
 /** Frames are never closer together than this. */
-export const STORYBOARD_MIN_INTERVAL_SECONDS = 2;
+const STORYBOARD_MIN_INTERVAL_SECONDS = 2;
 /** However long the video, at most this many frames. */
-export const STORYBOARD_MAX_FRAMES = 100;
+const STORYBOARD_MAX_FRAMES = 100;
 /** Frames per row of the sprite. */
-export const STORYBOARD_COLUMNS = 10;
+const STORYBOARD_COLUMNS = 10;
 /** The long edge of one frame, in pixels. */
 export const STORYBOARD_FRAME_LONG_EDGE = 240;
 

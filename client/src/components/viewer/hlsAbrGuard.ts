@@ -204,7 +204,7 @@ export const forwardBufferSeconds = (
  * enough for one viewer who asked for it, not for every fast connection that
  * would otherwise drift up to it. It stays a choice in the quality menu.
  */
-export const AUTO_MAX_HEIGHT = 1080;
+const AUTO_MAX_HEIGHT = 1080;
 
 /**
  * The `autoLevelCapping` that keeps Auto at or below AUTO_MAX_HEIGHT: the

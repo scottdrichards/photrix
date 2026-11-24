@@ -6,7 +6,7 @@ import { generateShareDescription } from "../shareDescription/generateShareDescr
 import { writeJson } from "../common/writeJson.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
-export const pageTitleHandler = async (
+export const pageTitleRequestHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse,
   database: IndexDatabase,

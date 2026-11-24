@@ -8,9 +8,9 @@ jest.unstable_mockModule("../auth/authService.ts", () => ({
   getShareLinkLabel: () => Promise.resolve(null),
 }));
 
-const { sharePreviewHandler } = await import("./sharePreviewHandler.ts");
+const { sharePreviewRequestHandler } = await import("./sharePreviewRequestHandler.ts");
 
-describe("sharePreviewHandler redirect", () => {
+describe("sharePreviewRequestHandler redirect", () => {
   it("uses a relative app URL so mounted deployments keep their base path", async () => {
     const req = new EventEmitter() as http.IncomingMessage & EventEmitter;
     req.url = "/share?token=t";
@@ -32,7 +32,7 @@ describe("sharePreviewHandler redirect", () => {
       },
     } as unknown as IndexDatabase;
 
-    await sharePreviewHandler(req, res, database);
+    await sharePreviewRequestHandler(req, res, database);
 
     expect(body).toContain('href="./?token=t"');
     expect(body).toContain('window.location.replace("./?token=t")');

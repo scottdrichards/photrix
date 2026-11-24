@@ -6,7 +6,6 @@ import { buildFilesQueryUrl, buildFileUrl, createPhotoItem, DEFAULT_METADATA_KEY
 import type {
   ApiPhotoResponse,
   FetchDateHistogramOptions,
-  FetchDateRangeOptions,
   FetchGeotaggedPhotosOptions,
   FetchPhotosOptions,
   FetchPhotosResult,
@@ -15,7 +14,7 @@ import type {
   DateHistogramResult,
   GeoPoint,
   PhotoItem,
-} from "./types";
+} from "./api.type";
 
 export const fetchFolders = async ({
   path = "",
@@ -238,49 +237,6 @@ export const fetchGeotaggedPhotos = async ({
   return { points, total: payload.total, truncated: payload.total > coveredCount };
 };
 
-export const fetchDateRange = async ({
-  includeSubfolders = false,
-  path = "",
-  ratingFilter,
-  mediaTypeFilter = "all",
-  locationBounds,
-  peopleInImageFilter,
-  faceClusterFilter,
-  faceClusterMatchMode,
-  faceAttributeFilter,
-  cameraModelFilter,
-  lensFilter,
-  signal,
-}: FetchDateRangeOptions = {}): Promise<{
-  minDate: number | null;
-  maxDate: number | null;
-}> => {
-  const params = new URLSearchParams();
-  params.set("aggregate", "dateRange");
-  if (includeSubfolders) params.set("includeSubfolders", "true");
-
-  const filterParam = filtersToParam(buildFilters({
-    ratingFilter,
-    mediaTypeFilter,
-    locationBounds,
-    dateRange: null,
-    peopleInImageFilter,
-    faceClusterFilter,
-    faceClusterMatchMode,
-    faceAttributeFilter,
-    cameraModelFilter,
-    lensFilter,
-  }));
-  if (filterParam) params.set("filter", filterParam);
-
-  const url = buildFilesQueryUrl(path, params);
-  return await fetchJsonOrThrow<{ minDate: number | null; maxDate: number | null }>(
-    url,
-    "fetch date range",
-    { signal },
-  );
-};
-
 export const fetchDateHistogram = async ({
   includeSubfolders = false,
   path = "",
@@ -369,9 +325,9 @@ export const fetchSemanticSearch = async ({
   if (filterParam) params.set("filter", filterParam);
 
   type SemanticSearchResult = {
-    items: (import("./types").ApiPhotoItem & {
+    items: (import("./api.type").ApiPhotoItem & {
       similarity: number;
-      sources?: import("./types").SearchSource[];
+      sources?: import("./api.type").SearchSource[];
       matchTimeMs?: number;
     })[];
     total: number;

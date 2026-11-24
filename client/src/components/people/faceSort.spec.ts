@@ -1,4 +1,4 @@
-import type { ClusterFace } from "../../api/types";
+import type { ClusterFace } from "../../api/api.type";
 import { sortFaces } from "./faceSort";
 
 const face = (path: string, dateTaken: string | null): ClusterFace =>

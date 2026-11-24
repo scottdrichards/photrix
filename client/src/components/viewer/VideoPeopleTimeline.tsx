@@ -1,4 +1,4 @@
-import type { PhotoPersonFace } from "../../api/types";
+import type { PhotoPersonFace } from "../../api/api.type";
 import { formatClock, videoTimelineRows } from "./videoPeople";
 import css from "./VideoPeopleTimeline.module.css";
 

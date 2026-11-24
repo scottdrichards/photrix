@@ -10,7 +10,7 @@ import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
  * stalls, slow requests) from the same buffer, the perf snapshot, the task
  * queue and machine load. Paths and search text are already redacted at record
  * time (privacy.ts), so it is safe to hand to an agent. Served by
- * `GET /api/diagnostics/report` and saved with every suggestion (feedbackHandler).
+ * `GET /api/diagnostics/report` and saved with every suggestion (feedbackRequestHandler).
  */
 export const buildDiagnosticsReport = async (
   clientSessionId: string | null,

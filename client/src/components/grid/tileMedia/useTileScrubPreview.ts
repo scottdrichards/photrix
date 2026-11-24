@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { buildFileUrl } from "../../../api/photoItem";
-import type { PhotoItem } from "../../../api/types";
+import type { PhotoItem } from "../../../api/api.type";
 
 /**
  * Mirrors the server's VIDEO_SCRUB_FRAME_COUNT (videoProcessing/videoUtils.ts)

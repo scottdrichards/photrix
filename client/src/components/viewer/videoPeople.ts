@@ -1,4 +1,4 @@
-import type { FaceAppearance, PhotoPersonFace } from "../../api/types";
+import type { FaceAppearance, PhotoPersonFace } from "../../api/api.type";
 
 type VideoPerson = {
   personId: string;

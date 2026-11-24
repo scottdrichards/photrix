@@ -1,6 +1,6 @@
 import { useEffect, useState, type ImgHTMLAttributes } from "react";
 import { buildFaceCropUrl } from "../../api";
-import type { ClusterFace } from "../../api/types";
+import type { ClusterFace } from "../../api/api.type";
 import { useNearViewport } from "../../hooks/useNearViewport";
 import { makeFaceCropPlaceholder, peekFaceCropPlaceholder } from "./faceCropPlaceholder";
 import { logFailure } from "../../logFailure";

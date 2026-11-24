@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dismiss16Regular } from "@fluentui/react-icons";
-import type { TranscriptSegment } from "../../api/types";
+import type { TranscriptSegment } from "../../api/api.type";
 import { formatDuration } from "./photoInfoFormat";
 import css from "./TranscriptSearch.module.css";
 
