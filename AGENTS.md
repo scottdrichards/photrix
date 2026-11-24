@@ -1,11 +1,74 @@
-# Links
+# Docs index
 
-Review these files when implicated (relative to root)
+Review these when implicated (paths relative to the repo root).
 
-- Testing: /TESTING.md
-- Deployment/Setup: /GETTING_STARTED.md
-- Where does X happen (routes, video pipeline, background stages): /documentation/ARCHITECTURE.md
-- Debugging a slowdown/bug from a user report: /documentation/DIAGNOSTICS.md
+| Doc | Read it for |
+| --- | --- |
+| `/GETTING_STARTED.md` | setup, install profiles, configuration, running locally |
+| `/TESTING.md` | test layers, `exampleFolder`, e2e; `/server/TESTING.md` for the server's jest specifics |
+| `/server/API.md` | every HTTP endpoint and its parameters |
+| `/documentation/ARCHITECTURE.md` | where X happens: routes, file serving, video, the background pipeline, module boundaries |
+| `/documentation/FACES.md` | faces and people: detection, embeddings, clustering, verdicts and review, identify |
+| `/documentation/CODING_STYLE.md` | style rules (loaded below) |
+| `/documentation/DIAGNOSTICS.md` | debugging a slowdown or bug from a user report |
+| `/documentation/OBSERVABILITY.md` | traces (OpenTelemetry, Jaeger) |
+| `/e2e/README.md` | adding Playwright tests |
+| `<module>/README.md` | the detail for one module; most directories in the map below have one |
+
+# Module map
+
+| Path | What it is |
+| --- | --- |
+| `server/src/main.ts` | boots the server: database, stores, background stages, HTTP, MCP |
+| `server/src/createServer.ts`, `createRoutes.ts` | request trace and auth gate; the route table and share-link policy |
+| `server/src/requestHandlers/` | one handler per route group |
+| `server/src/indexDatabase/` | SQLite schema, stores, queries, migrations, the scan/EXIF/clustering stages |
+| `server/src/backgroundTasks/`, `taskOrchestrator/` | which stage feeds which; scheduling, resource budgets, backing off for users |
+| `server/src/imageAnalysis/`, `faceDetection/`, `videoFaceAnalysis/` | faces and CLIP for photos, live identify, faces in videos |
+| `server/src/imageProcessing/`, `videoProcessing/`, `audioProcessing/` | image conversion, ffmpeg/HLS, Whisper and CLAP |
+| `server/src/auth/`, `shareScope/`, `shareDescription/` | accounts and tokens; what a share link may see; share previews |
+| `server/src/naturalLanguageSearch/`, `photoCaption/`, `places/` | query interpretation, captions, place names |
+| `server/src/observability/`, `systemStatus/`, `featureFlags/`, `feedback/`, `mcp/` | logs/traces/privacy, status, flags, the feedback queue, the MCP server |
+| `server/src/common/`, `fileHandling/`, `accel/`, `python/` | shared helpers, file/EXIF helpers, accelerator probe, Python interpreter resolution |
+| `server/python/` | the long-lived Python workers (image analysis, Whisper, CLAP) and their requirements |
+| `client/src/` | the React app; see its README |
+| `shared/` | code both sides import: filter contract, feature flags, HLS headers, video storyboard |
+| `e2e/` | Playwright suite and the playback lab |
+
+Python lives in two places on purpose: `server/python/` holds the long-lived
+workers, found from the server's working directory and installed by
+`bun run --filter server python:install`; `server/src/imageProcessing/*.py` are
+one-shot scripts kept beside the TypeScript that runs them and found through
+`import.meta.url`. `server/src/python/` is TypeScript only (interpreter
+resolution).
+
+# Recipes: where to add X
+
+- **A route**: handler in `server/src/requestHandlers/<thing>RequestHandler.ts`,
+  then a `Route` in `createRoutes.ts` with the narrowest `shareLink` access, a
+  row in `/documentation/ARCHITECTURE.md` and the endpoint in `server/API.md`.
+  See `requestHandlers/README.md`.
+- **A background stage**: a `process<Thing>.ts` returning a `TaskRunner` (use
+  `createTaskController`) in the module that owns the work; add it to
+  `BackgroundTaskPlan` and the cascade in
+  `backgroundTasks/registerBackgroundTasks.ts`, give it a name and task `type`
+  in `main.ts`, and add it to the pipeline diagram in ARCHITECTURE.md.
+- **A DB table, column or migration**: declare it in
+  `server/src/indexDatabase/tables.ts` and query it from the store that owns
+  it. Carrying user data across a schema change follows "Migrations" in
+  `indexDatabase/README.md`.
+- **An env var**: read it where it is used, validated at startup when a bad
+  value would otherwise fail later; document it, commented, in
+  `server/.env.example`. Client build-time vars are `VITE_*` in
+  `client/.env.example`.
+- **A client API call**: a function in `client/src/api/<area>.ts`, types in
+  `api/api.type.ts`, exported from `api/index.ts`. See `client/src/README.md`.
+- **A Python worker**: the script in `server/python/` (newline-delimited JSON
+  over stdin/stdout, print `{"type":"ready"}`, a `*_test.py` beside it for
+  `bun run --filter server test:python`); a Node manager modelled on
+  `imageAnalysis/imageAnalysisWorker.ts` using `python/pythonRuntime.ts`;
+  add its script name to `taskOrchestrator/reapOrphanedWorkers.ts` and its
+  dependencies to `server/python/requirements.txt`.
 
 # Terminal commands
 
@@ -25,7 +88,7 @@ Review these files when implicated (relative to root)
 - If a misunderstanding occurs, ensure the learnings are captured in documentation or comments
 - Ensure agent contexts are concise and only relevant contexts are loaded. For example, don't put much information in this file, but put it in a file/comment/etc. close to the relevant file.
 - Challenge the user if a prompt seems to go against any directive, best practice, or principle in the repository.
-- Development data policy: never add historical-database compatibility fallbacks. During development, prefer clearing/rebuilding the database over introducing legacy parsing or migration workaround logic.
+- Database changes: derived data (embeddings, EXIF, clusters a re-run reproduces) may be rebuilt, but data a user made by hand (face verdicts, names, merges, ratings) must be carried forward by a one-time startup migration. Never add read-time fallbacks for old shapes. See "Migrations" in `server/src/indexDatabase/README.md`.
 
 # Directive persistence
 

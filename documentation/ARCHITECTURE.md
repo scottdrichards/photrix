@@ -20,8 +20,8 @@ filter), so that file is also the share-link access policy.
 | `PATCH /api/files/<file>`                | `files/updateMetadataHandler.ts`                    | `indexDatabase.ts`                                                                                       |
 | `GET /api/folders/…`                     | `foldersRequestHandler.ts`                          | `indexDatabase.ts`                                                                                       |
 | `GET /api/search`                        | `searchRequestHandler.ts`                           | CLIP text embedding (`imageAnalysis/`), CLAP (`audioProcessing/clapWorker.ts`), `naturalLanguageSearch/` |
-| `POST /api/search/interpret`             | `searchInterpretHandler.ts`                         | `naturalLanguageSearch/interpretSearchQuery.ts`                                                          |
-| `POST /api/page-title`                   | `pageTitleHandler.ts`                               | describes the current filter for the header                                                              |
+| `POST /api/search/interpret`             | `searchInterpretRequestHandler.ts`                  | `naturalLanguageSearch/interpretSearchQuery.ts`                                                          |
+| `POST /api/page-title`                   | `pageTitleRequestHandler.ts`                        | describes the current filter for the header                                                              |
 | `GET /api/suggestions`                   | `suggestionsRequestHandler.ts`                      | `indexDatabase.ts`                                                                                       |
 | `GET /api/video/negotiate`               | `video/videoNegotiation.ts`                         | direct vs live GPU HLS decision                                                                          |
 | `/api/faces/…`                           | `faceIdentifyRequestHandler.ts`                     | `faceDetection/`, `indexDatabase/faceReview.ts`                                                          |
@@ -32,10 +32,10 @@ filter), so that file is also the share-link access policy.
 | `GET /api/day-photo/…`                   | `dayPhotoRequestHandler.ts`                         | `scripts/dayPhoto/`                                                                                      |
 | `/api/settings/…`                        | `settingsRequestHandler.ts`                         | `settings` table                                                                                         |
 | `/api/auth/…`, `/api/account`            | `authRequestHandler.ts`, `accountRequestHandler.ts` | `auth/`                                                                                                  |
-| `GET /share`                             | `sharePreviewHandler.ts`                            | `shareDescription/`                                                                                      |
+| `GET /share`                             | `sharePreviewRequestHandler.ts`                     | `shareDescription/`                                                                                      |
 | `/api/status`, `/api/status/stream`      | `statusRequestHandler.ts`                           | `systemStatus/systemMetrics.ts`, task orchestrator snapshot                                             |
 | `GET /api/network-probe`                 | `networkProbeRequestHandler.ts`                     | bytes for the client's bandwidth measurement                                                             |
-| `/api/feedback[/:id[/diagnostics]]`      | `feedbackHandler.ts`                                | `feedback` table; saves a diagnostics report per suggestion                                              |
+| `/api/feedback[/:id[/diagnostics]]`      | `feedbackRequestHandler.ts`                         | `feedback` table; saves a diagnostics report per suggestion                                              |
 | `/api/diagnostics/events`                | `diagnosticsRequestHandler.ts`                      | `observability/diagnosticsStore.ts`                                                                      |
 | `GET /api/diagnostics/perf`, `…/report`  | `diagnosticsReportRequestHandler.ts`                | `observability/perfMonitor.ts`, `systemStatus/buildDiagnosticsReport.ts`                                |
 
@@ -79,12 +79,15 @@ request answers it.
 
 ## Background pipeline (server)
 
-Wired in `main.ts` → `backgroundTasks/registerBackgroundTasks.ts`; scheduled
+Wired in `main.ts` → `backgroundTasks/registerBackgroundTasks.ts`, which owns
+the arrows below (each stage's `onDrain` queues the stages under it); scheduled
 by `taskOrchestrator/` (backs off while a user request is active; see its README).
+The face stages are described end to end in `FACES.md`.
 
 ```
 fileSystemScan ─► fileMetadata (indexDatabase/processFileInfo.ts)
                ├► exifMetadata (indexDatabase/processExifMetadata.ts)
+               │    ├► placeNames (indexDatabase/processPlaceNames.ts, places/)
                │    ├► audioTranscription (audioProcessing/, Whisper)
                │    ├► audioEmbedding (audioProcessing/, CLAP)
                │    └► videoFaceAnalysis (videoFaceAnalysis/) ─► faceClustering
