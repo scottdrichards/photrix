@@ -22,7 +22,7 @@ Review these when implicated (paths relative to the repo root).
 | `server/src/main.ts` | boots the server: database, stores, background stages, HTTP, MCP |
 | `server/src/createServer.ts`, `createRoutes.ts` | request trace and auth gate; the route table and share-link policy |
 | `server/src/requestHandlers/` | one handler per route group |
-| `server/src/indexDatabase/` | SQLite schema, file/moment/analysis stores, queries, migrations; `IndexDatabase` composes every store |
+| `server/src/indexDatabase/` | SQLite schema, migrations, and the stores (`fileStore`, `fileQueryStore`, `statsStore`, `suggestionStore`, `geoStore`, `taskQueueStore`, `maintenanceStore`, moment/analysis/place); `IndexDatabase` is a thin facade over them |
 | `server/src/pipeline/` | the indexing stages: scan, watcher, file info, EXIF, places, face and moment clustering |
 | `server/src/people/` | faces once stored: face and cluster stores, clustering math, review, live identify |
 | `server/src/backgroundTasks/`, `taskOrchestrator/` | which stage feeds which; scheduling, resource budgets, backing off for users |
@@ -58,8 +58,9 @@ resolution).
   in `main.ts`, and add it to the pipeline diagram in ARCHITECTURE.md.
 - **A DB table, column or migration**: declare it in
   `server/src/indexDatabase/tables.ts` and query it from the store that owns
-  it (`people/store/` for face data). Carrying user data across a schema change follows "Migrations" in
-  `indexDatabase/README.md`.
+  it (`people/store/` for face data); `indexDatabase/README.md`, "Which store
+  gets a new query", picks the store, and "Migrations" covers carrying user
+  data across a schema change.
 - **An env var**: add it to its section of `server/src/config/config.ts` with
   a reader from `config/env.ts` and a `help` line, read it with `config()`
   where it is used (not into a module constant), then run

@@ -15,14 +15,14 @@ filter), so that file is also the share-link access policy.
 
 | Route                                    | Handler (`server/src/requestHandlers/`)             | Does the work in                                                                                         |
 | ---------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `GET /api/files/<dir>/?…` (trailing `/`) | `files/queryHandler.ts`                             | `indexDatabase/indexDatabase.ts` `queryFiles`, `filterToSQL.ts`                                          |
+| `GET /api/files/<dir>/?…` (trailing `/`) | `files/queryHandler.ts`                             | `indexDatabase/fileQueryStore.ts` `queryFiles`, `filterToSQL.ts`                                          |
 | `GET /api/files/<file>?representation=…` | `files/filesRequestHandler.ts` `fileHandler`        | see "Serving a file" below                                                                               |
-| `PATCH /api/files/<file>`                | `files/updateMetadataHandler.ts`                    | `indexDatabase.ts`                                                                                       |
-| `GET /api/folders/…`                     | `foldersRequestHandler.ts`                          | `indexDatabase.ts`                                                                                       |
+| `PATCH /api/files/<file>`                | `files/updateMetadataHandler.ts`                    | `indexDatabase/fileStore.ts` `updateUserMetadata`                                                                                     |
+| `GET /api/folders/…`                     | `foldersRequestHandler.ts`                          | `indexDatabase/statsStore.ts` `getFolders`                                                                                     |
 | `GET /api/search`                        | `searchRequestHandler.ts`                           | CLIP text embedding (`imageAnalysis/`), CLAP (`audioProcessing/clapWorker.ts`), `naturalLanguageSearch/` |
 | `POST /api/search/interpret`             | `searchInterpretRequestHandler.ts`                  | `naturalLanguageSearch/interpretSearchQuery.ts`                                                          |
 | `POST /api/page-title`                   | `pageTitleRequestHandler.ts`                        | describes the current filter for the header                                                              |
-| `GET /api/suggestions`                   | `suggestionsRequestHandler.ts`                      | `indexDatabase.ts`                                                                                       |
+| `GET /api/suggestions`                   | `suggestionsRequestHandler.ts`                      | `indexDatabase/suggestionStore.ts`                                                                                     |
 | `GET /api/video/negotiate`               | `video/videoNegotiation.ts`                         | direct vs live GPU HLS decision                                                                          |
 | `/api/faces/…`                           | `faceIdentifyRequestHandler.ts`                     | `people/identify/` (frames, SSRF guard, scoring); centroids from `people/store/peopleQueries.ts` |
 | `/api/people/…`                          | `peopleRequestHandler.ts`                           | `people/store/faceClusterStore.ts` (facade over the people stores)                                       |
