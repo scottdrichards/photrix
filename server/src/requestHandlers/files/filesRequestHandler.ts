@@ -1,72 +1,45 @@
 import * as http from "http";
-import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
-import { stat, readFile } from "fs/promises";
-import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
-import { createReadStream, existsSync, statSync, type Stats } from "fs";
+import type { Stats } from "fs";
+import { stat } from "fs/promises";
 import path from "path";
+import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
+import { mimeTypeForFilename } from "../../fileHandling/mimeTypes.ts";
 import {
   convertImage,
   convertImageCrop,
   contentTypeForImageFormat,
   IMAGE_OUTPUT_CONTENT_TYPE,
-  IMAGE_OUTPUT_EXTENSION,
   ImageConversionError,
   type CropBox,
   type ImageOutputFormat,
 } from "../../imageProcessing/convertImage.ts";
-import { convertEmbeddedThumbnail } from "../../imageProcessing/embeddedThumbnail.ts";
-import {
-  generateVideoThumbnail,
-  generateVideoScrubFrame,
-  generateVideoFrameCrop,
-  VIDEO_SCRUB_FRAME_COUNT,
-} from "../../videoProcessing/videoUtils.ts";
-import {
-  exportShareVideo,
-  parseShareVideoShortSide,
-} from "../../videoProcessing/exportShareVideo.ts";
-import { markCacheAccess } from "../../common/cacheEviction.ts";
-import { getMirroredCachedFilePath } from "../../common/cacheUtils.ts";
-import {
-  clampToSupportedHeight,
-  generateVariantHLS,
-  getMultibitrateHLSInfo,
-  getVariantPlaylistPath,
-  getVariantSegmentPath,
-  prepareMultibitrateHLSStructure,
-} from "../../videoProcessing/generateMultibitrateHLS.ts";
-import { waitForHlsFile } from "../../videoProcessing/hlsSegmentWatcher.ts";
-import { buildVodVariantPlaylist } from "../../videoProcessing/buildHlsPlaylist.ts";
-import {
-  keepVariantAlive,
-  claimVariantEncode,
-  recentEncodeSpeed,
-  registerHlsProcess,
-  touchHlsSession,
-  touchVariant,
-} from "../../videoProcessing/hlsSession.ts";
-import { getLogger } from "../../observability/logger.ts";
-
-const hlsLog = getLogger("HLS");
-const storyboardLog = getLogger("storyboard");
-import { getGpuAcceleration } from "../../videoProcessing/gpuAcceleration.ts";
-import {
-  getCachedVideoDuration,
-  getCachedVideoSourceProfile,
-} from "../../videoProcessing/getVideoMetadata.ts";
-import { StandardHeight, parseToStandardHeight } from "../../common/standardHeights.ts";
+import { microThumbnailPath } from "../../imageProcessing/microThumbnail.ts";
+import { parseToStandardHeight } from "../../common/standardHeights.ts";
 import type { TaskOrchestrator } from "../../taskOrchestrator/taskOrchestrator.ts";
-import { queryHandler } from "./queryHandler.ts";
 import { writeJson } from "../../common/writeJson.ts";
-import { recordServerDiagnosticEvent } from "../../observability/diagnosticsStore.ts";
 import { decodeRequestPath } from "../../common/decodeRequestPath.ts";
-import { attempt, attemptSync } from "../../common/result.ts";
-import { generateVideoStoryboard } from "../../videoProcessing/videoStoryboard.ts";
-// Let the player tell a slow encoder from a slow network (feedback #178).
+import { queryHandler } from "./queryHandler.ts";
 import {
-  ENCODE_SPEED_HEADER,
-  SEGMENT_WAIT_HEADER,
-} from "../../../../shared/hls-segment-headers/src/index.ts";
+  messageOf,
+  parseCrop,
+  parseFrameTime,
+  unsupported,
+  type FileHandlingContext,
+} from "./fileHandlingContext.ts";
+import { streamCachedFile, streamFile } from "./streamFile.ts";
+import {
+  serveLivePhoto,
+  serveScrubFrame,
+  serveShareMp4,
+  serveStoryboard,
+  tryHLSStream,
+  tryVideoFrameCrop,
+  tryVideoThumbnail,
+} from "./videoRepresentations.ts";
+
+// `/api/files/…`: a folder query, or one file in the representation asked for.
+// This file parses the request and checks access; the work is in
+// imageProcessing/ and videoProcessing/ (see videoRepresentations.ts).
 
 type Options = {
   database: IndexDatabase;
@@ -101,65 +74,9 @@ export const filesEndpointRequestHandler = async (
     if (!res.headersSent)
       writeJson(res, 500, {
         error: "Internal server error",
-        message: error instanceof Error ? error.message : String(error),
+        message: messageOf(error),
       });
   }
-};
-
-const streamFile = (
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  filePath: string,
-  opts: {
-    contentType: string;
-    size: number;
-    cacheControl: string;
-    acceptRanges?: boolean;
-  },
-) => {
-  const { contentType, size, cacheControl, acceptRanges = false } = opts;
-  const rangeHeader = req.headers.range;
-
-  const getRange = (
-    rangeHeader: string | undefined,
-    size: number,
-  ): { start: number; end: number } | null => {
-    const match = rangeHeader?.match(/^bytes=(\d+)-(\d+)?$/);
-    if (!match) return null;
-
-    const start = Number.parseInt(match[1] ?? "", 10);
-    const end = match[2] ? Number.parseInt(match[2], 10) : size - 1;
-    if (Number.isFinite(start) && Number.isFinite(end) && start <= end && end < size)
-      return { start, end };
-    return null;
-  };
-
-  const range: { start: number; end: number } | null = getRange(rangeHeader, size);
-
-  const statusCode = range ? 206 : 200;
-  const headers: http.OutgoingHttpHeaders = {
-    "Content-Type": contentType,
-    "Cache-Control": cacheControl,
-    "content-length": range ? range.end - range.start + 1 : size,
-  };
-
-  if (acceptRanges) {
-    headers["Accept-Ranges"] = "bytes";
-  }
-
-  if (range) {
-    headers["Content-Range"] = `bytes ${range.start}-${range.end}/${size}`;
-  }
-
-  res.writeHead(statusCode, headers);
-  const fileStream = createReadStream(
-    filePath,
-    range ? { start: range.start, end: range.end } : undefined,
-  );
-  fileStream.on("error", (error) => {
-    res.destroy(error);
-  });
-  fileStream.pipe(res);
 };
 
 const isPathInsideStorage = (storageRoot: string, targetPath: string) => {
@@ -167,635 +84,49 @@ const isPathInsideStorage = (storageRoot: string, targetPath: string) => {
   return !relativeToStorage.startsWith("..") && !path.isAbsolute(relativeToStorage);
 };
 
-const streamStaticFile = (
-  filePath: string,
-  opts: {
-    res: http.ServerResponse;
-    contentType: string;
-    size: number;
-    cacheControl: string;
-  },
-) => {
-  const { res, contentType, size, cacheControl } = opts;
-  res.writeHead(200, {
-    "Content-Type": contentType,
-    "Content-Length": size,
-    "Cache-Control": cacheControl,
-  });
-
-  const fileStream = createReadStream(filePath);
-  fileStream.on("error", (error) => {
-    res.destroy(error);
-  });
-  fileStream.pipe(res);
-};
-
-const streamCachedFile = (
+/**
+ * Streams the cached image `produce` makes. An undecodable image is a 422; any
+ * other failure returns false so the next handler gets a go.
+ */
+const serveConvertedImage = async (
   res: http.ServerResponse,
-  filePath: string,
-  opts: { contentType: string; size: number; cacheControl?: string },
-) => {
-  const {
-    contentType,
-    size,
-    cacheControl = "public, max-age=31536000, immutable",
-  } = opts;
-  // Bump the file's timestamp so the cache eviction policy treats it as
-  // recently used (approximate LRU).
-  markCacheAccess(filePath);
-  streamStaticFile(filePath, {
-    res,
-    contentType,
-    size,
-    cacheControl,
-  });
-};
-
-const getDurationHeader = (knownDuration: number | null | undefined) =>
-  typeof knownDuration === "number" && Number.isFinite(knownDuration)
-    ? { "X-Content-Duration": String(knownDuration) }
-    : {};
-
-const writeHlsPlaylistResponse = (
-  res: http.ServerResponse,
-  playlistContent: string,
-  cacheControl: string,
-  knownDuration: number | null | undefined,
-) => {
-  res.writeHead(200, {
-    "Content-Type": "application/vnd.apple.mpegurl",
-    "Cache-Control": cacheControl,
-    "Content-Length": Buffer.byteLength(playlistContent, "utf-8"),
-    ...getDurationHeader(knownDuration),
-  });
-  res.end(playlistContent);
-};
-
-const streamHlsSegment = async (res: http.ServerResponse, segmentPath: string) => {
-  const segmentStats = await stat(segmentPath);
-  streamStaticFile(segmentPath, {
-    res,
-    contentType: "video/mp2t",
-    // Ephemeral: segments are deleted after playback, so they must not be cached
-    // by the browser or any intermediary.
-    cacheControl: "no-store",
-    size: segmentStats.size,
-  });
-};
-
-/** `segment_NNN.ts`, as ffmpeg names them (min width 3, grows past 999). */
-const segmentFileName = (index: number): string =>
-  `segment_${String(index).padStart(3, "0")}.ts`;
-
-const SEGMENT_WAIT_MS = 60_000;
-const SEGMENT_RECHECK_MS = 4_000;
-
-/**
- * Long-polls for a segment the encoder hasn't written yet. Gives up when the
- * player hangs up: hls.js abandons a request on every seek and timeout, and a
- * stale request must neither keep the encode it no longer needs alive nor,
- * through `recheck`, restart it back at a position the player has left.
- */
-const waitForSegment = async (opts: {
-  hlsDir: string;
-  segmentPath: string;
-  res: http.ServerResponse;
-  endWait: () => void;
-  recheck?: () => void;
-}): Promise<boolean> => {
-  const { hlsDir, segmentPath, res, endWait, recheck } = opts;
-  let clientGone = res.destroyed;
-  const onClose = () => {
-    clientGone = true;
-  };
-  res.once("close", onClose);
-  try {
-    const deadline = Date.now() + SEGMENT_WAIT_MS;
-    while (!clientGone) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) return false;
-      if (await waitForHlsFile(hlsDir, segmentPath, Math.min(SEGMENT_RECHECK_MS, remaining))) {
-        return true;
-      }
-      if (!existsSync(hlsDir) || clientGone) return false;
-      recheck?.();
-    }
-    return false;
-  } finally {
-    res.off("close", onClose);
-    endWait();
-  }
-};
-
-/** Extracts the integer index N from an HLS segment name `segment_NNN.ts`. */
-const parseSegmentIndex = (segment: string): number | null => {
-  const match = segment.match(/segment_(\d+)\.ts$/);
-  return match ? Number(match[1]) : null;
-};
-
-type FileHandlingContext = {
-  normalizedPath: string;
-  subPath: string;
-  height: StandardHeight;
-  res: http.ServerResponse;
-  representation: string | null;
-  outputFormat: ImageOutputFormat;
-  needsResize: boolean;
-  needsFormatChange: boolean;
-  isImage: boolean;
-  isVideo: boolean;
-  crop: CropBox | null;
-  /** `t`: which frame of a video a `crop` is of, in ms. Only set for videos. */
-  frameTimeMs: number | null;
-  database: IndexDatabase;
-  taskOrchestrator: TaskOrchestrator;
-};
-
-/**
- * Parses a `crop=x,y,w,h` query param of normalized top-left fractions (0..1)
- * of the EXIF-oriented image. Returns null when absent, or throws a message when
- * malformed so the caller can respond with 400.
- */
-const parseCrop = (raw: string | null): CropBox | null => {
-  if (raw === null) return null;
-  const parts = raw.split(",").map((p) => Number.parseFloat(p));
-  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) {
-    throw new Error("crop must be four comma-separated numbers: x,y,w,h");
-  }
-  const [x, y, width, height] = parts;
-  if (width <= 0 || height <= 0) {
-    throw new Error("crop width and height must be positive");
-  }
-  if (x < 0 || y < 0 || x >= 1 || y >= 1) {
-    throw new Error("crop x and y must be in [0, 1)");
-  }
-  return { x, y, width, height };
-};
-
-/**
- * Parses `t`, the frame of a video that a `crop` refers to, in ms from the
- * start. Returns null when absent; throws when malformed.
- */
-const parseFrameTime = (raw: string | null): number | null => {
-  if (raw === null) return null;
-  const ms = Number(raw);
-  if (!Number.isFinite(ms) || ms < 0) {
-    throw new Error("t must be a non-negative number of milliseconds");
-  }
-  return Math.round(ms);
-};
-
-const serveVideoThumb = async (ctx: FileHandlingContext, height: StandardHeight) => {
-  const { normalizedPath, res } = ctx;
-  try {
-    const cachedPath = await generateVideoThumbnail(normalizedPath, height, {
-      priority: "userBlocked",
-    });
-    const cachedStats = await stat(cachedPath);
-    streamCachedFile(res, cachedPath, {
-      contentType: "image/jpeg",
-      size: cachedStats.size,
-    });
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const tryVideoThumbnail = (ctx: FileHandlingContext) => {
-  if (!ctx.isVideo) return false;
-  const isPreview = ctx.representation === "preview";
-  const wantsThumb = isPreview || ctx.representation === "webSafe" || ctx.needsResize;
-  if (!wantsThumb) return false;
-  const height = isPreview ? 320 : ctx.height;
-  return serveVideoThumb(ctx, height);
-};
-
-const tryHLSStream = async (
-  ctx: FileHandlingContext & { url: URL },
+  contentType: string,
+  produce: () => Promise<string>,
 ): Promise<boolean> => {
-  const { isVideo, representation, normalizedPath, subPath, res, url, database } = ctx;
-  if (!isVideo || representation !== "hls") return false;
-
-  const segment = url.searchParams.get("segment");
-  const variant = url.searchParams.get("variant"); // e.g., "360" or "720"
-  // Propagate the auth token through rewritten playlist/segment URLs so that
-  // native HLS players (Safari) and any client that can't add Authorization
-  // headers can still authenticate sub-requests.
-  const tokenSuffix = url.searchParams.get("token")
-    ? `&token=${encodeURIComponent(url.searchParams.get("token")!)}`
-    : "";
-
   try {
-    // Get duration from database, falling back to ffprobe if not indexed yet
-    const fileRecord = await database.getFileRecord(subPath);
-    let knownDuration = fileRecord?.duration;
-    // Decides whether the 4K rung is offered (feedback #165).
-    const sourceSize = {
-      width: fileRecord?.dimensionWidth,
-      height: fileRecord?.dimensionHeight,
-    };
-
-    if (typeof knownDuration !== "number" || !Number.isFinite(knownDuration)) {
-      // Without a duration the player still works; it just can't size the scrubber up front.
-      // Memoized: this runs for every playlist and segment request of an unindexed file.
-      const probed = await attempt(getCachedVideoDuration(normalizedPath));
-      if (!probed.ok) hlsLog.warn({ err: probed.error }, "ffprobe failed; streaming without a known duration");
-      else if (probed.value !== null) knownDuration = probed.value;
-    }
-
-    // Check if multi-bitrate HLS structure is initialized (master.m3u8 exists)
-    const multibitrateInfo = await getMultibitrateHLSInfo(normalizedPath);
-
-    // Mark this HLS tree as actively in use so the reaper keeps it alive while the
-    // player is fetching, then deletes it (and kills any running encode) once idle.
-    touchHlsSession(multibitrateInfo.hlsDir);
-
-    const hlsDir = multibitrateInfo.hlsDir;
-
-    // If not initialized, set up the directory structure immediately so the master
-    // playlist can be returned to the client right away. Encodes are started lazily
-    // per variant when the client requests segments (see ensureEncoding below);
-    // segments become available as FFmpeg writes them and are served via the watcher.
-    if (!multibitrateInfo.initialized) {
-      if (!(await getGpuAcceleration())) {
-        writeJson(res, 422, {
-          error: "HLS not available",
-          message:
-            "No cached HLS and hardware acceleration is not available for on-the-fly encoding",
-        });
-        return true;
-      }
-
-      // Create dirs + write the multi-variant master.m3u8 synchronously so the
-      // response is immediate.
-      await prepareMultibitrateHLSStructure(normalizedPath, sourceSize);
-    }
-
-    const segmentProduced = (variantHeight: number) => (index: number) =>
-      existsSync(getVariantSegmentPath(hlsDir, variantHeight, segmentFileName(index)));
-
-    // Ensure an encode is running that will produce `segmentIndex` of
-    // `variantHeight` soon. A new encode starts at the requested segment, not at
-    // 0, so a seek or a quality switch late in a long video doesn't wait for
-    // everything before it to be re-encoded (see claimVariantEncode). Segments
-    // already on disk are kept: every encode stamps segment N with the same
-    // timestamps (see seekStartArgs), so output from different encodes splices
-    // cleanly. With no `segmentIndex` (the EVENT-playlist path) any live encode
-    // counts. Queued as a user-blocking task. The output is ephemeral — served
-    // while the player fetches, then reaped once that variant goes idle (an ABR
-    // switch away) or the whole tree goes idle, so we persist no DB marker.
-    const ensureEncoding = (variantHeight: number, segmentIndex?: number): void => {
-      const claim = claimVariantEncode(
-        hlsDir,
-        variantHeight,
-        segmentIndex,
-        segmentProduced(variantHeight),
-      );
-      if (!claim) return;
-      const { startSegment, runId } = claim;
-      recordServerDiagnosticEvent({
-        level: "warn",
-        event: "video.hls.encode.queued",
-        message: `Queued ${variantHeight}p encode from segment ${startSegment}`,
-        data: {
-          path: subPath,
-          hlsDir,
-          variantHeight,
-          startSegment,
-          queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
-        },
-      });
-      ctx.taskOrchestrator.addTask(
-        {
-          name: `HLS encode ${variantHeight}p`,
-          type: "videoConversion",
-          start: () => {
-            const promise = generateVariantHLS(normalizedPath, variantHeight, {
-              startSegment,
-              onSpawn: (child) => registerHlsProcess(hlsDir, variantHeight, child, runId),
-            }).then(
-              () => {},
-              (error) => {
-                // A reaped session/variant kills ffmpeg on purpose; expected for
-                // ephemeral HLS, not a real failure.
-                hlsLog.debug(
-                  { err: error, hlsDir, variantHeight },
-                  "HLS encode ended early",
-                );
-              },
-            );
-            return {
-              onComplete: async () => {
-                await promise;
-              },
-            };
-          },
-        },
-        "blocking",
-      );
-    };
-
-    // Serve variant segment — wait for FFmpeg to write it if not ready yet
-    if (segment && variant) {
-      const variantHeight = clampToSupportedHeight(parseInt(variant, 10), sourceSize);
-      const segmentPath = getVariantSegmentPath(hlsDir, variantHeight, segment);
-      const segmentIndex = parseSegmentIndex(segment);
-      touchVariant(hlsDir, variantHeight, segmentIndex ?? undefined);
-
-      // If the segment isn't on disk yet, make sure an encode is running.
-      const waitStartedAt = Date.now();
-      const alreadyWritten = existsSync(segmentPath);
-      if (!alreadyWritten && segmentIndex !== null) {
-        ensureEncoding(variantHeight, segmentIndex);
-      }
-
-      recordServerDiagnosticEvent({
-        level: "info",
-        event: "video.hls.segment.requested",
-        message: `Requested HLS segment ${segment}`,
-        data: {
-          path: subPath,
-          hlsDir,
-          variantHeight,
-          segment,
-          segmentIndex,
-          queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
-        },
-      });
-
-      const available = await waitForSegment({
-        hlsDir,
-        segmentPath,
-        res,
-        endWait: keepVariantAlive(hlsDir, variantHeight, segmentIndex ?? undefined),
-        // Re-check coverage while waiting: the encode this request was counting
-        // on can end (it reached the file's end, failed, or was dropped to make room
-        // for other viewers' encodes), and only a new request would otherwise notice.
-        recheck:
-          segmentIndex === null ? undefined : () => ensureEncoding(variantHeight, segmentIndex),
-      });
-      if (!available) {
-        recordServerDiagnosticEvent({
-          level: "error",
-          event: "video.hls.segment.timeout",
-          message: `Timed out waiting for HLS segment ${segment}`,
-          data: {
-            path: subPath,
-            hlsDir,
-            variantHeight,
-            segment,
-            segmentIndex,
-            queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
-          },
-        });
-        writeJson(res, 404, { error: "HLS segment not found or timed out" });
-        return true;
-      }
-      const waitMs = Date.now() - waitStartedAt;
-      // Only a request that waited reads the encoder's pace: the encode was then
-      // at its head, so the window is live encoding, not frozen pacing.
-      const encodeSpeed =
-        alreadyWritten || segmentIndex === null
-          ? null
-          : recentEncodeSpeed(hlsDir, variantHeight, segmentIndex, (index) => {
-              const written = attemptSync(() =>
-                statSync(getVariantSegmentPath(hlsDir, variantHeight, segmentFileName(index))),
-              );
-              return written.ok ? written.value.mtimeMs : null;
-            });
-      res.setHeader(SEGMENT_WAIT_HEADER, String(waitMs));
-      if (encodeSpeed !== null) res.setHeader(ENCODE_SPEED_HEADER, String(encodeSpeed));
-      recordServerDiagnosticEvent({
-        level: "info",
-        event: "video.hls.segment.ready",
-        message: `Served HLS segment ${segment}`,
-        data: {
-          path: subPath,
-          hlsDir,
-          variantHeight,
-          segment,
-          waitMs,
-          encodeSpeed,
-        },
-      });
-      await streamHlsSegment(res, segmentPath);
-      return true;
-    }
-
-    // Serve variant playlist
-    if (variant) {
-      const variantHeight = clampToSupportedHeight(parseInt(variant, 10), sourceSize);
-      touchVariant(hlsDir, variantHeight);
-      const baseUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls&variant=${variant}${tokenSuffix}&segment=`;
-
-      // When the total duration is known, synthesize a complete VOD playlist that
-      // lists every segment up front and ends with #EXT-X-ENDLIST. This gives the
-      // player the true total length immediately, instead of FFmpeg's growing EVENT
-      // playlist whose duration creeps up as segments are appended. The encode runs
-      // from segment 0; the segment handler waits for each segment to be produced.
-      if (
-        typeof knownDuration === "number" &&
-        Number.isFinite(knownDuration) &&
-        knownDuration > 0
-      ) {
-        recordServerDiagnosticEvent({
-          level: "info",
-          event: "video.hls.variant.playlist",
-          message: `Served synthetic VOD playlist for ${variantHeight}p`,
-          data: { path: subPath, hlsDir, variantHeight, knownDuration },
-        });
-        const playlist = buildVodVariantPlaylist({
-          durationSeconds: knownDuration,
-          segmentBaseUrl: baseUrl,
-        });
-        // Ephemeral HLS: never cache playlists — the underlying segments are
-        // deleted after playback and may be re-encoded on replay.
-        writeHlsPlaylistResponse(res, playlist, "no-store", knownDuration);
-        return true;
-      }
-
-      // Duration unknown — fall back to FFmpeg's own growing EVENT playlist.
-      ensureEncoding(variantHeight);
-      const variantPlaylistPath = getVariantPlaylistPath(
-        multibitrateInfo.hlsDir,
-        variantHeight,
-      );
-
-      const available = await waitForHlsFile(
-        multibitrateInfo.hlsDir,
-        variantPlaylistPath,
-      );
-      if (!available) {
-        recordServerDiagnosticEvent({
-          level: "error",
-          event: "video.hls.variant.playlist.timeout",
-          message: `Timed out waiting for ${variantHeight}p playlist`,
-          data: {
-            path: subPath,
-            hlsDir,
-            variantHeight,
-            queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
-          },
-        });
-        writeJson(res, 404, { error: "HLS variant playlist not found or timed out" });
-        return true;
-      }
-
-      const playlistContent = await readFile(variantPlaylistPath, "utf-8");
-
-      // Rewrite segment paths to use API endpoint
-      const modifiedPlaylist = playlistContent.replace(
-        /^(segment_\d+\.ts)$/gm,
-        (match) => `${baseUrl}${match}`,
-      );
-      writeHlsPlaylistResponse(res, modifiedPlaylist, "no-store", knownDuration);
-      return true;
-    }
-
-    // Serve master playlist. The player's next requests are a variant playlist and
-    // then a segment, which spawns the first encode; probing the source now takes
-    // the probe off that critical path.
-    getCachedVideoSourceProfile(normalizedPath).catch((err: unknown) =>
-      hlsLog.debug({ err }, "Source profile prewarm failed"),
-    );
-    recordServerDiagnosticEvent({
-      level: "info",
-      event: "video.hls.master.playlist",
-      message: `Served HLS master playlist for ${subPath}`,
-      data: {
-        path: subPath,
-        hlsDir,
-        queueSnapshot: ctx.taskOrchestrator.getDiagnosticsSnapshot(),
-      },
-    });
-    let masterContent = await readFile(multibitrateInfo.masterPlaylistPath, "utf-8");
-
-    // Rewrite variant playlist paths to use API endpoint
-    const baseVariantUrl = `/api/files/${encodeURIComponent(subPath)}?representation=hls${tokenSuffix}&variant=`;
-    masterContent = masterContent.replace(
-      /^(\d+)p\/playlist\.m3u8$/gm,
-      (_, variantHeight) => `${baseVariantUrl}${variantHeight}`,
-    );
-    // Ephemeral HLS: never cache the master playlist.
-    writeHlsPlaylistResponse(res, masterContent, "no-store", knownDuration);
+    await streamCachedFile(res, await produce(), { contentType });
     return true;
   } catch (error) {
-    writeJson(res, 500, {
-      error: "HLS generation failed",
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return true;
+    if (error instanceof ImageConversionError) {
+      writeJson(res, 422, { error: "Invalid image", message: error.message });
+      return true;
+    }
+    return false;
   }
 };
 
-/** A face crop of a face found in a video: one frame, cropped. */
-const tryVideoFrameCrop = async (ctx: FileHandlingContext) => {
-  const { crop, isVideo, frameTimeMs, normalizedPath, height, res } = ctx;
-  if (!crop || !isVideo || frameTimeMs === null) return false;
-  try {
-    const cachedPath = await generateVideoFrameCrop(normalizedPath, frameTimeMs, crop, height);
-    const cachedStats = await stat(cachedPath);
-    streamCachedFile(res, cachedPath, { contentType: "image/jpeg", size: cachedStats.size });
-  } catch (error) {
-    // Includes a `t` past the end, where ffmpeg succeeds but writes nothing.
-    writeJson(res, 422, {
-      error: "Could not crop video frame",
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-  return true;
-};
-
-const tryImageCrop = async (ctx: FileHandlingContext) => {
+const tryImageCrop = (ctx: FileHandlingContext) => {
   const { crop, isImage, normalizedPath, height, res } = ctx;
   if (!crop || !isImage) return false;
-
-  try {
-    const cachedPath = await convertImageCrop(normalizedPath, crop, height, {
-      priority: "userBlocked",
-    });
-    const cachedStats = await stat(cachedPath);
-    streamCachedFile(res, cachedPath, {
-      contentType: IMAGE_OUTPUT_CONTENT_TYPE,
-      size: cachedStats.size,
-    });
-    return true;
-  } catch (error) {
-    if (error instanceof ImageConversionError) {
-      writeJson(res, 422, { error: "Invalid image", message: error.message });
-      return true;
-    }
-    return false;
-  }
+  return serveConvertedImage(res, IMAGE_OUTPUT_CONTENT_TYPE, () =>
+    convertImageCrop(normalizedPath, crop, height, { priority: "userBlocked" }),
+  );
 };
 
-// Fixed size for the progressive-grid micro thumbnail. Matches the largest
-// commonly-available embedded EXIF thumbnail; the grid upgrades to the 320 tile
-// lazily on dwell/hover.
-const MICRO_THUMBNAIL_HEIGHT = 160;
-
-// Instant, I/O-cheap grid tile: serve a JPEG's embedded EXIF thumbnail (a
-// header-only read) instead of decoding the full source. Falls back to a normal
-// 160 full-decode conversion for files without an embedded thumbnail (all HEIC,
-// ~11% of JPEGs), so a `micro` request always resolves to a 160 tile.
-const tryMicroThumbnail = async (ctx: FileHandlingContext) => {
-  const { representation, isImage, normalizedPath, res } = ctx;
-  if (representation !== "micro" || !isImage) return false;
-
-  try {
-    // A decoded 160 exists only for files with no usable embedded thumbnail
-    // (made on an earlier request or by the overnight backfill). Checking it
-    // first skips the header read off the share that would just find none again.
-    const decodedPath = getMirroredCachedFilePath(
-      normalizedPath,
-      MICRO_THUMBNAIL_HEIGHT,
-      IMAGE_OUTPUT_EXTENSION,
-    );
-    const cachedPath =
-      (existsSync(decodedPath) ? decodedPath : null) ??
-      (await convertEmbeddedThumbnail(normalizedPath, MICRO_THUMBNAIL_HEIGHT)) ??
-      (await convertImage(normalizedPath, MICRO_THUMBNAIL_HEIGHT, {
-        priority: "userBlocked",
-      }));
-    const cachedStats = await stat(cachedPath);
-    streamCachedFile(res, cachedPath, {
-      contentType: IMAGE_OUTPUT_CONTENT_TYPE,
-      size: cachedStats.size,
-    });
-    return true;
-  } catch (error) {
-    if (error instanceof ImageConversionError) {
-      writeJson(res, 422, { error: "Invalid image", message: error.message });
-      return true;
-    }
-    return false;
-  }
+const tryMicroThumbnail = (ctx: FileHandlingContext) => {
+  if (ctx.representation !== "micro" || !ctx.isImage) return false;
+  return serveConvertedImage(ctx.res, IMAGE_OUTPUT_CONTENT_TYPE, () =>
+    microThumbnailPath(ctx.normalizedPath),
+  );
 };
 
-const tryImageVariant = async (ctx: FileHandlingContext) => {
-  const { needsFormatChange, needsResize, isImage, normalizedPath, height, res } = ctx;
-  const forcesFormat = ctx.outputFormat !== "webp";
+const tryImageVariant = (ctx: FileHandlingContext) => {
+  const { needsFormatChange, needsResize, isImage, normalizedPath, height, res, outputFormat } = ctx;
+  const forcesFormat = outputFormat !== "webp";
   if (!(needsFormatChange || needsResize || forcesFormat) || !isImage) return false;
-
-  try {
-    const cachedPath = await convertImage(normalizedPath, height, {
-      priority: "userBlocked",
-      format: ctx.outputFormat,
-    });
-    const cachedStats = await stat(cachedPath);
-    streamCachedFile(res, cachedPath, {
-      contentType: contentTypeForImageFormat(ctx.outputFormat),
-      size: cachedStats.size,
-    });
-    return true;
-  } catch (error) {
-    if (error instanceof ImageConversionError) {
-      writeJson(res, 422, { error: "Invalid image", message: error.message });
-      return true;
-    }
-    return false;
-  }
+  return serveConvertedImage(res, contentTypeForImageFormat(outputFormat), () =>
+    convertImage(normalizedPath, height, { priority: "userBlocked", format: outputFormat }),
+  );
 };
 
 const fileHandler = async (
@@ -819,10 +150,7 @@ const fileHandler = async (
   }
 
   if (shareFilter) {
-    const allowed = await database.fileMatchesFilter(
-      subPath,
-      shareFilter,
-    );
+    const allowed = await database.fileMatchesFilter(subPath, shareFilter);
     if (!allowed) {
       return writeJson(res, 403, { error: "Access denied" });
     }
@@ -864,32 +192,28 @@ const fileHandler = async (
   try {
     crop = parseCrop(url.searchParams.get("crop"));
   } catch (error) {
-    return writeJson(res, 400, {
-      error: "Invalid crop",
-      message: error instanceof Error ? error.message : String(error),
-    });
+    return writeJson(res, 400, { error: "Invalid crop", message: messageOf(error) });
   }
   let frameTimeMs: number | null;
   try {
     frameTimeMs = parseFrameTime(url.searchParams.get("t"));
   } catch (error) {
-    return writeJson(res, 400, {
-      error: "Invalid t",
-      message: error instanceof Error ? error.message : String(error),
-    });
+    return writeJson(res, 400, { error: "Invalid t", message: messageOf(error) });
   }
   // A video has no single picture to crop; `t` names the frame (a face found
   // in a video carries it — see faces.frameTimeMs).
   if (crop && !isImage && !(isVideo && frameTimeMs !== null)) {
-    return writeJson(res, 415, {
-      error: "Unsupported Media Type",
-      message: isVideo
+    return unsupported(
+      res,
+      isVideo
         ? "Cropping a video needs t, the frame time in ms"
         : "Crop is only supported for image and video files",
-    });
+    );
   }
 
   const handlingContext: FileHandlingContext = {
+    req,
+    url,
     normalizedPath,
     subPath,
     height,
@@ -906,162 +230,29 @@ const fileHandler = async (
     taskOrchestrator,
   };
 
-  if (representation === "transcript") {
-    const segments = await database.analysis.getAudioSegments(subPath);
-    writeJson(res, 200, { segments });
-    return;
+  switch (representation) {
+    case "transcript": {
+      const segments = await database.analysis.getAudioSegments(subPath);
+      return writeJson(res, 200, { segments });
+    }
+    case "live-photo":
+      return serveLivePhoto(handlingContext, fileStats.size);
+    case "scrub":
+      return serveScrubFrame(handlingContext);
+    case "storyboard":
+      return serveStoryboard(handlingContext);
+    case "shareMp4":
+      return serveShareMp4(handlingContext);
+    case null:
+    default:
+      // The original, or a representation one of the handlers below makes.
+      break;
   }
-
-  if (representation === "live-photo") {
-    const fileRecord = await database.getFileRecord(subPath);
-    const videoLength = fileRecord?.embeddedVideoLength;
-    if (!videoLength) {
-      return writeJson(res, 404, { error: "No embedded motion photo video" });
-    }
-    const videoStart = fileStats.size - videoLength;
-    if (videoStart < 0) {
-      return writeJson(res, 500, { error: "Embedded video length exceeds file size" });
-    }
-    // Stream only the tail slice; treat it as a standalone video for range requests.
-    const rangeHeader = req.headers.range;
-    const getSliceRange = (rangeHeader: string | undefined) => {
-      const match = rangeHeader?.match(/^bytes=(\d+)-(\d+)?$/);
-      if (!match) return null;
-      const start = parseInt(match[1] ?? "", 10);
-      const end = match[2] ? parseInt(match[2], 10) : videoLength - 1;
-      if (Number.isFinite(start) && Number.isFinite(end) && start <= end && end < videoLength)
-        return { start, end };
-      return null;
-    };
-    const range = getSliceRange(rangeHeader);
-    const headers: http.OutgoingHttpHeaders = {
-      "Content-Type": "video/mp4",
-      "Cache-Control": "public, max-age=31536000, immutable",
-      "Accept-Ranges": "bytes",
-      "content-length": range ? range.end - range.start + 1 : videoLength,
-    };
-    if (range) {
-      headers["Content-Range"] = `bytes ${range.start}-${range.end}/${videoLength}`;
-    }
-    res.writeHead(range ? 206 : 200, headers);
-    const fileStart = videoStart + (range?.start ?? 0);
-    const fileEnd = videoStart + (range?.end ?? videoLength - 1);
-    createReadStream(normalizedPath, { start: fileStart, end: fileEnd }).pipe(res);
-    return;
-  }
-
-  // Feedback #76: a handful of cached low-res frames for the hover/scrub
-  // preview strip — see generateVideoScrubFrame's doc comment for why this
-  // is a scoped-down "cycle through N stills" rather than true per-frame
-  // scrubbing. `index` selects which of VIDEO_SCRUB_FRAME_COUNT frames.
-  if (representation === "scrub") {
-    if (!isVideo) {
-      return writeJson(res, 415, {
-        error: "Unsupported Media Type",
-        message: "Scrub frames are only available for video files",
-      });
-    }
-    const indexParam = url.searchParams.get("index");
-    const index = indexParam ? Number.parseInt(indexParam, 10) : NaN;
-    if (!Number.isInteger(index) || index < 0 || index >= VIDEO_SCRUB_FRAME_COUNT) {
-      return writeJson(res, 400, {
-        error: `index must be an integer in [0, ${VIDEO_SCRUB_FRAME_COUNT})`,
-      });
-    }
-    const fileRecord = await database.getFileRecord(subPath);
-    const duration = fileRecord?.duration;
-    if (!duration) {
-      return writeJson(res, 404, { error: "Video duration unknown" });
-    }
-    try {
-      const cachedPath = await generateVideoScrubFrame(normalizedPath, index, duration, {
-        priority: "userBlocked",
-      });
-      if (!cachedPath) {
-        return writeJson(res, 404, { error: "Could not generate scrub frame" });
-      }
-      const cachedStats = await stat(cachedPath);
-      streamCachedFile(res, cachedPath, {
-        contentType: "image/jpeg",
-        size: cachedStats.size,
-      });
-      return;
-    } catch (error) {
-      return writeJson(res, 500, {
-        error: "Failed to generate scrub frame",
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  // Feedback #168: the storyboard sprite the viewer shows while a video is
-  // being dragged through. Built on first request and cached; the layout is
-  // shared with the client (shared/video-storyboard).
-  if (representation === "storyboard") {
-    if (!isVideo) {
-      return writeJson(res, 415, {
-        error: "Unsupported Media Type",
-        message: "Storyboards are only available for video files",
-      });
-    }
-    const duration = (await database.getFileRecord(subPath))?.duration;
-    if (!duration) {
-      return writeJson(res, 404, { error: "Video duration unknown" });
-    }
-    const built = await attempt(generateVideoStoryboard(normalizedPath, duration));
-    if (!built.ok) {
-      storyboardLog.warn({ err: built.error, path: subPath }, "Storyboard generation failed");
-      return writeJson(res, 500, {
-        error: "Failed to generate storyboard",
-        message: built.error.message,
-      });
-    }
-    if (!built.value) {
-      return writeJson(res, 404, { error: "Could not generate storyboard" });
-    }
-    const cachedStats = await stat(built.value);
-    streamCachedFile(res, built.value, { contentType: "image/jpeg", size: cachedStats.size });
-    return;
-  }
-
-  // A whole H.264/AAC MP4 for the share dialog's "web-safe" and "smaller"
-  // video options — something a share sheet or another phone can take, unlike
-  // HLS segments or a 4K HEVC original. Encoded once and cached.
-  if (representation === "shareMp4") {
-    if (!isVideo) {
-      return writeJson(res, 415, {
-        error: "Unsupported Media Type",
-        message: "shareMp4 is only available for video files",
-      });
-    }
-    try {
-      const sharePath = await exportShareVideo(
-        normalizedPath,
-        parseShareVideoShortSide(url.searchParams.get("size")),
-      );
-      const shareStats = await stat(sharePath);
-      streamFile(req, res, sharePath, {
-        contentType: "video/mp4",
-        size: shareStats.size,
-        cacheControl: "private, max-age=86400",
-        acceptRanges: true,
-      });
-      return;
-    } catch (error) {
-      return writeJson(res, 500, {
-        error: "Failed to prepare video for sharing",
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  // HLS handler needs URL for segment parameter
-  const hlsHandled = await tryHLSStream({ ...handlingContext, url });
-  if (hlsHandled) return;
 
   // tryVideoFrameCrop must precede tryVideoThumbnail, which would otherwise
   // answer a sized video request with the whole first frame.
   const handlers = [
+    tryHLSStream,
     tryVideoFrameCrop,
     tryVideoThumbnail,
     tryImageCrop,
@@ -1074,17 +265,11 @@ const fileHandler = async (
   }
 
   if (representation === "preview" && !isVideo) {
-    return writeJson(res, 415, {
-      error: "Unsupported Media Type",
-      message: "Preview is only available for video files",
-    });
+    return unsupported(res, "Preview is only available for video files");
   }
 
   if (representation !== null && !isImage && !isVideo) {
-    return writeJson(res, 415, {
-      error: "Unsupported Media Type",
-      message: "Requested representation is not supported for this file type",
-    });
+    return unsupported(res, "Requested representation is not supported for this file type");
   }
 
   streamFile(req, res, normalizedPath, {

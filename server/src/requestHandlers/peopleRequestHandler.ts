@@ -1,7 +1,7 @@
 import type * as http from "http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { writeJson } from "../common/writeJson.ts";
-import { invalidateNamedCentroidCache } from "./faceIdentifyRequestHandler.ts";
+import { invalidateNamedCentroidCache } from "../faceDetection/faceIdentify/centroidCache.ts";
 import { readJsonRequest } from "../common/readBody.ts";
 
 export const peopleRequestHandler = async (

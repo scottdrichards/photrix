@@ -131,7 +131,7 @@ export const planThumbnailWork = async (
   }
 
   // The micro tile is either the JPEG's embedded EXIF thumbnail (160.micro2)
-  // or, when there is none, a full-decode 160 — see tryMicroThumbnail.
+  // or, when there is none, a full-decode 160 — see microThumbnail.ts.
   const [hasTile, hasEmbeddedMicro, hasDecodedMicro] = await Promise.all([
     exists(getMirroredCachedFilePath(fullPath, TILE_HEIGHT, IMAGE_OUTPUT_EXTENSION)),
     exists(

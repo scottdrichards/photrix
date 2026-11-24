@@ -24,12 +24,13 @@ filter), so that file is also the share-link access policy.
 | `POST /api/page-title`                   | `pageTitleRequestHandler.ts`                        | describes the current filter for the header                                                              |
 | `GET /api/suggestions`                   | `suggestionsRequestHandler.ts`                      | `indexDatabase.ts`                                                                                       |
 | `GET /api/video/negotiate`               | `video/videoNegotiation.ts`                         | direct vs live GPU HLS decision                                                                          |
-| `/api/faces/…`                           | `faceIdentifyRequestHandler.ts`                     | `faceDetection/`, `indexDatabase/faceReview.ts`                                                          |
+| `/api/faces/…`                           | `faceIdentifyRequestHandler.ts`                     | `faceDetection/faceIdentify/` (frames, SSRF guard, scoring); centroids from `indexDatabase/faceClusterStore.ts` |
 | `/api/people/…`                          | `peopleRequestHandler.ts`                           | `indexDatabase/faceClusterEngine.ts`                                                                     |
 | `POST /api/moment-clusters/…`            | `momentClustersRequestHandler.ts`                   | `indexDatabase/momentClusterEngine.ts`                                                                   |
 | `GET /api/photos/caption`                | `photoCaptionRequestHandler.ts`                     | `photoCaption/` (Ollama)                                                                                 |
 | `GET /api/photos/suggest-rotation`       | `suggestRotationRequestHandler.ts`                  | `imageProcessing/suggestRotation.ts`                                                                     |
 | `GET /api/day-photo/…`                   | `dayPhotoRequestHandler.ts`                         | `scripts/dayPhoto/`                                                                                      |
+| `GET /api/screensaver`                   | `screensaverRequestHandler.ts`                      | `scripts/dayPhoto/screensaver_pick.py`                                                                   |
 | `/api/settings/…`                        | `settingsRequestHandler.ts`                         | `settings` table                                                                                         |
 | `/api/auth/…`, `/api/account`            | `authRequestHandler.ts`, `accountRequestHandler.ts` | `auth/`                                                                                                  |
 | `GET /share`                             | `sharePreviewRequestHandler.ts`                     | `shareDescription/`                                                                                      |
@@ -39,21 +40,26 @@ filter), so that file is also the share-link access policy.
 | `/api/diagnostics/events`                | `diagnosticsRequestHandler.ts`                      | `observability/diagnosticsStore.ts`                                                                      |
 | `GET /api/diagnostics/perf`, `…/report`  | `diagnosticsReportRequestHandler.ts`                | `observability/perfMonitor.ts`, `systemStatus/buildDiagnosticsReport.ts`                                |
 
-### Serving a file (`filesRequestHandler.ts`)
+### Serving a file (`files/filesRequestHandler.ts`)
 
-`fileHandler` tries each representation in turn; the first that claims the
-request answers it.
+`fileHandler` parses the request and checks access (storage containment, the
+share filter). The named representations below go straight to their function;
+the rest are tried in turn, and the first that claims the request answers it.
+Video ones live in `files/videoRepresentations.ts`, streaming and Range
+handling in `files/streamFile.ts`.
 
 | `representation=`                          | Function                            | Produced by                                                                    |
 | ------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------ |
 | `preview` / `webSafe` / `?height=` (image) | `tryImageVariant`                   | `imageProcessing/convertImage.ts` (sharp, Python for HEIC/RAW), cached on disk |
-| `micro`                                    | `tryMicroThumbnail`                 | embedded EXIF thumbnail (`imageProcessing/embeddedThumbnail.ts`)               |
+| `micro`                                    | `tryMicroThumbnail`                 | `imageProcessing/microThumbnail.ts` (embedded EXIF thumbnail, else a 160 decode) |
 | `preview` (video)                          | `tryVideoThumbnail`                 | `videoProcessing/videoUtils.ts` (ffmpeg frame grab)                            |
-| `hls` (+ `variant`, `segment`)             | `tryHLSStream`                      | `videoProcessing/generateMultibitrateHLS.ts`, lifecycle in `hlsSession.ts`     |
-| `scrub`                                    | inline                              | `videoProcessing/videoUtils.ts`, one cached low-res frame per `index`          |
+| `hls` (+ `variant`, `segment`)             | `tryHLSStream`                      | `videoProcessing/hlsService.ts` `serveHls`; encodes `generateMultibitrateHLS.ts`, lifecycle `hlsSession.ts` |
+| `scrub`                                    | `serveScrubFrame`                   | `videoProcessing/videoUtils.ts`, one cached low-res frame per `index`          |
+| `storyboard`                               | `serveStoryboard`                   | `videoProcessing/videoStoryboard.ts`                                           |
+| `shareMp4`                                 | `serveShareMp4`                     | `videoProcessing/exportShareVideo.ts`                                          |
 | `transcript`                               | inline                              | `audioProcessing/processAudioTranscription.ts` output                          |
-| `live-photo`                               | inline                              | paired `.mov` / embedded motion photo                                          |
-| `crop=` (faces)                            | `tryImageCrop`, `tryVideoFrameCrop` | `imageProcessing/convertImage.ts`                                              |
+| `live-photo`                               | `serveLivePhoto`                    | paired `.mov` / embedded motion photo                                          |
+| `crop=` (faces)                            | `tryImageCrop`, `tryVideoFrameCrop` | `imageProcessing/convertImage.ts`, `videoProcessing/videoUtils.ts`             |
 | none                                       | `streamFile`                        | the original, with range support                                               |
 
 ## Video playback, end to end
@@ -65,10 +71,11 @@ request answers it.
    can carry the original and the browser can decode it), **live GPU HLS**,
    or **error** (with a reason saying which).
 3. HLS: hls.js requests the master → variant playlist → segments from
-   `filesRequestHandler.ts` `tryHLSStream`. Each variant is a separate
+   `files/videoRepresentations.ts` `tryHLSStream`, which hands each to
+   `videoProcessing/hlsService.ts` `serveHls`. Each variant is a separate
    on-demand ffmpeg encode (`generateMultibitrateHLS.ts`) at the source's own
    frame rate up to 30fps (`hlsOutputFrameRate.ts`), queued through the
-   task orchestrator, killed after 8s unused and deleted after 90s
+   task orchestrator (`hlsEncodeQueue.ts`), killed after 8s unused and deleted after 90s
    (`hlsSession.ts`). Segment requests wait for the encoder
    (`hlsSegmentWatcher.ts`).
 4. Client ABR: hls.js, with upswitches held back by `client/src/components/viewer/hlsAbrGuard.ts`.

@@ -179,15 +179,19 @@ available to scoped share links.
 | `{"imageUrl": "http://..."}` | One frame the server should fetch |
 | `{"imageUrls": [...]}` | Up to 6 frames (see *Why several frames* below) |
 | `{"imageBase64": "..."}` | One inline image |
+| `{"frigateEvent": {"host": "<frigate-ip>:5000", "id": "..."}}` | A Frigate event: the server reads its record and picks the frames |
 
-Fetched URLs must resolve to a private/LAN address — this is a camera-frame
-fetcher, not an open proxy.
+Fetched URLs must name a private/LAN address — this is a camera-frame
+fetcher, not an open proxy. That means an IP literal in a private or loopback
+range, or `localhost`; a DNS name is refused even when it resolves to the LAN.
+A redirect is followed (up to 3 hops) only while it stays on such an address.
+A `frigateEvent.host` must be a bare `host:port` under the same rule.
 
 Each `imageUrls` entry is either a URL string or an object:
 
 ```json
 {
-  "url": "http://frigate.local:5000/api/doorbell/recordings/1785160322/snapshot.jpg",
+  "url": "http://<frigate-ip>:5000/api/doorbell/recordings/1785160322/snapshot.jpg",
   "box": [0.53, 0.48, 0.12, 0.45],
   "pad": 0.4
 }
@@ -197,7 +201,7 @@ Each `imageUrls` entry is either a URL string or an object:
 detection, and `pad` (default `0.3`) widens it by that fraction of its own size.
 
 **Query parameters** (all optional; every default is documented with the
-measurement behind it in `src/faceDetection/identifyFaces.ts`):
+measurement behind it in `src/faceDetection/faceIdentify/identifyFaces.ts`):
 
 - `strongThreshold` (default `0.3`) — similarity that stands alone, no margin needed.
 - `threshold` (default `0.2`) — similarity floor for the moderate tier.

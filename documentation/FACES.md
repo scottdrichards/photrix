@@ -78,11 +78,11 @@ changes around them get a real migration (see "Migrations" in
 
 ## 6. Identify
 
-`faceDetection/identifyFaces.ts` matches a face from outside the library (a
+`faceDetection/faceIdentify/identifyFaces.ts` matches a face from outside the library (a
 camera frame, an uploaded snap) against the centroids of **named** people. It
 is a different question from clustering ("which of a few dozen known people is
 this, if any"), so it has its own thresholds and a margin over the runner-up,
 and it never writes to clusters. Served by
 `requestHandlers/faceIdentifyRequestHandler.ts` (`/api/faces/…`);
-`faceDetection/frigateEventFrames.ts` turns a Frigate NVR event into the
+`faceDetection/faceIdentify/frigateEventFrames.ts` turns a Frigate NVR event into the
 frames worth trying.

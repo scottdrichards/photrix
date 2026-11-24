@@ -1,6 +1,6 @@
-import { dotProduct } from "../common/dotProduct.ts";
-import { toAlignedFloat32 } from "../common/toAlignedFloat32.ts";
-import type { DetectedFace } from "./faceDetector.type.ts";
+import { dotProduct } from "../../common/dotProduct.ts";
+import { toAlignedFloat32 } from "../../common/toAlignedFloat32.ts";
+import type { DetectedFace } from "../faceDetector.type.ts";
 
 /**
  * Matching a *live* face (doorbell frame, phone snap) against the named people
@@ -131,7 +131,7 @@ export type IdentifiedFace = {
   candidates: Candidate[];
 };
 
-type IdentifyOptions = {
+export type IdentifyOptions = {
   threshold?: number;
   strongThreshold?: number;
   minMargin?: number;
