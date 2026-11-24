@@ -1,40 +1,41 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 afterEach(() => {
   jest.resetModules();
   jest.restoreAllMocks();
-  delete process.env.PHOTRIX_SESSION_EXPIRY_DAYS;
-  delete process.env.AUTH_PASSWORD;
+  overrideConfig({ PHOTRIX_SESSION_EXPIRY_DAYS: undefined });
+  overrideConfig({ AUTH_PASSWORD: undefined });
 });
 
 describe("session token expiry", () => {
   it("validates a fresh session token", async () => {
-    process.env.AUTH_PASSWORD = "test-password";
+    overrideConfig({ AUTH_PASSWORD: "test-password" });
     const { issueToken, validateToken } = await import("./authService.ts");
     const token = issueToken("alice");
     expect(validateToken(token)).toBe(true);
   });
 
   it("rejects a session token past its inactivity window", async () => {
-    process.env.AUTH_PASSWORD = "test-password";
-    process.env.PHOTRIX_SESSION_EXPIRY_DAYS = "1"; // 1 day
-    const { issueToken, validateToken, SESSION_EXPIRY_MS } = await import("./authService.ts");
+    overrideConfig({ AUTH_PASSWORD: "test-password" });
+    overrideConfig({ PHOTRIX_SESSION_EXPIRY_DAYS: "1" }); // 1 day
+    const { issueToken, validateToken, sessionExpiryMs } = await import("./authService.ts");
     const token = issueToken("alice");
 
     // Advance time past expiry
-    const future = Date.now() + SESSION_EXPIRY_MS + 1000;
+    const future = Date.now() + sessionExpiryMs() + 1000;
     jest.spyOn(Date, "now").mockReturnValue(future);
 
     expect(validateToken(token)).toBe(false);
   });
 
   it("evicts the expired entry so a second call also returns false", async () => {
-    process.env.AUTH_PASSWORD = "test-password";
-    process.env.PHOTRIX_SESSION_EXPIRY_DAYS = "1";
-    const { issueToken, validateToken, SESSION_EXPIRY_MS } = await import("./authService.ts");
+    overrideConfig({ AUTH_PASSWORD: "test-password" });
+    overrideConfig({ PHOTRIX_SESSION_EXPIRY_DAYS: "1" });
+    const { issueToken, validateToken, sessionExpiryMs } = await import("./authService.ts");
     const token = issueToken("alice");
 
-    const future = Date.now() + SESSION_EXPIRY_MS + 1000;
+    const future = Date.now() + sessionExpiryMs() + 1000;
     jest.spyOn(Date, "now").mockReturnValue(future);
 
     validateToken(token); // first call evicts
@@ -42,13 +43,13 @@ describe("session token expiry", () => {
   });
 
   it("keeps a session alive when touched within the window", async () => {
-    process.env.AUTH_PASSWORD = "test-password";
-    process.env.PHOTRIX_SESSION_EXPIRY_DAYS = "1";
-    const { issueToken, validateToken, SESSION_EXPIRY_MS } = await import("./authService.ts");
+    overrideConfig({ AUTH_PASSWORD: "test-password" });
+    overrideConfig({ PHOTRIX_SESSION_EXPIRY_DAYS: "1" });
+    const { issueToken, validateToken, sessionExpiryMs } = await import("./authService.ts");
     const token = issueToken("alice");
 
     // Advance to 23h59m — still within window
-    const almostExpired = Date.now() + SESSION_EXPIRY_MS - 60_000;
+    const almostExpired = Date.now() + sessionExpiryMs() - 60_000;
     jest.spyOn(Date, "now").mockReturnValue(almostExpired);
 
     expect(validateToken(token)).toBe(true);
@@ -59,33 +60,35 @@ describe("session token expiry", () => {
 // share link could test password guesses against it offline.
 describe("share token secret", () => {
   afterEach(() => {
-    delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: undefined });
   });
 
   it("does not derive the share key from the account password", async () => {
-    process.env.AUTH_PASSWORD = "test-password";
+    overrideConfig({ AUTH_PASSWORD: "test-password" });
     const { issueShareToken } = await import("./authService.ts");
     expect(() => issueShareToken({ filter: { rating: 5 } })).toThrow("PHOTRIX_SHARE_TOKEN_SECRET");
   });
 
-  it.each([
-    ["missing", undefined],
-    ["too short", "short-secret"],
-  ])("refuses to start with auth enabled and the secret %s", async (_label, secret) => {
-    process.env.AUTH_PASSWORD = "test-password";
-    if (secret) process.env.PHOTRIX_SHARE_TOKEN_SECRET = secret;
+  it("refuses to start with auth enabled and the secret missing", async () => {
+    overrideConfig({ AUTH_PASSWORD: "test-password" });
     const { initAuthService } = await import("./authService.ts");
     await expect(initAuthService({} as never)).rejects.toThrow("PHOTRIX_SHARE_TOKEN_SECRET");
+  });
+
+  it("refuses a secret that is too short", () => {
+    expect(() => overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "short-secret" })).toThrow(
+      "PHOTRIX_SHARE_TOKEN_SECRET: must be at least 32 characters",
+    );
   });
 });
 
 describe("canonical usernames", () => {
   afterEach(() => {
-    delete process.env.PHOTRIX_ACCOUNTS;
+    overrideConfig({ PHOTRIX_ACCOUNTS: undefined });
   });
 
   it("issues a session under the canonical account key whatever case was typed", async () => {
-    process.env.PHOTRIX_ACCOUNTS = JSON.stringify([{ username: "Admin", password: "pw" }]);
+    overrideConfig({ PHOTRIX_ACCOUNTS: JSON.stringify([{ username: "Admin", password: "pw" }]) });
     const { validateCredentials, getSessionUsername, listSessions } = await import(
       "./authService.ts"
     );
@@ -96,8 +99,8 @@ describe("canonical usernames", () => {
   });
 
   it("resolves the owner of a session and of an API key, but not of a share token", async () => {
-    process.env.AUTH_PASSWORD = "test-password";
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ AUTH_PASSWORD: "test-password" });
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const { issueToken, issueApiToken, issueShareToken, getTokenOwner } = await import(
       "./authService.ts"
     );
@@ -105,7 +108,7 @@ describe("canonical usernames", () => {
     expect(getTokenOwner(issueApiToken("alice", "k").token)).toBe("alice");
     expect(getTokenOwner(issueShareToken({ filter: { rating: 5 } }))).toBeNull();
     expect(getTokenOwner("nope")).toBeNull();
-    delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: undefined });
   });
 
   it("rewrites mixed-case usernames at startup so hidden rows reach their owner", async () => {
@@ -126,8 +129,8 @@ describe("canonical usernames", () => {
       get: async (sql: string, params: unknown[] = []) => raw.prepare(sql).get(...params),
     } as unknown as import("../common/asyncSqlite.ts").AsyncSqlite;
 
-    process.env.AUTH_PASSWORD = "test-password";
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ AUTH_PASSWORD: "test-password" });
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const { initAuthService, listSessions, listApiTokens, listShareLinks, revokeSessionsForUser } =
       await import("./authService.ts");
     await initAuthService(db);
@@ -140,6 +143,6 @@ describe("canonical usernames", () => {
     });
     await revokeSessionsForUser("admin");
     expect(listSessions("admin")).toHaveLength(0);
-    delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: undefined });
   });
 });

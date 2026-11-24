@@ -11,9 +11,10 @@ import { walkFiles } from "./fileHandling/fileUtils.ts";
 import { createTaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
 import { issueShareToken, issueToken } from "./auth/authService.ts";
+import { overrideConfig } from "./config/config.fixture.ts";
 
 // Port 0: the OS picks a free port, so this suite can run alongside the others.
-process.env.PORT = "0";
+overrideConfig({ PORT: "0" });
 const { createServer } = await import("./createServer.ts");
 
 type Response = { status: number; headers: http.IncomingHttpHeaders; body: string };
@@ -59,7 +60,7 @@ describe("createServer", () => {
   beforeEach(async () => {
     mediaRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-server-spec-media-"));
     dbRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-server-spec-db-"));
-    process.env.INDEX_DB_LOCATION = dbRoot;
+    overrideConfig({ INDEX_DB_LOCATION: dbRoot });
 
     mkdirSync(path.join(mediaRoot, "subFolder"));
     mkdirSync(path.join(mediaRoot, "otherFolder"));
@@ -93,8 +94,8 @@ describe("createServer", () => {
   });
 
   afterEach(async () => {
-    delete process.env.AUTH_PASSWORD;
-    delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+    overrideConfig({ AUTH_PASSWORD: undefined });
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: undefined });
     await new Promise((resolve) => server.close(resolve));
     await database.close();
     rmSync(mediaRoot, { recursive: true, force: true });
@@ -193,8 +194,10 @@ describe("createServer", () => {
     const shareScope = { filter: { rating: { min: 5 } } };
 
     beforeEach(() => {
-      process.env.AUTH_PASSWORD = "test-password";
-      process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+      overrideConfig({ AUTH_PASSWORD: "test-password" });
+      overrideConfig({
+        PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars",
+      });
     });
 
     it("refuses a request with no token", async () => {

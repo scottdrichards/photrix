@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 type TimeoutEntry = {
   id: string;
@@ -120,13 +121,13 @@ beforeEach(() => {
   workerSuspended = false;
   // Most tests exercise behaviour unrelated to the start-hysteresis gate, so
   // disable it by default; the test that covers it sets its own value.
-  process.env.PHOTRIX_WHISPER_START_QUIET_MS = "0";
+  overrideConfig({ PHOTRIX_WHISPER_START_QUIET_MS: "0" });
   suspensionListener = null;
   timeouts.length = 0;
 });
 
 afterEach(() => {
-  delete process.env.PHOTRIX_WHISPER_START_QUIET_MS;
+  overrideConfig({ PHOTRIX_WHISPER_START_QUIET_MS: undefined });
   jest.resetModules();
   jest.restoreAllMocks();
 });
@@ -337,7 +338,7 @@ describe("whisperWorker", () => {
     // A 2s orchestrator cooldown means background resumes between keystrokes;
     // starting a ~30s / 2.2 GB load in that gap only to be killed by the next
     // request is pure waste, so the start decision uses a longer horizon.
-    process.env.PHOTRIX_WHISPER_START_QUIET_MS = "60000";
+    overrideConfig({ PHOTRIX_WHISPER_START_QUIET_MS: "60000" });
     const child = createFakeChild();
     spawn.mockReturnValue(child);
 
@@ -354,7 +355,7 @@ describe("whisperWorker", () => {
     // Anchoring to the suspend edge was the bug: under continuous browsing the
     // orchestrator stays suspended, so no further suspend edges arrive and a
     // suspend-anchored timestamp ages past any threshold. Anchor on resume.
-    process.env.PHOTRIX_WHISPER_START_QUIET_MS = "60000";
+    overrideConfig({ PHOTRIX_WHISPER_START_QUIET_MS: "60000" });
     const child = createFakeChild();
     spawn.mockReturnValue(child);
 
@@ -373,7 +374,7 @@ describe("whisperWorker", () => {
   });
 
   it("starts once a full quiet stretch has elapsed since activity ended", async () => {
-    process.env.PHOTRIX_WHISPER_START_QUIET_MS = "50";
+    overrideConfig({ PHOTRIX_WHISPER_START_QUIET_MS: "50" });
     const child = createFakeChild();
     spawn.mockReturnValue(child);
     child.stdin.write.mockImplementation(() => {

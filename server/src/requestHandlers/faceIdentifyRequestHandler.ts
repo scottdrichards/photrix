@@ -4,7 +4,6 @@ import type * as http from "node:http";
 import { isIP } from "node:net";
 import path from "node:path";
 import sharp from "sharp";
-import { CACHE_DIR } from "../common/cacheUtils.js";
 import {
   DEFAULT_IDENTIFY_THRESHOLD,
   DEFAULT_MIN_FACE_CONFIDENCE,
@@ -27,10 +26,10 @@ import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../common/writeJson.ts";
 import { logFailure } from "../common/logFailure.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("faceIdentify");
 
-const TEMP_DIR = path.join(CACHE_DIR, "face-identify");
 
 /** Largest single image accepted. A 5 MP camera JPEG is ~2 MB; 16 is generous. */
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -424,10 +423,11 @@ const analyzeFrame = async (
 ): Promise<{
   faces: NonNullable<Awaited<ReturnType<typeof AnalyzeImageFn>>["faces"]>;
 }> => {
-  await mkdir(TEMP_DIR, { recursive: true });
+  const tempDir = path.join(config().media.cacheDir, "face-identify");
+  await mkdir(tempDir, { recursive: true });
   // The worker takes a path, not a buffer: it shares one decode between the
   // face and CLIP passes and is fed from disk everywhere else.
-  const tempPath = path.join(TEMP_DIR, `${randomUUID()}.img`);
+  const tempPath = path.join(tempDir, `${randomUUID()}.img`);
   await writeFile(tempPath, bytes);
   try {
     // The shared ML workers are SIGKILLed whenever a user starts a video

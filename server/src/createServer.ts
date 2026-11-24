@@ -23,10 +23,9 @@ import { sharePreviewRequestHandler } from "./requestHandlers/sharePreviewReques
 import type { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
 import type { FeedbackStore } from "./feedback/feedbackStore.ts";
 import { createRoutes, matchesRoute, type ApiRequest } from "./createRoutes.ts";
+import { config } from "./config/config.ts";
 
 const log = getLogger("httpServer");
-
-const PORT = process.env.PORT || 3000;
 
 // Bound how long a single connection may stay idle/slow so hung or malicious
 // clients can't accumulate and exhaust sockets. The status SSE stream sends data
@@ -262,8 +261,9 @@ export const createServer = (
   server.headersTimeout = HEADERS_TIMEOUT_MS;
   server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
 
-  server.listen(PORT, () => {
-    log.info({ port: PORT }, "HTTP server listening");
+  const { port } = config().server;
+  server.listen(port, () => {
+    log.info({ port }, "HTTP server listening");
   });
   return server;
 };

@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, writeFileSync, readFileSync, accessSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 const makeSpawnProcess = () => {
   const proc = new EventEmitter() as EventEmitter & {
@@ -101,16 +102,15 @@ const lastFilterChain = (spawnMock: { mock: { calls: unknown[][] } }): string =>
 afterEach(() => {
   jest.resetModules();
   jest.restoreAllMocks();
-  delete process.env.CACHE_DIR;
-  delete process.env.HLS_CACHE_DIR;
-  delete process.env.HLS_ENCODE_VERBOSE;
+  overrideConfig({ CACHE_DIR: undefined });
+  overrideConfig({ HLS_CACHE_DIR: undefined });
 });
 
 describe("prepareMultibitrateHLSStructure", () => {
   it("writes a master playlist advertising every variant for ABR, and creates their dirs", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-prepare-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -141,8 +141,8 @@ describe("prepareMultibitrateHLSStructure", () => {
 describe("the 4K rung (feedback #165)", () => {
   const prepare = async (size: { width?: number | null; height?: number | null }) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-uhd-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
     const mod = await import("./generateMultibitrateHLS.ts");
@@ -192,8 +192,8 @@ describe("the 4K rung (feedback #165)", () => {
 describe("generateVariantHLS", () => {
   it("uses full CUDA pipeline for landscape NVIDIA encode", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-variant-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -221,8 +221,8 @@ describe("generateVariantHLS", () => {
 
   it("starts a seek's encode at the requested segment on the file's own timeline (feedback #167)", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-seek-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "long.mp4");
     writeFileSync(source, "video");
 
@@ -246,8 +246,8 @@ describe("generateVariantHLS", () => {
 
   it("uses NVDEC+NVENC (CPU auto-rotate) for rotated/portrait videos on NVIDIA", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-portrait-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "portrait.mp4");
     writeFileSync(source, "video");
 
@@ -280,8 +280,8 @@ describe("generateVariantHLS", () => {
 
   it("encodes at the source's own frame rate instead of resampling a 24fps film to 30", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-fps-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "film.mp4");
     writeFileSync(source, "video");
 
@@ -301,8 +301,8 @@ describe("generateVariantHLS", () => {
 
   it("drops every other frame of a 60fps source on the full CUDA pipeline", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-fps60-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "action.mp4");
     writeFileSync(source, "video");
 
@@ -318,8 +318,8 @@ describe("generateVariantHLS", () => {
 
   it("falls back to software encoding when hardware encode fails", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-variant-fallback-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -362,8 +362,8 @@ describe("generateVariantHLS", () => {
 
   it("scales and rotates entirely on the Intel iGPU when the driver has VPP", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-intel-vpp-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "portrait.mov");
     writeFileSync(source, "video");
 
@@ -406,8 +406,8 @@ describe("generateVariantHLS", () => {
 
   it("maps 8-bit surfaces without copying when the driver lacks VPP", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-intel-8bit-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -440,8 +440,8 @@ describe("generateVariantHLS", () => {
 
   it("copies 10-bit surfaces as p010 and rotates after scaling when VPP is absent", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-intel-10bit-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "portrait.mov");
     writeFileSync(source, "video");
 
@@ -480,8 +480,8 @@ describe("generateVariantHLS", () => {
 
   it("uses the system-memory pipeline for a codec the iGPU cannot decode", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-intel-av1-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "av1.mp4");
     writeFileSync(source, "video");
 
@@ -511,8 +511,8 @@ describe("generateVariantHLS", () => {
 
   it("retries a failed GPU-frame encode on the system-memory pipeline, not libx264", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-intel-retry-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -544,8 +544,8 @@ describe("generateVariantHLS", () => {
 
   it("treats a killed encode as cancellation, not as a hardware failure", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-intel-killed-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 
@@ -574,8 +574,8 @@ describe("generateVariantHLS", () => {
 
   it("rejects when ffmpeg fails without a hardware fallback signal", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "photrix-abr-variant-fail-"));
-    process.env.CACHE_DIR = root;
-    process.env.HLS_CACHE_DIR = root;
+    overrideConfig({ CACHE_DIR: root });
+    overrideConfig({ HLS_CACHE_DIR: root });
     const source = path.join(root, "video.mp4");
     writeFileSync(source, "video");
 

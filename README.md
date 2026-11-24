@@ -30,8 +30,9 @@ The client proxies `/api` to `http://localhost:3000` in development.
 
 ## Environment profiles
 
-- Use `server/.env.example` as the source of truth for all environment variables.
-- Local and production examples are included in that file.
+- `server/.env.example` lists every server environment variable, grouped and
+  commented. It is generated from `server/src/config/config.ts`, which checks
+  them all at startup and refuses to start, listing each bad or missing one.
 - For internet-facing setup details, see `GETTING_STARTED.md`.
 
 ## Finding your way around

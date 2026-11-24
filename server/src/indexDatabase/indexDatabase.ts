@@ -28,6 +28,7 @@ import { tables } from "./tables.ts";
 import { getLogger } from "../observability/logger.ts";
 import { attemptSync } from "../common/result.ts";
 import { deleteFacesStatements } from "./deleteFacesStatements.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("IndexDatabase");
 
@@ -316,8 +317,8 @@ export class IndexDatabase {
   // write connection writes committed frames back into the main DB and resets
   // the WAL file during the gaps between readers.
   private startWalMaintenance(): void {
-    const intervalMs = Number(process.env.PHOTRIX_WAL_CHECKPOINT_INTERVAL_MS) || 60_000;
-    if (intervalMs <= 0) return;
+    const intervalMs = config().db.walCheckpointIntervalMs;
+    if (intervalMs === 0) return;
     this.walCheckpointTimer = setInterval(() => {
       void this.checkpointWal();
     }, intervalMs);

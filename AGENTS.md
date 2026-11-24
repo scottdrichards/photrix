@@ -57,9 +57,13 @@ resolution).
   `server/src/indexDatabase/tables.ts` and query it from the store that owns
   it. Carrying user data across a schema change follows "Migrations" in
   `indexDatabase/README.md`.
-- **An env var**: read it where it is used, validated at startup when a bad
-  value would otherwise fail later; document it, commented, in
-  `server/.env.example`. Client build-time vars are `VITE_*` in
+- **An env var**: add it to its section of `server/src/config/config.ts` with
+  a reader from `config/env.ts` and a `help` line, read it with `config()`
+  where it is used (not into a module constant), then run
+  `bun run --filter server env:example` to regenerate `server/.env.example`.
+  Lint rejects `process.env` anywhere else; a spec changes config with
+  `overrideConfig` from `config/config.fixture.ts`. See
+  `server/src/config/README.md`. Client build-time vars are `VITE_*` in
   `client/.env.example`.
 - **A client API call**: a function in `client/src/api/<area>.ts`, types in
   `api/api.type.ts`, exported from `api/index.ts`. See `client/src/README.md`.

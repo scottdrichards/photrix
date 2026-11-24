@@ -3,7 +3,6 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { CACHE_DIR } from "../common/cacheUtils.js";
 import { getLogger } from "../observability/logger.ts";
 import { createModelLoadTimer, type ModelLoadProgress } from "../common/modelLoadTimer.ts";
 import { buildPythonProcessEnv, resolvePythonCommand } from "../python/pythonRuntime.ts";
@@ -20,6 +19,7 @@ import {
   markWorkerEvictedError,
 } from "../taskOrchestrator/computeWorkers.ts";
 import type { SearchModelState } from "../imageAnalysis/imageAnalysisWorker.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("clapWorker");
 
@@ -118,7 +118,7 @@ const ensureWorkerReady = async (): Promise<void> => {
     // the background-task registration) so a search's foreground CLAP call
     // is also blocked — "disable audio entirely" should mean no CLAP process
     // ever spawns, not just that the background embedding backlog stops.
-    if (process.env.PHOTRIX_DISABLE_AUDIO === "1") {
+    if (config().python.audioDisabled) {
       throw new Error("CLAP worker disabled via PHOTRIX_DISABLE_AUDIO=1");
     }
     if (!(await canAccess(CLAP_SCRIPT))) {
@@ -126,7 +126,7 @@ const ensureWorkerReady = async (): Promise<void> => {
     }
 
     const pythonCommand = await resolvePythonCommand();
-    const pythonEnv = await buildPythonProcessEnv(pythonCommand, process.env);
+    const pythonEnv = await buildPythonProcessEnv(pythonCommand);
 
     // Wait for any other GPU worker (e.g. image analysis) to finish loading
     // before spawning — simultaneous CUDA model loads can OOM the GPU.
@@ -135,7 +135,7 @@ const ensureWorkerReady = async (): Promise<void> => {
     const child = spawn(pythonCommand, [CLAP_SCRIPT], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
-      env: { ...pythonEnv, HF_HOME: path.join(CACHE_DIR, "huggingface") },
+      env: { ...pythonEnv, HF_HOME: path.join(config().media.cacheDir, "huggingface") },
     });
     worker = child;
     computeWorkerSpawned(COMPUTE_WORKER_IDS.clap);
@@ -184,7 +184,7 @@ const ensureWorkerReady = async (): Promise<void> => {
       // request too. On timeout we kill the child so the exit handler resets
       // state and the next call respawns a fresh worker.
       const readyTimeoutMs =
-        Number(process.env.PHOTRIX_CLAP_READY_TIMEOUT_MS) || 5 * 60 * 1_000;
+        config().python.clapReadyTimeoutMs;
       const readyTimer = setTimeout(() => {
         rejectReady(
           new Error(`CLAP worker failed to become ready within ${readyTimeoutMs}ms`),
@@ -312,7 +312,7 @@ export const embedTextWithClap = (text: string): Promise<Float32Array> =>
 
 /** Whether a text search against CLAP will be fast right now. */
 export const getAudioSearchModelState = (): SearchModelState => {
-  if (process.env.PHOTRIX_DISABLE_AUDIO === "1") return "unavailable";
+  if (config().python.audioDisabled) return "unavailable";
   if (worker && workerReady) return "ready";
   if (readyPromise) return "loading";
   return "cold";

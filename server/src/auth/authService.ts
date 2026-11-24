@@ -11,6 +11,7 @@ import type { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { logFailure } from "../common/logFailure.ts";
 import { getLogger } from "../observability/logger.ts";
 import type { ShareScope } from "../../../shared/filter-contract/src/index.ts";
+import { config } from "../config/config.ts";
 
 type TokenData = {
   createdAt: number;
@@ -37,8 +38,6 @@ const log = getLogger("auth");
 //   write has succeeded, and a failure propagates to the caller. Otherwise a
 //   revoked credential would come back to life at the next restart, silently.
 
-type AccountConfig = { username: string; password: string };
-
 const PASSWORD_SALT = "photrix-account-v1";
 const PASSWORD_KEY_LENGTH = 32;
 
@@ -54,29 +53,19 @@ const hashPasswordAsync = (password: string): Promise<Buffer> =>
     );
   });
 
-const loadAccounts = (): Map<string, Buffer> => {
-  const map = new Map<string, Buffer>();
-  const raw = process.env.PHOTRIX_ACCOUNTS;
-  if (raw) {
-    let parsed: AccountConfig[];
-    try {
-      parsed = JSON.parse(raw) as AccountConfig[];
-    } catch {
-      throw new Error("PHOTRIX_ACCOUNTS must be a valid JSON array");
-    }
-    for (const { username, password } of parsed) {
-      map.set(username.toLowerCase(), hashPassword(password));
-    }
-    return map;
-  }
-  // Fall back to single-account mode using AUTH_PASSWORD with username "admin".
-  if (process.env.AUTH_PASSWORD) {
-    map.set("admin", hashPassword(process.env.AUTH_PASSWORD));
-  }
+// Password hashes by account, made once per configuration.
+let accountHashes: { from: ReturnType<typeof config>["auth"]; map: Map<string, Buffer> } | null =
+  null;
+
+const getAccounts = (): Map<string, Buffer> => {
+  const { auth } = config();
+  if (accountHashes?.from === auth) return accountHashes.map;
+  // PHOTRIX_ACCOUNTS, else single-account mode: AUTH_PASSWORD for "admin".
+  const list = auth.accounts ?? (auth.password ? [{ username: "admin", password: auth.password }] : []);
+  const map = new Map(list.map(({ username, password }) => [username.toLowerCase(), hashPassword(password)]));
+  accountHashes = { from: auth, map };
   return map;
 };
-
-const accounts = loadAccounts();
 
 // Accounts are looked up case-insensitively, so every stored username (session,
 // API key, share link, passkey) must use one canonical form or a login typed as
@@ -86,9 +75,8 @@ const canonicalUsername = (username: string): string => username.toLowerCase();
 
 // Sessions expire after this many ms of inactivity. Configurable so a home
 // server that restarts infrequently can pick a longer window without forking
-// the code; 30 days is the default.
-const SESSION_EXPIRY_DAYS = Number(process.env.PHOTRIX_SESSION_EXPIRY_DAYS ?? 30);
-export const SESSION_EXPIRY_MS = SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+// the code (PHOTRIX_SESSION_EXPIRY_DAYS).
+export const sessionExpiryMs = (): number => config().auth.sessionExpiryDays * 24 * 60 * 60 * 1000;
 
 // In-memory session store — seeded from DB on startup, kept in sync on writes.
 const tokens = new Map<string, TokenData>();
@@ -128,11 +116,13 @@ const normalizeStoredUsernames = async (database: AsyncSqlite): Promise<void> =>
 };
 
 export const initAuthService = async (database: AsyncSqlite): Promise<void> => {
-  // Fail at startup, not on the first share link.
+  // Fail at startup, not on the first share link, and hash the account
+  // passwords now rather than on the first login.
   if (isAuthEnabled()) getShareTokenKey();
+  getAccounts();
   db = database;
   await normalizeStoredUsernames(database);
-  const cutoff = Date.now() - SESSION_EXPIRY_MS;
+  const cutoff = Date.now() - sessionExpiryMs();
   // Hard-delete expired sessions so the DB doesn't grow unboundedly.
   await db.run("DELETE FROM auth_sessions WHERE lastSeenAt < ?", [cutoff]);
 
@@ -181,17 +171,14 @@ export const initAuthService = async (database: AsyncSqlite): Promise<void> => {
 // server by sending made-up `photrix-share-v1.*` tokens. Derive once per secret.
 let shareTokenKeyCache: { secret: string; key: Buffer } | null = null;
 
-//
 // Its own random secret, never the account password: every share link carries
 // ciphertext under this key, so a password-derived key let anyone holding a
 // link test password guesses offline.
-const MIN_SHARE_TOKEN_SECRET_LENGTH = 32;
-
 const getShareTokenKey = (): Buffer => {
-  const secret = process.env.PHOTRIX_SHARE_TOKEN_SECRET;
-  if (!secret || secret.length < MIN_SHARE_TOKEN_SECRET_LENGTH) {
+  const { shareTokenSecret: secret, minShareTokenSecretLength } = config().auth;
+  if (!secret) {
     throw new Error(
-      `PHOTRIX_SHARE_TOKEN_SECRET must be set to a random string of at least ${MIN_SHARE_TOKEN_SECRET_LENGTH} characters (e.g. \`openssl rand -base64 32\`)`,
+      `PHOTRIX_SHARE_TOKEN_SECRET must be set to a random string of at least ${minShareTokenSecretLength} characters (e.g. \`openssl rand -base64 32\`)`,
     );
   }
   if (shareTokenKeyCache?.secret !== secret) {
@@ -234,8 +221,7 @@ const decodeShareScopePayload = (token: string): ShareScope<unknown> | null => {
   }
 };
 
-export const isAuthEnabled = () =>
-  !!(process.env.PHOTRIX_ACCOUNTS || process.env.AUTH_PASSWORD);
+export const isAuthEnabled = () => config().auth.enabled;
 
 export const issueToken = (username = "_test_", ip: string | null = null): string => {
   username = canonicalUsername(username);
@@ -273,7 +259,7 @@ export const validateCredentials = async (
   password: string,
   ip: string | null = null,
 ): Promise<string | null> => {
-  const storedHash = accounts.get(username.toLowerCase());
+  const storedHash = getAccounts().get(username.toLowerCase());
   if (!storedHash) return null;
   const inputHash = await hashPasswordAsync(password);
   if (!timingSafeEqual(storedHash, inputHash)) return null;
@@ -316,7 +302,7 @@ const touchSession = (token: string): void => {
 export const validateToken = (token: string): boolean => {
   const session = tokens.get(token);
   if (session) {
-    if (Date.now() - session.lastSeenAt > SESSION_EXPIRY_MS) {
+    if (Date.now() - session.lastSeenAt > sessionExpiryMs()) {
       // Expired — evict eagerly so the Map doesn't grow with dead entries. The
       // row needs no care: startup deletes expired rows before loading.
       tokens.delete(token);

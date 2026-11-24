@@ -4,6 +4,7 @@ import { getShareLinkLabel, getShareScope } from "../auth/authService.ts";
 import { resolveShareFilter } from "../shareScope/shareScope.ts";
 import { attempt } from "../common/result.ts";
 import { getLogger } from "../observability/logger.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("sharePreview");
 
@@ -100,7 +101,7 @@ export const sharePreviewRequestHandler = async (
   }
   const { previewPaths, totalCount } = preview.ok ? preview.value : { previewPaths: [], totalCount: 0 };
 
-  const origin = process.env.PHOTRIX_PUBLIC_URL?.replace(/\/$/, "") ?? getOrigin(req);
+  const origin = config().server.publicUrl ?? getOrigin(req);
   const appUrl = `${origin}/?token=${encodeURIComponent(token)}`;
   const openSharedViewHref = `./?token=${encodeURIComponent(token)}`;
   const countLabel =

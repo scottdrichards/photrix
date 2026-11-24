@@ -10,7 +10,9 @@ import { sharedIgnores, sharedRules, sharedTestRules } from "../eslint.shared.mj
 // cross-module import that is not listed here fails lint: either the code is in
 // the wrong module, or the dependency is deliberate and belongs in this map.
 // Read top to bottom it runs from the foundation to the composition root.
-const modules = {
+const modules = withConfig({
+  // Parses the environment; imports nothing from src.
+  config: [],
   observability: [],
   python: [],
   common: ["observability"],
@@ -47,7 +49,21 @@ const modules = {
   ],
   // main.ts, createServer.ts, createRoutes.ts: the composition root.
   "(root)": ["*"],
-};
+});
+
+// Every module may read config/.
+function withConfig(map) {
+  return Object.fromEntries(
+    Object.entries(map).map(([name, deps]) =>
+      [name, name === "config" || deps.includes("*") ? deps : ["config", ...deps]],
+    ),
+  );
+}
+
+// Only config/ reads the environment, so every variable is parsed, validated
+// and documented in one place (see config/config.ts). Tests override it with
+// config/config.fixture.ts.
+const processEnvAllowed = ["src/config/config.ts", "src/config/config.fixture.ts", "src/config/childEnv.ts"];
 
 // Known violations. Fix one, delete its line; do not add to this list.
 const stagesInDatabase = "pipeline stage living in the persistence module";
@@ -89,6 +105,21 @@ export default tseslint.config(
     files: ["**/*.{ts,tsx}"],
     rules: {
       "@typescript-eslint/switch-exhaustiveness-check": "error",
+    },
+  },
+  {
+    files: ["src/**/*.ts"],
+    ignores: processEnvAllowed,
+    rules: {
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "process",
+          property: "env",
+          message:
+            "Read configuration with config() from config/config.ts (add the variable there), spawn children with config/childEnv.ts, and override it in tests with config/config.fixture.ts.",
+        },
+      ],
     },
   },
   {

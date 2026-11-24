@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import type http from "node:http";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 afterEach(() => {
   jest.resetModules();
   jest.restoreAllMocks();
-  delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+  overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: undefined });
 });
 
 const createJsonResponse = () => {
@@ -59,7 +60,7 @@ const loadShareHandler = async () => {
 
 describe("authShareTokenHandler", () => {
   it("stores a stateless live semantic share definition in the token", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -94,7 +95,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("rejects invalid semantic share source lists", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -116,7 +117,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("allows live semantic shares without resolving them up front", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -143,7 +144,7 @@ describe("authShareTokenHandler", () => {
     ["a root folder", { folder: { folder: "/", recursive: true } }],
     ["an injected field name", { "1) OR (1": "x" }],
   ])("refuses a share scoped by %s", async (_label, filter) => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -158,7 +159,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("shares the whole library only when asked for by name (feedback #187)", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -179,7 +180,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("doesn't record a whole-library flag on a link that is scoped anyway", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -199,7 +200,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("refuses a whole-library share whose filter can't compile", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -217,7 +218,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("refuses an injected field name on a semantic share", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();
@@ -235,7 +236,7 @@ describe("authShareTokenHandler", () => {
   });
 
   it("dryRun reports the share size without minting a token", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     const authService = await import("../auth/authService.ts");
     const authToken = authService.issueToken();
     const handler = await loadShareHandler();

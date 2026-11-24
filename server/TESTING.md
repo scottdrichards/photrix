@@ -22,6 +22,11 @@ bun run test --forceExit -t "share link"         # by test name
   `await import(...)` the code under test. `jest.spyOn` cannot patch an ES
   module export. A mocked module must provide every member the code under test
   uses: the mock outlives `jest.resetModules()`.
+- **Change configuration with `overrideConfig`** from
+  `src/config/config.fixture.ts`, never by writing `process.env` (lint rejects
+  it). An override applies to modules already imported and to ones imported
+  after `jest.resetModules()`; `undefined` unsets a variable, `resetConfig()`
+  drops every override.
 - **Use `exampleFolder`** for anything that needs real media. It is a small
   synthetic library; its fixtures carry fabricated EXIF only.
 

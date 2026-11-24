@@ -10,6 +10,7 @@ import { createAbortError, getRequestAbortSignal } from "../common/requestAbort.
 import { getLogger } from "../observability/logger.ts";
 import { logFailure } from "../common/logFailure.ts";
 import { clamp01 } from "../common/clamp01.ts";
+import { config } from "../config/config.ts";
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "process_image.py");
 
 const log = getLogger("convertImage");
@@ -133,7 +134,7 @@ const resolvePythonInvocationUncached = async (): Promise<PythonInvocation> => {
   // When explicitly configured, that interpreter is the answer — validate it and
   // fail loudly if it can't do the job rather than silently falling back to a
   // system python that would hide the misconfiguration.
-  const configured = process.env.PHOTRIX_PYTHON?.trim();
+  const configured = config().python.command;
   if (configured) {
     const probe = await probeInterpreter(configured, []);
     if (probe.ok) {

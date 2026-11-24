@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { AsyncSqlite } from "../common/asyncSqlite.ts";
-import { CACHE_DIR } from "../common/cacheUtils.ts";
+import { config } from "../config/config.ts";
 
 export type IndexSqlite = { sqlite: AsyncSqlite; filePath: string };
 
@@ -12,9 +12,7 @@ export type IndexSqlite = { sqlite: AsyncSqlite; filePath: string };
  * connection), auth, feature flags and feedback. Nothing else gets the handle.
  */
 export const openIndexSqlite = async (): Promise<IndexSqlite> => {
-  const envDbLocation = process.env.INDEX_DB_LOCATION?.trim();
-  const databaseDirectory = envDbLocation || CACHE_DIR;
-  const filePath = path.join(path.resolve(databaseDirectory), "index.db");
+  const filePath = path.join(path.resolve(config().db.directory), "index.db");
 
   const directoryPath = path.dirname(filePath);
   const rootPath = path.parse(directoryPath).root;

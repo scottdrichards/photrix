@@ -1,9 +1,9 @@
 import { getHeapStatistics } from "node:v8";
 import { getLogger } from "./logger.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("memory");
 
-const DEFAULT_INTERVAL_MS = 10 * 60_000;
 const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
 
 /**
@@ -13,9 +13,8 @@ const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
  * PHOTRIX_MEMORY_LOG_INTERVAL_MS=0 turns it off.
  */
 export const startMemoryLog = (): (() => void) => {
-  const raw = process.env.PHOTRIX_MEMORY_LOG_INTERVAL_MS;
-  const intervalMs = raw === undefined ? DEFAULT_INTERVAL_MS : Number(raw);
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) return () => {};
+  const intervalMs = config().server.memoryLogIntervalMs;
+  if (intervalMs === 0) return () => {};
 
   const timer = setInterval(() => {
     const usage = process.memoryUsage();

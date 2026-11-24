@@ -10,6 +10,7 @@
     "dev": "tsx src/main.ts",
     "db:vacuum": "node scripts/vacuum-db.mjs",
     "mcp": "tsx src/mcp/main.ts",
+    "env:example": "tsx src/config/writeEnvExample.ts",
     "python:install": "node scripts/python-env.mjs install",
     "python:report": "node scripts/python-env.mjs report",
     "python:profiles": "node scripts/python-env.mjs list",

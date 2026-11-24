@@ -2,6 +2,7 @@ import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
 import { recordServerDiagnosticEvent } from "./diagnosticsStore.ts";
 import { getLogger } from "./logger.ts";
 import { redactRequestPath } from "./privacy.ts";
+import { config } from "../config/config.ts";
 
 /**
  * Always-on, in-process answer to "what is making the server slow right now?"
@@ -15,7 +16,6 @@ import { redactRequestPath } from "./privacy.ts";
 const log = getLogger("perfMonitor");
 
 const SAMPLES_PER_ROUTE = 200;
-const SLOW_REQUEST_MS = Number(process.env.PHOTRIX_SLOW_REQUEST_MS) || 1_000;
 const STALL_TICK_MS = 100;
 // A tick this late means synchronous work blocked every request for that long.
 const STALL_THRESHOLD_MS = 200;
@@ -96,7 +96,7 @@ export const recordRequestEnd = (
   stats.samples.push(durationMs);
   if (stats.samples.length > SAMPLES_PER_ROUTE) stats.samples.shift();
 
-  if (durationMs < SLOW_REQUEST_MS || LONG_LIVED_ROUTES.has(route)) return;
+  if (durationMs < config().server.slowRequestMs || LONG_LIVED_ROUTES.has(route)) return;
   const categoryMs: Record<string, number> = {};
   for (const span of spans)
     categoryMs[span.category] = (categoryMs[span.category] ?? 0) + span.durationMs;

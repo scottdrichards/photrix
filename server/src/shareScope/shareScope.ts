@@ -8,19 +8,13 @@ import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { FilterCompileError, filterToSQL } from "../indexDatabase/filterToSQL.ts";
 import { embedText } from "../imageAnalysis/imageAnalysisWorker.ts";
 import { embedTextWithClap } from "../audioProcessing/clapWorker.ts";
+import { config } from "../config/config.ts";
 
-const CLIP_MIN_SIMILARITY = Number(
-  process.env.PHOTRIX_SEARCH_CLIP_MIN_SIMILARITY ?? 0.18,
-);
-const CLAP_MIN_SIMILARITY = Number(
-  process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.45,
-);
-const SEARCH_TIMEOUT_MS = Number(process.env.PHOTRIX_SEARCH_TIMEOUT_MS) || 15_000;
 // Resolving a semantic share embeds its query text, which gives the same
 // vector every time, so the result can live a while. It used to expire after
 // 5 s, and every request in a cold window ran its own embed: a grid's ~100
 // concurrent tile requests each queued an ML-worker job behind background work
-// and 503'd on SEARCH_TIMEOUT_MS. Concurrent callers now share one in-flight
+// and 503'd on PHOTRIX_SEARCH_TIMEOUT_MS. Concurrent callers now share one in-flight
 // resolution.
 const SHARE_FILTER_CACHE_TTL_MS = 10 * 60_000;
 
@@ -49,8 +43,8 @@ export class ShareScopeError extends Error {
 const withTimeout = <T>(p: Promise<T>, label: string): Promise<T> =>
   new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
-      () => reject(new Error(`${label} search timed out after ${SEARCH_TIMEOUT_MS}ms`)),
-      SEARCH_TIMEOUT_MS,
+      () => reject(new Error(`${label} search timed out after ${config().search.timeoutMs}ms`)),
+      config().search.timeoutMs,
     );
     p.then(
       (value) => {
@@ -186,7 +180,7 @@ const resolveSemanticShareFilter = async (
           return {
             semanticImage: {
               queryVector: Array.from(queryVector),
-              minSimilarity: CLIP_MIN_SIMILARITY,
+              minSimilarity: config().search.clipMinSimilarity,
             },
           };
         }
@@ -196,7 +190,7 @@ const resolveSemanticShareFilter = async (
           return {
             semanticAudio: {
               queryVector: Array.from(queryVector),
-              minSimilarity: CLAP_MIN_SIMILARITY,
+              minSimilarity: config().shareScope.clapMinSimilarity,
             },
           };
         }

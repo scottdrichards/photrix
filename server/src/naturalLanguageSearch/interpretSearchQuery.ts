@@ -22,6 +22,7 @@ import {
 } from "./queryEvidence.ts";
 import { resolveDateIntent } from "./resolveDateIntent.ts";
 import type { SearchVocabulary, VocabularyPerson } from "./searchVocabulary.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("interpretSearchQuery");
 
@@ -34,7 +35,6 @@ const log = getLogger("interpretSearchQuery");
  * while a longer one leaves a stale request in flight after the user has moved
  * on. Raise it on a faster host; the client's own abort sits above it.
  */
-const TIMEOUT_MS = Number(process.env.PHOTRIX_NL_SEARCH_TIMEOUT_MS) || 12_000;
 
 /** Enough tokens for the JSON object below; anything longer is a runaway answer. */
 const NUM_PREDICT = 120;
@@ -186,7 +186,7 @@ export const interpretSearchQuery = async ({
   try {
     answer = await generate(SYSTEM_PROMPT, buildPrompt(trimmedQuery, vocabulary), {
       numPredict: NUM_PREDICT,
-      timeoutMs: TIMEOUT_MS,
+      timeoutMs: config().search.naturalLanguageTimeoutMs,
       json: true,
     });
   } catch (error) {

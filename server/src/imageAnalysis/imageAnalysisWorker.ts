@@ -3,7 +3,6 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { CACHE_DIR } from "../common/cacheUtils.js";
 import { getLogger } from "../observability/logger.ts";
 import { createModelLoadTimer, type ModelLoadProgress } from "../common/modelLoadTimer.ts";
 import { buildPythonProcessEnv, resolvePythonCommand } from "../python/pythonRuntime.ts";
@@ -20,6 +19,8 @@ import {
 } from "../taskOrchestrator/computeWorkers.ts";
 import type { DetectedFace, FaceAttributes } from "../faceDetection/faceDetector.type.ts";
 import { parseFaceAttributes } from "../faceDetection/faceAttributes.ts";
+import { config } from "../config/config.ts";
+import { childProcessEnv } from "../config/childEnv.ts";
 
 const log = getLogger("imageAnalysisWorker");
 
@@ -96,7 +97,7 @@ export type ImageAnalysisResult = {
 };
 
 export const resolveImageAnalysisWorkerRuntime = (
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = childProcessEnv(),
 ): { faceProvider: string; clipDevice: string } => {
   const faceProvider =
     env.PHOTRIX_INSIGHTFACE_PROVIDER?.trim() ??
@@ -222,7 +223,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
       }
 
       const pythonCommand = await resolvePythonCommand();
-      const pythonEnv = await buildPythonProcessEnv(pythonCommand, process.env);
+      const pythonEnv = await buildPythonProcessEnv(pythonCommand);
       const { faceProvider, clipDevice } = resolveImageAnalysisWorkerRuntime();
 
       // Hold the GPU init slot for the duration of model loading so a CLAP
@@ -236,7 +237,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
       const child = spawn(pythonCommand, [WORKER_SCRIPT, faceProvider, clipDevice], {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
-        env: { ...pythonEnv, HF_HOME: path.join(CACHE_DIR, "huggingface") },
+        env: { ...pythonEnv, HF_HOME: path.join(config().media.cacheDir, "huggingface") },
       });
       proc = child;
       computeWorkerSpawned(COMPUTE_WORKER_IDS.image);
@@ -280,7 +281,7 @@ const createWorkerHandle = (label: string): WorkerHandle => {
         // memoised that wedges every later request too. On timeout we kill the
         // child so the exit handler resets state and the next call respawns.
         const readyTimeoutMs =
-          Number(process.env.PHOTRIX_IMAGE_WORKER_READY_TIMEOUT_MS) || 5 * 60 * 1_000;
+          config().python.imageWorkerReadyTimeoutMs;
         const readyTimer = setTimeout(() => {
           rejectReady(
             new Error(

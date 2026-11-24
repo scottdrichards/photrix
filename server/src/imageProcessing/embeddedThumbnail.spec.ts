@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 const EXAMPLE_DIR = path.join(process.cwd(), "exampleFolder");
 // Canon DSLR JPEG: carries a 160x120 embedded EXIF thumbnail, EXIF orientation 8
@@ -21,8 +22,7 @@ let convertEmbeddedThumbnail: (
 
 beforeAll(async () => {
   tempCacheDir = mkdtempSync(path.join(os.tmpdir(), "photrix-micro-test-"));
-  // cacheUtils reads CACHE_DIR at import time, so set it before importing.
-  process.env.CACHE_DIR = tempCacheDir;
+  overrideConfig({ CACHE_DIR: tempCacheDir });
   ({ convertEmbeddedThumbnail } = await import("./embeddedThumbnail.ts"));
 });
 

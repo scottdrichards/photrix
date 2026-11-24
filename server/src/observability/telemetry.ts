@@ -1,21 +1,22 @@
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { NodeSDK } from "@opentelemetry/sdk-node";
+import { config } from "../config/config.ts";
+import { exportEnvDefaults } from "../config/childEnv.ts";
 
 let telemetrySdk: NodeSDK | undefined;
 let telemetryStartPromise: Promise<void> | null = null;
 let telemetryStopPromise: Promise<void> | null = null;
 
-const isTelemetryEnabled = () =>
-  process.env.PHOTRIX_OTEL_ENABLED?.trim().toLowerCase() === "true";
+const isTelemetryEnabled = () => config().telemetry.enabled;
 
-const getTracesEndpoint = () =>
-  process.env.PHOTRIX_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?.trim() ||
-  process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?.trim() ||
-  "http://127.0.0.1:4318/v1/traces";
+const getTracesEndpoint = () => config().telemetry.tracesEndpoint;
 
+// The OpenTelemetry SDK reads these itself; an operator's own values win.
 const configureTelemetryEnvironment = () => {
-  process.env.OTEL_SERVICE_NAME ??= "photrix-server";
-  process.env.OTEL_RESOURCE_ATTRIBUTES ??= `service.namespace=photrix,deployment.environment=${process.env.NODE_ENV ?? "development"}`;
+  exportEnvDefaults({
+    OTEL_SERVICE_NAME: "photrix-server",
+    OTEL_RESOURCE_ATTRIBUTES: `service.namespace=photrix,deployment.environment=${config().server.nodeEnv}`,
+  });
 };
 
 export const startTelemetry = async (): Promise<void> => {

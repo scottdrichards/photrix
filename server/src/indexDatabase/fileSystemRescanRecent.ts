@@ -4,10 +4,9 @@ import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
 import { attempt, isNotFound } from "../common/result.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("fileSystemRescanRecent");
-
-const DEFAULT_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Recursively collects every directory (absolute path) under `dir` whose own
@@ -75,8 +74,7 @@ export const startPeriodicRescan = (
   database: IndexDatabase,
   onChange?: () => void,
 ): (() => void) => {
-  const intervalMs =
-    Number(process.env.FILE_SYSTEM_RESCAN_INTERVAL_MS) || DEFAULT_INTERVAL_MS;
+  const intervalMs = config().media.rescanIntervalMs;
 
   let lastScanMs = Date.now();
   let rescanInProgress = false;

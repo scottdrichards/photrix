@@ -83,7 +83,7 @@ describe("featureFlagsRequestHandler", () => {
   });
 
   it("answers 409 for a flag pinned by the environment", async () => {
-    const pinned = await FeatureFlagStore.load(db, { PHOTRIX_FLAG_THUMBNAIL_BACKFILL: "true" });
+    const pinned = await FeatureFlagStore.load(db, { thumbnailBackfill: true });
     const { res, recorded } = response();
     await featureFlagsRequestHandler(
       request("PUT", "/api/feature-flags/thumbnailBackfill", { enabled: false }),

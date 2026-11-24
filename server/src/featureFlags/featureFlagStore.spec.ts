@@ -42,16 +42,10 @@ describe("FeatureFlagStore", () => {
 
   it("lets the environment pin a flag, which then can't be overridden", async () => {
     await (await FeatureFlagStore.load(db, {})).setOverride("thumbnailBackfill", true);
-    const store = await FeatureFlagStore.load(db, { PHOTRIX_FLAG_THUMBNAIL_BACKFILL: "false" });
+    const store = await FeatureFlagStore.load(db, { thumbnailBackfill: false });
 
     expect(store.list()[0]).toMatchObject({ enabled: false, source: "environment" });
     await expect(store.setOverride("thumbnailBackfill", true)).rejects.toBeInstanceOf(FeatureFlagPinnedError);
-  });
-
-  it("refuses to start on a malformed environment value", async () => {
-    await expect(FeatureFlagStore.load(db, { PHOTRIX_FLAG_THUMBNAIL_BACKFILL: "0" })).rejects.toThrow(
-      'PHOTRIX_FLAG_THUMBNAIL_BACKFILL must be "true" or "false"',
-    );
   });
 
   it("tells listeners when the effective value changes, and only then", async () => {

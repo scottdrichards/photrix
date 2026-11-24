@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 // A fresh cache, so the conversion really runs instead of returning an earlier result.
 const cacheDir = mkdtempSync(path.join(os.tmpdir(), "photrix-convert-spec-"));
-process.env.CACHE_DIR = cacheDir;
+overrideConfig({ CACHE_DIR: cacheDir });
 const { convertImage } = await import("./convertImage.ts");
 
 /** Stored 1400x933 (landscape) with EXIF Orientation 8: it displays as a 933x1400 portrait. */

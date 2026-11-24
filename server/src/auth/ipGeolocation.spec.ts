@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { createIpGeolocation, formatPlace } from "./ipGeolocation.ts";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 
 const json = (body: unknown, status = 200) =>
@@ -24,7 +25,7 @@ describe("formatPlace", () => {
 
 describe("createIpGeolocation", () => {
   afterEach(() => {
-    delete process.env.PHOTRIX_IP_LOCATION;
+    overrideConfig({ PHOTRIX_IP_LOCATION: undefined });
   });
 
   it("names the place from ipapi.co, spelling out the country", async () => {
@@ -124,7 +125,7 @@ describe("createIpGeolocation", () => {
   });
 
   it("looks nothing up when turned off", async () => {
-    process.env.PHOTRIX_IP_LOCATION = "off";
+    overrideConfig({ PHOTRIX_IP_LOCATION: "off" });
     const fetchImpl = fakeFetch(() => json({ city: "Nowhere" }));
     const { placesFor } = createIpGeolocation({ fetchImpl });
     expect((await placesFor(["203.0.113.9"])).size).toBe(0);

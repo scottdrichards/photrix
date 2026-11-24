@@ -1,5 +1,7 @@
 import path from "node:path";
 import { access, readdir } from "node:fs/promises";
+import { config } from "../config/config.ts";
+import { childProcessEnv } from "../config/childEnv.ts";
 
 const isWindows = process.platform === "win32";
 
@@ -13,8 +15,7 @@ const canAccess = async (targetPath: string): Promise<boolean> => {
 };
 
 export const resolvePythonCommand = async (): Promise<string> => {
-  const fromEnv =
-    process.env.PHOTRIX_PYTHON?.trim() ?? process.env.PHOTRIX_PYTHON_EXECUTABLE?.trim();
+  const fromEnv = config().python.command ?? config().python.executable;
   if (fromEnv) return fromEnv;
 
   const cwd = process.cwd();
@@ -76,7 +77,7 @@ const getBundledCudaLibDirs = async (pythonCommand: string): Promise<string[]> =
 
 export const buildPythonProcessEnv = async (
   pythonCommand: string,
-  baseEnv: NodeJS.ProcessEnv = process.env,
+  baseEnv: NodeJS.ProcessEnv = childProcessEnv(),
 ): Promise<NodeJS.ProcessEnv> => {
   if (isWindows) return { ...baseEnv };
 
