@@ -1,3 +1,4 @@
+import type { FaceAnomalyFlag as AnomalyFlag, FaceCutoffSuggestion as CutoffSuggestion } from "@photrix/api-contract";
 import { clamp01 } from "../../common/clamp01.ts";
 
 /**
@@ -69,22 +70,6 @@ const quantile = (sorted: number[], q: number): number => {
   return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
 };
 
-export type CutoffSuggestion = {
-  /**
-   * Number of faces kept. Faces at this index and beyond fall below the cut —
-   * so the suggestion is expressible either as a count or as `threshold`.
-   */
-  keepCount: number;
-  /**
-   * Midpoint of the gap. Using the midpoint rather than either endpoint means
-   * no face sits exactly on the boundary, so "below the threshold" is
-   * unambiguous however the value is later re-applied.
-   */
-  threshold: number;
-  /** Size of the gap the cut sits in — the UI shows this as its confidence. */
-  gap: number;
-};
-
 /**
  * Finds the natural break in a person's similarity distribution.
  *
@@ -138,7 +123,6 @@ export type AnomalyInput = {
   folder: string;
 };
 
-export type AnomalyFlag = "low-similarity" | "date" | "location" | "folder";
 
 type AnomalyResult = {
   faceId: number;
@@ -575,3 +559,5 @@ const normalize = (vector: Float32Array): Float32Array => {
   for (let i = 0; i < vector.length; i += 1) out[i] = vector[i] / magnitude;
   return out;
 };
+
+export type { AnomalyFlag, CutoffSuggestion };

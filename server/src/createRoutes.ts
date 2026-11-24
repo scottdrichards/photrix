@@ -3,7 +3,7 @@ import type { IndexDatabase } from "./indexDatabase/indexDatabase.ts";
 import type { TaskOrchestrator } from "./taskOrchestrator/taskOrchestrator.ts";
 import type { FeatureFlagStore } from "./featureFlags/featureFlagStore.ts";
 import type { FeedbackStore } from "./feedback/feedbackStore.ts";
-import type { ShareScope } from "../../shared/filter-contract/src/index.ts";
+import type { ShareScope } from "@photrix/filter-contract";
 import type { FilterElement } from "./indexDatabase/indexDatabase.type.ts";
 import { writeJson } from "./common/writeJson.ts";
 import { decodeRequestPath } from "./common/decodeRequestPath.ts";

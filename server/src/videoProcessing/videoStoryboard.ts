@@ -6,7 +6,7 @@ import {
   planStoryboard,
   storyboardFrameTime,
   type StoryboardPlan,
-} from "../../../shared/video-storyboard/src/index.ts";
+} from "@photrix/video-storyboard";
 import { getMirroredCachedFilePath } from "../common/cacheUtils.ts";
 import { scheduleMediaConversion } from "../common/mediaConversionScheduler.ts";
 import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";

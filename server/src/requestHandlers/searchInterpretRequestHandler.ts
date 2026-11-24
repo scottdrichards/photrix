@@ -1,5 +1,5 @@
 import type http from "node:http";
-import type { SearchInterpretation } from "../../../shared/filter-contract/src/index.ts";
+import type { SearchInterpretation } from "@photrix/filter-contract";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { interpretSearchQuery } from "../naturalLanguageSearch/interpretSearchQuery.ts";
 import { loadSearchVocabulary } from "../naturalLanguageSearch/searchVocabulary.ts";

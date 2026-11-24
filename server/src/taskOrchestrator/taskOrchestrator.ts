@@ -1,7 +1,7 @@
 import type {
   BackgroundTaskStatus,
   TaskHoldup,
-} from "../../../shared/filter-contract/src/index.ts";
+} from "@photrix/filter-contract";
 import { getLogger } from "../observability/logger.ts";
 import { recordServerDiagnosticEvent } from "../observability/diagnosticsStore.ts";
 import { isSystemOverloaded, getAvailableMemoryMB } from "./systemLoad.ts";

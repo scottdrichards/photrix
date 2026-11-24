@@ -17,7 +17,7 @@ import { useState, type ReactElement } from "react";
 import type {
   InterpretedFilterChip,
   InterpretedPersonAlternative,
-} from "../../../../shared/filter-contract/src";
+} from "@photrix/filter-contract";
 import css from "./SearchInterpretationChips.module.css";
 import { readStorage, writeStorage } from "../../storage";
 

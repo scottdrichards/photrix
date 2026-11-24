@@ -8,8 +8,12 @@
         "prettier.config.mjs"
       ],
       "project": [
-        "scripts/**/*.mjs",
-        "shared/*/src/**/*.ts"
+        "scripts/**/*.mjs"
+      ]
+    },
+    "shared/*": {
+      "entry": [
+        "src/*.ts"
       ]
     },
     "client": {

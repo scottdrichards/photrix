@@ -16,7 +16,7 @@ import OSM from "ol/source/OSM";
 import VectorSource from "ol/source/Vector";
 import { buildGeoPointThumbnailUrl, fetchGeotaggedPhotos } from "../../api";
 import type { GeoPoint } from "../../api";
-import type { GeoBoundsLike as GeoBounds } from "../../../../shared/filter-contract/src";
+import type { GeoBoundsLike as GeoBounds } from "@photrix/filter-contract";
 import { markerStyleFor, movementPathStyle } from "./MapFilter.styles";
 import {
   buildAgeLegend,

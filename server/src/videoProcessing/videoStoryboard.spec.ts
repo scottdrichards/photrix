@@ -7,7 +7,7 @@ import {
   planStoryboard,
   storyboardFrameAt,
   storyboardFrameTime,
-} from "../../../shared/video-storyboard/src/index.ts";
+} from "@photrix/video-storyboard";
 import { fillFrameGaps, generateVideoStoryboard } from "./videoStoryboard.ts";
 import { hasFfmpeg } from "./brokenVideos.fixture.ts";
 

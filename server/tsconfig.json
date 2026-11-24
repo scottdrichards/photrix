@@ -13,8 +13,15 @@
     "types": ["node", "jest"],
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "rootDir": ".."
+    "rootDir": "..",
+    "paths": {
+      "@photrix/api-contract": ["../shared/api-contract/src/index.ts"],
+      "@photrix/feature-flags": ["../shared/feature-flags/src/featureFlags.ts"],
+      "@photrix/filter-contract": ["../shared/filter-contract/src/index.ts"],
+      "@photrix/hls-segment-headers": ["../shared/hls-segment-headers/src/index.ts"],
+      "@photrix/video-storyboard": ["../shared/video-storyboard/src/index.ts"]
+    }
   },
-  "include": ["src/**/*.ts", "../shared/filter-contract/src/**/*.ts", "../shared/feature-flags/src/**/*.ts", "../shared/video-storyboard/src/**/*.ts"],
+  "include": ["src/**/*.ts", "../shared/*/src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.spec.ts"]
 }

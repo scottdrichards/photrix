@@ -18,7 +18,7 @@ import { generateVideoStoryboard } from "../../videoProcessing/videoStoryboard.t
 import {
   ENCODE_SPEED_HEADER,
   SEGMENT_WAIT_HEADER,
-} from "../../../../shared/hls-segment-headers/src/index.ts";
+} from "@photrix/hls-segment-headers";
 import { messageOf, unsupported, type FileHandlingContext } from "./fileHandlingContext.ts";
 import {
   streamCachedFile,

@@ -2,7 +2,7 @@ import type * as http from "http";
 import path from "path";
 import type { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
 import type { FilterElement, QueryOptions } from "../../indexDatabase/indexDatabase.type.ts";
-import { parseSort } from "../../../../shared/filter-contract/src/index.ts";
+import { parseSort } from "@photrix/filter-contract";
 import { getFastMediaDimensions } from "../../fileHandling/fileUtils.ts";
 import { stripLeadingSlash } from "../../common/stripLeadingSlash.ts";
 import { writeJson } from "../../common/writeJson.ts";

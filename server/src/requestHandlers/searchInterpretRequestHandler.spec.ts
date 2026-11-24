@@ -1,7 +1,7 @@
 import { describe, expect, it, jest, beforeEach } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import type http from "node:http";
-import type { SearchInterpretation } from "../../../shared/filter-contract/src/index.ts";
+import type { SearchInterpretation } from "@photrix/filter-contract";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 
 // A configured-but-stubbed Ollama: the handler's "no model configured"

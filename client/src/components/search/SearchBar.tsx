@@ -15,7 +15,7 @@ import {
   type InterpretedFilterChip,
   type InterpretedPersonAlternative,
   type InterpretedSearchFilter,
-} from "../../../../shared/filter-contract/src";
+} from "@photrix/filter-contract";
 import { interpretSearchQuery } from "../../api/naturalLanguageSearch";
 import { useFilter, type FilterState } from "../filter/FilterContext";
 import { SearchInterpretationChips } from "./SearchInterpretationChips";

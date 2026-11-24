@@ -16,7 +16,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { Spinner } from "../../Spinner";
 import css from "./Filter.module.css";
 import { fetchFolders, fetchSuggestionsWithCounts, type FolderSummary } from "../../api";
-import type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
+import type { MediaTypeFilter } from "@photrix/filter-contract";
 import { DateHistogram } from "./DateHistogram";
 import { lazyPart } from "../../lazyPart";
 import { OptionListWithCounts } from "./OptionListWithCounts";

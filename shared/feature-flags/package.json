@@ -2,5 +2,11 @@
   "name": "@photrix/feature-flags",
   "version": "0.0.1",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/featureFlags.ts",
+      "default": "./src/featureFlags.ts"
+    }
+  }
 }

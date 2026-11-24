@@ -3,7 +3,7 @@ import {
   FACE_ATTRIBUTE_KEYS,
   type FaceAttributeKey,
   type FaceClusterMatchMode,
-} from "../../../../shared/filter-contract/src";
+} from "@photrix/filter-contract";
 import type { PersonCluster } from "../../api";
 import { fetchPeopleClusters, fetchStatus } from "../../api";
 import { Spinner } from "../../Spinner";

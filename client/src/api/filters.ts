@@ -3,7 +3,7 @@ import {
   SEARCH_SOURCES,
   type FaceAttributeKey,
   type FaceClusterMatchMode,
-} from "../../../shared/filter-contract/src";
+} from "@photrix/filter-contract";
 import type {
   ApiFilterOptions,
   DateRangeFilter,

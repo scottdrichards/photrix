@@ -1,6 +1,6 @@
 import { getAuthHeaders } from "../auth";
 import { buildShareUrl } from "../hooks/useShareFilter";
-import type { ShareScope } from "../../../shared/filter-contract/src/index";
+import type { ShareScope } from "@photrix/filter-contract";
 
 /**
  * A share above this many items is treated as "large" and asks for explicit

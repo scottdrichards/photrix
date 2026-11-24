@@ -7,7 +7,7 @@ import {
   Star20Regular,
 } from "@fluentui/react-icons";
 import { useEffect } from "react";
-import { DEFAULT_SORT, type SortOption } from "../../../../shared/filter-contract/src";
+import { DEFAULT_SORT, type SortOption } from "@photrix/filter-contract";
 import { useFilter } from "../filter/FilterContext";
 import css from "./SortControl.module.css";
 

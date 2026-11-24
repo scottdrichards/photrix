@@ -14,7 +14,7 @@ import {
   type RatingFilter,
   type SearchSource,
   type SortOption,
-} from "../../shared/filter-contract/src";
+} from "@photrix/filter-contract";
 
 /**
  * Single serialize/deserialize layer between application state and the URL.

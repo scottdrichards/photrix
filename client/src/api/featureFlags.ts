@@ -1,4 +1,4 @@
-import type { FeatureFlagName, FeatureFlagState } from "../../../shared/feature-flags/src/featureFlags";
+import type { FeatureFlagName, FeatureFlagState } from "@photrix/feature-flags";
 import { fetchJsonOrThrow } from "./http";
 
 export const fetchFeatureFlags = async (): Promise<FeatureFlagState[]> =>

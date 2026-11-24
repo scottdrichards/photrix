@@ -1,6 +1,4 @@
 import { FileRecord } from "./fileRecord.type.ts";
-import type { AnomalyFlag, CutoffSuggestion } from "../people/review/faceReview.ts";
-import type { FaceVerdict } from "../people/store/faceClusterEngine.ts";
 import type {
   FaceMatchFilter,
   FileQueryExtraField,
@@ -8,12 +6,12 @@ import type {
   RecordFilterCondition,
   SortOption,
   StringSearch,
-} from "../../../shared/filter-contract/src/index.ts";
+} from "@photrix/filter-contract";
 export type {
   Range,
   SortOption,
   StringSearch,
-} from "../../../shared/filter-contract/src/index.ts";
+} from "@photrix/filter-contract";
 
 type RuntimeSemanticSimilarityFilter = {
   queryVector: number[];
@@ -135,137 +133,19 @@ export type GeoClusterResult = {
   total: number;
 };
 
-type FaceClusterBox = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
 
-export type FaceClusterFace = {
-  path: string;
-  fileName: string;
-  box: FaceClusterBox;
-  mimeType: string | null;
-  dimensionWidth: number | null;
-  dimensionHeight: number | null;
-  regions: string | null;
-  /**
-   * The `faces.id` row this crop came from — needed to target a specific
-   * detection for exclusion (feedback #90); previously unexposed since
-   * nothing before #90 needed to address one face independent of its photo.
-   */
-  faceId: number;
-  /** ISO capture time, on the person-detail faces only (feedback #144: sort by date). */
-  dateTaken?: string | null;
-  /**
-   * Video faces only: which frame (ms into the video) the box belongs to. A
-   * face crop of a video has to name its frame, so the client passes this back
-   * as the crop request's `t`. Absent for still photos.
-   */
-  frameTimeMs?: number;
-};
-
-export type FaceClusterSummary = {
-  id: string;
-  count: number;
-  representative: FaceClusterFace;
-  name: string | null;
-  yearRangeLabel?: string | null;
-  tags: string[];
-};
-
-type FaceCluster = FaceClusterSummary & {
-  faces: FaceClusterFace[];
-  centroids: FaceClusterCentroid[];
-  mergeSuggestions: FaceClusterSummary[];
-};
-
-export type FaceClusterCentroid = {
-  id: string;
-  count: number;
-  representative: FaceClusterFace;
-};
-
-export type FaceClusterResult = {
-  clusters: FaceClusterSummary[];
-  totalFaces: number;
-  totalClusters: number;
-  /**
-   * Faces detected but not yet assigned to a cluster by the background
-   * clustering task — lets the client show clustering progress.
-   */
-  pendingFaces: number;
-};
-
-export type FaceClusterDetailResult = {
-  cluster: FaceCluster | null;
-};
-
-/**
- * One face as the review UI sees it: the crop, how far it sits from the
- * person's reference point, whether the user has already ruled on it, and what
- * (if anything) looks wrong about it beyond the embedding.
- */
-export type FaceReviewFace = FaceClusterFace & {
-  /** Cosine similarity to the person's anchor, or centroid. Null when unscoreable. */
-  similarity: number | null;
-  verdict: FaceVerdict | null;
-  /** 0..1 — see faceReview.ts's scoreAnomalies. */
-  anomalyScore: number;
-  flags: AnomalyFlag[];
-  /** One readable sentence per flag, for the UI to show as evidence. */
-  reasons: string[];
-};
-
-export type FaceReviewResult = {
-  personId: string;
-  name: string | null;
-  /**
-   * True when `similarity` was measured against confirmed faces rather than the
-   * running centroid. The UI says so, because it changes how much the numbers
-   * are worth: an un-anchored distance is measured from a point the intruders
-   * have already moved.
-   */
-  anchored: boolean;
-  anchorCount: number;
-  /** The person's current similarity floor, if one has been set. */
-  radius: number | null;
-  /** Sorted by similarity, descending. Excludes already-rejected faces. */
-  faces: FaceReviewFace[];
-  /** Previously rejected faces, so the UI can show and undo them. */
-  rejected: FaceReviewFace[];
-  /** Where the natural break in `faces` is, if there is one worth proposing. */
-  suggestedCutoff: CutoffSuggestion | null;
-};
-
-export type FaceClusterPCAPoint = {
-  id: string;
-  count: number;
-  name: string | null;
-  representative: FaceClusterFace;
-  x: number;
-  y: number;
-  z: number;
-  focused: boolean;
-};
-
-export type FaceClusterPCAResult = {
-  points: FaceClusterPCAPoint[];
-};
-
-export type DateHistogramBucket = {
-  start: number;
-  end: number;
-  count: number;
-};
-
-export type DateHistogramGrouping = "day" | "month" | "year";
-
-export type DateHistogramResult = {
-  buckets: DateHistogramBucket[];
-  bucketSizeMs: number;
-  minDate: number | null;
-  maxDate: number | null;
-  grouping: DateHistogramGrouping;
-};
+export type {
+  DateHistogramBucket,
+  DateHistogramGrouping,
+  DateHistogramResult,
+  FaceClusterCentroid,
+  FaceClusterDetail,
+  FaceClusterDetailResult,
+  FaceClusterFace,
+  FaceClusterPCAPoint,
+  FaceClusterPCAResult,
+  FaceClusterResult,
+  FaceClusterSummary,
+  FaceReviewFace,
+  FaceReviewResult,
+} from "@photrix/api-contract";

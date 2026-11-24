@@ -1,7 +1,7 @@
 import {
   ENCODE_SPEED_HEADER,
   SEGMENT_WAIT_HEADER,
-} from "../../../../shared/hls-segment-headers/src";
+} from "@photrix/hls-segment-headers";
 
 /**
  * Telling a slow encoder from a slow network (feedback #178).

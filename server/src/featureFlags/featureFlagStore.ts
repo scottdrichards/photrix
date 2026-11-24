@@ -5,7 +5,7 @@ import {
   isFeatureFlagName,
   type FeatureFlagName,
   type FeatureFlagState,
-} from "../../../shared/feature-flags/src/featureFlags.ts";
+} from "@photrix/feature-flags";
 
 const SETTING_PREFIX = "featureFlag.";
 const flagNames = Object.keys(featureFlags) as FeatureFlagName[];

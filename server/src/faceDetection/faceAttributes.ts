@@ -1,7 +1,7 @@
 import {
   FACE_ATTRIBUTE_KEYS,
   type FaceAttributeKey,
-} from "../../../shared/filter-contract/src/index.ts";
+} from "@photrix/filter-contract";
 import type { FaceAttributes } from "./faceDetector.type.ts";
 
 export { FACE_ATTRIBUTE_KEYS, type FaceAttributeKey };

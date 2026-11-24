@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { FaceAttributeFilter } from "../../../../shared/filter-contract/src";
+import type { FaceAttributeFilter } from "@photrix/filter-contract";
 import { FaceFilterPanel } from "./FaceFilterPanel";
 import { FilterProvider, useFilter } from "./FilterContext";
 

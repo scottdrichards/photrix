@@ -1,3 +1,4 @@
+import type { FaceVerdict } from "@photrix/api-contract";
 import type { AsyncSqlite } from "../../common/asyncSqlite.ts";
 import { runWithoutRequestAbortSignal } from "../../common/requestAbort.ts";
 import { getLogger } from "../../observability/logger.ts";
@@ -5,6 +6,8 @@ import { decodeEmbedding } from "../../indexDatabase/embeddingCodec.ts";
 import { attempt } from "../../common/result.ts";
 import { dotProduct } from "../../common/dotProduct.ts";
 import { toAlignedFloat32 } from "../../common/toAlignedFloat32.ts";
+
+export type { FaceVerdict };
 
 const log = getLogger("faceClusterEngine");
 
@@ -67,8 +70,6 @@ const MANUALLY_EXCLUDED_CLUSTER_ID = -2;
  */
 const FACE_ANCHOR_MIN_CONFIRMED = 3;
 
-/** The two values `faceVerdicts.verdict` can hold. */
-export type FaceVerdict = "confirmed" | "rejected";
 
 /**
  * A cluster's stored per-face `clusterSimilarity` is written once, against the
