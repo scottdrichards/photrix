@@ -2,8 +2,8 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { getLogger } from "../observability/logger.ts";
-import { FileInfo } from "./fileRecord.type.ts";
-import { IndexDatabase } from "./indexDatabase.ts";
+import { FileInfo } from "../indexDatabase/fileRecord.type.ts";
+import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
 

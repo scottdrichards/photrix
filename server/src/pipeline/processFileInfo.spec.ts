@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import path from "node:path";
 import os from "node:os";
-import type { IndexDatabase } from "./indexDatabase.ts";
+import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 
 afterEach(() => {
   jest.resetModules();

@@ -9,7 +9,7 @@ Small, dependency-free helpers about media files themselves.
 | `mimeTypes.ts` | `mimeTypeForFilename`, the one extension → MIME table |
 | `clearMirroredCacheForFile.ts` | deletes every cached derivative of a file whose bytes changed in place |
 
-- The EXIF stage that uses these is `indexDatabase/processExifMetadata.ts`.
+- The EXIF stage that uses these is `pipeline/processExifMetadata.ts`.
 - A new EXIF field: add it to `ExifMetadata`, map it in `fileUtils.ts`, add the
   column to `indexDatabase/tables.ts`. Existing files are only re-read if a
   backfill re-queues them (see "Migrations" in `indexDatabase/README.md`).

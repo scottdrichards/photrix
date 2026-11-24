@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
-import { IndexDatabase } from "./indexDatabase.ts";
-import { openIndexSqlite } from "./openIndexSqlite.ts";
+import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
+import { openIndexSqlite } from "../indexDatabase/openIndexSqlite.ts";
 import { overrideConfig } from "../config/config.fixture.ts";
 
 const mkTempDir = async (prefix: string): Promise<string> =>

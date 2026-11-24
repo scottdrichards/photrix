@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
-import { IndexDatabase } from "./indexDatabase.ts";
+import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
 import { attempt, isNotFound } from "../common/result.ts";
 import { config } from "../config/config.ts";

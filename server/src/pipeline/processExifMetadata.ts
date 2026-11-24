@@ -6,7 +6,7 @@ import {
 } from "../fileHandling/fileUtils.ts";
 import { getLogger } from "../observability/logger.ts";
 import { batch } from "../common/batch.ts";
-import { IndexDatabase } from "./indexDatabase.ts";
+import { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
 

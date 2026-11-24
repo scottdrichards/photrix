@@ -16,8 +16,8 @@ jest.unstable_mockModule("node:fs/promises", () => ({
 }));
 
 const { fileSystemScanFolder } = await import("./fileSystemScanFolder.ts");
-const { IndexDatabase } = await import("./indexDatabase.ts");
-const { openIndexSqlite } = await import("./openIndexSqlite.ts");
+const { IndexDatabase } = await import("../indexDatabase/indexDatabase.ts");
+const { openIndexSqlite } = await import("../indexDatabase/openIndexSqlite.ts");
 
 describe("fileSystemScanFolder", () => {
   it("keeps a listed file it can't stat, and prunes one that is really gone", async () => {

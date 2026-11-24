@@ -9,8 +9,23 @@ import { encodeEmbedding } from "./embeddingCodec.ts";
 import { VectorIndex } from "./vectorIndex/vectorIndex.ts";
 import type { EmbeddingKind } from "./vectorIndex/vectorIndexProtocol.ts";
 import { clamp01 } from "../common/clamp01.ts";
-import type { QueuedVideoFaces, VideoFaceCostInputs } from "../videoFaceAnalysis/videoFaceCost.ts";
 import { decodeVideoFrameEmbeddings, encodeVideoFrameEmbeddings } from "./videoFrameEmbeddingCodec.ts";
+
+/** What the index knows about a video that prices it for the face pass (see videoFaceAnalysis/videoFaceCost.ts). */
+export type VideoFaceCostInputs = {
+  durationSeconds?: number;
+  sizeBytes?: number;
+  width?: number;
+  height?: number;
+};
+
+/** A video waiting for the face pass, with what ordering it needs. */
+export type QueuedVideoFaces = { relativePath: string } & VideoFaceCostInputs & {
+    /** ms since epoch: date taken, else file creation. */
+    takenAt?: number;
+    /** It failed once and came back after the retry cooldown. */
+    failedBefore: boolean;
+  };
 
 /** A queued video and which of the video pass's two results it still lacks. */
 export type QueuedVideoAnalysis = QueuedVideoFaces & {

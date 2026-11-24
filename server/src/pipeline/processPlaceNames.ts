@@ -1,7 +1,7 @@
 import { getLogger } from "../observability/logger.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
-import type { IndexDatabase } from "./indexDatabase.ts";
+import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { placeTextFor } from "../places/placeNames.ts";
 
 const log = getLogger("processPlaceNames");

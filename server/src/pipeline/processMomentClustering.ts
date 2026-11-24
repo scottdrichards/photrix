@@ -2,7 +2,7 @@ import path from "node:path";
 import { getLogger } from "../observability/logger.ts";
 import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { computeSharpnessScore } from "../imageProcessing/sharpness.ts";
-import type { IndexDatabase } from "./indexDatabase.ts";
+import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
 import {
@@ -10,7 +10,7 @@ import {
   MOMENT_VISUAL_SIMILARITY_THRESHOLD,
   centroidSimilarity,
   foldIntoCentroid,
-} from "./momentClusterEngine.ts";
+} from "../indexDatabase/momentClusterEngine.ts";
 
 const log = getLogger("processMomentClustering");
 

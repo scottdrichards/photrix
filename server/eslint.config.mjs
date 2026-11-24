@@ -35,6 +35,9 @@ const modules = withConfig({
   imageAnalysis: ["common", "observability", "python", "accel", "taskOrchestrator", "faceDetection", "indexDatabase"],
   audioProcessing: ["common", "observability", "python", "taskOrchestrator", "imageAnalysis", "indexDatabase"],
   videoFaceAnalysis: ["common", "observability", "taskOrchestrator", "faceDetection", "videoProcessing", "imageAnalysis", "indexDatabase"],
+  // The stages the task runner drives that turn files on disk into index rows:
+  // scan, file info, EXIF, places, face and moment clustering.
+  pipeline: ["common", "observability", "taskOrchestrator", "fileHandling", "places", "imageProcessing", "indexDatabase"],
   // What the machine and the task queue are doing right now, for the status page and reports.
   systemStatus: ["common", "observability", "taskOrchestrator", "audioProcessing"],
   // Turns a share link's scope into the filter its requests are confined to.
@@ -64,19 +67,6 @@ function withConfig(map) {
 // and documented in one place (see config/config.ts). Tests override it with
 // config/config.fixture.ts.
 const processEnvAllowed = ["src/config/config.ts", "src/config/config.fixture.ts", "src/config/childEnv.ts"];
-
-// Known violations. Fix one, delete its line; do not add to this list.
-const stagesInDatabase = "pipeline stage living in the persistence module";
-const grandfathered = {
-  "indexDatabase/analysisStore.ts -> videoFaceAnalysis": "queue-cost types declared by the consumer",
-  "indexDatabase/fileSystemScanFolder.ts -> taskOrchestrator": stagesInDatabase,
-  "indexDatabase/processExifMetadata.ts -> taskOrchestrator": stagesInDatabase,
-  "indexDatabase/processFaceClustering.ts -> taskOrchestrator": stagesInDatabase,
-  "indexDatabase/processFileInfo.ts -> taskOrchestrator": stagesInDatabase,
-  "indexDatabase/processMomentClustering.ts -> taskOrchestrator": stagesInDatabase,
-  "indexDatabase/processPlaceNames.ts -> taskOrchestrator": stagesInDatabase,
-  "indexDatabase/processMomentClustering.ts -> imageProcessing": stagesInDatabase,
-};
 
 export default tseslint.config(
   {
@@ -146,7 +136,6 @@ export default tseslint.config(
     srcDir: path.join(import.meta.dirname, "src"),
     nested: [],
     modules,
-    grandfathered,
   }),
   eslintConfigPrettier,
 );

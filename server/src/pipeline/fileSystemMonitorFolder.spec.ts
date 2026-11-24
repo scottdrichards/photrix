@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { promises as fs, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { FileRecord } from "./fileRecord.type.ts";
+import type { FileRecord } from "../indexDatabase/fileRecord.type.ts";
 import { fileSystemMonitorFolder } from "./fileSystemMonitorFolder.ts";
-import type { IndexDatabase } from "./indexDatabase.ts";
+import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 
 // Poll a predicate until it holds (or throws). fs.watch delivery is inherently
 // asynchronous and lightly batched, so tests observe effects rather than timing.

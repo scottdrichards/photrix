@@ -92,20 +92,20 @@ by `taskOrchestrator/` (backs off while a user request is active; see its README
 The face stages are described end to end in `FACES.md`.
 
 ```
-fileSystemScan ─► fileMetadata (indexDatabase/processFileInfo.ts)
-               ├► exifMetadata (indexDatabase/processExifMetadata.ts)
-               │    ├► placeNames (indexDatabase/processPlaceNames.ts, places/)
+fileSystemScan ─► fileMetadata (pipeline/processFileInfo.ts)
+               ├► exifMetadata (pipeline/processExifMetadata.ts)
+               │    ├► placeNames (pipeline/processPlaceNames.ts, places/)
                │    ├► audioTranscription (audioProcessing/, Whisper)
                │    ├► audioEmbedding (audioProcessing/, CLAP)
                │    └► videoFaceAnalysis (videoFaceAnalysis/) ─► faceClustering
                ├► imageAnalysis (imageAnalysis/, faces + CLIP, Python worker)
-               │    ├► faceClustering (indexDatabase/processFaceClustering.ts)
+               │    ├► faceClustering (pipeline/processFaceClustering.ts)
                │    ├► faceAttributes (imageAnalysis/processFaceAttributes.ts)
-               │    └► momentClustering (indexDatabase/processMomentClustering.ts)
+               │    └► momentClustering (pipeline/processMomentClustering.ts)
                └► thumbnailBackfill (imageProcessing/thumbnailBackfill.ts)
 ```
 
-File changes after boot: `indexDatabase/fileSystemMonitorFolder.ts` (watcher)
+File changes after boot: `pipeline/fileSystemMonitorFolder.ts` (watcher)
 and `fileSystemRescanRecent.ts` re-queue the entry stages.
 
 ## Client
@@ -128,8 +128,9 @@ A module is a directory under `server/src/`, `client/src/` or
 `client/src/components/`. Which module may import from which is written down in
 each workspace's `eslint.config.mjs` and enforced by `bun run lint`
 (`eslint.boundaries.mjs`). A new cross-module import fails until it is either
-moved or added to that map on purpose. The `grandfathered` list beside the map
-is the backlog of known violations: it may shrink, never grow.
+moved or added to that map on purpose. The server has no known violations left;
+the rule still accepts a `grandfathered` list (each entry must match a real
+import, so it can only shrink), which the client uses for its backlog.
 
 `server/src/config/` sits below every server module, and any module may import
 it. It is the only code that reads `process.env` (lint enforces this): every

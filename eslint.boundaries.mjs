@@ -35,7 +35,7 @@ const resolveImport = (fromFile, source) => {
  * - `srcDir`: absolute path of the source root.
  * - `nested`: top-level directories whose subdirectories are modules themselves.
  * - `modules`: module name -> the modules it may import from (`"*"` for any).
- * - `grandfathered`: `"<file relative to srcDir> -> <module>"` -> why it is
+ * - `grandfathered` (optional): `"<file relative to srcDir> -> <module>"` -> why it is
  *   still there. Known violations awaiting a fix; an entry that no longer
  *   matches an import is itself an error, so the list can only shrink.
  */
@@ -51,7 +51,7 @@ const rule = {
           modules: { type: "object" },
           grandfathered: { type: "object" },
         },
-        required: ["srcDir", "nested", "modules", "grandfathered"],
+        required: ["srcDir", "nested", "modules"],
         additionalProperties: false,
       },
     ],
@@ -65,7 +65,7 @@ const rule = {
     },
   },
   create: (context) => {
-    const [{ srcDir, nested, modules, grandfathered }] = context.options;
+    const [{ srcDir, nested, modules, grandfathered = {} }] = context.options;
     const from = moduleOfFile(context.filename, srcDir, nested);
     if (from === null) return {};
     if (!(from in modules))

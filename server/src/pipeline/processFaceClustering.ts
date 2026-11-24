@@ -1,5 +1,5 @@
 import { getLogger } from "../observability/logger.ts";
-import type { IndexDatabase } from "./indexDatabase.ts";
+import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
 
