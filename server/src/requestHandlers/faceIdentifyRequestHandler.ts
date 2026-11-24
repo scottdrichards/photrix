@@ -52,7 +52,7 @@ type FaceIdentifyDeps = {
 
 /**
  * `GET /api/faces/people` — who can be recognized; `POST /api/faces/identify`
- * — who is in these pictures? The work is in `faceDetection/faceIdentify/`.
+ * — who is in these pictures? The work is in `people/identify/`.
  *
  * A frame with no face in it is the expected case, not an error. Those answer
  * `{"faceCount": 0, "people": []}` with HTTP 200 so a caller can treat "nobody

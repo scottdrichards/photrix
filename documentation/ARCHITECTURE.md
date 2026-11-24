@@ -24,8 +24,8 @@ filter), so that file is also the share-link access policy.
 | `POST /api/page-title`                   | `pageTitleRequestHandler.ts`                        | describes the current filter for the header                                                              |
 | `GET /api/suggestions`                   | `suggestionsRequestHandler.ts`                      | `indexDatabase.ts`                                                                                       |
 | `GET /api/video/negotiate`               | `video/videoNegotiation.ts`                         | direct vs live GPU HLS decision                                                                          |
-| `/api/faces/…`                           | `faceIdentifyRequestHandler.ts`                     | `faceDetection/faceIdentify/` (frames, SSRF guard, scoring); centroids from `indexDatabase/faceClusterStore.ts` |
-| `/api/people/…`                          | `peopleRequestHandler.ts`                           | `indexDatabase/faceClusterEngine.ts`                                                                     |
+| `/api/faces/…`                           | `faceIdentifyRequestHandler.ts`                     | `people/identify/` (frames, SSRF guard, scoring); centroids from `people/store/peopleQueries.ts` |
+| `/api/people/…`                          | `peopleRequestHandler.ts`                           | `people/store/faceClusterStore.ts` (facade over the people stores)                                       |
 | `POST /api/moment-clusters/…`            | `momentClustersRequestHandler.ts`                   | `indexDatabase/momentClusterEngine.ts`                                                                   |
 | `GET /api/photos/caption`                | `photoCaptionRequestHandler.ts`                     | `photoCaption/` (Ollama)                                                                                 |
 | `GET /api/photos/suggest-rotation`       | `suggestRotationRequestHandler.ts`                  | `imageProcessing/suggestRotation.ts`                                                                     |

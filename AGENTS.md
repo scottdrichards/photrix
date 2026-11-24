@@ -22,9 +22,11 @@ Review these when implicated (paths relative to the repo root).
 | `server/src/main.ts` | boots the server: database, stores, background stages, HTTP, MCP |
 | `server/src/createServer.ts`, `createRoutes.ts` | request trace and auth gate; the route table and share-link policy |
 | `server/src/requestHandlers/` | one handler per route group |
-| `server/src/indexDatabase/` | SQLite schema, stores, queries, migrations, the scan/EXIF/clustering stages |
+| `server/src/indexDatabase/` | SQLite schema, file/moment/analysis stores, queries, migrations; `IndexDatabase` composes every store |
+| `server/src/pipeline/` | the indexing stages: scan, watcher, file info, EXIF, places, face and moment clustering |
+| `server/src/people/` | faces once stored: face and cluster stores, clustering math, review, live identify |
 | `server/src/backgroundTasks/`, `taskOrchestrator/` | which stage feeds which; scheduling, resource budgets, backing off for users |
-| `server/src/imageAnalysis/`, `faceDetection/`, `videoFaceAnalysis/` | faces and CLIP for photos, live identify, faces in videos |
+| `server/src/imageAnalysis/`, `faceDetection/`, `videoFaceAnalysis/` | the face producers: faces and CLIP for photos, the detector contract, faces in videos |
 | `server/src/imageProcessing/`, `videoProcessing/`, `audioProcessing/` | image conversion, ffmpeg/HLS, Whisper and CLAP |
 | `server/src/auth/`, `shareScope/`, `shareDescription/` | accounts and tokens; what a share link may see; share previews |
 | `server/src/naturalLanguageSearch/`, `photoCaption/`, `places/` | query interpretation, captions, place names |
@@ -49,13 +51,14 @@ resolution).
   row in `/documentation/ARCHITECTURE.md` and the endpoint in `server/API.md`.
   See `requestHandlers/README.md`.
 - **A background stage**: a `process<Thing>.ts` returning a `TaskRunner` (use
-  `createTaskController`) in the module that owns the work; add it to
+  `createTaskController`) in the module that owns the work (`pipeline/` for an
+  indexing stage that needs no ML worker); add it to
   `BackgroundTaskPlan` and the cascade in
   `backgroundTasks/registerBackgroundTasks.ts`, give it a name and task `type`
   in `main.ts`, and add it to the pipeline diagram in ARCHITECTURE.md.
 - **A DB table, column or migration**: declare it in
   `server/src/indexDatabase/tables.ts` and query it from the store that owns
-  it. Carrying user data across a schema change follows "Migrations" in
+  it (`people/store/` for face data). Carrying user data across a schema change follows "Migrations" in
   `indexDatabase/README.md`.
 - **An env var**: add it to its section of `server/src/config/config.ts` with
   a reader from `config/env.ts` and a `help` line, read it with `config()`

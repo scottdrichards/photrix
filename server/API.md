@@ -201,7 +201,7 @@ Each `imageUrls` entry is either a URL string or an object:
 detection, and `pad` (default `0.3`) widens it by that fraction of its own size.
 
 **Query parameters** (all optional; every default is documented with the
-measurement behind it in `src/faceDetection/faceIdentify/identifyFaces.ts`):
+measurement behind it in `src/people/identify/identifyFaces.ts`):
 
 - `strongThreshold` (default `0.3`) — similarity that stands alone, no margin needed.
 - `threshold` (default `0.2`) — similarity floor for the moderate tier.

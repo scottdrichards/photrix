@@ -18,7 +18,7 @@ the result to a status and body. Logic that would make sense without HTTP
 (encode queueing, fetching, scoring, caching) belongs in that module, behind
 a typed result the handler can switch on. For example, `files/videoRepresentations.ts`
 maps `videoProcessing/hlsService.ts`'s `HlsResponse`, and
-`faceIdentifyRequestHandler.ts` maps `faceDetection/faceIdentify/`'s `IdentifyResult`.
+`faceIdentifyRequestHandler.ts` maps `people/identify/`'s `IdentifyResult`.
 Streaming and Range handling for served files is `files/streamFile.ts`.
 
 Specs call a handler directly with `handlerTest.fixture.ts` (`fakeRequest`,

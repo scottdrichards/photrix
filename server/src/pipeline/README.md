@@ -13,7 +13,7 @@ They hold no state of their own between batches.
 | `processFileInfo.ts` | file-level facts: size, created, modified |
 | `processExifMetadata.ts` | EXIF/XMP/probe output mapped onto `files` columns (the mapping is `fileHandling/fileUtils.ts`) |
 | `processPlaceNames.ts` | GPS to the place words search matches on (`places/placeNames.ts`) |
-| `processFaceClustering.ts` | drains the unclustered-face backlog into people (`people/clustering/`) |
+| `processFaceClustering.ts` | drains the unclustered-face backlog into people (`people/store/faceClusterEdits.ts`) |
 | `processMomentClustering.ts` | burst and near-duplicate stacks (`indexDatabase/momentClusterEngine.ts`) |
 
 - Stages talk to the database only through `IndexDatabase` and its stores;
