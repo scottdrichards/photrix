@@ -1,13 +1,6 @@
-import {
-  CommentAddRegular,
-  Info24Regular,
-  Person24Regular,
-  Share24Regular,
-} from "@fluentui/react-icons";
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { cx } from "./cx";
 import css from "./App.module.css";
-import { buildShareScope, fetchPhotoByPath, fetchShareScopeCount, LARGE_SHARE_THRESHOLD } from "./api";
 import {
   LazyFullscreenViewer,
   preloadFullscreenViewer,
@@ -17,31 +10,16 @@ import { whenNetworkQuiet } from "./whenNetworkQuiet";
 import { AccountPanel } from "./components/account/AccountPanel";
 import { ThemeToggle } from "./components/account/ThemeToggle";
 import { LoginScreen } from "./components/account/LoginScreen";
-import { SearchBar } from "./components/search/SearchBar";
-import { ShareLinkModal } from "./components/share/ShareLinkModal";
-import { LargeShareWarningModal } from "./components/share/LargeShareWarningModal";
 import { StatusModal } from "./components/status/StatusModal";
 import { SuggestionModal } from "./components/feedback/SuggestionModal";
 import { ThumbnailGrid } from "./components/grid/ThumbnailGrid";
 import { TopRailPortalProvider } from "./components/TopRailPortal";
-import { Wordmark } from "./components/Wordmark";
 import { SortDockProvider } from "./components/grid/SortDockPortal";
-import { Filter } from "./components/filter/Filter";
 import { FilterProvider, useFilter } from "./components/filter/FilterContext";
 import { SelectionProvider, useSelectionContext } from "./components/selection/SelectionContext";
-import {
-  useSyncUrlWithFilter,
-  type UrlNavState,
-  type ViewMode,
-} from "./hooks/useSyncUrlWithFilter";
 import { usePageTitle } from "./hooks/usePageTitle";
 import { setSelectionBadge, setViewerThemeColor } from "./appChrome";
-import { buildShareUrl, isSharedView } from "./hooks/useShareFilter";
-import {
-  NO_PEOPLE_SELECTION,
-  parseAppUrlState,
-  type PeopleSelection,
-} from "./filterUrlState";
+import { isSharedView } from "./hooks/useShareFilter";
 import {
   applyTheme,
   getStoredThemeOverride,
@@ -52,16 +30,10 @@ import {
   type ThemeOverride,
 } from "./theme";
 import { probeVideoPlaybackProfile } from "./videoPlaybackProfile";
-import {
-  extractUrlToken,
-  getAuthHeaders,
-  hasAccountSession,
-  initAuth,
-  onUnauthorized,
-} from "./auth";
-import { attempt } from "./result";
-import { logFailure } from "./logFailure";
+import { extractUrlToken, hasAccountSession, initAuth, onUnauthorized } from "./auth";
 import { FeatureFlagsProvider } from "./featureFlags/FeatureFlagsContext";
+import { AppHeader } from "./AppHeader";
+import { useAppNavigation } from "./useAppNavigation";
 
 const { Part: PeopleView } = lazyPart("people", () =>
   import("./components/people/PeopleView").then((module) => module.PeopleView),
@@ -69,8 +41,6 @@ const { Part: PeopleView } = lazyPart("people", () =>
 
 // Extract a token from the URL immediately (before auth check) so share links self-authenticate.
 extractUrlToken();
-
-const numberFormatter = new Intl.NumberFormat();
 
 // Feedback #127: below this scroll offset the floating view-toggle/sort bar
 // (see .floatingBarDock) is shown; above it, hidden.
@@ -80,165 +50,6 @@ const sharedView = isSharedView();
 // Whether a real account session exists underneath this share view — read before
 // any request can disturb it, same as sharedView.
 const ownsAccountSession = hasAccountSession();
-
-const initialNavFromUrl = (): UrlNavState => {
-  if (typeof window === "undefined") {
-    return { view: "library", people: NO_PEOPLE_SELECTION, previewPath: null };
-  }
-  const { view, people, preview } = parseAppUrlState(window.location);
-  return { view, people, previewPath: preview };
-};
-
-const copyToClipboard = async (text: string): Promise<boolean> => {
-  // The async clipboard needs a secure context and permission; when it says no,
-  // the legacy path below still works on HTTP and localhost.
-  if (navigator.clipboard?.writeText) {
-    const copied = await attempt(navigator.clipboard.writeText(text));
-    if (copied.ok) return true;
-    logFailure("clipboard.write.failed", "Async clipboard refused; using the legacy copy")(copied.error);
-  }
-  // Legacy execCommand — works on HTTP / localhost
-  const el = document.createElement("textarea");
-  el.value = text;
-  el.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
-  document.body.appendChild(el);
-  el.focus();
-  el.select();
-  const ok = document.execCommand("copy");
-  document.body.removeChild(el);
-  return ok;
-};
-
-type ShareModalState = { url: string; copied: boolean } | null;
-
-const SHARE_FAILED_MESSAGE_MS = 4_000;
-
-const ShareButton = () => {
-  const { filter } = useFilter();
-  const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const [modal, setModal] = useState<ShareModalState>(null);
-  // A share whose size crossed the threshold and is waiting on confirmation.
-  const [pendingLarge, setPendingLarge] = useState<{
-    scope: unknown;
-    /** Null when the size couldn't be measured. */
-    count: number | null;
-    wholeLibrary: boolean;
-  } | null>(null);
-
-  const mintAndShow = async (shareScope: unknown) => {
-    const res = await fetch("/api/auth/share-token", {
-      method: "POST",
-      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify(shareScope),
-    });
-    if (!res.ok) throw new Error("Failed to issue share token");
-    const { token } = (await res.json()) as { token: string };
-    const url = buildShareUrl(token);
-    const copied = await copyToClipboard(url);
-    setModal({ url, copied });
-  };
-
-  const shareScope = buildShareScope({
-    ...filter,
-    path: filter.path,
-    includeSubfolders: filter.includeSubfolders,
-  });
-  // Feedback #187: a view with no filter shares the whole library. That is
-  // allowed, but always behind the large-share warning, and the server only
-  // accepts it when the scope says so by name.
-  const isUnscoped =
-    !shareScope.semanticQuery &&
-    typeof shareScope.filter === "object" &&
-    shareScope.filter !== null &&
-    Object.keys(shareScope.filter).length === 0;
-
-  const handleShare = async () => {
-    if (loading) return;
-    setLoading(true);
-    try {
-
-      // Size the share before minting. A failure here must not block sharing —
-      // the count is a guardrail, not a gate — so fall through to the normal
-      // path if it can't be determined.
-      const scope = isUnscoped ? { ...shareScope, wholeLibrary: true } : shareScope;
-      const counted = await attempt(fetchShareScopeCount(scope));
-      if (!counted.ok) {
-        logFailure("share.count.failed", "Could not size the share; sharing without the large-share check")(
-          counted.error,
-        );
-      }
-
-      if (isUnscoped) {
-        setPendingLarge({
-          scope,
-          count: counted.ok ? counted.value : null,
-          wholeLibrary: true,
-        });
-        return;
-      }
-      if (counted.ok && counted.value > LARGE_SHARE_THRESHOLD) {
-        setPendingLarge({ scope: shareScope, count: counted.value, wholeLibrary: false });
-        return;
-      }
-
-      await mint(scope);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Mints the link, or says on the button that it couldn't.
-  const mint = async (scope: unknown) => {
-    const minted = await attempt(mintAndShow(scope));
-    if (minted.ok) return;
-    logFailure("share.mint.failed", "Could not create a share link")(minted.error);
-    setFailed(true);
-    setTimeout(() => setFailed(false), SHARE_FAILED_MESSAGE_MS);
-  };
-
-  const confirmLarge = async () => {
-    if (!pendingLarge) return;
-    const { scope } = pendingLarge;
-    setPendingLarge(null);
-    setLoading(true);
-    await mint(scope);
-    setLoading(false);
-  };
-
-  return (
-    <>
-      <button
-        title={isUnscoped ? "Share your whole library" : "Share current view"}
-        className="btn btn-subtle"
-        onClick={() => void handleShare()}
-        disabled={loading}
-      >
-        <Share24Regular fontSize={20} />
-        <span className={css.btnLabel} role="status">
-          {loading ? "Sharing…" : failed ? "Couldn't share" : "Share"}
-        </span>
-      </button>
-
-      {pendingLarge && (
-        <LargeShareWarningModal
-          count={pendingLarge.count}
-          wholeLibrary={pendingLarge.wholeLibrary}
-          onConfirm={() => void confirmLarge()}
-          onCancel={() => setPendingLarge(null)}
-        />
-      )}
-
-      {modal && (
-        <ShareLinkModal
-          url={modal.url}
-          copied={modal.copied}
-          onClose={() => setModal(null)}
-        />
-      )}
-    </>
-  );
-};
 
 type AppContentProps = {
   theme: Theme;
@@ -252,11 +63,9 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
   const [isSuggestionOpen, setIsSuggestionOpen] = useState(false);
   const [viewToggleHost, setViewToggleHost] = useState<HTMLDivElement | null>(null);
   const [sortDockHost, setSortDockHost] = useState<HTMLDivElement | null>(null);
-  const [nav, setNav] = useState<UrlNavState>(initialNavFromUrl);
+  const { nav, handleViewChange, handlePeopleNavigate } = useAppNavigation();
   const { view } = nav;
-  const { items, selected, selectedPath, selectByPath, checkedPaths } = useSelectionContext();
-
-  useSyncUrlWithFilter(nav, setNav);
+  const { selected, checkedPaths } = useSelectionContext();
 
   // Feedback #195: the window around the app mirrors its state: a black title
   // bar while a photo is open, and the selection count on the installed icon.
@@ -270,66 +79,6 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
     setSelectionBadge(checkedCount);
     return () => setSelectionBadge(0);
   }, [checkedCount]);
-
-  // Feedback #120: mirror the fullscreen viewer's open photo into the URL
-  // (nav.previewPath), the same way nav.people already mirrors the People
-  // tab's selection — a refresh, a shared link, or the back button should
-  // all be able to reopen (or close) it, not just drop back to the bare grid.
-  // Keyed on the selected *path*, and only when it changes: on a cold load the
-  // path is still null while the URL names a photo, and writing that null back
-  // would erase the deep link before it opens.
-  const lastSelectedPathRef = useRef(selectedPath);
-  useEffect(() => {
-    if (lastSelectedPathRef.current === selectedPath) return;
-    lastSelectedPathRef.current = selectedPath;
-    setNav((prev) => (prev.previewPath === selectedPath ? prev : { ...prev, previewPath: selectedPath }));
-  }, [selectedPath]);
-
-  // The URL side: initial load and back/forward. No view-transition morph
-  // (setSelected's), since there is no origin tile to animate from. A photo
-  // the loaded items don't have (a deep link from the Home Assistant wall, a
-  // refresh deep in a long day, a burst member hidden in its stack) is fetched
-  // on its own, so the viewer opens without waiting for the grid to find it.
-  useEffect(() => {
-    const path = nav.previewPath;
-    if (path === selectedPath) return;
-    selectByPath(path);
-    if (!path || items.some((item) => item.path === path)) return;
-    const controller = new AbortController();
-    fetchPhotoByPath(path, controller.signal)
-      .then((item) => {
-        if (item) selectByPath(path, item);
-      })
-      .catch(logFailure("viewer.deepLink.failed", "Could not load the linked photo"));
-    return () => controller.abort();
-    // Only react to the URL side; the effect above handles the reverse.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nav.previewPath]);
-
-  // A person only exists inside the People tab, so leaving it clears the
-  // selection rather than leaving state the URL can no longer express. The
-  // open preview doesn't carry across either — the People tab and the
-  // library grid load different item lists, so a path from one won't
-  // resolve in the other.
-  const handleViewChange = useCallback((nextView: ViewMode) => {
-    setNav((prev) => ({
-      view: nextView,
-      people: nextView === "people" ? prev.people : NO_PEOPLE_SELECTION,
-      previewPath: null,
-    }));
-  }, []);
-
-  const handlePeopleNavigate = useCallback(
-    (people: PeopleSelection, options?: { replace?: boolean }) => {
-      setNav((prev) => ({
-        view: prev.view,
-        people,
-        previewPath: prev.previewPath,
-        replace: options?.replace,
-      }));
-    },
-    [],
-  );
 
   const { filter } = useFilter();
   // Live result count for the header subtitle, reported by ThumbnailGrid so
@@ -388,114 +137,19 @@ const AppContent = ({ theme, followsSystem, onThemeToggle }: AppContentProps) =>
     <SortDockProvider host={sortDockHost}>
       <div className={css.app}>
         <div className={cx(css.topRail, isStatusOpen ? css.topRailStatusOpen : undefined)}>
-          <header className={css.header}>
-            <div className={css.title}>
-              <h2>
-                {sharedView ? <Wordmark /> : <a className={css.homeLink} href="/"><Wordmark /></a>}
-              </h2>
-              <small>
-                {sharedView ? (
-                  "Shared view"
-                ) : viewDescription ? (
-                  // Feedback #85/#103: fold the current view's generated
-                  // description into the sentence itself ("...of your trip
-                  // to Mexico") rather than appending it after a period,
-                  // which read as two unrelated fragments ("photos. ...trip
-                  // to Mexico"). Feedback #107: the generated half reads as
-                  // plain static copy otherwise, so it's set off in its own
-                  // span (same brand-color treatment as the AI-search
-                  // chips) to signal "the app said this, not us".
-                  <>
-                    A better way to view{" "}
-                    {resultCount != null && (
-                      <>
-                        <span className={css.resultCount}>
-                          {numberFormatter.format(resultCount)}{resultCountIsLowerBound ? "+" : ""}
-                        </span>{" "}
-                        photo{resultCount === 1 ? "" : "s"}{" "}
-                      </>
-                    )}
-                    of <span className={css.taglineGenerated}>{viewDescription}</span>
-                  </>
-                ) : resultCount != null ? (
-                  <>
-                    A better way to view{" "}
-                    <span className={css.resultCount}>
-                      {numberFormatter.format(resultCount)}{resultCountIsLowerBound ? "+" : ""}
-                    </span>{" "}
-                    photo{resultCount === 1 ? "" : "s"}.
-                  </>
-                ) : (
-                  "A better way to view photos."
-                )}
-              </small>
-            </div>
-
-            <div className={css.headerActions}>
-              {/* A shared link has no Account panel, so the toggle stays here. */}
-              {sharedView && (
-                <ThemeToggle
-                  theme={theme}
-                  followsSystem={followsSystem}
-                  onToggle={onThemeToggle}
-                  className={css.headerThemeToggle}
-                />
-              )}
-              <ShareButton />
-              {/* Global entry point, deliberately rendered in every view
-                  including a shared link — the previous entry point was a
-                  Ctrl/Cmd+P keyboard shortcut explicitly disabled in shared
-                  view, so shared-link visitors had no way at all to leave
-                  feedback (feedback #99). */}
-              <button
-                title="Send a comment or suggestion"
-                className="btn btn-subtle"
-                onClick={() => setIsSuggestionOpen(true)}
-              >
-                <CommentAddRegular fontSize={20} />
-                <span className={css.btnLabel}>Comments</span>
-              </button>
-              {sharedView && ownsAccountSession && (
-                // A signed-in owner viewing their own share link is not trapped in it:
-                // the account session is still there, and dropping the ?token= URL
-                // restores the full library. A full navigation (not pushState) is
-                // deliberate — share mode is read once at module load.
-                <a className="btn btn-subtle" href="/" title="Return to your full library">
-                  <Person24Regular fontSize={20} />
-                  <span className={css.btnLabel}>My library</span>
-                </a>
-              )}
-              {!sharedView && (
-                <>
-                  <button
-                    title="Account"
-                    className="btn btn-subtle"
-                    onClick={() => setIsAccountOpen(true)}
-                  >
-                    <Person24Regular fontSize={20} />
-                    <span className={css.btnLabel}>Account</span>
-                  </button>
-                  <button
-                    title="Server Status"
-                    className="btn btn-subtle"
-                    onClick={() => setIsStatusOpen(true)}
-                  >
-                    <Info24Regular fontSize={20} />
-                    <span className={css.btnLabel}>Status</span>
-                  </button>
-                </>
-              )}
-            </div>
-
-            {/* Search and filters get their own row at every width, so the
-                brand/utility row above never has to wrap around them. */}
-            <div className={css.searchRow}>
-              <SearchBar />
-              <div className={css.filterSlot}>
-                <Filter />
-              </div>
-            </div>
-          </header>
+          <AppHeader
+            sharedView={sharedView}
+            ownsAccountSession={ownsAccountSession}
+            viewDescription={viewDescription}
+            resultCount={resultCount}
+            resultCountIsLowerBound={resultCountIsLowerBound}
+            theme={theme}
+            followsSystem={followsSystem}
+            onThemeToggle={onThemeToggle}
+            onOpenSuggestion={() => setIsSuggestionOpen(true)}
+            onOpenAccount={() => setIsAccountOpen(true)}
+            onOpenStatus={() => setIsStatusOpen(true)}
+          />
         </div>
 
         {/* Feedback #121/#122/#123: this used to dock just under the header

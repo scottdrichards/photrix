@@ -2,7 +2,7 @@ import type http from "node:http";
 import {
   SEARCH_SOURCES,
   type ShareScope,
-} from "../../../shared/filter-contract/src/index.ts";
+} from "@photrix/filter-contract";
 import {
   extractToken,
   getSessionUsername,

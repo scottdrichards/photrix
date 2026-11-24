@@ -6,9 +6,9 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import type { ClientFilterState } from "../../../../shared/filter-contract/src";
+import type { ClientFilterState } from "@photrix/filter-contract";
 import { createFilterStateFromUrl } from "../../filterUrlState";
-export type { MediaTypeFilter } from "../../../../shared/filter-contract/src";
+export type { MediaTypeFilter } from "@photrix/filter-contract";
 
 /**
  * null values means "find items with no value for this field".

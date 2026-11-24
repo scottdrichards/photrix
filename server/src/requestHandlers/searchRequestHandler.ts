@@ -5,7 +5,7 @@ import {
   type SearchSource,
   type ShareScope,
   type SortOption,
-} from "../../../shared/filter-contract/src/index.ts";
+} from "@photrix/filter-contract";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import {
   embedText,

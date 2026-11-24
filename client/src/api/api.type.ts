@@ -12,8 +12,24 @@ import type {
   ApiFilterOptions,
   SortOption,
   TaskHoldup,
-} from "../../../shared/filter-contract/src";
+} from "@photrix/filter-contract";
+import type {
+  DateHistogramBucket,
+  DateHistogramGrouping,
+  DateHistogramResult,
+  FaceAnomalyFlag,
+  FaceBox,
+  FaceClusterCentroid,
+  FaceClusterFace,
+  FaceClusterPCAPoint as WireFaceClusterPCAPoint,
+  FaceClusterResult,
+  FaceClusterSummary,
+  FaceReviewFace,
+  FaceReviewResult,
+  FaceVerdict,
+} from "@photrix/api-contract";
 export type { TaskHoldup };
+export type { DateHistogramBucket, DateHistogramGrouping, DateHistogramResult, FaceAnomalyFlag, FaceBox, FaceVerdict };
 export type { BackgroundTaskStatus, DateRangeFilter, FaceAttributeFilter, FaceClusterMatchMode, GeoBounds, MediaTypeFilter, RatingFilter, ShareScope, SearchSource, ApiFilterOptions, SortOption };
 
 export interface ApiPhotoItem {
@@ -90,27 +106,6 @@ export type GeoPoint = {
   maxDate?: number;
 };
 
-export type DateHistogramBucket = {
-  start: number;
-  end: number;
-  count: number;
-};
-
-export type DateHistogramResult = {
-  buckets: DateHistogramBucket[];
-  bucketSizeMs: number;
-  minDate: number | null;
-  maxDate: number | null;
-  grouping: "day" | "month" | "year";
-};
-
-export type FaceBox = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
-
 export type ClusterFace = {
   photo: PhotoItem;
   box: FaceBox;
@@ -153,31 +148,13 @@ export type NamedPerson = {
   name: string;
 };
 
-/** Why a face looks out of place beyond the embedding — see server faceReview.ts. */
-export type FaceAnomalyFlag = "low-similarity" | "date" | "location" | "folder";
+/** One face in the review view: the server's review face with its crop hydrated into a `ClusterFace`. */
+export type ReviewFace = ClusterFace & Omit<FaceReviewFace, keyof FaceClusterFace>;
 
-export type FaceVerdict = "confirmed" | "rejected";
-
-/** One face in the review view, with its distance and its evidence. */
-export type ReviewFace = ClusterFace & {
-  similarity: number | null;
-  verdict: FaceVerdict | null;
-  anomalyScore: number;
-  flags: FaceAnomalyFlag[];
-  reasons: string[];
-};
-
-export type PersonReview = {
-  personId: string;
-  name: string | null;
-  /** True when distances are measured from confirmed faces rather than the group average. */
-  anchored: boolean;
-  anchorCount: number;
-  radius: number | null;
+export type PersonReview = Omit<FaceReviewResult, "faces" | "rejected"> & {
   /** Sorted by similarity, descending. */
   faces: ReviewFace[];
   rejected: ReviewFace[];
-  suggestedCutoff: { keepCount: number; threshold: number; gap: number } | null;
 };
 
 export type OptimizeProposal =
@@ -199,13 +176,9 @@ export type OptimizeProposal =
       gap: number;
     };
 
-export type PersonCluster = {
-  id: string;
-  count: number;
+/** The server's cluster summary, with the representative crop hydrated into a `ClusterFace`. */
+export type PersonCluster = Omit<FaceClusterSummary, "representative"> & {
   representative: ClusterFace;
-  name: string | null;
-  yearRangeLabel?: string | null;
-  tags: string[];
 };
 
 export type PersonClusterWithFaces = PersonCluster & {
@@ -214,18 +187,12 @@ export type PersonClusterWithFaces = PersonCluster & {
   mergeSuggestions: PersonCluster[];
 };
 
-export type PersonCentroid = {
-  id: string;
-  count: number;
+export type PersonCentroid = Omit<FaceClusterCentroid, "representative"> & {
   representative: ClusterFace;
 };
 
-export type PeopleClustersResult = {
+export type PeopleClustersResult = Omit<FaceClusterResult, "clusters"> & {
   clusters: PersonCluster[];
-  totalFaces: number;
-  totalClusters: number;
-  /** Faces awaiting background clustering — non-zero means the list is still growing. */
-  pendingFaces: number;
 };
 
 export type PersonClusterDetailResult = {
@@ -396,13 +363,6 @@ export type MomentClusterDetail = {
   members: MomentClusterMember[];
 };
 
-export type FaceClusterPCAPoint = {
-  id: string;
-  count: number;
-  name: string | null;
+export type FaceClusterPCAPoint = Omit<WireFaceClusterPCAPoint, "representative"> & {
   representative: ClusterFace;
-  x: number;
-  y: number;
-  z: number;
-  focused: boolean;
 };

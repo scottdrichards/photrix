@@ -1,25 +1,58 @@
 # indexDatabase
 
-SQLite persistence layer for all indexed file metadata, embeddings, and face data.
+SQLite persistence for indexed file metadata, embeddings, moments and the
+analysis queues, and the `IndexDatabase` that composes every store.
 
 ## Key files
 
-| File                                                                          | What it owns                                                                   |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `openIndexSqlite.ts`                                                          | Opens the one SQLite connection (path, pragmas, SQL functions)                 |
-| `indexDatabase.ts`                                                            | `IndexDatabase` class: file queries and mutations, and the stores below        |
-| `faceStore.ts`, `faceClusterStore.ts`, `momentStore.ts`, `analysisStore.ts`   | Face, person, moment and analysis-queue queries (`database.faces`, …)          |
-| `tables.ts`                                                                   | Schema DDL (`CREATE TABLE`, `CREATE INDEX`)                                    |
-| `prepareTables.ts`                                                            | Reconciles the live schema with `tables.ts` at startup (adds, drops, indexes)  |
-| `migrate*.ts`                                                                 | Data migrations that must run before `prepareTables` (see Migrations)          |
-| `filterToSQL.ts`                                                              | Converts JSON filter trees (from HTTP params) to parameterized WHERE clauses   |
-| `processExifMetadata.ts`                                                      | Maps raw EXIF/probe output to DB column values                                 |
-| `processFileInfo.ts`                                                          | Extracts file-level facts (size, modified, path)                               |
-| `rowFileRecordConversionFunctions.ts`                                         | Converts raw DB rows → typed `FileRecord` objects                              |
-| `faceClusterEngine.ts`                                                        | Incremental DBSCAN face clustering against centroid embeddings                 |
-| `processFaceClustering.ts`                                                    | Orchestrates clustering passes triggered by the task runner                    |
-| `fileSystemScanFolder.ts` / `fileSystemMonitorFolder.ts`                      | FS walk + inotify watcher                                                      |
-| `pca.ts`                                                                      | PCA projection for face embedding visualisation                                |
+| File                                                  | What it owns                                                                  |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `openIndexSqlite.ts`                                  | Opens the one SQLite connection (path, pragmas, SQL functions)                |
+| `indexDatabase.ts`                                    | `IndexDatabase`: opens and wires the stores; its methods only delegate        |
+| `fileStore.ts`                                        | Writes to `files`: add/update, user edits, move, remove, re-sync, stamps      |
+| `fileQueryStore.ts`                                   | `queryFiles` (paged, sorted listing) and `fileMatchesFilter`                  |
+| `statsStore.ts`                                       | Counts, status counts and their cache, ratings, folders, date range/histogram |
+| `suggestionStore.ts`, `geoStore.ts`                   | Field autocomplete; map-pin clusters                                          |
+| `taskQueueStore.ts`                                   | What background tasks poll: files needing a pass, next variant/HLS job        |
+| `maintenanceStore.ts`                                 | WAL checkpoint timer, VACUUM, on-disk size, the `settings` rows               |
+| `exifBackfills.ts`                                    | One-time `user_version`-gated EXIF re-queues run at startup                   |
+| `momentStore.ts`, `analysisStore.ts`, `placeStore.ts` | Moment, analysis-queue and place queries (`database.moments`, …)              |
+| `analysisSearch.ts`                                   | Semantic / transcript / metadata search behind `analysisStore`'s search methods |
+| `tables.ts`                                           | Schema DDL (`CREATE TABLE`, `CREATE INDEX`), face tables included             |
+| `prepareTables.ts`                                    | Reconciles the live schema with `tables.ts` at startup (adds, drops, indexes) |
+| `migrate*.ts`                                         | Data migrations that must run before `prepareTables` (see Migrations)         |
+| `filterToSQL.ts`                                      | Converts JSON filter trees (from HTTP params) to parameterized WHERE clauses  |
+| `rowFileRecordConversionFunctions.ts`                 | Converts raw DB rows → typed `FileRecord` objects                             |
+| `momentClusterEngine.ts`                              | Burst / near-duplicate grouping behind `momentStore`                          |
+| `embeddingCodec.ts`, `vectorIndex/`                   | int8 embedding storage and the in-memory similarity index                     |
+
+`IndexDatabase` is a facade: `database.addFile(...)` forwards to
+`database.files.addFile(...)`, and every store is also public
+(`database.files`, `.fileQueries`, `.stats`, `.suggestions`, `.geo`, `.tasks`,
+`.maintenance`) for callers that want the namespaced form. Keep new code
+delegating through the facade method unless a whole module uses one store.
+Face and person data (`database.faces`, `database.faceClusters`) lives in
+`people/store/`; IndexDatabase only builds those stores. The indexing stages
+(scan, file info, EXIF, places, clustering) live in `pipeline/`.
+
+### Which store gets a new query
+
+| The query...                                                      | Store                |
+| ----------------------------------------------------------------- | -------------------- |
+| inserts, updates or deletes `files` rows (and their side rows)    | `fileStore`          |
+| lists files with a filter, sort and page                          | `fileQueryStore`     |
+| counts or aggregates the library (status, ratings, folders, dates)| `statsStore`         |
+| feeds the search-bar autocomplete / the map                       | `suggestionStore` / `geoStore` |
+| is polled by a background task to find its next unit of work      | `taskQueueStore`     |
+| is about the database itself (WAL, VACUUM, size) or `settings`    | `maintenanceStore`   |
+| touches moments, embeddings/analysis queues, places               | `momentStore`, `analysisStore`, `placeStore` |
+| touches faces or people                                           | `people/store/`      |
+
+`taskQueueStore` stays here, not in `taskOrchestrator/` or `pipeline/`:
+`taskOrchestrator` may not import `indexDatabase`, and the callers in
+`pipeline/` and the processing modules already depend on it. Add the method
+to its store, then a one-line delegate to `IndexDatabase` if callers reach it
+through the facade.
 
 ## Who may run SQL
 
@@ -42,13 +75,14 @@ re-run can reproduce); it is not fine for user judgements.
   `tables.ts`. `prepareTables` creates what is missing and drops columns that
   are no longer listed, so a removed column's data is gone after the next boot.
 - **Moving data out of something you are removing** gets its own
-  `migrate<What>.ts` in this directory, called from `IndexDatabase.init()`
+  `migrate<What>.ts` beside the store that owns the data (here, or
+  `people/store/` for face data), called from `IndexDatabase.init()`
   *before* `prepareTables` (which would otherwise drop the source first). It
   creates its destination with `ensureTableExists`, copies, then drops or
   stops reading the source. Examples: `migrateEmbeddingStorage.ts`,
-  `migrateFaceVerdicts.ts`.
+  `people/store/migrateFaceVerdicts.ts`.
 - **Re-queuing or rewriting existing rows once** (a backfill) is a method on
-  the store that owns the table, gated by `PRAGMA user_version` with a named
+  the store that owns the table (EXIF re-queues: `exifBackfills.ts`), gated by `PRAGMA user_version` with a named
   `*_VERSION` constant next to it (`TAGS_BACKFILL_VERSION`,
   `FACE_ATTRIBUTE_RESET_VERSION`, …). All of them share the one
   `user_version` counter, so a new one takes the next unused number (highest

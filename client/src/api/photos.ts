@@ -1,4 +1,4 @@
-import { serializeSort } from "../../../shared/filter-contract/src";
+import { serializeSort } from "@photrix/filter-contract";
 import { buildFilters, filtersToParam } from "./filters";
 import { fetchJsonOrThrow, fetchWithDiagnostics } from "./http";
 import { SearchUnavailableError, type SearchSourceStatus } from "./searchStatus";

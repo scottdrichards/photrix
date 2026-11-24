@@ -17,7 +17,7 @@ import {
 import {
   filterFieldCapabilities,
   FIELD_METADATA,
-} from "../../shared/filter-contract/src";
+} from "@photrix/filter-contract";
 
 describe("api", () => {
   beforeEach(() => {

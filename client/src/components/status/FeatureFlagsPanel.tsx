@@ -4,7 +4,7 @@ import {
   featureFlags,
   type FeatureFlagName,
   type FeatureFlagState,
-} from "../../../../shared/feature-flags/src/featureFlags";
+} from "@photrix/feature-flags";
 import { useFeatureFlags } from "../../featureFlags/FeatureFlagsContext";
 import { attempt } from "../../result";
 import css from "./StatusModal.module.css";

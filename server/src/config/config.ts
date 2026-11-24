@@ -13,7 +13,7 @@ import {
   featureFlagEnvironmentVariable,
   featureFlags,
   type FeatureFlagName,
-} from "../../../shared/feature-flags/src/featureFlags.ts";
+} from "@photrix/feature-flags";
 import { ConfigError, createEnvReader, type Env } from "./env.ts";
 
 /** What is starting: the main server needs its library; the standalone MCP server doesn't. */

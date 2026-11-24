@@ -2,8 +2,15 @@ import { buildFilters, filtersToParam } from "./filters";
 import { fetchWithDiagnostics, fetchJsonOrThrow } from "./http";
 import { buildFileUrl, buildFilesQueryUrl, createPhotoItem } from "./photoItem";
 import type {
+  FaceClusterDetailResult,
+  FaceClusterFace,
+  FaceClusterPCAResult,
+  FaceClusterResult,
+  FaceReviewFace,
+  FaceReviewResult,
+} from "@photrix/api-contract";
+import type {
   ClusterFace,
-  FaceBox,
   FaceClusterPCAPoint,
   FaceVerdict,
   FetchPeopleClustersOptions,
@@ -15,20 +22,7 @@ import type {
   ReviewFace,
 } from "./api.type";
 
-type ApiFaceRep = {
-  path: string;
-  fileName: string;
-  box: FaceBox;
-  mimeType: string | null;
-  dimensionWidth: number | null;
-  dimensionHeight: number | null;
-  regions: string | null;
-  faceId: number;
-  dateTaken?: string | null;
-  frameTimeMs?: number;
-};
-
-const toClusterFace = (face: ApiFaceRep): ClusterFace => {
+const toClusterFace = (face: FaceClusterFace): ClusterFace => {
   const { path: relativePath, fileName, mimeType, dimensionWidth, dimensionHeight, box, regions, faceId, dateTaken, frameTimeMs } = face;
   return {
     photo: createPhotoItem({
@@ -81,17 +75,7 @@ export const fetchPeopleClusters = async ({
   if (filterParam) params.set("filter", filterParam);
 
   const url = buildFilesQueryUrl(path, params);
-  const payload = await fetchJsonOrThrow<{
-    clusters: Array<{
-      id: string;
-      count: number;
-      representative: ApiFaceRep;
-      tags?: string[];
-    }>;
-    totalFaces: number;
-    totalClusters: number;
-    pendingFaces?: number;
-  }>(url, "fetch people clusters", { signal });
+  const payload = await fetchJsonOrThrow<FaceClusterResult>(url, "fetch people clusters", { signal });
 
   return {
     clusters: payload.clusters.map((cluster) => ({
@@ -153,22 +137,7 @@ export const fetchClusterDetail = async (
   if (filterParam) params.set("filter", filterParam);
 
   const url = buildFilesQueryUrl(path, params);
-  const payload = await fetchJsonOrThrow<{
-    cluster: {
-      id: string;
-      count: number;
-      representative: ApiFaceRep;
-      faces: ApiFaceRep[];
-      centroids?: Array<{ id: string; count: number; representative: ApiFaceRep }>;
-      mergeSuggestions?: Array<{
-        id: string;
-        count: number;
-        name: string | null;
-        representative: ApiFaceRep;
-      }>;
-      tags?: string[];
-    } | null;
-  }>(url, "fetch cluster detail", { signal });
+  const payload = await fetchJsonOrThrow<FaceClusterDetailResult>(url, "fetch cluster detail", { signal });
 
   if (!payload.cluster) return { cluster: null };
 
@@ -251,7 +220,7 @@ export const fetchClusterFacePreview = async ({
   params.set("clusterId", clusterId);
   if (excludeFaceId != null) params.set("excludeFaceId", String(excludeFaceId));
   if (limit != null) params.set("limit", String(limit));
-  const payload = await fetchJsonOrThrow<{ faces?: ApiFaceRep[] }>(
+  const payload = await fetchJsonOrThrow<{ faces?: FaceClusterFace[] }>(
     `/api/people/cluster-preview?${params.toString()}`,
     "fetch cluster face preview",
     { signal },
@@ -270,18 +239,7 @@ export const fetchFaceClustersPCA = async ({
   params.set("aggregate", "faceCentroidsPCA");
   if (clusterId) params.set("clusterId", clusterId);
   const url = buildFilesQueryUrl("", params);
-  const payload = await fetchJsonOrThrow<{
-    points: Array<{
-      id: string;
-      count: number;
-      name: string | null;
-      representative: ApiFaceRep;
-      x: number;
-      y: number;
-      z: number;
-      focused: boolean;
-    }>;
-  }>(url, "fetch face cluster PCA", { signal });
+  const payload = await fetchJsonOrThrow<FaceClusterPCAResult>(url, "fetch face cluster PCA", { signal });
 
   if (!Array.isArray(payload.points)) {
     throw new Error("Server returned unexpected response — try restarting the server to pick up the new faceCentroidsPCA endpoint");
@@ -421,7 +379,7 @@ export const excludeFaceFromCluster = async (faceId: number): Promise<void> => {
  * One person's faces ordered by how far they sit from that person's reference
  * point, each with its verdict and anomaly evidence, plus a suggested cut line.
  *
- * The server returns the face crops in the same `ApiFaceRep` shape everything
+ * The server returns the face crops in the same `FaceClusterFace` shape everything
  * else here uses, so the extra review fields are grafted onto the usual
  * `ClusterFace` rather than given a parallel photo model.
  */
@@ -429,29 +387,13 @@ export const fetchPersonReview = async (
   clusterId: string,
   signal?: AbortSignal,
 ): Promise<PersonReview> => {
-  type ApiReviewFace = ApiFaceRep & {
-    similarity: number | null;
-    verdict: FaceVerdict | null;
-    anomalyScore: number;
-    flags: ReviewFace["flags"];
-    reasons: string[];
-  };
-  const payload = await fetchJsonOrThrow<{
-    personId: string;
-    name: string | null;
-    anchored: boolean;
-    anchorCount: number;
-    radius: number | null;
-    faces: ApiReviewFace[];
-    rejected: ApiReviewFace[];
-    suggestedCutoff: PersonReview["suggestedCutoff"];
-  }>(
+  const payload = await fetchJsonOrThrow<FaceReviewResult>(
     `/api/people/review?clusterId=${encodeURIComponent(clusterId)}`,
     "fetch person review",
     { signal },
   );
 
-  const toReviewFace = (face: ApiReviewFace): ReviewFace => ({
+  const toReviewFace = (face: FaceReviewFace): ReviewFace => ({
     ...toClusterFace(face),
     similarity: face.similarity,
     verdict: face.verdict,
@@ -551,7 +493,7 @@ export type CapChange = {
 
 const toCapChange = (payload: {
   affected?: number;
-  sample?: ApiFaceRep[];
+  sample?: FaceClusterFace[];
   faceIds?: number[];
   excludable?: boolean;
 }): CapChange => ({

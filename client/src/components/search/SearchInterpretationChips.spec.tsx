@@ -1,5 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
-import type { InterpretedFilterChip } from "../../../../shared/filter-contract/src";
+import type { InterpretedFilterChip } from "@photrix/filter-contract";
 import { SearchInterpretationChips } from "./SearchInterpretationChips";
 
 vi.mock("../../storage", () => ({

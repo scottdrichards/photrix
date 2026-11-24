@@ -2,7 +2,7 @@ import {
   SEARCH_SOURCES,
   type SearchSource,
   type ShareScope,
-} from "../../../shared/filter-contract/src/index.ts";
+} from "@photrix/filter-contract";
 import type { FilterElement } from "../indexDatabase/indexDatabase.type.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { FilterCompileError, filterToSQL } from "../indexDatabase/filterToSQL.ts";

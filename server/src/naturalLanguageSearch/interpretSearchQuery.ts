@@ -3,7 +3,7 @@ import type {
   InterpretedPersonAlternative,
   InterpretedSearchFilter,
   SearchInterpretation,
-} from "../../../shared/filter-contract/src/index.ts";
+} from "@photrix/filter-contract";
 import { getLogger } from "../observability/logger.ts";
 import { ollamaGenerate } from "../shareDescription/ollamaGenerate.ts";
 import {

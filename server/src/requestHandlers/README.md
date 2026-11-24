@@ -11,9 +11,25 @@ Name a handler file `<thing>RequestHandler.ts`, exporting `<thing>RequestHandler
 `authRequestHandler.ts` exports several (`authLoginHandler`, …) because they
 share one module's state; `files/` and `video/` hold the file-serving helpers.
 
+## Keep handlers thin
+
+A handler parses the request, calls the module that does the work, and maps
+the result to a status and body. Logic that would make sense without HTTP
+(encode queueing, fetching, scoring, caching) belongs in that module, behind
+a typed result the handler can switch on. For example, `files/videoRepresentations.ts`
+maps `videoProcessing/hlsService.ts`'s `HlsResponse`, and
+`faceIdentifyRequestHandler.ts` maps `people/identify/`'s `IdentifyResult`.
+Streaming and Range handling for served files is `files/streamFile.ts`.
+
+Specs call a handler directly with `handlerTest.fixture.ts` (`fakeRequest`,
+`recordResponse`) and test its contract: status codes, validation, and what
+it refuses. Which routes a share link reaches is tested once, in
+`createServer.spec.ts`.
+
 ## Adding a route
 
-1. Write the handler here (read a body with `readJsonRequest` from `common/readBody.ts`).
+1. Write the handler here (read a body with `readJsonRequest` from `common/readBody.ts`),
+   and a `<thing>RequestHandler.spec.ts` beside it.
 2. Add a `Route` entry in `createRoutes.ts` with the narrowest `shareLink`
    that works, and a case in `createServer.spec.ts` if share links may reach it
    (`createRoutes.spec.ts` checks every route is under `/api/` and reachable).

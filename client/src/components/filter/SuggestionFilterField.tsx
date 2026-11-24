@@ -14,7 +14,7 @@ import type {
   GeoBoundsLike as GeoBounds,
   MediaTypeFilter,
   RatingFilter,
-} from "../../../../shared/filter-contract/src";
+} from "@photrix/filter-contract";
 import { OptionListWithCounts } from "./OptionListWithCounts";
 
 type SuggestionFilterFieldProps = {

@@ -1,5 +1,5 @@
 import type http from "node:http";
-import { isFeatureFlagName } from "../../../shared/feature-flags/src/featureFlags.ts";
+import { isFeatureFlagName } from "@photrix/feature-flags";
 import { readJsonRequest } from "../common/readBody.ts";
 import { attempt } from "../common/result.ts";
 import { FeatureFlagPinnedError, type FeatureFlagStore } from "../featureFlags/featureFlagStore.ts";

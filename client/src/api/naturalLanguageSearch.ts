@@ -1,4 +1,4 @@
-import type { SearchInterpretation } from "../../../shared/filter-contract/src";
+import type { SearchInterpretation } from "@photrix/filter-contract";
 import { fetchJsonOrThrow } from "./http";
 
 /**

@@ -1,4 +1,4 @@
-import type { AnalysisCoverage } from "../../../shared/filter-contract/src/index.ts";
+import type { AnalysisCoverage } from "@photrix/filter-contract";
 import type { AnalysisStore } from "../indexDatabase/analysisStore.ts";
 
 /**

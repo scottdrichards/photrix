@@ -22,9 +22,11 @@ Review these when implicated (paths relative to the repo root).
 | `server/src/main.ts` | boots the server: database, stores, background stages, HTTP, MCP |
 | `server/src/createServer.ts`, `createRoutes.ts` | request trace and auth gate; the route table and share-link policy |
 | `server/src/requestHandlers/` | one handler per route group |
-| `server/src/indexDatabase/` | SQLite schema, stores, queries, migrations, the scan/EXIF/clustering stages |
+| `server/src/indexDatabase/` | SQLite schema, migrations, and the stores (`fileStore`, `fileQueryStore`, `statsStore`, `suggestionStore`, `geoStore`, `taskQueueStore`, `maintenanceStore`, moment/analysis/place); `IndexDatabase` is a thin facade over them |
+| `server/src/pipeline/` | the indexing stages: scan, watcher, file info, EXIF, places, face and moment clustering |
+| `server/src/people/` | faces once stored: face and cluster stores, clustering math, review, live identify |
 | `server/src/backgroundTasks/`, `taskOrchestrator/` | which stage feeds which; scheduling, resource budgets, backing off for users |
-| `server/src/imageAnalysis/`, `faceDetection/`, `videoFaceAnalysis/` | faces and CLIP for photos, live identify, faces in videos |
+| `server/src/imageAnalysis/`, `faceDetection/`, `videoFaceAnalysis/` | the face producers: faces and CLIP for photos, the detector contract, faces in videos |
 | `server/src/imageProcessing/`, `videoProcessing/`, `audioProcessing/` | image conversion, ffmpeg/HLS, Whisper and CLAP |
 | `server/src/auth/`, `shareScope/`, `shareDescription/` | accounts and tokens; what a share link may see; share previews |
 | `server/src/naturalLanguageSearch/`, `photoCaption/`, `places/` | query interpretation, captions, place names |
@@ -32,7 +34,7 @@ Review these when implicated (paths relative to the repo root).
 | `server/src/common/`, `fileHandling/`, `accel/`, `python/` | shared helpers, file/EXIF helpers, accelerator probe, Python interpreter resolution |
 | `server/python/` | the long-lived Python workers (image analysis, Whisper, CLAP) and their requirements |
 | `client/src/` | the React app; see its README |
-| `shared/` | code both sides import: filter contract, feature flags, HLS headers, video storyboard |
+| `shared/` | workspace packages both sides import as `@photrix/*`: `api-contract` (response types), `filter-contract`, `feature-flags`, `hls-segment-headers`, `video-storyboard` |
 | `e2e/` | Playwright suite and the playback lab |
 
 Python lives in two places on purpose: `server/python/` holds the long-lived
@@ -49,14 +51,16 @@ resolution).
   row in `/documentation/ARCHITECTURE.md` and the endpoint in `server/API.md`.
   See `requestHandlers/README.md`.
 - **A background stage**: a `process<Thing>.ts` returning a `TaskRunner` (use
-  `createTaskController`) in the module that owns the work; add it to
+  `createTaskController`) in the module that owns the work (`pipeline/` for an
+  indexing stage that needs no ML worker); add it to
   `BackgroundTaskPlan` and the cascade in
   `backgroundTasks/registerBackgroundTasks.ts`, give it a name and task `type`
   in `main.ts`, and add it to the pipeline diagram in ARCHITECTURE.md.
 - **A DB table, column or migration**: declare it in
   `server/src/indexDatabase/tables.ts` and query it from the store that owns
-  it. Carrying user data across a schema change follows "Migrations" in
-  `indexDatabase/README.md`.
+  it (`people/store/` for face data); `indexDatabase/README.md`, "Which store
+  gets a new query", picks the store, and "Migrations" covers carrying user
+  data across a schema change.
 - **An env var**: add it to its section of `server/src/config/config.ts` with
   a reader from `config/env.ts` and a `help` line, read it with `config()`
   where it is used (not into a module constant), then run
@@ -65,8 +69,15 @@ resolution).
   `overrideConfig` from `config/config.fixture.ts`. See
   `server/src/config/README.md`. Client build-time vars are `VITE_*` in
   `client/.env.example`.
-- **A client API call**: a function in `client/src/api/<area>.ts`, types in
-  `api/api.type.ts`, exported from `api/index.ts`. See `client/src/README.md`.
+- **A client API call**: a function in `client/src/api/<area>.ts`, exported
+  from `api/index.ts`. See `client/src/README.md`.
+- **A response type**: one the server returns and the client reads goes in
+  `shared/api-contract/src/index.ts`, imported as `@photrix/api-contract` by
+  both. A new `shared/<name>/` package needs a `package.json` named
+  `@photrix/<name>` with an `exports` entry pointing at its `.ts` source, a
+  `workspace:*` dependency in each consumer, a `paths` line in that
+  workspace's `tsconfig.json`, then `bun run bootstrap`. The server build
+  (`server/scripts/copy-build-assets.mjs`) links it into `dist/` by itself.
 - **A Python worker**: the script in `server/python/` (newline-delimited JSON
   over stdin/stdout, print `{"type":"ready"}`, a `*_test.py` beside it for
   `bun run --filter server test:python`); a Node manager modelled on

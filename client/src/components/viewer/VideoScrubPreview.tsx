@@ -2,7 +2,7 @@ import { useEffect, useState, type RefObject } from "react";
 import {
   planStoryboard,
   storyboardFrameAt,
-} from "../../../../shared/video-storyboard/src";
+} from "@photrix/video-storyboard";
 import { buildFileUrl } from "../../api/photoItem";
 import css from "./VideoScrubPreview.module.css";
 

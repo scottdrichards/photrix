@@ -2,6 +2,7 @@ import {
   LONG_VIDEO_SECONDS,
   MAX_ANALYSIS_FRAMES,
 } from "../videoProcessing/extractAnalysisFrames.ts";
+import type { QueuedVideoFaces, VideoFaceCostInputs } from "../indexDatabase/analysisStore.ts";
 
 /**
  * What one video costs the video-face pass, and how long the rest of the
@@ -30,13 +31,6 @@ import {
  * The runner reads the next video's frames while the face model works on the
  * current one's, so a video costs the wall clock its slower stage, not both.
  */
-
-export type VideoFaceCostInputs = {
-  durationSeconds?: number;
-  sizeBytes?: number;
-  width?: number;
-  height?: number;
-};
 
 /**
  * Starting coefficients, least-squares fits to extraction timed on 36 random
@@ -70,14 +64,6 @@ const DEFAULT_MEGAPIXELS = 2;
 const DEFAULT_MBIT_PER_SECOND = 50;
 
 type VideoFaceCost = { extractMs: number; frames: number };
-
-/** A video waiting for the face pass, with what ordering it needs. */
-export type QueuedVideoFaces = { relativePath: string } & VideoFaceCostInputs & {
-    /** ms since epoch: date taken, else file creation. */
-    takenAt?: number;
-    /** It failed once and came back after the retry cooldown. */
-    failedBefore: boolean;
-  };
 
 /** Videos taken this recently go first, so new footage gets faces soon. */
 export const RECENT_VIDEO_MS = 30 * 24 * 60 * 60 * 1_000;

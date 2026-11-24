@@ -2,7 +2,7 @@ import http from "node:http";
 import type {
   AnalysisCoverage,
   BackgroundTaskStatus,
-} from "../../../shared/filter-contract/src/index.ts";
+} from "@photrix/filter-contract";
 import type { TaskOrchestrator } from "../taskOrchestrator/taskOrchestrator.ts";
 import { getSystemMetrics } from "../systemStatus/systemMetrics.ts";
 import { isGpuReclaimed } from "../taskOrchestrator/computeWorkers.ts";

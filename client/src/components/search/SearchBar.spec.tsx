@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { act } from "react";
-import type { SearchInterpretation } from "../../../../shared/filter-contract/src";
+import type { SearchInterpretation } from "@photrix/filter-contract";
 import { SearchBar } from "./SearchBar";
 import { FilterProvider, useFilter } from "../filter/FilterContext";
 

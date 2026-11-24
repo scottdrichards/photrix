@@ -10,7 +10,7 @@ import {
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { logFailure } from "../common/logFailure.ts";
 import { getLogger } from "../observability/logger.ts";
-import type { ShareScope } from "../../../shared/filter-contract/src/index.ts";
+import type { ShareScope } from "@photrix/filter-contract";
 import { config } from "../config/config.ts";
 
 type TokenData = {

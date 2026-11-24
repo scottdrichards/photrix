@@ -1,7 +1,7 @@
 import type {
   AnalysisCoverage,
   BackgroundTaskStatus,
-} from "../../../../shared/filter-contract/src";
+} from "@photrix/filter-contract";
 import css from "./StatusModal.module.css";
 
 const count = (value: number) => value.toLocaleString();

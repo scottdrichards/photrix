@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import {
   type FeatureFlagName,
   type FeatureFlagState,
-} from "../../../shared/feature-flags/src/featureFlags";
+} from "@photrix/feature-flags";
 import { fetchFeatureFlags, setFeatureFlagOverride } from "../api";
 import { logClientEvent } from "../diagnostics";
 

@@ -5,8 +5,8 @@ import { stripLeadingSlash } from "../common/stripLeadingSlash.ts";
 import { getLogger } from "../observability/logger.ts";
 import { recordServerDiagnosticEvent } from "../observability/diagnosticsStore.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
-import type { AnalysisStore, QueuedVideoAnalysis } from "../indexDatabase/analysisStore.ts";
-import type { FaceStore } from "../indexDatabase/faceStore.ts";
+import type { AnalysisStore, QueuedVideoAnalysis, VideoFaceCostInputs } from "../indexDatabase/analysisStore.ts";
+import type { FaceStore } from "../people/store/faceStore.ts";
 import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { createTaskController } from "../taskOrchestrator/taskController.ts";
 import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";
@@ -17,11 +17,7 @@ import {
   type AnalysisFrame,
 } from "../videoProcessing/extractAnalysisFrames.ts";
 import { collapseFaceTracks, type FrameFaces } from "./collapseFaceTracks.ts";
-import {
-  createVideoFaceEta,
-  orderVideoFaceQueue,
-  type VideoFaceCostInputs,
-} from "./videoFaceCost.ts";
+import { createVideoFaceEta, orderVideoFaceQueue } from "./videoFaceCost.ts";
 
 const log = getLogger("processVideoFaceAnalysis");
 

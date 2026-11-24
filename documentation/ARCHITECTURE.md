@@ -15,21 +15,22 @@ filter), so that file is also the share-link access policy.
 
 | Route                                    | Handler (`server/src/requestHandlers/`)             | Does the work in                                                                                         |
 | ---------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `GET /api/files/<dir>/?…` (trailing `/`) | `files/queryHandler.ts`                             | `indexDatabase/indexDatabase.ts` `queryFiles`, `filterToSQL.ts`                                          |
+| `GET /api/files/<dir>/?…` (trailing `/`) | `files/queryHandler.ts`                             | `indexDatabase/fileQueryStore.ts` `queryFiles`, `filterToSQL.ts`                                          |
 | `GET /api/files/<file>?representation=…` | `files/filesRequestHandler.ts` `fileHandler`        | see "Serving a file" below                                                                               |
-| `PATCH /api/files/<file>`                | `files/updateMetadataHandler.ts`                    | `indexDatabase.ts`                                                                                       |
-| `GET /api/folders/…`                     | `foldersRequestHandler.ts`                          | `indexDatabase.ts`                                                                                       |
+| `PATCH /api/files/<file>`                | `files/updateMetadataHandler.ts`                    | `indexDatabase/fileStore.ts` `updateUserMetadata`                                                                                     |
+| `GET /api/folders/…`                     | `foldersRequestHandler.ts`                          | `indexDatabase/statsStore.ts` `getFolders`                                                                                     |
 | `GET /api/search`                        | `searchRequestHandler.ts`                           | CLIP text embedding (`imageAnalysis/`), CLAP (`audioProcessing/clapWorker.ts`), `naturalLanguageSearch/` |
 | `POST /api/search/interpret`             | `searchInterpretRequestHandler.ts`                  | `naturalLanguageSearch/interpretSearchQuery.ts`                                                          |
 | `POST /api/page-title`                   | `pageTitleRequestHandler.ts`                        | describes the current filter for the header                                                              |
-| `GET /api/suggestions`                   | `suggestionsRequestHandler.ts`                      | `indexDatabase.ts`                                                                                       |
+| `GET /api/suggestions`                   | `suggestionsRequestHandler.ts`                      | `indexDatabase/suggestionStore.ts`                                                                                     |
 | `GET /api/video/negotiate`               | `video/videoNegotiation.ts`                         | direct vs live GPU HLS decision                                                                          |
-| `/api/faces/…`                           | `faceIdentifyRequestHandler.ts`                     | `faceDetection/`, `indexDatabase/faceReview.ts`                                                          |
-| `/api/people/…`                          | `peopleRequestHandler.ts`                           | `indexDatabase/faceClusterEngine.ts`                                                                     |
+| `/api/faces/…`                           | `faceIdentifyRequestHandler.ts`                     | `people/identify/` (frames, SSRF guard, scoring); centroids from `people/store/peopleQueries.ts` |
+| `/api/people/…`                          | `peopleRequestHandler.ts`                           | `people/store/faceClusterStore.ts` (facade over the people stores)                                       |
 | `POST /api/moment-clusters/…`            | `momentClustersRequestHandler.ts`                   | `indexDatabase/momentClusterEngine.ts`                                                                   |
 | `GET /api/photos/caption`                | `photoCaptionRequestHandler.ts`                     | `photoCaption/` (Ollama)                                                                                 |
 | `GET /api/photos/suggest-rotation`       | `suggestRotationRequestHandler.ts`                  | `imageProcessing/suggestRotation.ts`                                                                     |
 | `GET /api/day-photo/…`                   | `dayPhotoRequestHandler.ts`                         | `scripts/dayPhoto/`                                                                                      |
+| `GET /api/screensaver`                   | `screensaverRequestHandler.ts`                      | `scripts/dayPhoto/screensaver_pick.py`                                                                   |
 | `/api/settings/…`                        | `settingsRequestHandler.ts`                         | `settings` table                                                                                         |
 | `/api/auth/…`, `/api/account`            | `authRequestHandler.ts`, `accountRequestHandler.ts` | `auth/`                                                                                                  |
 | `GET /share`                             | `sharePreviewRequestHandler.ts`                     | `shareDescription/`                                                                                      |
@@ -39,21 +40,26 @@ filter), so that file is also the share-link access policy.
 | `/api/diagnostics/events`                | `diagnosticsRequestHandler.ts`                      | `observability/diagnosticsStore.ts`                                                                      |
 | `GET /api/diagnostics/perf`, `…/report`  | `diagnosticsReportRequestHandler.ts`                | `observability/perfMonitor.ts`, `systemStatus/buildDiagnosticsReport.ts`                                |
 
-### Serving a file (`filesRequestHandler.ts`)
+### Serving a file (`files/filesRequestHandler.ts`)
 
-`fileHandler` tries each representation in turn; the first that claims the
-request answers it.
+`fileHandler` parses the request and checks access (storage containment, the
+share filter). The named representations below go straight to their function;
+the rest are tried in turn, and the first that claims the request answers it.
+Video ones live in `files/videoRepresentations.ts`, streaming and Range
+handling in `files/streamFile.ts`.
 
 | `representation=`                          | Function                            | Produced by                                                                    |
 | ------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------ |
 | `preview` / `webSafe` / `?height=` (image) | `tryImageVariant`                   | `imageProcessing/convertImage.ts` (sharp, Python for HEIC/RAW), cached on disk |
-| `micro`                                    | `tryMicroThumbnail`                 | embedded EXIF thumbnail (`imageProcessing/embeddedThumbnail.ts`)               |
+| `micro`                                    | `tryMicroThumbnail`                 | `imageProcessing/microThumbnail.ts` (embedded EXIF thumbnail, else a 160 decode) |
 | `preview` (video)                          | `tryVideoThumbnail`                 | `videoProcessing/videoUtils.ts` (ffmpeg frame grab)                            |
-| `hls` (+ `variant`, `segment`)             | `tryHLSStream`                      | `videoProcessing/generateMultibitrateHLS.ts`, lifecycle in `hlsSession.ts`     |
-| `scrub`                                    | inline                              | `videoProcessing/videoUtils.ts`, one cached low-res frame per `index`          |
+| `hls` (+ `variant`, `segment`)             | `tryHLSStream`                      | `videoProcessing/hlsService.ts` `serveHls`; encodes `generateMultibitrateHLS.ts`, lifecycle `hlsSession.ts` |
+| `scrub`                                    | `serveScrubFrame`                   | `videoProcessing/videoUtils.ts`, one cached low-res frame per `index`          |
+| `storyboard`                               | `serveStoryboard`                   | `videoProcessing/videoStoryboard.ts`                                           |
+| `shareMp4`                                 | `serveShareMp4`                     | `videoProcessing/exportShareVideo.ts`                                          |
 | `transcript`                               | inline                              | `audioProcessing/processAudioTranscription.ts` output                          |
-| `live-photo`                               | inline                              | paired `.mov` / embedded motion photo                                          |
-| `crop=` (faces)                            | `tryImageCrop`, `tryVideoFrameCrop` | `imageProcessing/convertImage.ts`                                              |
+| `live-photo`                               | `serveLivePhoto`                    | paired `.mov` / embedded motion photo                                          |
+| `crop=` (faces)                            | `tryImageCrop`, `tryVideoFrameCrop` | `imageProcessing/convertImage.ts`, `videoProcessing/videoUtils.ts`             |
 | none                                       | `streamFile`                        | the original, with range support                                               |
 
 ## Video playback, end to end
@@ -65,10 +71,11 @@ request answers it.
    can carry the original and the browser can decode it), **live GPU HLS**,
    or **error** (with a reason saying which).
 3. HLS: hls.js requests the master → variant playlist → segments from
-   `filesRequestHandler.ts` `tryHLSStream`. Each variant is a separate
+   `files/videoRepresentations.ts` `tryHLSStream`, which hands each to
+   `videoProcessing/hlsService.ts` `serveHls`. Each variant is a separate
    on-demand ffmpeg encode (`generateMultibitrateHLS.ts`) at the source's own
    frame rate up to 30fps (`hlsOutputFrameRate.ts`), queued through the
-   task orchestrator, killed after 8s unused and deleted after 90s
+   task orchestrator (`hlsEncodeQueue.ts`), killed after 8s unused and deleted after 90s
    (`hlsSession.ts`). Segment requests wait for the encoder
    (`hlsSegmentWatcher.ts`).
 4. Client ABR: hls.js, with upswitches held back by `client/src/components/viewer/hlsAbrGuard.ts`.
@@ -85,29 +92,29 @@ by `taskOrchestrator/` (backs off while a user request is active; see its README
 The face stages are described end to end in `FACES.md`.
 
 ```
-fileSystemScan ─► fileMetadata (indexDatabase/processFileInfo.ts)
-               ├► exifMetadata (indexDatabase/processExifMetadata.ts)
-               │    ├► placeNames (indexDatabase/processPlaceNames.ts, places/)
+fileSystemScan ─► fileMetadata (pipeline/processFileInfo.ts)
+               ├► exifMetadata (pipeline/processExifMetadata.ts)
+               │    ├► placeNames (pipeline/processPlaceNames.ts, places/)
                │    ├► audioTranscription (audioProcessing/, Whisper)
                │    ├► audioEmbedding (audioProcessing/, CLAP)
                │    └► videoFaceAnalysis (videoFaceAnalysis/) ─► faceClustering
                ├► imageAnalysis (imageAnalysis/, faces + CLIP, Python worker)
-               │    ├► faceClustering (indexDatabase/processFaceClustering.ts)
+               │    ├► faceClustering (pipeline/processFaceClustering.ts)
                │    ├► faceAttributes (imageAnalysis/processFaceAttributes.ts)
-               │    └► momentClustering (indexDatabase/processMomentClustering.ts)
+               │    └► momentClustering (pipeline/processMomentClustering.ts)
                └► thumbnailBackfill (imageProcessing/thumbnailBackfill.ts)
 ```
 
-File changes after boot: `indexDatabase/fileSystemMonitorFolder.ts` (watcher)
+File changes after boot: `pipeline/fileSystemMonitorFolder.ts` (watcher)
 and `fileSystemRescanRecent.ts` re-queue the entry stages.
 
 ## Client
 
 | Concern                         | File(s) in `client/src/`                                          |
 | ------------------------------- | ----------------------------------------------------------------- |
-| App shell, views, routing state | `App.tsx`, `filterUrlState.ts`, `hooks/useSyncUrlWithFilter.ts`   |
+| App shell, views, routing state | `App.tsx`, `appNavigation.ts`, `useAppNavigation.ts`, `filterUrlState.ts`, `hooks/useSyncUrlWithFilter.ts` |
 | Grid, tiles, hover previews     | `components/grid/` (`ThumbnailGrid.tsx`, `ThumbnailTile.tsx`, `tileMedia/`) |
-| Photo/video viewer, editor      | `components/viewer/` (`FullscreenViewer.tsx`, `photoEdit/`)       |
+| Photo/video viewer, editor      | `components/viewer/` (`FullscreenViewer.tsx` and its `useViewer*` hooks, `photoEdit/`) |
 | Filters / search                | `components/filter/`, `components/search/`                        |
 | People                          | `components/people/`                                              |
 | Map                             | `components/map/`                                                 |
@@ -121,8 +128,9 @@ A module is a directory under `server/src/`, `client/src/` or
 `client/src/components/`. Which module may import from which is written down in
 each workspace's `eslint.config.mjs` and enforced by `bun run lint`
 (`eslint.boundaries.mjs`). A new cross-module import fails until it is either
-moved or added to that map on purpose. The `grandfathered` list beside the map
-is the backlog of known violations: it may shrink, never grow.
+moved or added to that map on purpose. The server has no known violations left;
+the rule still accepts a `grandfathered` list (each entry must match a real
+import, so it can only shrink), which the client uses for its backlog.
 
 `server/src/config/` sits below every server module, and any module may import
 it. It is the only code that reads `process.env` (lint enforces this): every

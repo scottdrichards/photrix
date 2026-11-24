@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { FeatureFlagState } from "../../../../shared/feature-flags/src/featureFlags";
+import type { FeatureFlagState } from "@photrix/feature-flags";
 import { fetchFeatureFlags, setFeatureFlagOverride } from "../../api";
 import { FeatureFlagsProvider } from "../../featureFlags/FeatureFlagsContext";
 import { FeatureFlagsPanel } from "./FeatureFlagsPanel";
