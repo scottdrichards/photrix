@@ -3,7 +3,6 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { CACHE_DIR } from "../common/cacheUtils.js";
 import { getLogger } from "../observability/logger.ts";
 import { buildPythonProcessEnv, resolvePythonCommand } from "../python/pythonRuntime.ts";
 import {
@@ -24,6 +23,7 @@ import {
   markWorkerEvictedError,
   onComputeWorkerSuspensionChange,
 } from "../taskOrchestrator/computeWorkers.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("whisperWorker");
 
@@ -86,18 +86,11 @@ const SLOW_REQUEST_MS = 5 * 60 * 1_000;
 // When the orchestrator freezes us for a user request the worker is killed
 // outright and immediately — see the suspension hook below. This timer covers
 // only the other case: genuinely idle with no work in flight. Generous enough
-// that a run of queued transcriptions doesn't pay a model reload per file.
-// `Number(x) || fallback` would silently reject a legitimate 0, since 0 is
-// falsy — which makes these knobs impossible to turn off. Parse explicitly.
-const envMs = (raw: string | undefined, fallback: number): number => {
-  if (raw === undefined || raw.trim() === "") return fallback;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-};
-
-const IDLE_UNLOAD_MS = envMs(process.env.PHOTRIX_WHISPER_IDLE_UNLOAD_MS, 60_000);
-
-// How long the box must be quiet before paying for a model load.
+// that a run of queued transcriptions doesn't pay a model reload per file
+// (PHOTRIX_WHISPER_IDLE_UNLOAD_MS).
+//
+// How long the box must be quiet before paying for a model load
+// (PHOTRIX_WHISPER_START_QUIET_MS).
 //
 // The orchestrator's ACTIVITY_COOLDOWN_MS is 2s, so background work resumes two
 // seconds after each request. Loading Whisper takes ~30s and ~2.2 GB, so during
@@ -106,7 +99,6 @@ const IDLE_UNLOAD_MS = envMs(process.env.PHOTRIX_WHISPER_IDLE_UNLOAD_MS, 60_000)
 // measured at one request per two seconds, none of which ever transcribed
 // anything. Requiring a longer quiet period makes the start decision match the
 // cost of the thing being started.
-const START_QUIET_MS = envMs(process.env.PHOTRIX_WHISPER_START_QUIET_MS, 60_000);
 
 // When the current quiet stretch began, or null while a user-request window is
 // open. Anchored to the *resume* edge (activity ending), not the suspend edge
@@ -191,7 +183,7 @@ onComputeWorkerSuspensionChange(COMPUTE_WORKER_IDS.whisper, (isSuspended) => {
     return;
   }
   quietSince = Date.now(); // activity window lapsed — quiet starts now
-  armIdleUnload(IDLE_UNLOAD_MS, "idle");
+  armIdleUnload(config().python.whisperIdleUnloadMs, "idle");
 });
 
 const canAccess = async (targetPath: string): Promise<boolean> => {
@@ -252,7 +244,7 @@ const onWorkerLine = (
   request.timeout.clear();
   // Queue went empty — start counting down to unload. If the resolve/reject
   // below feeds another file straight back in, sendRequest cancels this.
-  armIdleUnload(IDLE_UNLOAD_MS, "idle");
+  armIdleUnload(config().python.whisperIdleUnloadMs, "idle");
 
   const elapsedMs = Date.now() - request.startedAt;
 
@@ -294,7 +286,7 @@ const ensureWorkerReady = async (): Promise<void> => {
     // Emergency kill switch: see main.ts. Checked at spawn time so this
     // covers every caller of ensureWorkerReady, not just the background
     // transcription task.
-    if (process.env.PHOTRIX_DISABLE_AUDIO === "1") {
+    if (config().python.audioDisabled) {
       throw new Error("Whisper worker disabled via PHOTRIX_DISABLE_AUDIO=1");
     }
     // Refuse to *start* inside a user-request window, rather than starting and
@@ -315,11 +307,12 @@ const ensureWorkerReady = async (): Promise<void> => {
     // Not merely "no request right now" — the box must have been quiet long
     // enough that the load has a chance to finish and do real work.
     const quietMs = quietSince === null ? 0 : Date.now() - quietSince;
-    if (quietMs < START_QUIET_MS) {
+    const startQuietMs = config().python.whisperStartQuietMs;
+    if (quietMs < startQuietMs) {
       throw markWorkerEvictedError(
         new Error(
           `Whisper worker not started: only ${quietMs}ms of quiet ` +
-            `(need ${START_QUIET_MS}ms)`,
+            `(need ${startQuietMs}ms)`,
         ),
       );
     }
@@ -328,7 +321,7 @@ const ensureWorkerReady = async (): Promise<void> => {
     }
 
     const pythonCommand = await resolvePythonCommand();
-    const pythonEnv = await buildPythonProcessEnv(pythonCommand, process.env);
+    const pythonEnv = await buildPythonProcessEnv(pythonCommand);
 
     // Serialize GPU model loading to avoid OOM from simultaneous CUDA loads.
     const releaseGpuSlot = await acquireGpuInitSlot();
@@ -337,7 +330,7 @@ const ensureWorkerReady = async (): Promise<void> => {
     const child = spawn(pythonCommand, [WHISPER_SCRIPT], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
-      env: { ...pythonEnv, HF_HOME: path.join(CACHE_DIR, "huggingface") },
+      env: { ...pythonEnv, HF_HOME: path.join(config().media.cacheDir, "huggingface") },
     });
     worker = child;
     noteWhisperWorkerStarting(child.pid);
@@ -381,7 +374,7 @@ const ensureWorkerReady = async (): Promise<void> => {
       // user request — a plain setTimeout would fire during suspension and falsely
       // kill a worker that is simply frozen, not stuck.
       const readyTimeoutMs =
-        Number(process.env.PHOTRIX_WHISPER_READY_TIMEOUT_MS) || 5 * 60 * 1_000;
+        config().python.whisperReadyTimeoutMs;
       const readyTimer = createSuspensionAwareTimeout(
         COMPUTE_WORKER_IDS.whisper,
         readyTimeoutMs,
@@ -518,7 +511,7 @@ const sendRequest = async (
     await ensureWorkerReady();
   } catch (error) {
     // Re-arm: a failed start may still have left a child behind.
-    armIdleUnload(IDLE_UNLOAD_MS, "idle");
+    armIdleUnload(config().python.whisperIdleUnloadMs, "idle");
     throw error;
   }
   if (!worker) throw new Error("Whisper worker is not available");
@@ -568,7 +561,7 @@ const sendRequest = async (
     } catch (error) {
       timeout.clear();
       pending.delete(id);
-      armIdleUnload(IDLE_UNLOAD_MS, "idle");
+      armIdleUnload(config().python.whisperIdleUnloadMs, "idle");
       reject(error instanceof Error ? error : new Error(String(error)));
     }
   });

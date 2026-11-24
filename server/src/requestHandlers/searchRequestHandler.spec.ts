@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import type http from "node:http";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 // A short search budget keeps the "slow worker" tests fast.
-process.env.PHOTRIX_SEARCH_TIMEOUT_MS = "200";
+overrideConfig({ PHOTRIX_SEARCH_TIMEOUT_MS: "200" });
 
 afterEach(() => {
   jest.resetModules();

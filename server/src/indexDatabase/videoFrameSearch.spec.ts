@@ -4,6 +4,7 @@ import type { IndexDatabase } from "./indexDatabase.ts";
 import { VectorIndex } from "./vectorIndex/vectorIndex.ts";
 import { encodeEmbedding } from "./embeddingCodec.ts";
 import { withTempDb } from "./withTempDb.fixture.ts";
+import { config } from "../config/config.ts";
 
 // Feedback #150: CLIP search over the sampled frames of videos.
 
@@ -99,7 +100,7 @@ describe("searching video frames", () => {
         { timeMs: 1_000, embedding: vec(0, 1, 0, 0) },
         { timeMs: 9_000, embedding: QUERY },
       ]);
-      const index = new VectorIndex(path.join(process.env.INDEX_DB_LOCATION!, "index.db"));
+      const index = new VectorIndex(path.join(config().db.directory, "index.db"));
       try {
         expect(await index.loaded).toMatchObject({ videos: 1 });
         const [hit] = await index.searchFrames(encodeEmbedding(QUERY)!, 5);

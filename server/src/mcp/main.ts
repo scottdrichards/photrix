@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "../config/mcpEnv.ts";
 import { startMcpServer } from "./mcpServer.ts";
 
 // Standalone entrypoint for `npm run mcp` — useful when running the MCP

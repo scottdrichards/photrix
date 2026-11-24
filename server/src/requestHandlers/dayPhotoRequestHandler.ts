@@ -2,8 +2,8 @@ import type http from "node:http";
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
 import { join } from "node:path";
-import { CACHE_DIR } from "../common/cacheUtils.ts";
 import { getLogger } from "../observability/logger.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("dayPhotoRequestHandler");
 
@@ -12,7 +12,6 @@ const log = getLogger("dayPhotoRequestHandler");
 // pulls this endpoint nightly per date; photrix has no knowledge of HA
 // beyond serving "the representative photo for this date" as a JPEG.
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DAY_PHOTO_DIR = join(CACHE_DIR, "day-photos");
 const GENERATE_SCRIPT = join(
   process.cwd(),
   "scripts",
@@ -23,7 +22,7 @@ const GENERATE_TIMEOUT_MS = 60_000;
 
 const runGenerateScript = (date: string): Promise<void> =>
   new Promise((resolvePromise, rejectPromise) => {
-    const pythonBin = process.env.PHOTRIX_PYTHON?.trim() || "python3";
+    const pythonBin = config().python.command ?? "python3";
     const child = spawn(pythonBin, [GENERATE_SCRIPT, date, date], {
       timeout: GENERATE_TIMEOUT_MS,
     });
@@ -59,7 +58,7 @@ export const dayPhotoRequestHandler = async (
     return;
   }
 
-  const jpegPath = join(DAY_PHOTO_DIR, `${date}.jpg`);
+  const jpegPath = join(config().media.cacheDir, "day-photos", `${date}.jpg`);
 
   if (!existsSync(jpegPath)) {
     try {

@@ -2,6 +2,8 @@ import type http from "node:http";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { getLogger } from "../observability/logger.ts";
+import { config } from "../config/config.ts";
+import { childProcessEnv } from "../config/childEnv.ts";
 
 const log = getLogger("screensaverRequestHandler");
 
@@ -15,7 +17,7 @@ const PICK_TIMEOUT_MS = 60_000;
 
 const runPick = (count: string, windowDays: string, env: NodeJS.ProcessEnv): Promise<string> =>
   new Promise((resolvePromise, rejectPromise) => {
-    const pythonBin = process.env.PHOTRIX_PYTHON?.trim() || "python3";
+    const pythonBin = config().python.command ?? "python3";
     const child = spawn(pythonBin, [PICK_SCRIPT, count, windowDays], {
       timeout: PICK_TIMEOUT_MS,
       env,
@@ -49,7 +51,7 @@ export const screensaverRequestHandler = async (
   const count = String(Math.max(1, Math.min(Number(url.searchParams.get("count")) || 60, 400)));
   const windowDays = String(Math.max(1, Math.min(Number(url.searchParams.get("window")) || 365, 3650)));
 
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env = childProcessEnv();
   const rec = url.searchParams.get("rec");
   const star = url.searchParams.get("star");
   const fam = url.searchParams.get("fam");

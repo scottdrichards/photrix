@@ -2,13 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "@jest/globals";
 import { mkdir, mkdtemp, readdir, utimes, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { overrideConfig } from "../config/config.fixture.ts";
 
-// MEDIA_CACHE_DIR is resolved from CACHE_DIR at import time, so the cache root
-// must be set before the module under test is loaded.
 let tempRoot: string;
 let mediaDir: string;
 let enforceCacheLimit: typeof import("./cacheEviction.ts").enforceCacheLimit;
-let parseByteSize: typeof import("./cacheEviction.ts").parseByteSize;
 
 const writeCacheFile = async (name: string, sizeBytes: number, ageMs: number) => {
   const filePath = join(mediaDir, name);
@@ -20,31 +18,15 @@ const writeCacheFile = async (name: string, sizeBytes: number, ageMs: number) =>
 
 beforeAll(async () => {
   tempRoot = await mkdtemp(join(tmpdir(), "photrix-evict-"));
-  process.env.CACHE_DIR = tempRoot;
+  overrideConfig({ CACHE_DIR: tempRoot });
   mediaDir = join(tempRoot, "media");
   await mkdir(mediaDir, { recursive: true });
-  ({ enforceCacheLimit, parseByteSize } = await import("./cacheEviction.ts"));
+  ({ enforceCacheLimit } = await import("./cacheEviction.ts"));
 });
 
 afterAll(() => {
-  delete process.env.CACHE_DIR;
-  delete process.env.CACHE_MAX_BYTES;
-});
-
-describe("parseByteSize", () => {
-  it("parses plain byte counts", () => {
-    expect(parseByteSize("1024")).toBe(1024);
-  });
-
-  it("parses suffixed sizes case-insensitively", () => {
-    expect(parseByteSize("10GB")).toBe(10 * 1024 ** 3);
-    expect(parseByteSize("512mb")).toBe(512 * 1024 ** 2);
-  });
-
-  it("returns null for unset or invalid values", () => {
-    expect(parseByteSize(undefined)).toBeNull();
-    expect(parseByteSize("not-a-size")).toBeNull();
-  });
+  overrideConfig({ CACHE_DIR: undefined });
+  overrideConfig({ CACHE_MAX_BYTES: undefined });
 });
 
 describe("enforceCacheLimit", () => {
@@ -54,7 +36,7 @@ describe("enforceCacheLimit", () => {
     await writeCacheFile("older.jpg", 100, 30_000);
     await writeCacheFile("newer.jpg", 100, 20_000);
     await writeCacheFile("newest.jpg", 100, 10_000);
-    process.env.CACHE_MAX_BYTES = "250";
+    overrideConfig({ CACHE_MAX_BYTES: "250" });
 
     const result = await enforceCacheLimit();
 
@@ -72,7 +54,7 @@ describe("enforceCacheLimit", () => {
       await writeCacheFile(join("photo", name), 1000, 90_000);
     }
     await writeCacheFile(join("photo", "2160.webp"), 100, 50_000);
-    process.env.CACHE_MAX_BYTES = "250";
+    overrideConfig({ CACHE_MAX_BYTES: "250" });
 
     const result = await enforceCacheLimit();
 
@@ -101,7 +83,7 @@ describe("enforceCacheLimit", () => {
     await writeCacheFile(join(buried, "1080.webp"), 10, 900_000);
     // 200 + 36 * 10 + 10 = 570. Limit 560 → target 504: the buried oldest file
     // goes first, then newer.jpg (the next oldest), leaving 460.
-    process.env.CACHE_MAX_BYTES = "560";
+    overrideConfig({ CACHE_MAX_BYTES: "560" });
 
     const result = await enforceCacheLimit();
 
@@ -112,7 +94,7 @@ describe("enforceCacheLimit", () => {
   });
 
   it("does nothing when under the limit", async () => {
-    process.env.CACHE_MAX_BYTES = "10GB";
+    overrideConfig({ CACHE_MAX_BYTES: "10GB" });
     const result = await enforceCacheLimit();
     expect(result.evictedCount).toBe(0);
   });

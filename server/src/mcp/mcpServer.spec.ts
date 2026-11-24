@@ -1,15 +1,11 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import http from "node:http";
+import { overrideConfig, resetConfig } from "../config/config.fixture.ts";
 
-// Fresh module state per test — MCP_PORT/MCP_AUTH_TOKEN are read into
-// module-level consts at import time (see mcpServer.ts), so each test that
-// wants different env-driven behavior needs its own import.
+// Fresh module state (the verified-key cache) per test.
 const loadServer = async (env: Record<string, string | undefined> = {}) => {
   jest.resetModules();
-  for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
+  overrideConfig(env);
   return import("./mcpServer.ts");
 };
 
@@ -21,9 +17,7 @@ describe("startMcpServer", () => {
       await new Promise<void>((resolve) => server?.close(() => resolve()));
       server = undefined;
     }
-    delete process.env.MCP_PORT;
-    delete process.env.MCP_AUTH_TOKEN;
-    delete process.env.PHOTRIX_BASE_URL;
+    resetConfig();
     if (photrix) {
       await new Promise<void>((resolve) => photrix?.close(() => resolve()));
       photrix = undefined;
@@ -115,7 +109,7 @@ describe("startMcpServer", () => {
     expect((await listTools(port, "secret-gate-tokeX")).status).toBe(401);
     expect((await listTools(port, "short")).status).toBe(401);
     expect((await listTools(port, "secret-gate-token-and-more")).status).toBe(401);
-    delete process.env.PHOTRIX_TOKEN;
+    overrideConfig({ PHOTRIX_TOKEN: undefined });
   });
 
   it("per-user mode never falls back to PHOTRIX_TOKEN when no bearer is sent", async () => {
@@ -130,7 +124,7 @@ describe("startMcpServer", () => {
     const response = await listTools(listeningPort(server));
     expect(response.status).toBe(401);
     expect(response.headers.get("www-authenticate")).toMatch(/^Bearer/);
-    delete process.env.PHOTRIX_TOKEN;
+    overrideConfig({ PHOTRIX_TOKEN: undefined });
   });
 
   it("rejects a second bind on the same port instead of crashing the process", async () => {

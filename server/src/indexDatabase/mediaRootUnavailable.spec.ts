@@ -5,19 +5,18 @@ import path from "node:path";
 import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { openIndexSqlite } from "./openIndexSqlite.ts";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 const mkTempDir = async (prefix: string): Promise<string> =>
   fs.mkdtemp(path.join(os.tmpdir(), prefix));
 
 describe("fileSystemScanFolder: media root unavailable", () => {
-  beforeEach(() => {
-    process.env.ThumbnailCacheDirectory ??= path.join(os.tmpdir(), "photrix-test-thumbs");
-  });
+  beforeEach(() => {});
 
   it("does not prune the index when the root directory itself is missing", async () => {
     const rootDir = await mkTempDir("photrix-missing-root-");
     const dbDir = await mkTempDir("photrix-missing-db-");
-    process.env.INDEX_DB_LOCATION = dbDir;
+    overrideConfig({ INDEX_DB_LOCATION: dbDir });
 
     let db: IndexDatabase | undefined;
     try {
@@ -47,7 +46,7 @@ describe("fileSystemScanFolder: media root unavailable", () => {
   it("does not prune the index when the root exists but scans zero files against a non-empty index", async () => {
     const rootDir = await mkTempDir("photrix-empty-mount-root-");
     const dbDir = await mkTempDir("photrix-empty-mount-db-");
-    process.env.INDEX_DB_LOCATION = dbDir;
+    overrideConfig({ INDEX_DB_LOCATION: dbDir });
 
     let db: IndexDatabase | undefined;
     try {
@@ -76,7 +75,7 @@ describe("fileSystemScanFolder: media root unavailable", () => {
   it("resumes normal pruning and clears the flag once the root is available again", async () => {
     const rootDir = await mkTempDir("photrix-recovers-root-");
     const dbDir = await mkTempDir("photrix-recovers-db-");
-    process.env.INDEX_DB_LOCATION = dbDir;
+    overrideConfig({ INDEX_DB_LOCATION: dbDir });
 
     let db: IndexDatabase | undefined;
     try {

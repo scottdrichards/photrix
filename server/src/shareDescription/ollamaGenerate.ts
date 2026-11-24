@@ -1,4 +1,5 @@
 import { getLogger } from "../observability/logger.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("ollamaGenerate");
 
@@ -7,28 +8,7 @@ const log = getLogger("ollamaGenerate");
  * Unset means "no local model available" — callers fall back to their own
  * deterministic text rather than failing the request.
  */
-export const getOllamaUrl = (): string | undefined =>
-  process.env.PHOTRIX_OLLAMA_URL?.replace(/\/$/, "");
-
-// Small instruct model: a share title is a one-line generation, so the 3B model
-// answers in well under a second on the shared GPU and leaves VRAM for Frigate.
-const model = process.env.PHOTRIX_OLLAMA_MODEL ?? "llama3.2:3b";
-// Generous enough to absorb a cold model load (~7s when Ollama has unloaded
-// the model after idling), while a genuinely down GPU box still fails fast.
-const timeoutMs = Number(process.env.PHOTRIX_OLLAMA_TIMEOUT_MS) || 15_000;
-
-/**
- * How long Ollama should hold the model in memory after a call.
- *
- * Measured on this deployment: a cold call costs ~14.4s, of which 11.9s is
- * loading the model — actual inference is ~2.5s. Ollama's default keep-alive
- * (5 min) expires between searches, so nearly every interpretation paid the
- * load again. Holding the model resident turns a ~14s answer into ~3s.
- *
- * Set `PHOTRIX_OLLAMA_KEEP_ALIVE=0` to release the memory immediately if the
- * Ollama host needs it for something else.
- */
-const keepAlive = process.env.PHOTRIX_OLLAMA_KEEP_ALIVE ?? "30m";
+export const getOllamaUrl = (): string | undefined => config().ollama.url;
 
 /**
  * Per-call overrides. Defaults reproduce the share-title behaviour exactly, so
@@ -85,8 +65,8 @@ export const ollamaGenerate = async (
   const ollamaUrl = getOllamaUrl();
   if (!ollamaUrl) return null;
 
-  const effectiveModel = options.model ?? model;
-  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? timeoutMs);
+  const effectiveModel = options.model ?? config().ollama.model;
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? config().ollama.timeoutMs);
   const signal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
 
   try {
@@ -99,7 +79,7 @@ export const ollamaGenerate = async (
         prompt,
         stream: false,
         think: false,
-        keep_alive: keepAlive,
+        keep_alive: config().ollama.keepAlive,
         ...(options.json ? { format: "json" } : {}),
         ...(options.images ? { images: options.images } : {}),
         options: {
@@ -145,7 +125,7 @@ export const ollamaGenerateStream = async (
   const ollamaUrl = getOllamaUrl();
   if (!ollamaUrl) return null;
 
-  const effectiveModel = options.model ?? model;
+  const effectiveModel = options.model ?? config().ollama.model;
   const idle = new AbortController();
   const idleTimeoutMs = options.idleTimeoutMs ?? 90_000;
   let idleTimer = setTimeout(() => idle.abort(), options.firstTokenTimeoutMs ?? 300_000);
@@ -167,7 +147,7 @@ export const ollamaGenerateStream = async (
         prompt,
         stream: true,
         think: false,
-        keep_alive: keepAlive,
+        keep_alive: config().ollama.keepAlive,
         ...(options.images ? { images: options.images } : {}),
         options: {
           temperature: options.temperature ?? 0.2,

@@ -5,43 +5,41 @@ import { pathToken } from "../observability/privacy.ts";
 import { recordServerDiagnosticEvent } from "../observability/diagnosticsStore.ts";
 import { HLS_SEGMENT_SECONDS } from "./buildHlsPlaylist.ts";
 import { closeHlsWatcher } from "./hlsSegmentWatcher.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("HlsSession");
 
 // HLS output is ephemeral: once a player stops requesting anything from this tree
 // for this long, every encode is killed and the directory is deleted so nothing
-// accumulates. Replays after this idle window re-encode from scratch.
-const IDLE_MS = Number(process.env.PHOTRIX_HLS_IDLE_MS) || 90_000;
+// accumulates. Replays after this idle window re-encode from scratch
+// (PHOTRIX_HLS_IDLE_MS).
 
 // Per-encode idle window. An encode is killed once no request has touched the
 // part of the video it is producing for this long — which happens as soon as
 // ABR switches to a different quality or the player seeks elsewhere. Requests
 // still waiting on it count as touching it (see keepVariantAlive).
-const VARIANT_IDLE_MS = Number(process.env.PHOTRIX_HLS_VARIANT_IDLE_MS) || 8_000;
+// PHOTRIX_HLS_VARIANT_IDLE_MS.
 
 // How far past an encode's head a request may be before waiting for it costs more
 // than starting a new encode at the request (feedback #167). The encode runs
 // ~2-3x realtime and a new one costs a spawn plus a seek, so ~10 one-second
 // segments is a few seconds either way. Normal playback asks for the segment
 // right after the head; only a seek, or an ABR switch onto a variant whose
-// encode is elsewhere, lands further out.
-export const SEEK_RESTART_GAP_SEGMENTS =
-  Number(process.env.PHOTRIX_HLS_SEEK_RESTART_GAP) || 10;
+// encode is elsewhere, lands further out. PHOTRIX_HLS_SEEK_RESTART_GAP.
 
 // How many encodes one variant of one video may run at once: one per place it
 // is being watched from (two viewers far apart, or one viewer's seek while the
 // encode it left behind idles out). Past this, the least recently used goes.
-const MAX_RUNS_PER_VARIANT = Number(process.env.PHOTRIX_HLS_MAX_RUNS_PER_VARIANT) || 3;
+// PHOTRIX_HLS_MAX_RUNS_PER_VARIANT.
 
 // Pacing. An encode runs well above realtime, so left alone it races to the end
 // of the file whether or not anyone will watch that far — and on a shared iGPU
 // that throughput is exactly what a second viewer, or this viewer's next seek,
 // needs. Once an encode is this many segments past the furthest one requested
 // from it, it is frozen (SIGSTOP) until the player catches up to within
-// PACE_RESUME_SEGMENTS. hls.js buffers ~30 s ahead, so the encode stays a full
+// ten segments less. hls.js buffers ~30 s ahead, so the encode stays a full
 // buffer ahead of what is asked for and the player never waits on a frozen one.
-const PACE_AHEAD_SEGMENTS = Number(process.env.PHOTRIX_HLS_PACE_AHEAD_SEGMENTS) || 30;
-const PACE_RESUME_SEGMENTS = Math.max(1, PACE_AHEAD_SEGMENTS - 10);
+// PHOTRIX_HLS_PACE_AHEAD_SEGMENTS.
 const PACE_CHECK_MS = 500;
 
 /** One ffmpeg encode of one variant, writing segments forward from `startSegment`. */
@@ -178,10 +176,11 @@ const pace = (variant: VariantState, run: EncodeRun): void => {
   if (!child || run.dead) return;
   advanceHead(variant, run);
   const lead = run.head - run.maxRequested;
-  if (!run.frozen && lead >= PACE_AHEAD_SEGMENTS) {
+  const { paceAheadSegments } = config().hls;
+  if (!run.frozen && lead >= paceAheadSegments) {
     run.frozen = child.kill("SIGSTOP");
     if (run.frozen) run.frozenAt = Date.now();
-  } else if (run.frozen && lead < PACE_RESUME_SEGMENTS) {
+  } else if (run.frozen && lead < Math.max(1, paceAheadSegments - 10)) {
     child.kill("SIGCONT");
     run.frozen = false;
     thawAccounting(run);
@@ -228,7 +227,7 @@ const reap = async (hlsDir: string): Promise<void> => {
 };
 
 const armTreeTimer = (hlsDir: string): ReturnType<typeof setTimeout> => {
-  const timer = setTimeout(() => void reap(hlsDir), IDLE_MS);
+  const timer = setTimeout(() => void reap(hlsDir), config().hls.idleMs);
   timer.unref?.();
   return timer;
 };
@@ -289,7 +288,7 @@ const armRunIdle = (hlsDir: string, height: number, variant: VariantState, run: 
       { hlsDir: pathToken(hlsDir), height, startSegment: run.startSegment },
       "Reaped idle HLS encode",
     );
-  }, VARIANT_IDLE_MS);
+  }, config().hls.variantIdleMs);
   run.idleTimer.unref?.();
 };
 
@@ -340,7 +339,7 @@ export const touchVariant = (hlsDir: string, height: number, segmentIndex?: numb
     for (const run of variant.runs) touchRun(hlsDir, height, variant, run);
     return;
   }
-  const run = coveringRun(variant, segmentIndex, SEEK_RESTART_GAP_SEGMENTS);
+  const run = coveringRun(variant, segmentIndex, config().hls.seekRestartGapSegments);
   if (run) touchRun(hlsDir, height, variant, run, segmentIndex);
 };
 
@@ -358,7 +357,7 @@ export const keepVariantAlive = (
   const run =
     segmentIndex === undefined
       ? variant.runs.at(-1)
-      : coveringRun(variant, segmentIndex, SEEK_RESTART_GAP_SEGMENTS);
+      : coveringRun(variant, segmentIndex, config().hls.seekRestartGapSegments);
   if (!run) return () => {};
   touchRun(hlsDir, height, variant, run, segmentIndex);
   run.waiters += 1;
@@ -390,7 +389,7 @@ type EncodeClaim = {
  * Other encodes of the variant keep running: a second viewer elsewhere in the
  * same video has its own, rather than the two dragging one encode back and
  * forth. Each idles out on its own once nobody asks for its part of the video,
- * and past MAX_RUNS_PER_VARIANT the least recently used is dropped.
+ * and past PHOTRIX_HLS_MAX_RUNS_PER_VARIANT the least recently used is dropped.
  *
  * With no `segmentIndex` (a caller that only needs *an* encode, such as the
  * EVENT-playlist path) any live encode counts, and a new one starts at 0.
@@ -412,7 +411,7 @@ export const claimVariantEncode = (
   if (requestedSegment === undefined) {
     if (variant.runs.length > 0) return null;
   } else {
-    const covering = coveringRun(variant, requestedSegment, SEEK_RESTART_GAP_SEGMENTS);
+    const covering = coveringRun(variant, requestedSegment, config().hls.seekRestartGapSegments);
     if (covering) {
       // Make sure pacing knows the player wants this, or a frozen encode would
       // never reach it.
@@ -422,7 +421,7 @@ export const claimVariantEncode = (
   }
 
   const startSegment = requestedSegment ?? 0;
-  while (variant.runs.length >= MAX_RUNS_PER_VARIANT) {
+  while (variant.runs.length >= config().hls.maxRunsPerVariant) {
     const leastRecent = variant.runs.reduce((a, b) => (a.lastTouched <= b.lastTouched ? a : b));
     killRun(variant, leastRecent);
   }

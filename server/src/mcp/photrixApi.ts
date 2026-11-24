@@ -2,19 +2,10 @@
 // index directly — it calls the same REST endpoints the web client uses, so it
 // inherits auth, share-scoping, and all query/aggregation logic for free and can
 // run on a different host from Photrix itself.
+import { config } from "../config/config.ts";
 
-const BASE_URL = (process.env.PHOTRIX_BASE_URL ?? "http://localhost:3000").replace(
-  /\/+$/,
-  "",
-);
-const REQUEST_TIMEOUT_MS = Number(process.env.PHOTRIX_MCP_TIMEOUT_MS) || 30_000;
-
-export const photrixBaseUrl = BASE_URL;
-
-// Where a person opens a result. BASE_URL is how *this process* reaches Photrix,
-// usually a loopback address that means nothing on the agent's machine, so links
-// use the public origin when one is configured.
-const PUBLIC_URL = (process.env.PHOTRIX_PUBLIC_URL ?? BASE_URL).replace(/\/+$/, "");
+/** How *this process* reaches Photrix: usually a loopback address. */
+export const photrixBaseUrl = (): string => config().mcp.baseUrl;
 
 // The people list costs a full face aggregation on a cache miss, and a name
 // lookup needs it too, so a burst of tool calls would otherwise repeat it.
@@ -30,7 +21,7 @@ const encodeRelativePath = (relativePath: string): string =>
 
 // A human-openable URL for a result (auth may still be required in the browser).
 export const viewUrl = (relativePath: string, height = 1080): string =>
-  `${PUBLIC_URL}/api/files/${encodeRelativePath(relativePath)}?representation=webSafe&height=${height}`;
+  `${config().mcp.publicUrl}/api/files/${encodeRelativePath(relativePath)}?representation=webSafe&height=${height}`;
 
 // ---- Response shapes (subset of what the endpoints return) ----
 
@@ -126,15 +117,15 @@ export type PhotrixApi = {
 };
 
 export const createPhotrixApi = (token?: string): PhotrixApi => {
-  const authToken = token ?? process.env.PHOTRIX_TOKEN;
+  const authToken = token ?? config().mcp.token;
   const authHeaders = (): Record<string, string> =>
     authToken ? { Authorization: `Bearer ${authToken}` } : {};
 
   const apiFetch = async (pathWithQuery: string): Promise<Response> => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), config().mcp.timeoutMs);
     try {
-      return await fetch(`${BASE_URL}${pathWithQuery}`, {
+      return await fetch(`${photrixBaseUrl()}${pathWithQuery}`, {
         signal: controller.signal,
         headers: authHeaders(),
       });
@@ -150,11 +141,11 @@ export const createPhotrixApi = (token?: string): PhotrixApi => {
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         throw new Error(
-          `Photrix request timed out after ${REQUEST_TIMEOUT_MS}ms (${pathWithQuery}). Is the server running at ${BASE_URL}?`,
+          `Photrix request timed out after ${config().mcp.timeoutMs}ms (${pathWithQuery}). Is the server running at ${config().mcp.baseUrl}?`,
         );
       }
       throw new Error(
-        `Could not reach Photrix at ${BASE_URL}${pathWithQuery}: ${err instanceof Error ? err.message : String(err)}`,
+        `Could not reach Photrix at ${config().mcp.baseUrl}${pathWithQuery}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
     if (!res.ok) {

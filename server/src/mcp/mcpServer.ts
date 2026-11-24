@@ -4,6 +4,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { buildPhotrixMcpServer } from "./buildServer.ts";
 import { createPhotrixApi, photrixBaseUrl } from "./photrixApi.ts";
 import { readJsonBody } from "../common/readBody.ts";
+import { config } from "../config/config.ts";
 
 // Streamable-HTTP MCP server that lets remote AI agents query the Photrix photo
 // library. It proxies every request to the Photrix REST API, so it can live on
@@ -17,17 +18,6 @@ import { readJsonBody } from "../common/readBody.ts";
 // when the response closes. There are no server->client notifications here (only
 // request/response tool calls), so no session state is needed and horizontal
 // scaling is trivial.
-
-// `Number(x) || 3100` would treat an explicit MCP_PORT=0 (used by tests to ask
-// the OS for a free ephemeral port) as falsy and silently fall back to 3100, so
-// check for a genuinely unset/invalid value instead.
-const parsedPort = Number(process.env.MCP_PORT);
-const PORT =
-  process.env.MCP_PORT !== undefined && Number.isFinite(parsedPort) ? parsedPort : 3100;
-// Optional shared-secret gate for the MCP endpoint itself (distinct from the
-// PHOTRIX_TOKEN used to authenticate to Photrix). Set to require callers to send
-// `Authorization: Bearer <MCP_AUTH_TOKEN>`.
-const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
 
 // Per-user mode checks the caller's key with Photrix before serving anything, so
 // a wrong or revoked key fails the client's connect with a 401 instead of
@@ -71,7 +61,7 @@ const handleRequest = async (
 
     if (req.method === "GET" && pathname === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", photrix: photrixBaseUrl }));
+      res.end(JSON.stringify({ status: "ok", photrix: photrixBaseUrl() }));
       return;
     }
 
@@ -81,7 +71,10 @@ const handleRequest = async (
       return;
     }
 
-    if (MCP_AUTH_TOKEN && !matchesGateToken(req.headers["authorization"], MCP_AUTH_TOKEN)) {
+    // Optional shared-secret gate for the MCP endpoint itself, distinct from
+    // the PHOTRIX_TOKEN used to authenticate to Photrix.
+    const gateToken = config().mcp.authToken;
+    if (gateToken && !matchesGateToken(req.headers["authorization"], gateToken)) {
       jsonRpcError(res, 401, "Unauthorized");
       return;
     }
@@ -104,16 +97,16 @@ const handleRequest = async (
         ? authHeader.slice(7)
         : undefined;
     // Per-user mode never falls back to the service token: no bearer, no access.
-    if (!MCP_AUTH_TOKEN && !callerBearer) {
+    if (!gateToken && !callerBearer) {
       jsonRpcError(res, 401, "Unauthorized: send your Photrix MCP key as a Bearer token.", {
         "www-authenticate": 'Bearer realm="photrix"',
       });
       return;
     }
-    const photrixToken = MCP_AUTH_TOKEN ? undefined : callerBearer;
+    const photrixToken = gateToken ? undefined : callerBearer;
     const api = createPhotrixApi(photrixToken);
 
-    if (!MCP_AUTH_TOKEN) {
+    if (!gateToken) {
       const id = keyId(photrixToken);
       const verifiedAt = verifiedKeys.get(id);
       if (verifiedAt === undefined || Date.now() - verifiedAt > VERIFIED_KEY_TTL_MS) {
@@ -163,10 +156,10 @@ export const startMcpServer = (): Promise<http.Server> =>
       void handleRequest(req, res);
     });
     server.once("error", reject);
-    server.listen(PORT, () => {
+    server.listen(config().mcp.port, () => {
       server.removeListener("error", reject);
       console.log(
-        `Photrix MCP server listening on http://localhost:${PORT}/mcp (proxying ${photrixBaseUrl})`,
+        `Photrix MCP server listening on http://localhost:${config().mcp.port}/mcp (proxying ${photrixBaseUrl()})`,
       );
       resolve(server);
     });

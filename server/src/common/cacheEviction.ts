@@ -1,38 +1,12 @@
 import { readdir, stat, unlink, utimes } from "fs/promises";
 import { join, resolve } from "path";
-import { MEDIA_CACHE_DIR } from "./cacheUtils.ts";
+import { mediaCacheDir } from "./cacheUtils.ts";
 import { getLogger } from "../observability/logger.ts";
 import { isNotFound } from "./result.ts";
 import { toError } from "./toError.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("cacheEviction");
-
-const DEFAULT_MAX_BYTES = 10 * 1024 * 1024 * 1024; // 10 GiB
-
-/**
- * Parses a human-friendly size string ("10GB", "512mb", "1024") into bytes.
- * Plain numbers are treated as bytes. Returns null when the value is unset or
- * cannot be parsed.
- */
-export const parseByteSize = (value: string | undefined): number | null => {
-  if (!value) return null;
-  const match = /^\s*([\d.]+)\s*(b|kb|mb|gb|tb)?\s*$/i.exec(value);
-  if (!match) return null;
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount) || amount < 0) return null;
-  const unit = (match[2] ?? "b").toLowerCase();
-  const multipliers: Record<string, number> = {
-    b: 1,
-    kb: 1024,
-    mb: 1024 ** 2,
-    gb: 1024 ** 3,
-    tb: 1024 ** 4,
-  };
-  return Math.floor(amount * multipliers[unit]);
-};
-
-const getMaxBytes = (): number =>
-  parseByteSize(process.env.CACHE_MAX_BYTES) ?? DEFAULT_MAX_BYTES;
 
 // Grid thumbnails: the 160 micro tile (embedded-EXIF or decoded), the 320 photo
 // tile and the 320 video frame. The overnight backfill (thumbnailBackfill.ts)
@@ -135,8 +109,8 @@ export const enforceCacheLimit = async (): Promise<{
   if (evictionInProgress) return noop;
   evictionInProgress = true;
   try {
-    const maxBytes = getMaxBytes();
-    const files = await collectCacheFiles(MEDIA_CACHE_DIR);
+    const maxBytes = config().media.cacheMaxBytes;
+    const files = await collectCacheFiles(mediaCacheDir());
     const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
 
     if (totalBytes <= maxBytes) {
@@ -182,7 +156,7 @@ export const enforceCacheLimit = async (): Promise<{
  */
 export const markCacheAccess = (filePath: string): void => {
   const resolved = resolve(filePath);
-  if (!resolved.startsWith(resolve(MEDIA_CACHE_DIR))) return;
+  if (!resolved.startsWith(resolve(mediaCacheDir()))) return;
   const now = new Date();
   // A file evicted between the serve and this touch is fine; anything else isn't.
   void utimes(resolved, now, now).catch((error: unknown) => {
@@ -196,7 +170,7 @@ export const markCacheAccess = (filePath: string): void => {
  * once on startup and then on an interval. Returns a stop function.
  */
 export const startCacheEviction = (): (() => void) => {
-  const intervalMs = Number(process.env.CACHE_EVICTION_INTERVAL_MS) || 5 * 60_000;
+  const intervalMs = config().media.cacheEvictionIntervalMs;
 
   void enforceCacheLimit().catch((err) => log.error({ err }, "Cache eviction failed"));
 

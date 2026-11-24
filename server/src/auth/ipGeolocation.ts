@@ -21,6 +21,7 @@
 
 import { getLogger } from "../observability/logger.ts";
 import { attempt, attemptSync, type Result } from "../common/result.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("ipGeolocation");
 
@@ -87,8 +88,7 @@ const PROVIDERS: readonly Provider[] = [
 
 type CacheEntry = { place: string | null; expiresAt: number };
 
-const isIpLocationEnabled = (): boolean =>
-  (process.env.PHOTRIX_IP_LOCATION ?? "").trim().toLowerCase() !== "off";
+const isIpLocationEnabled = (): boolean => config().auth.ipLocation;
 
 type Options = {
   fetchImpl?: Fetch;

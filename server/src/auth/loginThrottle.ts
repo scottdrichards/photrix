@@ -1,3 +1,4 @@
+import { config } from "../config/config.ts";
 /**
  * Limits on password login, which is unauthenticated and costs a scrypt hash.
  *
@@ -13,10 +14,7 @@
  *   the site up.
  */
 
-const MAX_CONCURRENT_HASHES = Number(process.env.PHOTRIX_LOGIN_MAX_CONCURRENT) || 2;
-const MAX_QUEUED_LOGINS = Number(process.env.PHOTRIX_LOGIN_MAX_QUEUED) || 16;
 const FAILURE_WINDOW_MS = 15 * 60_000;
-const MAX_FAILURES_PER_WINDOW = Number(process.env.PHOTRIX_LOGIN_MAX_FAILURES) || 20;
 
 export class LoginThrottledError extends Error {
   constructor(readonly retryAfterSeconds: number) {
@@ -28,11 +26,11 @@ let hashesInFlight = 0;
 const waiting: Array<() => void> = [];
 
 const acquireHashSlot = async (): Promise<void> => {
-  if (hashesInFlight < MAX_CONCURRENT_HASHES) {
+  if (hashesInFlight < config().auth.login.maxConcurrent) {
     hashesInFlight++;
     return;
   }
-  if (waiting.length >= MAX_QUEUED_LOGINS) {
+  if (waiting.length >= config().auth.login.maxQueued) {
     throw new LoginThrottledError(5);
   }
   // The slot is handed over directly on release, so the count stays put.
@@ -85,7 +83,7 @@ export const throttleLogin = async (
   const client = clientIp ?? "unknown";
   const now = Date.now();
   const window = currentWindow(client, now);
-  if (window && window.failures >= MAX_FAILURES_PER_WINDOW) {
+  if (window && window.failures >= config().auth.login.maxFailures) {
     throw new LoginThrottledError(
       Math.ceil((window.startedAt + FAILURE_WINDOW_MS - now) / 1000),
     );

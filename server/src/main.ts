@@ -1,4 +1,6 @@
-import "dotenv/config";
+import "./config/serverEnv.ts";
+import { config } from "./config/config.ts";
+import { exportToChildProcesses, childProcessEnv } from "./config/childEnv.ts";
 import { initializeCacheDirectories } from "./common/cacheUtils.ts";
 import { startCacheEviction } from "./common/cacheEviction.ts";
 import { logger } from "./observability/logger.ts";
@@ -90,14 +92,16 @@ const startServer = async () => {
     process.exit(1);
   }
 
-  const mediaRoot = process.env.MEDIA_ROOT || "./exampleFolder";
+  const { root: mediaRoot } = config().media;
+  // serverEnv.ts has already refused to start without one.
+  if (mediaRoot === undefined) throw new Error("MEDIA_ROOT is not set");
   // One connection, handed to each module that owns tables in it. init()
   // creates every module's tables, so it runs before any of them reads.
   const indexSqlite = await openIndexSqlite();
   const { sqlite } = indexSqlite;
   const database = new IndexDatabase(mediaRoot, indexSqlite);
   await database.init();
-  const featureFlags = await FeatureFlagStore.load(sqlite, process.env);
+  const featureFlags = await FeatureFlagStore.load(sqlite, config().featureFlags);
   await initAuthService(sqlite);
   initPasskeyService(sqlite);
 
@@ -144,7 +148,7 @@ const startServer = async () => {
     feedback: new FeedbackStore(sqlite),
     taskOrchestrator,
   });
-  logger.info({ mediaRoot, port: process.env.PORT ?? 3000 }, "Server started");
+  logger.info({ mediaRoot, port: config().server.port }, "Server started");
 
   // Start the MCP server in-process alongside the main app by default, so AI
   // agents wired to it don't depend on a second process (`npm run mcp`) being
@@ -154,7 +158,7 @@ const startServer = async () => {
   // effort: a failure here (e.g. MCP_PORT already bound by a standalone
   // instance) is logged, not fatal — it never blocks serving photos.
   let mcpServer: Awaited<ReturnType<typeof startMcpServer>> | undefined;
-  if (process.env.MCP_AUTOSTART !== "false") {
+  if (config().mcp.autostart) {
     try {
       mcpServer = await startMcpServer();
     } catch (err) {
@@ -187,16 +191,14 @@ const startServer = async () => {
   // gets a no-op runner for each instead of the real one). Meant to be
   // temporary on hardware with tight VRAM if this class of bug recurs, not a
   // permanent config knob.
-  const audioDisabled = process.env.PHOTRIX_DISABLE_AUDIO === "1";
+  const audioDisabled = config().python.audioDisabled;
   if (audioDisabled) {
     logger.warn(
       "PHOTRIX_DISABLE_AUDIO=1: audio transcription and embedding are disabled for this run",
     );
   }
-  Object.assign(
-    process.env,
-    resolveDetectedImageAnalysisEnv(process.env, accelerators),
-  );
+  // The ML workers read their device from the environment they are spawned with.
+  exportToChildProcesses(resolveDetectedImageAnalysisEnv(childProcessEnv(), accelerators));
   // Prime semantic search before the background backlog starts churning, so the
   // first query after a restart is fast instead of timing out. Three independent
   // cold costs are warmed:

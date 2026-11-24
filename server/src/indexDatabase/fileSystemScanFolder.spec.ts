@@ -2,6 +2,7 @@ import { describe, expect, it, jest } from "@jest/globals";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 // stat() fails with EIO for these file names, as a flaky network share can.
 const unreadable = new Set<string>();
@@ -21,7 +22,7 @@ const { openIndexSqlite } = await import("./openIndexSqlite.ts");
 describe("fileSystemScanFolder", () => {
   it("keeps a listed file it can't stat, and prunes one that is really gone", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "photrix-scan-root-"));
-    process.env.INDEX_DB_LOCATION = await fs.mkdtemp(path.join(os.tmpdir(), "photrix-scan-db-"));
+    overrideConfig({ INDEX_DB_LOCATION: await fs.mkdtemp(path.join(os.tmpdir(), "photrix-scan-db-")) });
     let db: InstanceType<typeof IndexDatabase> | undefined;
     try {
       for (const name of ["keep.jpg", "flaky.jpg", "deleted.jpg"]) {

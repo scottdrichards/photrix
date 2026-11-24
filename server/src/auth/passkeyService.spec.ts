@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import Database from "better-sqlite3";
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 afterEach(() => {
   jest.resetModules();
@@ -62,7 +63,7 @@ describe("passkey registration ownership", () => {
     mockWebauthn();
     const { raw, db } = makeDb();
     raw.prepare("INSERT INTO webauthn_credentials VALUES ('cred-1',?,'old',5,NULL,NULL,1)").run(owner);
-    process.env.PHOTRIX_RP_ORIGIN = "https://photos.example.com";
+    overrideConfig({ PHOTRIX_RP_ORIGIN: "https://photos.example.com" });
     const svc = await import("./passkeyService.ts");
     svc.initPasskeyService(db);
     const { sessionId } = await svc.generatePasskeyRegistrationOptions(registrant);
@@ -72,7 +73,7 @@ describe("passkey registration ownership", () => {
       registrant,
     );
     const row = raw.prepare("SELECT username, publicKey FROM webauthn_credentials").get();
-    delete process.env.PHOTRIX_RP_ORIGIN;
+    overrideConfig({ PHOTRIX_RP_ORIGIN: undefined });
     return { ok, row };
   };
 

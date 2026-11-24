@@ -6,19 +6,18 @@ import { fileSystemScanFolder } from "./fileSystemScanFolder.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { openIndexSqlite } from "./openIndexSqlite.ts";
 import { createDeferred } from "../common/createDeferred.fixture.ts";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 const mkTempDir = async (prefix: string): Promise<string> =>
   fs.mkdtemp(path.join(os.tmpdir(), prefix));
 
 describe("discoverFiles", () => {
-  beforeEach(() => {
-    process.env.ThumbnailCacheDirectory ??= path.join(os.tmpdir(), "photrix-test-thumbs");
-  });
+  beforeEach(() => {});
 
   it("adds discovered files to the database", async () => {
     const rootDir = await mkTempDir("photrix-discover-root-");
     const dbDir = await mkTempDir("photrix-discover-db-");
-    process.env.INDEX_DB_LOCATION = dbDir;
+    overrideConfig({ INDEX_DB_LOCATION: dbDir });
 
     let db: IndexDatabase | undefined;
     try {
@@ -45,7 +44,7 @@ describe("discoverFiles", () => {
   it("prunes index entries for files no longer on disk", async () => {
     const rootDir = await mkTempDir("photrix-prune-root-");
     const dbDir = await mkTempDir("photrix-prune-db-");
-    process.env.INDEX_DB_LOCATION = dbDir;
+    overrideConfig({ INDEX_DB_LOCATION: dbDir });
 
     let db: IndexDatabase | undefined;
     try {
@@ -74,7 +73,7 @@ describe("discoverFiles", () => {
   it("ignores zero-byte files during discovery", async () => {
     const rootDir = await mkTempDir("photrix-zero-byte-root-");
     const dbDir = await mkTempDir("photrix-zero-byte-db-");
-    process.env.INDEX_DB_LOCATION = dbDir;
+    overrideConfig({ INDEX_DB_LOCATION: dbDir });
 
     let db: IndexDatabase | undefined;
     try {

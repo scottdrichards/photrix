@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "../common/createDeferred.fixture.ts";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 const makeSpawnProcess = () => {
   const proc = new EventEmitter() as EventEmitter & {
@@ -44,14 +45,14 @@ const makeHealthyWorkerProcess = () => {
 afterEach(() => {
   jest.resetModules();
   jest.restoreAllMocks();
-  delete process.env.CACHE_DIR;
-  delete process.env.PHOTRIX_PYTHON;
+  overrideConfig({ CACHE_DIR: undefined });
+  overrideConfig({ PHOTRIX_PYTHON: undefined });
 });
 
 describe("convertImage unit", () => {
   it("returns cached image path when conversion already exists", async () => {
     const cacheRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-convert-cache-"));
-    process.env.CACHE_DIR = cacheRoot;
+    overrideConfig({ CACHE_DIR: cacheRoot });
 
     const source = path.join(cacheRoot, "source.jpg");
     writeFileSync(source, "img");
@@ -70,7 +71,7 @@ describe("convertImage unit", () => {
 
   it("invokes python pipeline for uncached image conversion", async () => {
     const cacheRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-convert-cache-"));
-    process.env.CACHE_DIR = cacheRoot;
+    overrideConfig({ CACHE_DIR: cacheRoot });
 
     const source = path.join(cacheRoot, "source.jpg");
     writeFileSync(source, "img");
@@ -99,7 +100,7 @@ describe("convertImage unit", () => {
 
   it("reuses the persistent worker across conversions", async () => {
     const cacheRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-convert-cache-"));
-    process.env.CACHE_DIR = cacheRoot;
+    overrideConfig({ CACHE_DIR: cacheRoot });
 
     const sourceA = path.join(cacheRoot, "a.jpg");
     const sourceB = path.join(cacheRoot, "b.jpg");
@@ -134,7 +135,7 @@ describe("convertImage unit", () => {
 
   it("throws ImageConversionError with dependency guidance on module missing", async () => {
     const cacheRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-convert-cache-"));
-    process.env.CACHE_DIR = cacheRoot;
+    overrideConfig({ CACHE_DIR: cacheRoot });
 
     const source = path.join(cacheRoot, "source.jpg");
     writeFileSync(source, "img");
@@ -196,7 +197,7 @@ describe("convertImage unit", () => {
   });
 
   it("does not fall back to system python when PHOTRIX_PYTHON is set but broken", async () => {
-    process.env.PHOTRIX_PYTHON = "/opt/broken/python";
+    overrideConfig({ PHOTRIX_PYTHON: "/opt/broken/python" });
 
     const spawnMock = jest.fn((_command: string, args: string[]) => {
       const proc = makeSpawnProcess();
@@ -227,7 +228,7 @@ describe("convertImage unit", () => {
 
   it("kills the conversion subprocess when the request aborts", async () => {
     const cacheRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-convert-cache-"));
-    process.env.CACHE_DIR = cacheRoot;
+    overrideConfig({ CACHE_DIR: cacheRoot });
 
     const source = path.join(cacheRoot, "source.jpg");
     writeFileSync(source, "img");
@@ -281,7 +282,7 @@ describe("convertImage unit", () => {
 
   it("skips multi-size generation when all outputs already cached", async () => {
     const cacheRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-convert-cache-"));
-    process.env.CACHE_DIR = cacheRoot;
+    overrideConfig({ CACHE_DIR: cacheRoot });
 
     const source = path.join(cacheRoot, "source.jpg");
     writeFileSync(source, "img");

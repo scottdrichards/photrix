@@ -12,6 +12,7 @@ import type {
   WebAuthnCredential,
 } from "@simplewebauthn/server";
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
+import { config } from "../config/config.ts";
 
 type ChallengeEntry = {
   challenge: string;
@@ -28,8 +29,7 @@ type CredentialRow = {
 };
 
 const getRpConfig = () => {
-  const origin =
-    process.env.PHOTRIX_RP_ORIGIN ?? `http://localhost:${process.env.PORT ?? 3000}`;
+  const origin = config().auth.rpOrigin ?? `http://localhost:${config().server.port}`;
   const rpID = new URL(origin).hostname;
   return { origin, rpID };
 };
@@ -57,13 +57,8 @@ const isLocalHostname = (hostname: string): boolean => {
 // useful. This mirrors the account-owner's own read on the feature (it's the
 // public-domain case that matters, not local-network access).
 export const isPublicOriginConfigured = (): boolean => {
-  const raw = process.env.PHOTRIX_RP_ORIGIN;
-  if (!raw) return false;
-  try {
-    return !isLocalHostname(new URL(raw).hostname);
-  } catch {
-    return false;
-  }
+  const origin = config().auth.rpOrigin;
+  return origin !== undefined && !isLocalHostname(new URL(origin).hostname);
 };
 
 // In-memory challenge store (challenges are short-lived, ~2 min TTL).

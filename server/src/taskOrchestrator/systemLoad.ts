@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import os from "node:os";
+import { config } from "../config/config.ts";
 
 /**
  * Returns available memory in MB. On Linux reads MemAvailable from
@@ -28,16 +29,9 @@ export const getNormalizedLoad = (): number => {
   return oneMinute / cpuCount;
 };
 
-const DEFAULT_OVERLOAD_THRESHOLD = 0.9;
-
-const overloadThreshold = (): number => {
-  const raw = Number.parseFloat(process.env.PHOTRIX_LOAD_THRESHOLD ?? "");
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_OVERLOAD_THRESHOLD;
-};
-
 /**
  * Whether the machine is hot enough that new background work should hold off and
  * let in-flight work (and user requests) drain first.
  */
 export const isSystemOverloaded = (): boolean =>
-  getNormalizedLoad() > overloadThreshold();
+  getNormalizedLoad() > config().background.loadThreshold;

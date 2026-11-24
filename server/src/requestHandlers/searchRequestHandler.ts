@@ -21,6 +21,7 @@ import {
 import type { ModelLoadProgress } from "../common/modelLoadTimer.ts";
 import { getLogger } from "../observability/logger.ts";
 import { writeJson } from "../common/writeJson.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("searchRequestHandler");
 
@@ -42,12 +43,6 @@ const log = getLogger("searchRequestHandler");
 // it is confident (music/waves/laughing ~0.50+) at the cost of weak audio
 // recall. Transcript search now requires whole-word matches (all query terms for
 // multi-word queries), so it stays precise enough without a separate floor.
-const CLIP_MIN_SIMILARITY = Number(
-  process.env.PHOTRIX_SEARCH_CLIP_MIN_SIMILARITY ?? 0.18,
-);
-const CLAP_MIN_SIMILARITY = Number(
-  process.env.PHOTRIX_SEARCH_CLAP_MIN_SIMILARITY ?? 0.52,
-);
 
 /**
  * Readiness of the model behind each search source. Transcript search is plain
@@ -254,7 +249,7 @@ export const searchRequestHandler = async (
   // Without a bound the handler would block on the slowest worker's internal
   // timeout (CLIP 120s, CLAP 10min), so a single slow worker makes the whole
   // request appear to hang. Time the laggards out and return whatever resolved.
-  const SEARCH_TIMEOUT_MS = Number(process.env.PHOTRIX_SEARCH_TIMEOUT_MS) || 15_000;
+  const SEARCH_TIMEOUT_MS = config().search.timeoutMs;
   const withTimeout = <T>(p: Promise<T>, label: string): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       const timer = setTimeout(
@@ -426,8 +421,8 @@ export const searchRequestHandler = async (
     metadata: outcomeFor("metadata", "metadata", useMetadata, metadataResult),
   };
 
-  const clipHits = applyFloor("clip", useImage, clipResult, CLIP_MIN_SIMILARITY);
-  const clapHits = applyFloor("clap", useAudio, clapResult, CLAP_MIN_SIMILARITY);
+  const clipHits = applyFloor("clip", useImage, clipResult, config().search.clipMinSimilarity);
+  const clapHits = applyFloor("clap", useAudio, clapResult, config().search.clapMinSimilarity);
   const transcriptHits =
     useTranscript && transcriptResult.status === "fulfilled"
       ? transcriptResult.value

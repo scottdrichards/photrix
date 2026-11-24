@@ -124,6 +124,11 @@ each workspace's `eslint.config.mjs` and enforced by `bun run lint`
 moved or added to that map on purpose. The `grandfathered` list beside the map
 is the backlog of known violations: it may shrink, never grow.
 
+`server/src/config/` sits below every server module, and any module may import
+it. It is the only code that reads `process.env` (lint enforces this): every
+variable is parsed and validated once, at startup, into the object `config()`
+returns. Child processes get the environment through `config/childEnv.ts`.
+
 ## Something is slow or broken
 
 See `DIAGNOSTICS.md`: pull `GET /api/diagnostics/report?clientSessionId=…`

@@ -24,17 +24,15 @@ export class FeatureFlagStore {
 
   private constructor(private readonly db: AsyncSqlite) {}
 
-  /** Reads pins from `env` (failing on a malformed value) and overrides from the database. */
-  static async load(db: AsyncSqlite, env: NodeJS.ProcessEnv): Promise<FeatureFlagStore> {
+  /** Takes the environment's pins (config's featureFlags) and the overrides stored in the database. */
+  static async load(
+    db: AsyncSqlite,
+    pins: Partial<Record<FeatureFlagName, boolean>>,
+  ): Promise<FeatureFlagStore> {
     const store = new FeatureFlagStore(db);
     for (const name of flagNames) {
-      const variable = featureFlagEnvironmentVariable(name);
-      const raw = env[variable];
-      if (raw === undefined) continue;
-      if (raw !== "true" && raw !== "false") {
-        throw new Error(`${variable} must be "true" or "false", not "${raw}"`);
-      }
-      store.pinned.set(name, raw === "true");
+      const pin = pins[name];
+      if (pin !== undefined) store.pinned.set(name, pin);
     }
 
     const rows = await db.all<{ key: string; value: string }>(

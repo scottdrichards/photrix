@@ -2,6 +2,7 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getRequestAbortSignal } from "./requestAbort.ts";
+import { config } from "../config/config.ts";
 
 // Under tsx (dev) this module is loaded as .ts, and the worker needs the .mjs
 // shim that registers the tsx ESM loader before importing the TypeScript worker.
@@ -206,7 +207,7 @@ export class AsyncSqlite {
     // flowing past a slow one. Kept small: each worker is a thread plus its own
     // SQLite connection and page cache.
     const readPoolSize =
-      options.readPoolSize ?? (Number(process.env.PHOTRIX_DB_READ_WORKERS) || 2);
+      options.readPoolSize ?? config().db.readWorkers;
     const spawned: Worker[] = [];
     try {
       spawned.push(await spawnWorker(dbPath, { ...options, readonly: false }));

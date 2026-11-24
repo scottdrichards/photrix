@@ -1,18 +1,10 @@
 import { createHash, randomBytes } from "crypto";
-import { existsSync } from "fs";
 import { mkdir, rm, stat, writeFile } from "fs/promises";
-import { tmpdir, userInfo } from "os";
+import { userInfo } from "os";
 import { basename, dirname, extname, join, parse, resolve } from "path";
+import { config } from "../config/config.ts";
 
-export const CACHE_DIR = process.env.CACHE_DIR || join(process.cwd(), ".cache");
-export const MEDIA_CACHE_DIR = join(CACHE_DIR, "media");
-
-// HLS output is ephemeral (regenerated on demand, deleted shortly after playback)
-// so it lives on a RAM-backed filesystem and never touches persistent disk.
-// Defaults to tmpfs (/dev/shm on Linux); override with HLS_CACHE_DIR.
-export const HLS_CACHE_DIR =
-  process.env.HLS_CACHE_DIR ||
-  join(existsSync("/dev/shm") ? "/dev/shm" : tmpdir(), "photrix-hls");
+export const mediaCacheDir = (): string => join(config().media.cacheDir, "media");
 
 // mkdir(recursive) succeeds silently when the directory already exists, even if
 // it's owned by another user and unwritable to us — so a cache dir left behind by
@@ -44,7 +36,7 @@ const assertWritableDirectory = async (dir: string): Promise<void> => {
 
 export const initializeCacheDirectories = async () =>
   Promise.all(
-    [CACHE_DIR, MEDIA_CACHE_DIR, HLS_CACHE_DIR].map(async (dir) => {
+    [config().media.cacheDir, mediaCacheDir(), config().hls.cacheDir].map(async (dir) => {
       await mkdir(dir, { recursive: true });
       await assertWritableDirectory(dir);
     }),
@@ -83,7 +75,7 @@ const getMirroredSourceParts = (
 
 export const getMirroredCacheBaseDirectory = (filePath: string): string => {
   const { rootKey, relativeDirectory, sourceName } = getMirroredSourceParts(filePath);
-  return join(MEDIA_CACHE_DIR, rootKey, relativeDirectory, sourceName);
+  return join(mediaCacheDir(), rootKey, relativeDirectory, sourceName);
 };
 
 export const getMirroredCachedFilePath = (
@@ -98,7 +90,7 @@ export const getMirroredHLSDirectory = (
 ): string => {
   const { rootKey, relativeDirectory, sourceName } = getMirroredSourceParts(filePath);
   return join(
-    HLS_CACHE_DIR,
+    config().hls.cacheDir,
     rootKey,
     relativeDirectory,
     sourceName,

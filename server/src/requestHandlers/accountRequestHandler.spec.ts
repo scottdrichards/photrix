@@ -3,10 +3,11 @@ import { EventEmitter } from "node:events";
 import type http from "node:http";
 import Database from "better-sqlite3";
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 // Sessions from public test addresses must not reach a real IP-location
 // service. The one test about place names turns lookups back on with a stub.
-process.env.PHOTRIX_IP_LOCATION = "off";
+overrideConfig({ PHOTRIX_IP_LOCATION: "off" });
 
 // A minimal stand-in for AsyncSqlite backed by a real in-memory sqlite db, just
 // enough of the surface (all/run/get with the "sql, ...params" calling
@@ -84,7 +85,7 @@ const load = async () => {
 
 describe("accountRequestHandler", () => {
   it("rejects requests without a login session", async () => {
-    process.env.PHOTRIX_ACCOUNTS = JSON.stringify([{ username: "alice", password: "pw" }]);
+    overrideConfig({ PHOTRIX_ACCOUNTS: JSON.stringify([{ username: "alice", password: "pw" }]) });
     try {
       const { accountRequestHandler, authService } = await load();
       const apiToken = authService.issueApiToken("alice", "k").token;
@@ -94,7 +95,7 @@ describe("accountRequestHandler", () => {
       await accountRequestHandler(makeReq("/api/account", "GET", apiToken), res);
       expect(getStatus()).toBe(401);
     } finally {
-      delete process.env.PHOTRIX_ACCOUNTS;
+      overrideConfig({ PHOTRIX_ACCOUNTS: undefined });
     }
   });
 
@@ -214,7 +215,7 @@ describe("accountRequestHandler", () => {
 
   it("names the rough place of an internet session, and never looks up a local one", async () => {
     const realFetch = globalThis.fetch;
-    delete process.env.PHOTRIX_IP_LOCATION;
+    overrideConfig({ PHOTRIX_IP_LOCATION: undefined });
     const asked: string[] = [];
     const stub = async (url: string) => {
       asked.push(url);
@@ -242,7 +243,7 @@ describe("accountRequestHandler", () => {
       await authService.revokeToken(remote);
     } finally {
       globalThis.fetch = realFetch;
-      process.env.PHOTRIX_IP_LOCATION = "off";
+      overrideConfig({ PHOTRIX_IP_LOCATION: "off" });
     }
   });
 
@@ -327,7 +328,7 @@ describe("accountRequestHandler", () => {
   });
 
   it("lists and revokes a share link minted with an MCP key", async () => {
-    process.env.PHOTRIX_SHARE_TOKEN_SECRET = "test-share-secret-of-at-least-32-chars";
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
     try {
       const { accountRequestHandler, authService } = await load();
       const { authShareTokenHandler } = await import("./authRequestHandler.ts");
@@ -361,12 +362,11 @@ describe("accountRequestHandler", () => {
       expect(revoked.getStatus()).toBe(200);
       expect(authService.validateToken(shareToken)).toBe(false);
     } finally {
-      delete process.env.PHOTRIX_SHARE_TOKEN_SECRET;
+      overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: undefined });
     }
   });
 
   it("only reports passkeysAvailable once a public RP origin is configured", async () => {
-    const previous = process.env.PHOTRIX_RP_ORIGIN;
     const { accountRequestHandler, authService } = await load();
     const passkeyService = await import("../auth/passkeyService.ts");
     // Passkey storage is "ready" (db configured) in both cases — only the RP
@@ -374,20 +374,19 @@ describe("accountRequestHandler", () => {
     passkeyService.initPasskeyService(makeTestDb());
     const token = authService.issueToken("henry");
 
-    delete process.env.PHOTRIX_RP_ORIGIN;
+    overrideConfig({ PHOTRIX_RP_ORIGIN: undefined });
     const withoutOrigin = createJsonResponse();
     await accountRequestHandler(makeReq("/api/account", "GET", token), withoutOrigin.res);
     expect(withoutOrigin.getJson<{ passkeysAvailable: boolean }>().passkeysAvailable).toBe(
       false,
     );
 
-    process.env.PHOTRIX_RP_ORIGIN = "https://photos.example.com";
+    overrideConfig({ PHOTRIX_RP_ORIGIN: "https://photos.example.com" });
     const withOrigin = createJsonResponse();
     await accountRequestHandler(makeReq("/api/account", "GET", token), withOrigin.res);
     expect(withOrigin.getJson<{ passkeysAvailable: boolean }>().passkeysAvailable).toBe(true);
 
     await authService.revokeToken(token);
-    if (previous === undefined) delete process.env.PHOTRIX_RP_ORIGIN;
-    else process.env.PHOTRIX_RP_ORIGIN = previous;
+    overrideConfig({ PHOTRIX_RP_ORIGIN: undefined });
   });
 });

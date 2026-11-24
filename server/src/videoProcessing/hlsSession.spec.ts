@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import { overrideConfig } from "../config/config.fixture.ts";
+import { config } from "../config/config.ts";
 
 // A minimal fake ffmpeg process: an EventEmitter with a spy-able kill().
 const makeChild = () => {
@@ -12,13 +14,13 @@ const makeChild = () => {
 // Fresh module state (and a controllable variant-idle window) per test.
 const loadSession = async (idleMs = 10_000) => {
   jest.resetModules();
-  process.env.PHOTRIX_HLS_VARIANT_IDLE_MS = String(idleMs);
+  overrideConfig({ PHOTRIX_HLS_VARIANT_IDLE_MS: String(idleMs) });
   return import("./hlsSession.ts");
 };
 
 afterEach(() => {
   jest.useRealTimers();
-  delete process.env.PHOTRIX_HLS_VARIANT_IDLE_MS;
+  overrideConfig({ PHOTRIX_HLS_VARIANT_IDLE_MS: undefined });
 });
 
 describe("claimVariantEncode", () => {
@@ -100,8 +102,8 @@ describe("claiming an encode at the player's position", () => {
   });
 
   it("waits for the running encode while the request is within the gap past its head", async () => {
-    const { claimVariantEncode, registerHlsProcess, SEEK_RESTART_GAP_SEGMENTS } =
-      await loadSession();
+    const { claimVariantEncode, registerHlsProcess } = await loadSession();
+    const SEEK_RESTART_GAP_SEGMENTS = config().hls.seekRestartGapSegments;
     const dir = "/hls/fill";
     const claim = claimVariantEncode(dir, 720, 0)!;
     const child = makeChild();
@@ -121,8 +123,8 @@ describe("claiming an encode at the player's position", () => {
   });
 
   it("starts an encode at a far seek, then serves the following segments from it", async () => {
-    const { claimVariantEncode, registerHlsProcess, SEEK_RESTART_GAP_SEGMENTS } =
-      await loadSession();
+    const { claimVariantEncode, registerHlsProcess } = await loadSession();
+    const SEEK_RESTART_GAP_SEGMENTS = config().hls.seekRestartGapSegments;
     const dir = "/hls/seek-follow";
     const fromZero = claimVariantEncode(dir, 720, 0)!;
     registerHlsProcess(dir, 720, makeChild(), fromZero.runId);
@@ -347,7 +349,7 @@ describe("pacing an encode to the player", () => {
 describe("playback lifecycle hooks", () => {
   it("brackets a session from first touch to tree reap, once per session", async () => {
     jest.useFakeTimers();
-    process.env.PHOTRIX_HLS_IDLE_MS = "100";
+    overrideConfig({ PHOTRIX_HLS_IDLE_MS: "100" });
     const { touchHlsSession, touchVariant, setPlaybackLifecycleHooks } =
       await loadSession(50);
     const onSessionEnd = jest.fn();
@@ -375,7 +377,7 @@ describe("playback lifecycle hooks", () => {
     // A fresh playback after the reap opens a new bracket.
     touchHlsSession(dir);
     expect(onSessionStart).toHaveBeenCalledTimes(2);
-    delete process.env.PHOTRIX_HLS_IDLE_MS;
+    overrideConfig({ PHOTRIX_HLS_IDLE_MS: undefined });
   });
 });
 

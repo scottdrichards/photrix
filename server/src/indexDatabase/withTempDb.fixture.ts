@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { IndexDatabase } from "./indexDatabase.ts";
 import { openIndexSqlite } from "./openIndexSqlite.ts";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 /**
  * Runs `testFn` against a fresh, empty database over an empty media root, then
@@ -19,7 +20,7 @@ export const withTempDb = async (
 ) => {
   const mediaRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-media-root-"));
   const dbRoot = mkdtempSync(path.join(os.tmpdir(), "photrix-db-root-"));
-  process.env.INDEX_DB_LOCATION = dbRoot;
+  overrideConfig({ INDEX_DB_LOCATION: dbRoot });
   let db: IndexDatabase | undefined;
   try {
     const indexSqlite = await openIndexSqlite();

@@ -10,6 +10,7 @@ import {
   trace,
   type Span,
 } from "@opentelemetry/api";
+import { config } from "../config/config.ts";
 
 type TraceCategory = "request" | "db" | "file" | "conversion" | "other";
 
@@ -68,13 +69,7 @@ const getRequestRootSpanName = (method: string, url: string): string => {
 
 const nowMs = () => Number(process.hrtime.bigint()) / 1_000_000;
 
-const parsePositiveNumber = (value: string | undefined, fallback: number): number => {
-  const parsed = Number.parseFloat(value ?? "");
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-};
-
-const getSpanLogThresholdMs = (): number =>
-  parsePositiveNumber(process.env.PHOTRIX_TRACE_SPAN_MIN_MS, 25);
+const getSpanLogThresholdMs = (): number => config().server.traceSpanMinMs;
 
 const summarizeByCategory = (spans: RequestSpan[]) => {
   const totals: Record<TraceCategory, number> = {

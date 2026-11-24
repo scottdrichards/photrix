@@ -6,6 +6,7 @@ import { getLogger } from "../observability/logger.ts";
 import { recordServerDiagnosticEvent } from "../observability/diagnosticsStore.ts";
 import { isSystemOverloaded, getAvailableMemoryMB } from "./systemLoad.ts";
 import { attempt } from "../common/result.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("TaskOrchestrator");
 
@@ -14,9 +15,8 @@ const log = getLogger("TaskOrchestrator");
 const ACTIVITY_COOLDOWN_MS = 2_000;
 // Under pressure, background work runs on a duty cycle rather than stopping: an
 // OFF rest where pressured runners pause, then an ON burst where they run. This
-// keeps the backlog always making progress while freeing disk/CPU in between.
-const DUTY_ON_MS = Number(process.env.PHOTRIX_BG_DUTY_ON_MS) || 2_000;
-const DUTY_OFF_MS = Number(process.env.PHOTRIX_BG_DUTY_OFF_MS) || 2_000;
+// keeps the backlog always making progress while freeing disk/CPU in between
+// (PHOTRIX_BG_DUTY_ON_MS / PHOTRIX_BG_DUTY_OFF_MS).
 // Hard ceiling on how long a single user-activity lease can hold background work
 // in a full stop without being refreshed. A lease whose release never runs (a
 // response whose finish/close never fired, a lifecycle hook that never ended) used
@@ -24,8 +24,7 @@ const DUTY_OFF_MS = Number(process.env.PHOTRIX_BG_DUTY_OFF_MS) || 2_000;
 // and moved files sat unprocessed for 37h before anyone noticed. Past this age the
 // lease is dropped and logged loudly by label so the leaking caller can be found.
 // Well above the HTTP server's 5-minute requestTimeout; long-lived holders (HLS
-// playback) refresh their lease while in use.
-const USER_LEASE_MAX_MS = Number(process.env.PHOTRIX_USER_LEASE_MAX_MS) || 10 * 60_000;
+// playback) refresh their lease while in use. PHOTRIX_USER_LEASE_MAX_MS.
 
 type QueueType = "blocking" | "implied" | "background";
 // cpu/gpu/disk/network are notional fractions (0–1) tracked as reservations.
@@ -101,7 +100,7 @@ export type Task = {
 
 // One holder of user activity (an in-flight request, a playback session, the
 // startup warmup). release() is idempotent; refresh() pushes out the expiry for
-// holders that legitimately outlive USER_LEASE_MAX_MS.
+// holders that legitimately outlive PHOTRIX_USER_LEASE_MAX_MS.
 type UserActivityLease = {
   release: () => void;
   refresh: () => void;
@@ -131,7 +130,7 @@ export type TaskOrchestrator = {
   // can run 10–15s on a busy box (cold model load, a starved vector scan); the
   // cooldown alone lets background workers resume mid-request and re-starve it.
   // Release the returned lease when the request ends. A lease that is never
-  // released expires after USER_LEASE_MAX_MS and is logged with its label.
+  // released expires after PHOTRIX_USER_LEASE_MAX_MS and is logged with its label.
   beginUserRequest: (label: string) => UserActivityLease;
   getDiagnosticsSnapshot: () => {
     processBackgroundTasks: boolean;
@@ -249,8 +248,8 @@ export const createTaskOrchestrator = (
   const isOverloaded = options.isOverloaded ?? isSystemOverloaded;
   const availableMemoryMB = options.availableMemoryMB ?? getAvailableMemoryMB;
   const now = options.now ?? Date.now;
-  const dutyOnMs = options.dutyOnMs ?? DUTY_ON_MS;
-  const dutyOffMs = options.dutyOffMs ?? DUTY_OFF_MS;
+  const dutyOnMs = options.dutyOnMs ?? config().background.dutyOnMs;
+  const dutyOffMs = options.dutyOffMs ?? config().background.dutyOffMs;
   const computeThrottle = options.computeThrottle ?? {
     suspend: () => {},
     resume: () => {},
@@ -790,7 +789,7 @@ export const createTaskOrchestrator = (
       const lease: LeaseState = {
         label,
         startedAt,
-        expiresAt: startedAt + USER_LEASE_MAX_MS,
+        expiresAt: startedAt + config().background.userLeaseMaxMs,
       };
       activeLeases.add(lease);
       // Extend the cooldown immediately too, so even a request that ends before
@@ -804,7 +803,8 @@ export const createTaskOrchestrator = (
           reconcileBackoff();
         },
         refresh: () => {
-          if (activeLeases.has(lease)) lease.expiresAt = now() + USER_LEASE_MAX_MS;
+          if (activeLeases.has(lease))
+            lease.expiresAt = now() + config().background.userLeaseMaxMs;
         },
       };
     },

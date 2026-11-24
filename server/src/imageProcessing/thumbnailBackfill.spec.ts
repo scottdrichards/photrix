@@ -2,22 +2,22 @@ import { afterAll, beforeAll, describe, expect, it } from "@jest/globals";
 import { mkdir, mkdtemp, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
+import { overrideConfig } from "../config/config.fixture.ts";
+import { loadConfig } from "../config/config.ts";
 
-// The cache root is resolved from CACHE_DIR at import time, so it must be set
-// before the module under test (and cacheUtils behind it) is loaded.
 let tempRoot: string;
 let mod: typeof import("./thumbnailBackfill.ts");
 let cachePath: typeof import("../common/cacheUtils.ts").getMirroredCachedFilePath;
 
 beforeAll(async () => {
   tempRoot = await mkdtemp(join(tmpdir(), "photrix-backfill-"));
-  process.env.CACHE_DIR = tempRoot;
+  overrideConfig({ CACHE_DIR: tempRoot });
   mod = await import("./thumbnailBackfill.ts");
   ({ getMirroredCachedFilePath: cachePath } = await import("../common/cacheUtils.ts"));
 });
 
 afterAll(() => {
-  delete process.env.CACHE_DIR;
+  overrideConfig({ CACHE_DIR: undefined });
 });
 
 const touch = async (filePath: string) => {
@@ -27,7 +27,9 @@ const touch = async (filePath: string) => {
 
 describe("readThumbnailBackfillLimits", () => {
   it("defaults to 10 MB/s, waiting while load is above half the CPUs", () => {
-    expect(mod.readThumbnailBackfillLimits({})).toEqual({
+    expect(
+      mod.readThumbnailBackfillLimits(loadConfig({}).media.thumbnailBackfill),
+    ).toEqual({
       bytesPerSecond: 10 * 1024 * 1024,
       maxLoad: 0.5,
     });
@@ -35,10 +37,12 @@ describe("readThumbnailBackfillLimits", () => {
 
   it("honours overrides and falls back on bad values", () => {
     expect(
-      mod.readThumbnailBackfillLimits({
-        PHOTRIX_THUMBNAIL_BACKFILL_MB_PER_SEC: "25",
-        PHOTRIX_THUMBNAIL_BACKFILL_MAX_LOAD: "-1",
-      }),
+      mod.readThumbnailBackfillLimits(
+        loadConfig({
+          PHOTRIX_THUMBNAIL_BACKFILL_MB_PER_SEC: "25",
+          PHOTRIX_THUMBNAIL_BACKFILL_MAX_LOAD: "-1",
+        }).media.thumbnailBackfill,
+      ),
     ).toEqual({ bytesPerSecond: 25 * 1024 * 1024, maxLoad: 0.5 });
   });
 });

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { PersonCluster, PhotrixApi } from "./photrixApi.ts";
+import { overrideConfig } from "../config/config.fixture.ts";
 
 type QueryOpts = Parameters<PhotrixApi["queryFiles"]>[0];
 
@@ -57,10 +58,9 @@ const fakeApi = (overrides: Partial<PhotrixApi> = {}) => {
   return { api, queries, imageHeights };
 };
 
-// PHOTRIX_PUBLIC_URL is read at import, so each test imports fresh.
 const connect = async (api: PhotrixApi, env: Record<string, string> = {}) => {
   jest.resetModules();
-  Object.assign(process.env, env);
+  overrideConfig(env);
   const { buildPhotrixMcpServer } = await import("./buildServer.ts");
   const server = buildPhotrixMcpServer(api);
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
@@ -102,7 +102,7 @@ describe("photrix MCP tools", () => {
   afterEach(async () => {
     await close?.();
     close = undefined;
-    delete process.env.PHOTRIX_PUBLIC_URL;
+    overrideConfig({ PHOTRIX_PUBLIC_URL: undefined });
   });
 
   it("asks Photrix for one sorted page rather than sorting a big page itself", async () => {

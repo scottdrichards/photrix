@@ -11,6 +11,7 @@ import type { TaskRunner } from "../taskOrchestrator/taskOrchestrator.ts";
 import { generateVideoThumbnail } from "../videoProcessing/videoUtils.ts";
 import { convertImageToMultipleSizes, IMAGE_OUTPUT_EXTENSION } from "./convertImage.ts";
 import { convertEmbeddedThumbnail } from "./embeddedThumbnail.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("thumbnailBackfill");
 
@@ -51,9 +52,6 @@ const VIDEO_THUMBNAIL_READ_ESTIMATE_BYTES = 8 * 1024 * 1024;
 /** Used when the index has no size for a photo yet. */
 const DEFAULT_IMAGE_READ_ESTIMATE_BYTES = 5 * 1024 * 1024;
 
-const DEFAULT_MB_PER_SECOND = 10;
-/** 1-minute load average per CPU above which the pass waits for the machine to quieten. */
-const DEFAULT_MAX_LOAD = 0.5;
 const LOAD_POLL_MS = 5_000;
 /** Rest after each file, as a multiple of how long it took. 1 = work at most half the time. */
 const REST_PER_WORK = 1;
@@ -77,20 +75,9 @@ type ThumbnailBackfillConfig = ThumbnailBackfillLimits & {
   isEnabled: () => boolean;
 };
 
-const positiveNumber = (raw: string | undefined, fallback: number): number => {
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-};
-
 export const readThumbnailBackfillLimits = (
-  env: NodeJS.ProcessEnv = process.env,
-): ThumbnailBackfillLimits => ({
-  bytesPerSecond:
-    positiveNumber(env.PHOTRIX_THUMBNAIL_BACKFILL_MB_PER_SEC, DEFAULT_MB_PER_SECOND) *
-    1024 *
-    1024,
-  maxLoad: positiveNumber(env.PHOTRIX_THUMBNAIL_BACKFILL_MAX_LOAD, DEFAULT_MAX_LOAD),
-});
+  { mbPerSecond, maxLoad } = config().media.thumbnailBackfill,
+): ThumbnailBackfillLimits => ({ bytesPerSecond: mbPerSecond * 1024 * 1024, maxLoad });
 
 const defaultSleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));

@@ -1,5 +1,6 @@
 import { getLogger } from "../observability/logger.ts";
 import { ollamaGenerate, ollamaGenerateStream } from "../shareDescription/ollamaGenerate.ts";
+import { config } from "../config/config.ts";
 
 const log = getLogger("generatePhotoCaption");
 
@@ -15,13 +16,12 @@ const log = getLogger("generatePhotoCaption");
 // `num_gpu` on calls to this model — forcing it caused CUDA OOM crashes on
 // this box when VRAM is tight (Frigate and other GPU consumers can leave as
 // little as 1-2GB free).
-const visionModel = process.env.PHOTRIX_OLLAMA_VISION_MODEL ?? "moondream:latest";
 
-// moondream is fast enough now that this only needs to absorb a cold
-// keep_alive load (~16s measured) plus box contention, not multi-minute
-// generation — see the multi-minute comment history in git blame if
-// qwen2.5vl (or an equally slow model) ever comes back into rotation here.
-const timeoutMs = Number(process.env.PHOTRIX_OLLAMA_CAPTION_TIMEOUT_MS) || 40_000;
+// PHOTRIX_OLLAMA_CAPTION_TIMEOUT_MS: moondream is fast enough now that the
+// caption timeout only needs to absorb a cold keep_alive load (~16s measured)
+// plus box contention, not multi-minute generation — see the multi-minute
+// comment history in git blame if qwen2.5vl (or an equally slow model) ever
+// comes back into rotation here.
 
 const MAX_WORDS = 18;
 const MAX_LENGTH = 130;
@@ -181,17 +181,17 @@ export const generatePhotoCaption = async (
   const generate = (system: string, request: string, temperature: number) =>
     ollamaGenerate(system, request, {
       images: [imageBase64],
-      model: visionModel,
+      model: config().ollama.visionModel,
       numPredict: 50,
       temperature,
-      timeoutMs,
+      timeoutMs: config().ollama.captionTimeoutMs,
       signal: options.signal,
     });
 
   let raw = await generate(SYSTEM_PROMPT, prompt, 0.3);
   let cleaned = raw ? cleanCaption(raw) : null;
   if (!cleaned) {
-    log.warn({ raw, model: visionModel }, "Retrying unusable photo caption from Ollama");
+    log.warn({ raw, model: config().ollama.visionModel }, "Retrying unusable photo caption from Ollama");
     raw = await generate(RETRY_SYSTEM_PROMPT, RETRY_PROMPT, 0.5);
     cleaned = raw ? cleanCaption(raw) : null;
   }
@@ -213,8 +213,6 @@ const DESCRIPTION_SYSTEM_PROMPT = `Describe this family photo in detail for a ph
 // contended GPU pushes moondream onto CPU (~0.3 tokens/s measured 2026-10-22);
 // the stream's idle timeout is what catches a genuinely stuck model.
 const DESCRIPTION_NUM_PREDICT = 512;
-const descriptionTimeoutMs =
-  Number(process.env.PHOTRIX_OLLAMA_DESCRIPTION_TIMEOUT_MS) || 600_000;
 
 /**
  * Tidies a long description without shortening it: strips the "This image
@@ -258,16 +256,16 @@ export const generatePhotoDescription = async (
     options.onDelta ?? (() => {}),
     {
       images: [imageBase64],
-      model: visionModel,
+      model: config().ollama.visionModel,
       numPredict: DESCRIPTION_NUM_PREDICT,
       temperature: 0.4,
-      timeoutMs: descriptionTimeoutMs,
+      timeoutMs: config().ollama.descriptionTimeoutMs,
       signal: options.signal,
     },
   );
   const cleaned = raw ? cleanDescription(raw) : null;
   if (!cleaned) {
-    log.warn({ raw, model: visionModel }, "Unusable photo description from Ollama");
+    log.warn({ raw, model: config().ollama.visionModel }, "Unusable photo description from Ollama");
     throw new Error("Description model returned nothing usable");
   }
   return cleaned;
