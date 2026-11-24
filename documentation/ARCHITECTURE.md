@@ -112,9 +112,9 @@ and `fileSystemRescanRecent.ts` re-queue the entry stages.
 
 | Concern                         | File(s) in `client/src/`                                          |
 | ------------------------------- | ----------------------------------------------------------------- |
-| App shell, views, routing state | `App.tsx`, `filterUrlState.ts`, `hooks/useSyncUrlWithFilter.ts`   |
+| App shell, views, routing state | `App.tsx`, `appNavigation.ts`, `useAppNavigation.ts`, `filterUrlState.ts`, `hooks/useSyncUrlWithFilter.ts` |
 | Grid, tiles, hover previews     | `components/grid/` (`ThumbnailGrid.tsx`, `ThumbnailTile.tsx`, `tileMedia/`) |
-| Photo/video viewer, editor      | `components/viewer/` (`FullscreenViewer.tsx`, `photoEdit/`)       |
+| Photo/video viewer, editor      | `components/viewer/` (`FullscreenViewer.tsx` and its `useViewer*` hooks, `photoEdit/`) |
 | Filters / search                | `components/filter/`, `components/search/`                        |
 | People                          | `components/people/`                                              |
 | Map                             | `components/map/`                                                 |

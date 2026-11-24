@@ -34,7 +34,7 @@ Review these when implicated (paths relative to the repo root).
 | `server/src/common/`, `fileHandling/`, `accel/`, `python/` | shared helpers, file/EXIF helpers, accelerator probe, Python interpreter resolution |
 | `server/python/` | the long-lived Python workers (image analysis, Whisper, CLAP) and their requirements |
 | `client/src/` | the React app; see its README |
-| `shared/` | code both sides import: filter contract, feature flags, HLS headers, video storyboard |
+| `shared/` | workspace packages both sides import as `@photrix/*`: `api-contract` (response types), `filter-contract`, `feature-flags`, `hls-segment-headers`, `video-storyboard` |
 | `e2e/` | Playwright suite and the playback lab |
 
 Python lives in two places on purpose: `server/python/` holds the long-lived
@@ -69,8 +69,15 @@ resolution).
   `overrideConfig` from `config/config.fixture.ts`. See
   `server/src/config/README.md`. Client build-time vars are `VITE_*` in
   `client/.env.example`.
-- **A client API call**: a function in `client/src/api/<area>.ts`, types in
-  `api/api.type.ts`, exported from `api/index.ts`. See `client/src/README.md`.
+- **A client API call**: a function in `client/src/api/<area>.ts`, exported
+  from `api/index.ts`. See `client/src/README.md`.
+- **A response type**: one the server returns and the client reads goes in
+  `shared/api-contract/src/index.ts`, imported as `@photrix/api-contract` by
+  both. A new `shared/<name>/` package needs a `package.json` named
+  `@photrix/<name>` with an `exports` entry pointing at its `.ts` source, a
+  `workspace:*` dependency in each consumer, a `paths` line in that
+  workspace's `tsconfig.json`, then `bun run bootstrap`. The server build
+  (`server/scripts/copy-build-assets.mjs`) links it into `dist/` by itself.
 - **A Python worker**: the script in `server/python/` (newline-delimited JSON
   over stdin/stdout, print `{"type":"ready"}`, a `*_test.py` beside it for
   `bun run --filter server test:python`); a Node manager modelled on
