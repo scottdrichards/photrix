@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
-import type { DetectedFace } from "../faceDetector.type.ts";
+import type { DetectedFace } from "../../faceDetection/faceDetector.type.ts";
 import { identifyFaces, prepareCentroids, type NamedCentroid } from "./identifyFaces.ts";
 
 const DIMENSIONS = 8;

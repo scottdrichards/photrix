@@ -29,12 +29,17 @@ const modules = withConfig({
   fileHandling: ["common", "videoProcessing"],
   // Pure lookups, no I/O: GPS to place words.
   places: ["common"],
-  indexDatabase: ["common", "observability", "fileHandling", "faceDetection", "places"],
+  // People: faces as stored rows, clusters and their review, and the live identify API.
+  // The two-way edge with indexDatabase is the composition seam: IndexDatabase
+  // builds the face stores onto database.faces/.faceClusters, and people reads
+  // the index plumbing (filterToSQL, row types, embedding codec).
+  people: ["common", "observability", "faceDetection", "indexDatabase"],
+  indexDatabase: ["common", "observability", "fileHandling", "faceDetection", "places", "people"],
   // Pipeline stages and features: each reads and writes the index.
   imageProcessing: ["common", "observability", "python", "taskOrchestrator", "videoProcessing", "indexDatabase"],
   imageAnalysis: ["common", "observability", "python", "accel", "taskOrchestrator", "faceDetection", "indexDatabase"],
   audioProcessing: ["common", "observability", "python", "taskOrchestrator", "imageAnalysis", "indexDatabase"],
-  videoFaceAnalysis: ["common", "observability", "taskOrchestrator", "faceDetection", "videoProcessing", "imageAnalysis", "indexDatabase"],
+  videoFaceAnalysis: ["common", "observability", "taskOrchestrator", "faceDetection", "videoProcessing", "imageAnalysis", "indexDatabase", "people"],
   // The stages the task runner drives that turn files on disk into index rows:
   // scan, file info, EXIF, places, face and moment clustering.
   pipeline: ["common", "observability", "taskOrchestrator", "fileHandling", "places", "imageProcessing", "indexDatabase"],
@@ -47,7 +52,7 @@ const modules = withConfig({
   photoCaption: ["common", "observability", "shareDescription"],
   requestHandlers: [
     "common", "observability", "featureFlags", "taskOrchestrator", "auth", "videoProcessing", "fileHandling",
-    "faceDetection", "indexDatabase", "imageProcessing", "imageAnalysis", "audioProcessing", "shareDescription",
+    "faceDetection", "people", "indexDatabase", "imageProcessing", "imageAnalysis", "audioProcessing", "shareDescription",
     "naturalLanguageSearch", "photoCaption", "systemStatus", "shareScope", "feedback",
   ],
   // main.ts, createServer.ts, createRoutes.ts: the composition root.

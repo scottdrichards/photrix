@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AsyncSqlite } from "../common/asyncSqlite.ts";
 import { decodeEmbedding } from "./embeddingCodec.ts";
-import { UNCLUSTERABLE_CLUSTER_ID } from "./faceClusterEngine.ts";
+import { UNCLUSTERABLE_CLUSTER_ID } from "../people/store/faceClusterEngine.ts";
 import {
   EMBEDDING_STORAGE_VERSION,
   migrateEmbeddingStorage,

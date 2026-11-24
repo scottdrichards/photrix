@@ -1,7 +1,7 @@
 import { describe, it, expect } from "@jest/globals";
-import { IndexDatabase } from "./indexDatabase.ts";
-import { splitPath } from "./utils/pathUtils.ts";
-import { withTempDb } from "./withTempDb.fixture.ts";
+import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
+import { splitPath } from "../../indexDatabase/utils/pathUtils.ts";
+import { withTempDb } from "../../indexDatabase/withTempDb.fixture.ts";
 
 /**
  * The geometry operations against real SQLite and real greedy clustering. The

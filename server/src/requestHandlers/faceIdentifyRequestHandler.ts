@@ -5,15 +5,15 @@ import {
   DEFAULT_MIN_FACE_PIXELS,
   DEFAULT_MIN_MARGIN,
   DEFAULT_STRONG_THRESHOLD,
-} from "../faceDetection/faceIdentify/identifyFaces.ts";
-import { getNamedCentroids } from "../faceDetection/faceIdentify/centroidCache.ts";
-import { framesFromBody, MAX_IMAGE_BYTES } from "../faceDetection/faceIdentify/frameSource.ts";
+} from "../people/identify/identifyFaces.ts";
+import { getNamedCentroids } from "../people/identify/centroidCache.ts";
+import { framesFromBody, MAX_IMAGE_BYTES } from "../people/identify/frameSource.ts";
 import {
   identifyFrames,
   tryClaimIdentifySlot,
   type AnalyzeImage,
-} from "../faceDetection/faceIdentify/identifyFrames.ts";
-import { FaceIdentifyInputError } from "../faceDetection/faceIdentify/inputError.ts";
+} from "../people/identify/identifyFrames.ts";
+import { FaceIdentifyInputError } from "../people/identify/inputError.ts";
 import type { IndexDatabase } from "../indexDatabase/indexDatabase.ts";
 import { getLogger } from "../observability/logger.ts";
 import { isWorkerEvictedError } from "../taskOrchestrator/computeWorkers.ts";

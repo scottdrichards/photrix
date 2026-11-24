@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { logFailure } from "../../common/logFailure.ts";
 import { config } from "../../config/config.ts";
-import type { DetectedFace } from "../faceDetector.type.ts";
+import type { DetectedFace } from "../../faceDetection/faceDetector.type.ts";
 import { cropToBox, decodedSizeOf, DEFAULT_CROP_PAD, type CropRect } from "./frameImage.ts";
 import type { FrameSource } from "./frameSource.ts";
 import {

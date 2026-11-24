@@ -1,10 +1,10 @@
-import type { AsyncSqlite } from "../common/asyncSqlite.ts";
-import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
-import { getLogger } from "../observability/logger.ts";
-import { decodeEmbedding } from "./embeddingCodec.ts";
-import { attempt } from "../common/result.ts";
-import { dotProduct } from "../common/dotProduct.ts";
-import { toAlignedFloat32 } from "../common/toAlignedFloat32.ts";
+import type { AsyncSqlite } from "../../common/asyncSqlite.ts";
+import { runWithoutRequestAbortSignal } from "../../common/requestAbort.ts";
+import { getLogger } from "../../observability/logger.ts";
+import { decodeEmbedding } from "../../indexDatabase/embeddingCodec.ts";
+import { attempt } from "../../common/result.ts";
+import { dotProduct } from "../../common/dotProduct.ts";
+import { toAlignedFloat32 } from "../../common/toAlignedFloat32.ts";
 
 const log = getLogger("faceClusterEngine");
 

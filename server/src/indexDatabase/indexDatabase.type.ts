@@ -1,6 +1,6 @@
 import { FileRecord } from "./fileRecord.type.ts";
-import type { AnomalyFlag, CutoffSuggestion } from "./faceReview.ts";
-import type { FaceVerdict } from "./faceClusterEngine.ts";
+import type { AnomalyFlag, CutoffSuggestion } from "../people/review/faceReview.ts";
+import type { FaceVerdict } from "../people/store/faceClusterEngine.ts";
 import type {
   FaceMatchFilter,
   FileQueryExtraField,

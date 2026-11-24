@@ -7,7 +7,7 @@ import {
   encodeEmbedding,
 } from "./embeddingCodec.ts";
 import { ensureTableExists } from "./prepareTables.ts";
-import { UNCLUSTERABLE_CLUSTER_ID } from "./faceClusterEngine.ts";
+import { UNCLUSTERABLE_CLUSTER_ID } from "../people/store/faceClusterEngine.ts";
 
 const log = getLogger("migrateEmbeddingStorage");
 

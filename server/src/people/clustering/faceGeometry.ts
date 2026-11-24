@@ -1,4 +1,4 @@
-import { planSplit } from "./faceReview.ts";
+import { planSplit } from "../review/faceReview.ts";
 
 /**
  * The geometry of a face cluster: a centre and a distance.

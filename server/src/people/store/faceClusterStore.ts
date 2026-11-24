@@ -1,9 +1,9 @@
-import { AsyncSqlite } from "../common/asyncSqlite.ts";
-import { runWithoutRequestAbortSignal } from "../common/requestAbort.ts";
-import { queryCacheKey, WriteInvalidatedCache } from "../common/writeInvalidatedCache.ts";
-import { filterToSQL } from "./filterToSQL.ts";
-import { type FaceClusterCentroid, type FaceClusterDetailResult, type FaceClusterFace, type FaceClusterSummary, type FaceClusterPCAResult, type FaceClusterResult, type FaceReviewFace, type FaceReviewResult, type QueryOptions } from "./indexDatabase.type.ts";
-import { encodeEmbedding } from "./embeddingCodec.ts";
+import { AsyncSqlite } from "../../common/asyncSqlite.ts";
+import { runWithoutRequestAbortSignal } from "../../common/requestAbort.ts";
+import { queryCacheKey, WriteInvalidatedCache } from "../../common/writeInvalidatedCache.ts";
+import { filterToSQL } from "../../indexDatabase/filterToSQL.ts";
+import { type FaceClusterCentroid, type FaceClusterDetailResult, type FaceClusterFace, type FaceClusterSummary, type FaceClusterPCAResult, type FaceClusterResult, type FaceReviewFace, type FaceReviewResult, type QueryOptions } from "../../indexDatabase/indexDatabase.type.ts";
+import { encodeEmbedding } from "../../indexDatabase/embeddingCodec.ts";
 import {
   FACE_CLUSTER_SIMILARITY_THRESHOLD,
   FaceClusterEngine,
@@ -13,8 +13,8 @@ import {
   MIN_FACE_CONFIDENCE_FOR_CLUSTERING,
   UNCLUSTERABLE_CLUSTER_ID,
 } from "./faceClusterEngine.ts";
-import { dotProduct } from "../common/dotProduct.ts";
-import { toAlignedFloat32 } from "../common/toAlignedFloat32.ts";
+import { dotProduct } from "../../common/dotProduct.ts";
+import { toAlignedFloat32 } from "../../common/toAlignedFloat32.ts";
 import {
   planOptimization,
   scoreAnomalies,
@@ -22,7 +22,7 @@ import {
   type AnomalyInput,
   type OptimizeCluster,
   type OptimizeProposal,
-} from "./faceReview.ts";
+} from "../review/faceReview.ts";
 import {
   collateralOf,
   dot as capDot,
@@ -31,17 +31,17 @@ import {
   refitCaps,
   shrinkCapToExclude,
   type Cap,
-} from "./faceGeometry.ts";
-import { computePCA3D } from "./pca.ts";
-import { getLogger } from "../observability/logger.ts";
-import { attemptSync } from "../common/result.ts";
+} from "../clustering/faceGeometry.ts";
+import { computePCA3D } from "../clustering/pca.ts";
+import { getLogger } from "../../observability/logger.ts";
+import { attemptSync } from "../../common/result.ts";
 import { faceClusterIdToString, faceClusterIdFromString } from "./faceClusterId.ts";
 import { faceRowToClusterFace } from "./faceRowToClusterFace.ts";
 import {
   type ClusterDetailRow,
   videoFaceQuota,
   withVideoFaceShare,
-} from "./clusterDetailVideoShare.ts";
+} from "../clustering/clusterDetailVideoShare.ts";
 
 const log = getLogger("faceClusters");
 

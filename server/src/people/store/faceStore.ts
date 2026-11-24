@@ -1,21 +1,21 @@
-import { AsyncSqlite } from "../common/asyncSqlite.ts";
-import { type FaceClusterFace } from "./indexDatabase.type.ts";
-import { joinPath, splitPath } from "./utils/pathUtils.ts";
-import { decodeEmbedding, encodeEmbedding } from "./embeddingCodec.ts";
+import { AsyncSqlite } from "../../common/asyncSqlite.ts";
+import { type FaceClusterFace } from "../../indexDatabase/indexDatabase.type.ts";
+import { joinPath, splitPath } from "../../indexDatabase/utils/pathUtils.ts";
+import { decodeEmbedding, encodeEmbedding } from "../../indexDatabase/embeddingCodec.ts";
 import {
   FaceClusterEngine,
   LOW_CONFIDENCE_CLUSTER_ID,
   UNCLUSTERABLE_CLUSTER_ID,
 } from "./faceClusterEngine.ts";
-import { getLogger } from "../observability/logger.ts";
-import { FACE_ATTRIBUTE_VERSION } from "../faceDetection/faceAttributes.ts";
-import type { FaceAttributes } from "../faceDetection/faceDetector.type.ts";
+import { getLogger } from "../../observability/logger.ts";
+import { FACE_ATTRIBUTE_VERSION } from "../../faceDetection/faceAttributes.ts";
+import type { FaceAttributes } from "../../faceDetection/faceDetector.type.ts";
 import {
   computePhotoQualityScore,
   faceAttributesToQualityInputs,
   type FaceQualityInputs,
-} from "../faceDetection/photoQuality.ts";
-import { clamp01 } from "../common/clamp01.ts";
+} from "../../faceDetection/photoQuality.ts";
+import { clamp01 } from "../../common/clamp01.ts";
 import { faceClusterIdToString, faceClusterIdFromString } from "./faceClusterId.ts";
 import { faceRowToClusterFace } from "./faceRowToClusterFace.ts";
 import { deleteFacesStatements } from "./deleteFacesStatements.ts";

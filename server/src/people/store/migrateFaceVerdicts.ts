@@ -1,6 +1,6 @@
-import type { AsyncSqlite } from "../common/asyncSqlite.ts";
-import { getLogger } from "../observability/logger.ts";
-import { ensureTableExists } from "./prepareTables.ts";
+import type { AsyncSqlite } from "../../common/asyncSqlite.ts";
+import { getLogger } from "../../observability/logger.ts";
+import { ensureTableExists } from "../../indexDatabase/prepareTables.ts";
 
 const log = getLogger("migrateFaceVerdicts");
 

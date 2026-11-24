@@ -1,4 +1,4 @@
-import { clamp01 } from "../common/clamp01.ts";
+import { clamp01 } from "../../common/clamp01.ts";
 
 /**
  * Pure review/repair logic for face clusters.

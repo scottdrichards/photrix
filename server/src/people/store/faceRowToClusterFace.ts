@@ -1,5 +1,5 @@
-import type { FaceClusterFace } from "./indexDatabase.type.ts";
-import { joinPath } from "./utils/pathUtils.ts";
+import type { FaceClusterFace } from "../../indexDatabase/indexDatabase.type.ts";
+import { joinPath } from "../../indexDatabase/utils/pathUtils.ts";
 
 export const faceRowToClusterFace = (row: {
   id: number;

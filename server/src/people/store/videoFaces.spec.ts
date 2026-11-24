@@ -1,9 +1,9 @@
 import { describe, it, expect, jest } from "@jest/globals";
-import type { AsyncSqlite } from "../common/asyncSqlite.ts";
-import { IndexDatabase } from "./indexDatabase.ts";
-import { splitPath } from "./utils/pathUtils.ts";
-import { AnalysisStore } from "./analysisStore.ts";
-import { withTempDb } from "./withTempDb.fixture.ts";
+import type { AsyncSqlite } from "../../common/asyncSqlite.ts";
+import { IndexDatabase } from "../../indexDatabase/indexDatabase.ts";
+import { splitPath } from "../../indexDatabase/utils/pathUtils.ts";
+import { AnalysisStore } from "../../indexDatabase/analysisStore.ts";
+import { withTempDb } from "../../indexDatabase/withTempDb.fixture.ts";
 
 const addVideo = async (
   db: IndexDatabase,
