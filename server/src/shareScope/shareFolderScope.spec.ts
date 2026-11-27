@@ -68,6 +68,25 @@ describe("extractShareFolderRoots", () => {
     expect(extractShareFolderRoots(filter)).toBeNull();
   });
 
+  it("does not treat a negated folder as the share's root", () => {
+    const filter = {
+      operation: "and",
+      conditions: [
+        folderShare("/Trips"),
+        { operation: "not", conditions: [folderShare("/Trips/Private")] },
+      ],
+    } as unknown as FilterElement;
+    expect(extractShareFolderRoots(filter)).toEqual([
+      { folder: "/Trips/", recursive: true },
+    ]);
+    expect(
+      extractShareFolderRoots({
+        operation: "not",
+        conditions: [folderShare("/Private")],
+      } as unknown as FilterElement),
+    ).toBeNull();
+  });
+
   it("is unbounded for a share that is not folder-based", () => {
     expect(extractShareFolderRoots({})).toBeNull();
     expect(extractShareFolderRoots({ rating: 5 })).toBeNull();

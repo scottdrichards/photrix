@@ -84,6 +84,13 @@ export const readJsonRequest = async <T = unknown>(
   options: ReadJsonOptions = {},
 ): Promise<T | null> => {
   const body = await attempt(readJsonBody<T>(req, options));
+  // Null means "already answered" to every caller, so a body that parses to a
+  // falsy value (`null`, `false`, `0`, `""`) must be answered here too, or the
+  // caller returns and the request hangs until the server's request timeout.
+  if (body.ok && !body.value) {
+    writeJson(res, 400, { error: "Request body must be a JSON object" });
+    return null;
+  }
   if (body.ok) return body.value;
   if (body.error instanceof BodyTooLargeError) {
     writeJson(res, 413, { error: body.error.message });

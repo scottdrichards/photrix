@@ -262,4 +262,18 @@ describe("feedbackRequestHandler", () => {
 
     expect(getStatus()).toBe(404);
   });
+
+  it.each([
+    ["DELETE", "/api/feedback"],
+    ["PATCH", "/api/feedback"],
+    ["GET", "/api/feedback/3"],
+    ["POST", "/api/feedback/3"],
+  ])("answers %s %s instead of leaving the request hanging", async (method, url) => {
+    const database = new FeedbackStore({ run: jest.fn(), all: jest.fn() } as unknown as AsyncSqlite);
+    const { res, getStatus } = createMockRes();
+
+    await feedbackRequestHandler(createMockReq(method, url), res, database);
+
+    expect(getStatus()).toBe(404);
+  });
 });

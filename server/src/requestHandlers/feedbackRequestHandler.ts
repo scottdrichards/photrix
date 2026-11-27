@@ -127,5 +127,11 @@ export const feedbackRequestHandler = async (
     }
 
     writeJson(res, 400, { error: "action must be 'claim', 'unclaim', or 'complete'" });
+    return;
   }
+
+  // Anything else (DELETE, a PATCH without an id, GET /api/feedback/:id) used
+  // to fall through unanswered and hold the connection until the server's
+  // request timeout.
+  writeJson(res, 404, { error: "Not found" });
 };

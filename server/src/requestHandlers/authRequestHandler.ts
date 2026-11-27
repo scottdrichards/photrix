@@ -336,7 +336,10 @@ export const authLogoutHandler = async (
   const body = await readJsonRequest<{ token?: unknown }>(req, res);
   if (!body) return;
 
-  if (typeof body.token === "string") {
+  // This endpoint is unauthenticated, so it ends sessions only. A share link
+  // is revoked by its owner (revokeShareLink); letting any holder "log out"
+  // a share token would kill the link for every other viewer.
+  if (typeof body.token === "string" && !isShareToken(body.token)) {
     await revokeToken(body.token);
   }
 
