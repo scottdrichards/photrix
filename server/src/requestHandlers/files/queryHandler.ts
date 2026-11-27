@@ -36,6 +36,34 @@ export const queryHandler = async (
   // time. `includeExcluded=true` is the per-request opt-out. A share filter
   // already carries the exclusions (resolveShareFilter), so a share can't opt out.
   const includeExcluded = url.searchParams.get("includeExcluded") === "true";
+
+  // A malformed `filter` is the caller's mistake (400), not a server fault:
+  // JSON.parse used to throw straight into the 500 path.
+  let requestedFilter: FilterElement | null = null;
+  if (filterParam) {
+    try {
+      requestedFilter = JSON.parse(filterParam) as FilterElement;
+    } catch {
+      writeJson(res, 400, { error: "filter must be valid JSON" });
+      return;
+    }
+    if (typeof requestedFilter !== "object" || requestedFilter === null) {
+      writeJson(res, 400, { error: "filter must be a JSON object" });
+      return;
+    }
+  }
+  // `pageSize=-1` reached SQLite as `LIMIT -1` (no limit at all) and a
+  // non-numeric value as NaN; refuse both rather than dump or 500.
+  const parsedPageSize = pageSize ? Number(pageSize) : null;
+  const parsedPage = page ? Number(page) : null;
+  if (
+    (parsedPageSize !== null && !(Number.isInteger(parsedPageSize) && parsedPageSize >= 0)) ||
+    (parsedPage !== null && !Number.isInteger(parsedPage))
+  ) {
+    writeJson(res, 400, { error: "page and pageSize must be non-negative integers" });
+    return;
+  }
+
   const defaultExclusionFilter =
     includeExcluded || shareFilter ? null : await database.getDefaultExclusionFilter();
 
@@ -53,7 +81,7 @@ export const queryHandler = async (
             },
           ]
         : []),
-      ...(filterParam ? [JSON.parse(filterParam) as FilterElement] : []),
+      ...(requestedFilter ? [requestedFilter] : []),
       ...(defaultExclusionFilter
         ? [{ operation: "not" as const, conditions: [defaultExclusionFilter] }]
         : []),
@@ -94,10 +122,10 @@ export const queryHandler = async (
     // full page of records only to throw them away.
     ...(countOnly
       ? { pageSize: 0 }
-      : pageSize
-        ? { pageSize: parseInt(pageSize, 10) }
+      : parsedPageSize !== null
+        ? { pageSize: parsedPageSize }
         : {}),
-    ...(page && { page: parseInt(page, 10) }),
+    ...(parsedPage !== null && { page: parsedPage }),
     ...(expandToFolder && { expandToFolder: true }),
     ...(collapseMomentClustersParam === "false" && { collapseMomentClusters: false }),
     ...(() => {

@@ -319,4 +319,36 @@ describe("queryHandler", () => {
       );
     });
   });
+
+  describe("request validation", () => {
+    const runQuery = async (query: string) => {
+      const { res } = createMockResponse();
+      const queryFiles = jest.fn(async () => ({ items: [], total: 0, page: 1, pageSize: 1 }));
+      const database = {
+        queryFiles,
+        getDefaultExclusionFilter: async () => null,
+      } as unknown as IndexDatabase;
+      await queryHandler(new URL(`http://localhost/api/files/?${query}`), "/", database, res);
+      return { status: (res.writeHead as jest.Mock).mock.calls[0]?.[0], queryFiles };
+    };
+
+    it.each([
+      ["filter=%7Bnot-json"],
+      ["filter=42"],
+      ["pageSize=-1"],
+      ["pageSize=abc"],
+      ["pageSize=2.5"],
+      ["page=abc"],
+    ])("answers 400 for %s without querying", async (query) => {
+      const { status, queryFiles } = await runQuery(query);
+      expect(status).toBe(400);
+      expect(queryFiles).not.toHaveBeenCalled();
+    });
+
+    it("passes a valid page and pageSize through", async () => {
+      const { status, queryFiles } = await runQuery("page=3&pageSize=50");
+      expect(status).toBe(200);
+      expect(queryFiles).toHaveBeenCalledWith(expect.objectContaining({ page: 3, pageSize: 50 }));
+    });
+  });
 });

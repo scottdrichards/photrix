@@ -75,4 +75,10 @@ describe("readJsonRequest", () => {
     await expect(readJsonRequest(request, res, { maxBytes: 15 })).resolves.toBeNull();
     expect(recorded.status).toBe(413);
   });
+
+  it.each(["null", "false", "0", '""'])("answers 400 for a body of %s rather than leaving it unanswered", async (text) => {
+    const { res, recorded } = responseRecorder();
+    await expect(readJsonRequest(requestFrom([Buffer.from(text)]), res)).resolves.toBeNull();
+    expect(recorded.status).toBe(400);
+  });
 });

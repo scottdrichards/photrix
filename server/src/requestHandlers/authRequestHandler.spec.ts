@@ -331,3 +331,30 @@ describe("passkey registration", () => {
     expect(verifyPasskeyRegistration).toHaveBeenCalledWith("s1", { id: "x" }, "alice");
   });
 });
+
+describe("authLogoutHandler", () => {
+  it("ends a session", async () => {
+    const { issueToken, validateToken } = await import("../auth/authService.ts");
+    const { authLogoutHandler } = await import("./authRequestHandler.ts");
+    const session = issueToken("alice");
+    const { res, getStatus } = createJsonResponse();
+
+    await authLogoutHandler(makeReq("", { token: session }, "/api/auth/logout"), res);
+
+    expect(getStatus()).toBe(200);
+    expect(validateToken(session)).toBe(false);
+  });
+
+  it("does not let a holder revoke a share link for everyone", async () => {
+    overrideConfig({ PHOTRIX_SHARE_TOKEN_SECRET: "test-share-secret-of-at-least-32-chars" });
+    const { issueShareToken, validateToken } = await import("../auth/authService.ts");
+    const { authLogoutHandler } = await import("./authRequestHandler.ts");
+    const shareToken = issueShareToken({ filter: { folder: { folder: "/trip" } } });
+    const { res, getStatus } = createJsonResponse();
+
+    await authLogoutHandler(makeReq("", { token: shareToken }, "/api/auth/logout"), res);
+
+    expect(getStatus()).toBe(200);
+    expect(validateToken(shareToken)).toBe(true);
+  });
+});

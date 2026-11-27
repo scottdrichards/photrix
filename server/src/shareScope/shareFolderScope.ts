@@ -76,6 +76,10 @@ export const extractShareFolderRoots = (
   if (!filter || typeof filter !== "object") return null;
 
   if ("operation" in filter) {
+    // A negation bounds nothing: "everything except /Private/" is not a
+    // share rooted at /Private/. The share filter still gates every listing.
+    if (filter.operation === "not") return null;
+
     const children = filter.conditions.map((condition) =>
       extractShareFolderRoots(condition as FilterElement),
     );
